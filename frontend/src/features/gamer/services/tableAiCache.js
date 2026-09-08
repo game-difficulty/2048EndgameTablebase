@@ -35,7 +35,7 @@ export class TableAiCache {
     const generation = this.generation;
     const task = { context: this.context(body), nodes: new Map(), done: false, error: null,
       changed: null, wake: null, consumed: -1, allowed: 7, lastCredit: -1,
-      lastConsume: null, interval: 50, latency: 350, started: this.now() };
+      used: new Set(), lastReturn: null, interval: 50, latency: 350, started: this.now() };
     const wake = () => {
       task.wake?.();
       task.changed = new Promise((resolve) => { task.wake = resolve; });
@@ -49,65 +49,78 @@ export class TableAiCache {
         this.entries.set(this.key(item), { time: this.now(), value: item });
         while (this.entries.size > 256) this.entries.delete(this.entries.keys().next().value);
         task.nodes.set(nodeKey(item), item.seq);
-        while (task.nodes.size > 64) task.nodes.delete(task.nodes.keys().next().value);
+        while (task.nodes.size > 256) task.nodes.delete(task.nodes.keys().next().value);
         if (item.seq === 0) task.latency = Math.max(50, this.now() - task.started);
+        // Cached playback may already have passed this late-arriving node.
+        if (task.used.has(nodeKey(item))) this.advanceCredit(task, item.seq);
         wake();
       },
-      onLatency: (ms) => { task.latency = Math.max(50, task.latency * .7 + ms * .3); },
+      onLatency: (ms) => { task.latency = Math.max(50, ms, task.latency * .9 + ms * .1); },
       onEnd: () => { task.done = true; wake(); },
       onError: (error) => { task.error = error; task.done = true; wake(); },
     });
     return task;
   }
 
-  consume(body, value) {
+  consume(body, value, requestedAt) {
     const task = this.active;
-    const seq = task?.nodes.get(nodeKey(body));
-    if (!task || task.context !== this.context(body) || seq === undefined || seq <= task.consumed || task.done) return value;
-    const now = this.now();
-    if (task.lastConsume !== null) task.interval = Math.max(1, .6 * task.interval + .4 * (now - task.lastConsume));
-    task.lastConsume = now;
+    if (!task || task.context !== this.context(body) || task.done) return value;
+    if (task.lastReturn !== null) {
+      const interval = Math.max(1, requestedAt - task.lastReturn);
+      task.interval = Math.min(interval, .8 * task.interval + .2 * interval);
+    }
+    task.lastReturn = this.now();
+    const key = nodeKey(body);
+    task.used.add(key);
+    while (task.used.size > 256) task.used.delete(task.used.values().next().value);
+    const seq = task.nodes.get(key);
+    if (seq !== undefined) this.advanceCredit(task, seq);
+    return value;
+  }
+
+  advanceCredit(task, seq) {
+    if (task.done || seq <= task.consumed) return;
     task.consumed = seq;
     const cover = Math.ceil(task.latency / task.interval);
-    const window = Math.max(8, Math.min(32, cover + 6));
+    const window = Math.max(8, Math.min(64, cover + 12));
     // Include the four-move credit cadence in the refill margin.
-    if (task.allowed - seq <= Math.max(4, cover + 4) && (seq - task.lastCredit >= 4 || task.allowed - seq <= 2)) {
+    if (task.allowed - seq <= Math.max(4, cover + 4) && (task.lastCredit < 0 || seq - task.lastCredit >= 4 || task.allowed - seq <= 2)) {
       task.allowed = Math.max(task.allowed, Math.min(99999, seq + window));
       task.lastCredit = seq;
       task.handle.credit(seq, task.allowed);
     }
-    return value;
   }
 
   async lookup(body) {
+    const requestedAt = this.now();
     const generation = this.generation;
     let value = this.get(body);
     if (value) {
       if (!this.active || this.active.context !== this.context(body)) this.start(body, true);
-      return this.consume(body, value);
+      return this.consume(body, value, requestedAt);
     }
     const previous = this.active;
     if (previous && previous.context === this.context(body)) {
       while (!previous.done && generation === this.generation) {
         value = this.get(body);
-        if (value) return this.consume(body, value);
+        if (value) return this.consume(body, value, requestedAt);
         await this.waitForChange(previous);
       }
       if (generation !== this.generation) throw new Error('Superseded AI request');
       value = this.get(body);
-      if (value) return this.consume(body, value);
+      if (value) return this.consume(body, value, requestedAt);
       if (previous.error) throw previous.error;
     }
     const task = this.start(body);
     const currentGeneration = this.generation;
     while (!task.done && currentGeneration === this.generation) {
       value = this.get(body);
-      if (value) return this.consume(body, value);
+      if (value) return this.consume(body, value, requestedAt);
       await this.waitForChange(task);
     }
     if (currentGeneration !== this.generation) throw new Error('Superseded AI request');
     value = this.get(body);
-    if (value) return this.consume(body, value);
+    if (value) return this.consume(body, value, requestedAt);
     throw task.error || new Error('No tablebase result');
   }
 

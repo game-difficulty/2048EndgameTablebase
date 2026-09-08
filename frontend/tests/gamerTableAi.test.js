@@ -33,7 +33,7 @@ test('one subscription serves sixty-four moves without a four-step boundary', as
   }
   assert.ok(requests[0].credits.length > 0);
   assert.ok(requests[0].credits.length < 32, 'credits are cumulative, not one per step');
-  assert.ok(requests[0].credits.every(({consumed,allowed}) => allowed-consumed <= 32));
+  assert.ok(requests[0].credits.every(({consumed,allowed}) => allowed-consumed <= 64));
   assert.equal(requests[0].cancelled, false);
   cache.clear();
 });
@@ -108,6 +108,35 @@ test('pausing cancels computation, preserves paid results and resumes past the c
   assert.deepEqual(await cache.lookup(body()),result(0));
   assert.equal(requests[1].request.advance_first,true);
   cache.clear();
+});
+
+test('late frames advance credit after playback has already consumed a long cached prefix', async () => {
+  const { requests, transport } = controlledTransport();
+  const cache = new TableAiCache({ transport });
+  for (let step=0; step<=20; step++) cache.entries.set(cache.key(body(step)), {time:Date.now(), value:result(step)});
+  try {
+    for (let step=0; step<=20; step++) await cache.lookup(body(step));
+    assert.equal(requests[0].request.advance_first,true);
+    const pending=cache.lookup(body(21));
+    for (let step=1; step<=8; step++) requests[0].onResult({...result(step),seq:step-1});
+    assert.ok(requests[0].credits.at(-1).allowed>=20, 'late consumed nodes must release the initial window');
+    for (let step=9; step<=21; step++) requests[0].onResult({...result(step),seq:step-1});
+    assert.deepEqual((await pending).board_codes,body(21).board_codes);
+    assert.equal(requests.length,1);
+  } finally {cache.close()}
+});
+
+test('network waiting does not inflate the consumer interval', async () => {
+  let now=0;
+  const { requests, transport } = controlledTransport();
+  const cache = new TableAiCache({ transport,now:()=>now });
+  const first=cache.lookup(body());
+  now=600; requests[0].onResult(result(0)); await first;
+  now=604; const second=cache.lookup(body(1));
+  now=1204; requests[0].onResult(result(1)); await second;
+  assert.equal(cache.active.interval,4);
+  assert.equal(cache.active.lastReturn,1204);
+  cache.close();
 });
 
 test('switching patterns cancels the old subscription without awaiting its completion', async () => {

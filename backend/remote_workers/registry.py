@@ -29,6 +29,7 @@ PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
 CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
 CAPABILITY_GAMER_STREAM_V1 = "gamer_stream_v1"
+CAPABILITY_GAMER_STREAM_V2 = "gamer_stream_v2"
 HEARTBEAT_TIMEOUT_SECONDS = float(
     os.getenv("REMOTE_TABLEBASE_HEARTBEAT_TIMEOUT_SECONDS", "30")
 )
@@ -71,7 +72,9 @@ class RemoteGamerStream:
     def __init__(self, registry, worker, request_id, future, allowed):
         self.registry, self.worker, self.request_id = registry, worker, request_id
         self.future = future
-        self.queue = asyncio.Queue(maxsize=32)
+        from backend.gamer_stream_window import MAX_WINDOW
+        self.max_window = MAX_WINDOW if CAPABILITY_GAMER_STREAM_V2 in worker.capabilities else 32
+        self.queue = asyncio.Queue(maxsize=self.max_window)
         self.produced = -1
         self.allowed = allowed
 
@@ -342,7 +345,7 @@ class RemoteWorkerRegistry:
                 for item in hello.get("capabilities", [])
                 if isinstance(item, str)
             )
-            if capability in (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1)
+            if capability in (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1, CAPABILITY_GAMER_STREAM_V2)
         )
 
         worker = WorkerConnection(
@@ -567,11 +570,15 @@ class RemoteWorkerRegistry:
         except RemoteTablebaseOffline:
             return False
 
+    def gamer_stream_window(self, full_pattern: str) -> int:
+        from backend.gamer_stream_window import MAX_WINDOW
+        return MAX_WINDOW if CAPABILITY_GAMER_STREAM_V2 in self._worker_for_table(full_pattern).capabilities else 32
+
     async def open_gamer_stream(self, *, full_pattern, pattern, target, options, allow_through):
         from backend.gamer_tablebase_route import validate_options
         from backend.gamer_stream_window import StreamWindow
         validate_options(options)
-        StreamWindow(allow_through)
+        StreamWindow(allow_through, max_window=self.gamer_stream_window(full_pattern))
         worker = self._worker_for_table(full_pattern, required_capability=CAPABILITY_GAMER_STREAM_V1)
         request_id = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()

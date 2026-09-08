@@ -859,6 +859,7 @@ def consume_operation_tokens_once(
     quantity: int = 1,
     metadata: dict[str, Any] | None = None,
     idempotency_scope: str | None = None,
+    db: sqlite3.Connection | None = None,
 ) -> bool:
     """Consume tokens once for a client-generated idempotency key."""
     if user_id is None:
@@ -881,7 +882,7 @@ def consume_operation_tokens_once(
     )
     request_scope = str(idempotency_scope or operation_key)
 
-    with auth_db() as db:
+    with _maybe_connection(db) as db:
         cursor = db.execute(
             """
             INSERT OR IGNORE INTO token_operation_requests

@@ -4,11 +4,14 @@ export function createTableAiStreamTransport({ createClient, onBalance = () => {
   let current = null;
   const sendOpen = () => {
     if (!current) return;
+    current.credits.clear();
     client.send('GAMER_STREAM_OPEN', { route_id: current.body.request_id, request: current.body,
       received: current.received, resume: current.opened, allow_through: 7 });
     current.opened = true;
-    if (current.consumed >= 0) client.send('GAMER_STREAM_CREDIT', {
-      route_id: current.body.request_id, consumed: current.consumed, allow_through: current.allowed });
+    if (current.consumed >= 0) {
+      client.send('GAMER_STREAM_CREDIT', {
+        route_id: current.body.request_id, consumed: current.consumed, allow_through: current.allowed });
+    }
   };
   const ensureClient = () => {
     if (client) return;
@@ -31,12 +34,16 @@ export function createTableAiStreamTransport({ createClient, onBalance = () => {
           }
           if (item.seq <= current.received) return;
           current.received = item.seq;
+          for (const [limit, sample] of current.credits) {
+            if (item.seq >= sample.firstSeq) {
+              current.callbacks.onLatency?.(now() - sample.sent);
+              current.credits.delete(limit);
+            }
+          }
           onBalance(item.token_balance);
           current.callbacks.onResult(item);
         } else if (item.type === 'window') {
-          const sent = current.credits.get(item.allow_through);
-          if (sent !== undefined) current.callbacks.onLatency?.(now() - sent);
-          for (const limit of current.credits.keys()) if (limit <= item.allow_through) current.credits.delete(limit);
+          // Forwarding credit is not proof that new Worker results have arrived.
         } else if (item.type === 'end' || (item.type === 'error' && item.detail === 'STREAM_GONE')) {
           current.callbacks.onEnd(); current = null;
         } else if (item.type === 'error') {
@@ -60,10 +67,12 @@ export function createTableAiStreamTransport({ createClient, onBalance = () => {
       return {
         credit(consumed, allowed) {
           if (current !== task) return;
+          const previousAllowed = task.allowed;
           task.consumed = Math.max(task.consumed, consumed);
           task.allowed = Math.max(task.allowed, allowed);
           if (client.getSocket()?.readyState === 1) {
-            task.credits.set(task.allowed, now());
+            if (task.allowed > previousAllowed) task.credits.set(task.allowed,
+              {sent: now(), firstSeq: previousAllowed + 1});
             while (task.credits.size > 32) task.credits.delete(task.credits.keys().next().value);
             client.send('GAMER_STREAM_CREDIT', { route_id: body.request_id,
               consumed: task.consumed, allow_through: task.allowed });

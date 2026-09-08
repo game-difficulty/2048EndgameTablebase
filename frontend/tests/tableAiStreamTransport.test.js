@@ -3,18 +3,32 @@ import test from 'node:test';
 import { createTableAiStreamTransport } from '../src/features/gamer/services/tableAiStreamTransport.js';
 
 function setup() {
-  const sent=[], results=[], balances=[], errors=[];
+  const sent=[], results=[], balances=[], errors=[], latencies=[];
   let callbacks, connected=false, now=0;
   const client={send:(action,data)=>sent.push({action,data}),connect(){},disconnect(){connected=false;},
     getSocket:()=>({readyState:connected?1:0})};
   const transport=createTableAiStreamTransport({createClient:(value)=>{callbacks=value;return client;},
     onBalance:value=>balances.push(value),now:()=>now});
   const open=(id='route-1')=>transport.open({request_id:id},
-    {onResult:value=>results.push(value),onError:error=>errors.push(error),onEnd:()=>results.push('end')});
+    {onResult:value=>results.push(value),onError:error=>errors.push(error),onEnd:()=>results.push('end'),onLatency:ms=>latencies.push(ms)});
   const connect=()=>{connected=true;callbacks.onOpen();};
   const receive=(data)=>callbacks.onMessage({action:'GAMER_STREAM_EVENT',data});
-  return {transport,sent,results,balances,errors,open,connect,receive,disconnect:()=>{connected=false;},advance:()=>{now+=100;}};
+  return {transport,sent,results,balances,errors,latencies,open,connect,receive,disconnect:()=>{connected=false;},advance:(ms=100)=>{now+=ms;}};
 }
+
+test('latency measures newly authorized results, not cloud window ACKs or replay', () => {
+  const f=setup(); const handle=f.open(); f.connect();
+  const receive=(seq)=>f.receive({route_id:'route-1',type:'result',seq});
+  receive(0); handle.credit(0,30);
+  f.advance(300); f.receive({route_id:'route-1',type:'window',allow_through:30});
+  for(let seq=1;seq<=7;seq++)receive(seq);
+  assert.deepEqual(f.latencies,[]);
+  f.advance(310); receive(8); receive(8);
+  assert.deepEqual(f.latencies,[610]);
+  handle.credit(8,40); f.disconnect(); f.connect(); f.advance(); receive(9);
+  assert.deepEqual(f.latencies,[610], 'replayed paid frames cannot measure replenishment');
+  f.transport.close();
+});
 
 test('open waits for authenticated socket ordering; reconnect uses the same ID and receipt', () => {
   const f=setup(); const handle=f.open();

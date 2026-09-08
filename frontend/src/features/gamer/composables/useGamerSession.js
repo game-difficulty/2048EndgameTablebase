@@ -16,6 +16,7 @@ import { TableDispatcher } from '../engine/tableDispatcher.js';
 import { createOrdinaryRng, planGamerSpawn } from '../engine/gamerSpawn.js';
 import { createTableAiStreamClient } from '../services/tableAiClient.js';
 import { TableAiCache } from '../services/tableAiCache.js';
+import { TableAiCatalog } from '../services/tableAiCatalog.js';
 import {
   createRankedInitialBoard,
   randomSpawnWithRng,
@@ -327,7 +328,7 @@ export function useGamerSession(activeRef) {
   const tableAiCache = new TableAiCache({ transport: createTableAiStreamClient() });
   const tableDispatcher = new TableDispatcher();
   let aiCatalogVersion = '';
-  let aiCatalogExpires = 0;
+  const aiCatalog = new TableAiCatalog({ load: fetchTablebaseCatalog });
   let aiCatalogRate = null;
   let aiTableRetryAfter = 0;
   let decisionGeneration = 0;
@@ -750,17 +751,14 @@ export function useGamerSession(activeRef) {
     if (aiTableEnabled.value && authUser.value?.id && Date.now() >= aiTableRetryAfter) {
       try {
         const rate = ranked.value.eligible ? Number(ranked.value.spawnRate4) : configuredSpawnRate4();
-        if (Date.now() >= aiCatalogExpires || rate !== aiCatalogRate) {
-          const tables = await fetchTablebaseCatalog();
-          if (!isCurrent()) return null;
-          if (tables.catalogVersion !== aiCatalogVersion || rate !== aiCatalogRate) {
-            tableAiCache.clear();
-            tableDispatcher.setTables(tables, rate);
-          }
-          aiCatalogVersion = tables.catalogVersion;
-          aiCatalogRate = rate;
-          aiCatalogExpires = Date.now() + 60000;
+        const tables = await aiCatalog.get();
+        if (!isCurrent()) return null;
+        if (tables.catalogVersion !== aiCatalogVersion || rate !== aiCatalogRate) {
+          tableAiCache.clear();
+          tableDispatcher.setTables(tables, rate);
         }
+        aiCatalogVersion = tables.catalogVersion;
+        aiCatalogRate = rate;
         tableDispatcher.reset(board.value);
         const direction = await tableDispatcher.choose((candidate) => tableAiCache.lookup({
           full_pattern: candidate.table.fullPattern, catalog_version: aiCatalogVersion,
@@ -775,7 +773,7 @@ export function useGamerSession(activeRef) {
         if (!isCurrent()) return null;
         tableAiCache.clear();
         if (error.status === 402 || error.status === 401) aiTableEnabled.value = false;
-        aiCatalogExpires = 0;
+        aiCatalog.invalidate();
         aiTableRetryAfter = Date.now() + 3000;
       }
     }
@@ -1214,7 +1212,7 @@ export function useGamerSession(activeRef) {
     if (enabled && !authUser.value?.id) { emitAuthRequired(); return; }
     stopAI();
     aiTableEnabled.value = Boolean(enabled);
-    aiCatalogExpires = 0;
+    aiCatalog.invalidate();
     aiTableRetryAfter = 0;
     persistState({ immediate: true });
   };
@@ -1431,7 +1429,7 @@ export function useGamerSession(activeRef) {
     [authReady, () => authUser.value?.id],
     ([ready, userId]) => {
       tableAiCache.clear();
-      aiCatalogExpires = 0;
+      aiCatalog.clear();
       decisionGeneration += 1;
       if (!ready || !ranked.value.runId || !ranked.value.eligible || ranked.value.status !== 'ranked') return;
       if (Number(ranked.value.userId) !== Number(userId || 0)) loseRankedOwnership('user_changed');
@@ -1441,7 +1439,7 @@ export function useGamerSession(activeRef) {
   watch([difficulty, () => appConfig.value?.['4_spawn_rate']], () => {
     tableAiCache.clear();
     decisionGeneration += 1;
-    aiCatalogExpires = 0;
+    aiCatalog.invalidate();
   });
 
   onMounted(() => {
@@ -1455,6 +1453,7 @@ export function useGamerSession(activeRef) {
   });
 
   onUnmounted(() => {
+    aiCatalog.clear();
     tableAiCache.close();
     window.removeEventListener('keydown', handleKeydown);
     window.removeEventListener('beforeunload', handleBeforeUnload);

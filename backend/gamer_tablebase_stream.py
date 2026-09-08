@@ -15,7 +15,7 @@ from backend.auth.db import auth_db
 from backend.auth.service import parse_iso, utcnow
 from backend.gamer_tablebase import RouteRequest, check_query_budget
 from backend.gamer_tablebase_route import GamerRouteCursor
-from backend.gamer_stream_window import StreamWindow, MAX_WINDOW, STREAM_IDLE_SECONDS, MAX_STREAM_STEPS
+from backend.gamer_stream_window import StreamWindow, MAX_WINDOW, REMOTE_LOOKAHEAD, STREAM_IDLE_SECONDS, MAX_STREAM_STEPS
 from backend.quota.config import apply_pricing_multipliers, operation_cost_units, resolve_pricing_snapshot, table_multiplier_units, token_to_units
 from backend.quota.errors import InsufficientTokens
 from backend.quota.service import consume_operation_tokens_once, get_token_balance, has_numeric_result
@@ -55,6 +55,7 @@ class RouteSubscription:
     reader: object = None
     end: dict | None = None
     auth_checked: float = 0
+    balance: dict | None = None
 
     async def send(self, data):
         async with self.lock:
@@ -71,12 +72,26 @@ class RouteSubscription:
                 raise HTTPException(409, 'CATALOG_CHANGED')
             self.auth_checked = time.monotonic()
 
-    def affordable_limit(self):
-        cost = apply_pricing_multipliers(operation_cost_units('trainer_lookup_hit'),
+    def query_cost(self):
+        return apply_pricing_multipliers(operation_cost_units('trainer_lookup_hit'),
             table_multiplier_units(self.request.full_pattern), resolve_pricing_snapshot().global_multiplier_units)
-        balance = token_to_units(get_token_balance(self.user_id)['total'])
-        count = MAX_WINDOW if cost <= 0 else min(MAX_WINDOW, balance // cost)
-        return min(self.window.allow_through, self.window.produced + max(0, count))
+
+    def affordable_limit(self, max_window=None):
+        max_window = max_window or self.remote.max_window
+        cost = self.query_cost()
+        balance = token_to_units(self.balance['total'])
+        count = max_window if cost <= 0 else min(max_window, balance // cost)
+        return min(self.window.allow_through + REMOTE_LOOKAHEAD,
+                   self.window.produced + max(0, count), MAX_STREAM_STEPS - 1)
+
+    async def replenish_remote(self):
+        if self.remote is None or not self.attached.is_set():
+            return
+        allowed = self.affordable_limit()
+        # Cloud consumption, not browser consumption, drains the unpaid buffer.
+        if allowed > self.remote.allowed and (allowed - self.remote.allowed >= 4
+                or self.remote.allowed - self.window.produced <= 4):
+            await self.remote.credit(self.window.produced, allowed)
 
     async def lookup(self, cursor, seq):
         spec = TablebaseLookupSpec(cursor.encoded, self.descriptor['pattern'], str(self.descriptor['target']),
@@ -91,12 +106,13 @@ class RouteSubscription:
             handle.cancel()
 
     def bill(self, seq, item):
-        consume_operation_tokens_once(request_id=f'gamer-ai:{self.request.request_id}:{seq}',
-            user_id=self.user_id, session_id=self.session_id,
-            operation_key='trainer_lookup_hit' if has_numeric_result(item['results']) else 'trainer_lookup_miss',
-            full_pattern=self.request.full_pattern, idempotency_scope=f'gamer-ai:{self.fingerprint}:{seq}',
-            metadata={'source': 'gamer_ai', 'board_hex': item['lookup_board'], 'route_index': seq})
-        return get_token_balance(self.user_id)
+        with auth_db() as db:
+            consume_operation_tokens_once(request_id=f'gamer-ai:{self.request.request_id}:{seq}',
+                user_id=self.user_id, session_id=self.session_id, db=db,
+                operation_key='trainer_lookup_hit' if has_numeric_result(item['results']) else 'trainer_lookup_miss',
+                full_pattern=self.request.full_pattern, idempotency_scope=f'gamer-ai:{self.fingerprint}:{seq}',
+                metadata={'source': 'gamer_ai', 'board_hex': item['lookup_board'], 'route_index': seq})
+            return get_token_balance(self.user_id, db=db)
 
     async def produce(self):
         try:
@@ -107,6 +123,7 @@ class RouteSubscription:
             options['steps'] = 1
             cursor = GamerRouteCursor(options, ai_table_metadata(self.descriptor)['large_tiles'])
             await asyncio.to_thread(check_query_budget, self.user_id, request, self.fingerprint, 0)
+            self.balance = await asyncio.to_thread(get_token_balance, self.user_id)
             if self.descriptor['_provider'] == 'local':
                 self.reader = BookReaderDispatcher()
                 await asyncio.to_thread(self.reader.dispatch,
@@ -120,7 +137,7 @@ class RouteSubscription:
                 options.update(board_codes=[0 if v == 0 else v.bit_length()-1 for v in cursor.values],
                                rng_state=cursor.rng.state.copy(), random_only=False)
             if self.descriptor['_provider'] == 'remote' and remote_worker_registry.supports_gamer_stream(request.full_pattern):
-                allowed = await asyncio.to_thread(self.affordable_limit)
+                allowed = self.affordable_limit(remote_worker_registry.gamer_stream_window(request.full_pattern))
                 self.remote = await remote_worker_registry.open_gamer_stream(full_pattern=request.full_pattern,
                     pattern=self.descriptor['pattern'], target=self.descriptor['target'], options=options,
                     allow_through=max(0, allowed))
@@ -128,7 +145,10 @@ class RouteSubscription:
                 await self.window.wait(seq)
                 await asyncio.wait_for(self.attached.wait(), STREAM_IDLE_SECONDS)
                 await self.check()
-                await asyncio.to_thread(check_query_budget, self.user_id, request, self.fingerprint, seq)
+                # Advisory credit uses the last committed balance. The transaction below
+                # remains authoritative if another tab spends tokens concurrently.
+                if token_to_units(self.balance['total']) < self.query_cost():
+                    await asyncio.to_thread(check_query_budget, self.user_id, request, self.fingerprint, seq)
                 if self.remote is not None:
                     item = await self.remote.receive()
                     if item is None:
@@ -148,6 +168,7 @@ class RouteSubscription:
                 except asyncio.CancelledError:
                     await billing
                     raise
+                self.balance = balance
                 frame = {'type': 'result', 'seq': seq, **item, 'full_pattern': request.full_pattern,
                          'catalog_version': request.catalog_version, 'token_balance': balance}
                 self.frames[seq] = frame
@@ -156,10 +177,7 @@ class RouteSubscription:
                 if not cursor.advance(item['results'], item['dtype']):
                     break
                 # Credits are forwarded in advance, never one ACK per node.
-                if self.remote is not None and self.window.allow_through > self.remote.allowed:
-                    allowed = await asyncio.to_thread(self.affordable_limit)
-                    if allowed > self.remote.allowed:
-                        await self.remote.credit(self.window.consumed, allowed)
+                await self.replenish_remote()
             self.end = {'type': 'end', 'reason': 'route_end'}
         except asyncio.CancelledError:
             raise
@@ -265,6 +283,7 @@ class GamerStreamService:
                         raise HTTPException(409, 'STREAM_GONE')
                     await state.check()
                     balance = await asyncio.to_thread(get_token_balance, state.user_id)
+                    state.balance = balance
                     async with state.lock:
                         state.socket, state.sender = socket, sender
                         state.attached.set()
@@ -279,14 +298,11 @@ class GamerStreamService:
                 for seq in list(state.frames):
                     if seq < state.window.consumed:
                         del state.frames[seq]
-                if state.remote is not None and state.attached.is_set():
-                    allowed = await asyncio.to_thread(state.affordable_limit)
-                    if allowed > state.remote.allowed:
-                        try:
-                            await state.remote.credit(state.window.consumed, allowed)
-                        except Exception:
-                            await self.stop(key)
-                            raise HTTPException(503, 'TABLEBASE_UNAVAILABLE') from None
+                try:
+                    await state.replenish_remote()
+                except Exception:
+                    await self.stop(key)
+                    raise HTTPException(503, 'TABLEBASE_UNAVAILABLE') from None
                 await state.send({'type': 'window', 'allow_through': state.window.allow_through})
         except (ValueError, TypeError, ValidationError):
             await sender(socket, {'action': EVENT, 'data': {'route_id': route_id,

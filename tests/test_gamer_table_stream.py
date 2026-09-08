@@ -10,7 +10,7 @@ from backend import gamer_tablebase_stream as stream
 from backend.auth.db import init_auth_db, auth_db
 from backend.auth.service import create_session
 from backend.quota.service import get_token_balance
-from backend.gamer_stream_window import StreamWindow
+from backend.gamer_stream_window import StreamWindow, MAX_WINDOW
 
 
 class Cursor:
@@ -97,9 +97,10 @@ class GamerTableStreamTests(unittest.IsolatedAsyncioTestCase):
         return self.service.routes.get((self.user_id, data['route_id']))
 
     async def until(self, predicate):
-        async with asyncio.timeout(5):
+        async def poll():
             while not predicate():
                 await asyncio.sleep(.005)
+        await asyncio.wait_for(poll(), 5)
 
     async def test_window_stops_at_eight_then_continues_same_task_past_four_step_boundary(self):
         state = await self.open()
@@ -142,7 +143,7 @@ class GamerTableStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.calls),8)
 
     async def test_oversized_window_and_changed_retry_are_rejected(self):
-        self.assertIsNone(await self.open(allow_through=100))
+        self.assertIsNone(await self.open(allow_through=MAX_WINDOW))
         self.assertEqual(self.messages[-1][1]['status'],400)
         state=await self.open()
         await self.until(lambda:state.window.produced==7)
@@ -172,6 +173,74 @@ class GamerTableStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.messages[-1][1]['detail'],'STREAM_GONE')
         self.assertEqual(self.calls,[])
 
+    async def test_remote_lookahead_is_unpaid_and_ready_before_browser_credit(self):
+        class BufferedRemote:
+            max_window = MAX_WINDOW
+            def __init__(self, allowed):
+                self.initial_allowed = allowed
+                self.allowed = allowed
+                self.consumed = -1
+                self.credits = []
+            async def credit(self, consumed, allowed):
+                self.credits.append((consumed, allowed))
+                self.allowed = allowed
+            async def receive(self):
+                self.consumed += 1
+                assert self.consumed <= self.allowed
+                cursor = Cursor({}, 0)
+                cursor.index = self.consumed
+                return cursor.node({'left':.9}, 'float64')
+            async def close(self):
+                pass
+        opened = []
+        async def open_remote(**options):
+            remote = BufferedRemote(options['allow_through'])
+            opened.append(remote)
+            return remote
+        with patch.object(stream.remote_worker_registry, 'supports_gamer_stream', return_value=True), \
+             patch.object(stream.remote_worker_registry, 'gamer_stream_window', return_value=MAX_WINDOW), \
+             patch.object(stream.remote_worker_registry, 'open_gamer_stream', side_effect=open_remote):
+            state = await self.open()
+            await self.until(lambda: state.window.produced == 7)
+            remote = opened[0]
+            self.assertEqual(remote.initial_allowed, MAX_WINDOW-1)
+            self.assertLessEqual(remote.allowed-remote.consumed, MAX_WINDOW)
+            self.assertEqual(remote.consumed, 7)
+            with auth_db() as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM token_operation_requests').fetchone()[0], 8)
+            await self.service.handle(stream.CREDIT, dict(route_id=state.request.request_id,
+                consumed=7, allow_through=39), self.session, self.socket, self.send)
+            await self.until(lambda: state.window.produced == 39)
+            self.assertEqual(remote.consumed, 39)
+            self.assertTrue(all(allowed-consumed <= MAX_WINDOW for consumed,allowed in remote.credits))
+            # Spending elsewhere cannot turn already-computed results into free published nodes.
+            with auth_db() as db:
+                db.execute('UPDATE token_accounts SET paid_balance_units=0,bonus_balance_units=0 WHERE user_id=?',(self.user_id,))
+            await self.service.handle(stream.CREDIT, dict(route_id=state.request.request_id,
+                consumed=39, allow_through=50), self.session, self.socket, self.send)
+            await self.until(lambda: state.task.done())
+            self.assertEqual(state.end['status'],402)
+            self.assertEqual(state.window.produced,39)
+            with auth_db() as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM token_operation_requests').fetchone()[0],40)
+
+    async def test_billing_and_balance_share_one_transaction_and_rollback_together(self):
+        state=await self.open()
+        await self.until(lambda:state.window.produced==7)
+        before=get_token_balance(self.user_id)
+        item=Cursor({},0).node({'left':.9},'float64')
+        with patch.object(stream,'auth_db',wraps=auth_db) as connection:
+            balance=state.bill(100,item)
+            self.assertEqual(connection.call_count,1)
+            self.assertEqual(state.bill(100,item),balance)
+        self.assertLess(balance['total'],before['total'])
+        with patch.object(stream,'get_token_balance',side_effect=RuntimeError('balance read failed')):
+            with self.assertRaises(RuntimeError): state.bill(101,item)
+        self.assertEqual(get_token_balance(self.user_id),balance)
+        with auth_db() as db:
+            self.assertIsNone(db.execute('SELECT 1 FROM token_operation_requests WHERE request_id=?',
+                (f'gamer-ai:{state.request.request_id}:101',)).fetchone())
+
 
 class StreamWindowTests(unittest.IsolatedAsyncioTestCase):
     async def test_cumulative_credit_and_hard_limit(self):
@@ -182,5 +251,11 @@ class StreamWindowTests(unittest.IsolatedAsyncioTestCase):
         window.update(4,20); await waiting
         window.update(2,10)
         self.assertEqual((window.consumed,window.allow_through),(4,20))
-        for consumed,allowed in [(8,20),(7,40),(True,20),(-1,32)]:
+        for consumed,allowed in [(8,20),(7,7+MAX_WINDOW+1),(True,20),(-1,MAX_WINDOW)]:
             with self.assertRaises(ValueError): window.update(consumed,allowed)
+
+    async def test_old_worker_window_remains_bounded_to_32(self):
+        window=StreamWindow(31,max_window=32)
+        window.produced=7
+        window.update(7,39)
+        with self.assertRaises(ValueError): window.update(7,40)

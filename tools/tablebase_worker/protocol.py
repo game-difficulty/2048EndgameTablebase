@@ -12,7 +12,8 @@ PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
 CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
 CAPABILITY_GAMER_STREAM_V1 = "gamer_stream_v1"
-WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1)
+CAPABILITY_GAMER_STREAM_V2 = "gamer_stream_v2"
+WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1, CAPABILITY_GAMER_STREAM_V2)
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 BOARD_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 SEED_RE = re.compile(r"^[0-9a-fA-F]{32}$")
@@ -227,7 +228,8 @@ def validate_request(
         except ValueError as exc:
             raise ProtocolError('INVALID_REQUEST', str(exc), request_id) from exc
         allowed = message.get('allow_through', 7)
-        if type(allowed) is not int or not 0 <= allowed < 32:
+        from backend.gamer_stream_window import MAX_WINDOW
+        if type(allowed) is not int or not 0 <= allowed < MAX_WINDOW:
             raise ProtocolError('INVALID_REQUEST', 'Invalid stream window', request_id)
         return Request(message_type, request_id, full_pattern, pattern, target,
                        gamer_options=options, allow_through=allowed)

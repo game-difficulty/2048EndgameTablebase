@@ -31,6 +31,25 @@ class FakeWebSocket:
 
 
 class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_window_negotiation_and_unpaid_queue_bound(self):
+        options=dict(board_codes=[1]+[0]*15,rng_state=[1,2,3,4],steps=1,
+                     difficulty=0,spawn_rate4=.1,random_only=False)
+        for capabilities,limit in [(['gamer_stream_v1'],32),(['gamer_stream_v1','gamer_stream_v2'],64)]:
+            _,worker=await self._connect(capabilities=capabilities)
+            self.assertEqual(self.registry.gamer_stream_window('free11_512'),limit)
+            remote=await self.registry.open_gamer_stream(full_pattern='free11_512',pattern='free11',
+                target='512',options=options,allow_through=limit-1)
+            self.assertEqual(remote.queue.maxsize,limit)
+            for seq in range(limit):
+                await self.registry._handle_message(worker,dict(type='GAMER_STREAM_NODE',
+                    request_id=remote.request_id,seq=seq,item={'index':seq}))
+            self.assertEqual(remote.queue.qsize(),limit)
+            self.assertEqual(await remote.receive(),{'index':0})
+            await remote.close()
+            with self.assertRaises(ValueError):
+                await self.registry.open_gamer_stream(full_pattern='free11_512',pattern='free11',
+                    target='512',options=options,allow_through=limit)
+
     async def test_continuous_gamer_stream_nodes_credit_and_terminal_frame(self):
         websocket, worker = await self._connect(capabilities=['gamer_stream_v1'])
         self.assertTrue(self.registry.supports_gamer_stream('free11_512'))
