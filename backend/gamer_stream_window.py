@@ -7,6 +7,20 @@ STREAM_IDLE_SECONDS = 90
 MAX_STREAM_STEPS = 100_000
 
 
+async def wait_stream_event(event, timeout):
+    # Python 3.10 wait_for can swallow cancellation when event.wait finishes
+    # concurrently. Keep the timeout separate from the producer's cancellation.
+    waiter = asyncio.create_task(event.wait())
+    try:
+        done, _ = await asyncio.wait({waiter}, timeout=timeout)
+        if not done:
+            raise asyncio.TimeoutError
+        return waiter.result()
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
 class StreamWindow:
     def __init__(self, allow_through=7, *, max_window=MAX_WINDOW):
         self.max_window = max_window
@@ -28,4 +42,4 @@ class StreamWindow:
     async def wait(self, index):
         while index > self.allow_through:
             self.changed.clear()
-            await asyncio.wait_for(self.changed.wait(), STREAM_IDLE_SECONDS)
+            await wait_stream_event(self.changed, STREAM_IDLE_SECONDS)
