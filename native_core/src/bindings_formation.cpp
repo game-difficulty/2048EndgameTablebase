@@ -343,6 +343,21 @@ nb::dict bc_cold_lookup_to_python(const BCCompressedResult::ColdLookupResult &lo
     return result;
 }
 
+nb::dict bc_compress_stats_to_python(const BCCompressedResult::CompressStats &stats) {
+    nb::dict result;
+    result["cells"] = stats.cells;
+    result["non_empty_cells"] = stats.non_empty_cells;
+    result["bucket_blocks"] = stats.bucket_blocks;
+    result["value_blocks"] = stats.value_blocks;
+    result["success_values"] = stats.success_values;
+    result["live_rows"] = stats.live_rows;
+    result["output_bytes"] = stats.output_bytes;
+    result["original_position_bytes"] = stats.original_position_bytes;
+    result["original_success_bytes"] = stats.original_success_bytes;
+    result["total_seconds"] = stats.total_seconds;
+    return result;
+}
+
 } // namespace
 
 NB_MODULE(formation_core, m) {
@@ -937,6 +952,35 @@ NB_MODULE(formation_core, m) {
         "ad_key"_a,
         "canonical_board"_a,
         "column"_a
+    );
+
+    m.def(
+        "compress_bc_exact_result",
+        [](const std::string &position_path,
+           const std::string &success_path,
+           const std::string &output_path,
+           uint32_t target_rank,
+           uint32_t worker_count) {
+            BCCompressedResult::CompressOptions options;
+            options.worker_count = worker_count;
+            BCCompressedResult::CompressStats stats;
+            {
+                nb::gil_scoped_release release;
+                const BC::BCLut lut(BC::detail::bc_family_runner_legal_tiles(target_rank));
+                stats = BCCompressedResult::compress_exact_layer_to_result(
+                    NativePath::from_utf8(position_path),
+                    NativePath::from_utf8(success_path),
+                    lut,
+                    NativePath::from_utf8(output_path),
+                    options);
+            }
+            return bc_compress_stats_to_python(stats);
+        },
+        "position_path"_a,
+        "success_path"_a,
+        "output_path"_a,
+        "target_rank"_a,
+        "worker_count"_a = 0U
     );
 
     m.def(

@@ -1018,6 +1018,59 @@ inline void bc_family_runner_add_final_compress_stats(
         bc_family_runner_estimate_compressed_output_bytes(position_path, success_path));
 }
 
+[[nodiscard]] inline StoragePaths::ReservedWritePath bc_family_runner_reserve_uncompressed_archive_output(
+    const BCFamilySolveRunOptions &options,
+    uint32_t ordinal,
+    const std::filesystem::path &position_path,
+    const std::filesystem::path &success_path
+) {
+    auto required_file_size = [](const std::filesystem::path &path) {
+        std::error_code ec;
+        const uintmax_t size = std::filesystem::file_size(path, ec);
+        if (ec) {
+            throw std::runtime_error(
+                "BC uncompressed archive file_size failed for " +
+                NativePath::to_utf8_string(path) + ": " + ec.message());
+        }
+        return static_cast<uint64_t>(size);
+    };
+    const uint64_t required_bytes = StoragePaths::saturating_add(
+        required_file_size(position_path),
+        required_file_size(success_path));
+    std::vector<std::string> reasons;
+    for (const std::filesystem::path &dir : bc_family_runner_archive_dirs(options)) {
+        std::error_code create_ec;
+        std::filesystem::create_directories(dir, create_ec);
+        if (create_ec) {
+            reasons.push_back(
+                "create directory failed for " + NativePath::to_utf8_string(dir) +
+                ": " + create_ec.message());
+            continue;
+        }
+        const std::string candidate = NativePath::to_utf8_string(
+            bc_family_runner_position_path(dir, options.prefix, ordinal));
+        std::string reason;
+        if (StoragePaths::try_reserve_for_path(
+                candidate,
+                required_bytes,
+                StoragePaths::kDefaultSafetyMarginBytes,
+                &reason)) {
+            return StoragePaths::ReservedWritePath(candidate, required_bytes, true);
+        }
+        reasons.push_back(std::move(reason));
+    }
+    std::string message =
+        "BC uncompressed archive has no output path with enough free space (required=" +
+        std::to_string(required_bytes) +
+        ", margin=" + std::to_string(StoragePaths::kDefaultSafetyMarginBytes) + ")";
+    for (const std::string &reason : reasons) {
+        if (!reason.empty()) {
+            message += "\n" + reason;
+        }
+    }
+    throw std::runtime_error(message);
+}
+
 [[nodiscard]] inline std::optional<uint32_t> bc_family_runner_parse_archive_tmp_ordinal(
     const std::string &name,
     const std::string &prefix,
@@ -2138,9 +2191,9 @@ template <typename StorageT>
     const std::filesystem::path exact_success_path = retired.success_path;
     const std::filesystem::path archive_dir =
         options.archive_output_dir.empty() ? options.solved_output_dir : options.archive_output_dir;
-    const std::filesystem::path position_target =
+    const std::filesystem::path primary_position_target =
         bc_family_runner_position_path(archive_dir, options.prefix, metric.ordinal);
-    const std::filesystem::path success_target =
+    const std::filesystem::path primary_success_target =
         bc_family_runner_success_path(archive_dir, options.prefix, metric.ordinal);
     if (!archive_dir.empty()) {
         std::filesystem::create_directories(archive_dir);
@@ -2183,8 +2236,8 @@ template <typename StorageT>
         }
         retired = BCFamilySolveFrontierLayer<StorageT>();
         const double publish_t0 = bc_family_solve_runner_now_seconds();
-        bc_family_runner_move_or_copy_file(exact_position_path, position_target);
-        bc_family_runner_move_or_copy_file(exact_success_path, success_target);
+        bc_family_runner_move_or_copy_file(exact_position_path, primary_position_target);
+        bc_family_runner_move_or_copy_file(exact_success_path, primary_success_target);
         metric.archive_prune_write_seconds =
             bc_family_solve_runner_now_seconds() - publish_t0;
         metric.total_seconds = metric.archive_prune_write_seconds;
@@ -2240,8 +2293,8 @@ template <typename StorageT>
         }
         retired = BCFamilySolveFrontierLayer<StorageT>();
         const double publish_t0 = bc_family_solve_runner_now_seconds();
-        bc_family_runner_move_or_copy_file(exact_position_path, position_target);
-        bc_family_runner_move_or_copy_file(exact_success_path, success_target);
+        bc_family_runner_move_or_copy_file(exact_position_path, primary_position_target);
+        bc_family_runner_move_or_copy_file(exact_success_path, primary_success_target);
         metric.archive_prune_write_seconds =
             bc_family_solve_runner_now_seconds() - publish_t0;
         metric.total_seconds =
@@ -2364,6 +2417,16 @@ template <typename StorageT>
         return metric;
     }
 
+    auto archive_lease = bc_family_runner_reserve_uncompressed_archive_output(
+        options,
+        metric.ordinal,
+        exact_position_path,
+        exact_success_path);
+    const std::filesystem::path position_target = NativePath::from_utf8(archive_lease.path());
+    const std::filesystem::path success_target = bc_family_runner_success_path(
+        position_target.parent_path(),
+        options.prefix,
+        metric.ordinal);
     const std::filesystem::path position_tmp = position_target.string() + ".archive_tmp";
     const std::filesystem::path success_tmp = success_target.string() + ".archive_tmp";
     bc_family_runner_remove_file_quiet(position_tmp);
@@ -2498,6 +2561,7 @@ template <typename StorageT>
         std::filesystem::resize_file(position_target, position_bytes);
         std::filesystem::resize_file(success_target, success_bytes);
     }
+    archive_lease.release();
     if (options.compress) {
         bc_family_runner_add_final_compress_stats(
             metric,
@@ -2834,6 +2898,37 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             first_solve_ordinal = resume_next_ordinal;
             open_frontier_pair_for(first_solve_ordinal);
             initialized_from_checkpoint = true;
+
+            // The checkpoint is published before its retired +4 layer is archived.
+            // Recover any such stranded exact layer before advancing the solve again.
+            for (int64_t retired_ordinal = resume_next_ordinal + 3;
+                 retired_ordinal <= static_cast<int64_t>(max_ordinal) + 1;
+                 ++retired_ordinal) {
+                if (!bc_family_runner_find_exact_layer_paths(
+                        options,
+                        static_cast<uint32_t>(retired_ordinal)).has_value()) {
+                    continue;
+                }
+                BCFamilySolveFrontierLayer<StorageT> retired =
+                    bc_family_runner_open_frontier<StorageT>(
+                        options,
+                        retired_ordinal,
+                        lut,
+                        possible_8tile_sums);
+                BCFamilySolveRunLayerMetric archive_metric =
+                    bc_family_runner_archive_prune_retired<StorageT>(
+                        options,
+                        retired,
+                        deletion_state,
+                        lut);
+                if (archive_metric.position_bytes != 0U ||
+                    archive_metric.success_bytes != 0U) {
+                    bc_family_runner_emit_metric<StorageT>(
+                        run_result,
+                        callback,
+                        archive_metric);
+                }
+            }
         }
     }
 
