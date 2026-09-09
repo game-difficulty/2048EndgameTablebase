@@ -2131,27 +2131,26 @@ ColdLookupResult lookup_exadbook_cold(
     return result;
 }
 
-bool sample_exad_cold(
+ColdSampleResult sample_exad_cold(
     const std::string& compressed_path,
-    const std::string& exadlut_path,
-    uint64_t& board) {
+    const std::string& exadlut_path) {
     try {
         const auto index_ptr = cached_compressed_index(compressed_path);
         const auto& index = *index_ptr;
         ExadLutPointReader lut(exadlut_path);
         if (index.header.lut_signature != 0 && lut.signature() != 0 &&
             index.header.lut_signature != lut.signature()) {
-            return false;
+            return {};
         }
         if (!physical_metadata_matches_lut(index.header, lut.header())) {
-            return false;
+            return {};
         }
         if (index.header.live_board_count == 0U || index.header.bucket_block_count == 0U) {
-            return false;
+            return {};
         }
         std::ifstream compressed_in(NativePath::from_utf8(compressed_path), std::ios::binary);
         if (!compressed_in) {
-            return false;
+            return {};
         }
 
         static thread_local std::mt19937 rng(std::random_device{}());
@@ -2259,37 +2258,37 @@ bool sample_exad_cold(
                     continue;
                 }
             }
+            uint64_t board = 0ULL;
             if (reconstruct_board_from_key_rank(lut, key, rank, board)) {
-                return true;
+                return {true, board, index.header.original_board_sum};
             }
         }
     } catch (...) {
-        return false;
+        return {};
     }
-    return false;
+    return {};
 }
 
-bool sample_exadbook_cold(
+ColdSampleResult sample_exadbook_cold(
     const std::string& exadbook_path,
-    const std::string& exadlut_path,
-    uint64_t& board) {
+    const std::string& exadlut_path) {
     try {
         std::ifstream in(NativePath::from_utf8(exadbook_path), std::ios::binary);
         if (!in) {
-            return false;
+            return {};
         }
         const auto index_ptr = cached_solved_file_index(exadbook_path);
         const auto& index = *index_ptr;
         ExadLutPointReader lut(exadlut_path);
         if (index.header.lut_signature != 0 && lut.signature() != 0 &&
             index.header.lut_signature != lut.signature()) {
-            return false;
+            return {};
         }
         if (!physical_metadata_matches_lut(index.header, lut.header())) {
-            return false;
+            return {};
         }
         if (index.header.live_board_count == 0U) {
-            return false;
+            return {};
         }
 
         static thread_local std::mt19937 rng(std::random_device{}());
@@ -2306,14 +2305,15 @@ bool sample_exadbook_cold(
             if (!read_solved_bucket_for_local_row(in, slot, local_row, bucket)) {
                 continue;
             }
+            uint64_t board = 0ULL;
             if (sample_from_solved_bucket(in, index, slot, lut, local_row, bucket, board)) {
-                return true;
+                return {true, board, index.header.original_board_sum};
             }
         }
     } catch (...) {
-        return false;
+        return {};
     }
-    return false;
+    return {};
 }
 
 } // namespace EXADCompressedResult

@@ -190,7 +190,7 @@ class DispatcherCommon(BaseDispatcher):
         _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG["uint32"])
         r1 = {
             key: (
-                value + zero_val
+                value - zero_val
                 if isinstance(value, (int, float, np.integer, np.floating))
                 else value
             )

@@ -246,6 +246,14 @@ std::vector<OrderedReaderEntry> blank_direction_entries() {
     };
 }
 
+struct PreferredResultAccumulator {
+    bool has_best = false;
+    double best_success_rate = 0.0;
+    std::vector<OrderedReaderEntry> entries = blank_direction_entries();
+    std::string dtype;
+    int operation_index = 0;
+};
+
 std::vector<OrderedReaderEntry> question_entries() {
     return {{"?", ReaderValueKind::String, 0.0, "?"}};
 }
@@ -275,6 +283,37 @@ std::vector<OrderedReaderEntry> sort_adjusted_entries(
     result.insert(result.end(), numeric_entries.begin(), numeric_entries.end());
     result.insert(result.end(), other_entries.begin(), other_entries.end());
     return result;
+}
+
+std::optional<double> first_numeric_value(const std::vector<OrderedReaderEntry> &entries) {
+    for (const auto &entry : entries) {
+        if (entry.kind == ReaderValueKind::Numeric) {
+            return entry.number;
+        }
+    }
+    return std::nullopt;
+}
+
+void consider_preferred_result(
+    PreferredResultAccumulator &accumulator,
+    const std::vector<OrderedReaderEntry> &entries,
+    const std::string &dtype,
+    int operation_index
+) {
+    const std::optional<double> raw_value = first_numeric_value(entries);
+    if (!raw_value) {
+        return;
+    }
+    const double success_rate = *raw_value - dtype_info_for_name(dtype).zero_value;
+    if (success_rate <= 0.0 ||
+        (accumulator.has_best && success_rate <= accumulator.best_success_rate)) {
+        return;
+    }
+    accumulator.has_best = true;
+    accumulator.best_success_rate = success_rate;
+    accumulator.entries = entries;
+    accumulator.dtype = dtype;
+    accumulator.operation_index = operation_index;
 }
 
 template <typename T>
@@ -2249,14 +2288,12 @@ ReaderMoveResult evaluate_classic_result_candidates(
         return {blank_direction_entries(), {}};
     }
 
-    std::vector<OrderedReaderEntry> final_results = blank_direction_entries();
-    double max_success_rate = 0.0;
-    std::string success_rate_dtype;
+    PreferredResultAccumulator preferred;
     const std::string filename = pattern_full + "_" + std::to_string(nums) + ".book";
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
-        if (!NativePath::exists(path_entry.first) || max_success_rate > 0.0) {
+        if (!NativePath::exists(path_entry.first) || preferred.has_best) {
             continue;
         }
         const ClassicLookupContext lookup = make_classic_lookup_context(path_entry.first, filename, path_entry.second);
@@ -2308,33 +2345,24 @@ ReaderMoveResult evaluate_classic_result_candidates(
             }
 
             const std::vector<OrderedReaderEntry> sorted_entries = sort_adjusted_entries(adjusted_entries);
-            bool has_numeric = false;
-            double first_numeric = 0.0;
-            for (const auto &entry : sorted_entries) {
-                if (entry.kind == ReaderValueKind::Numeric) {
-                    has_numeric = true;
-                    first_numeric = entry.number;
-                    break;
-                }
-            }
-            if (!has_numeric) {
+            if (!first_numeric_value(sorted_entries)) {
                 continue;
             }
 
-            reader.last_operation_index_ = operation_index;
             if (reader.prefer_max_result_) {
-                if (first_numeric > max_success_rate) {
-                    max_success_rate = first_numeric;
-                    final_results = sorted_entries;
-                    success_rate_dtype = path_entry.second;
-                }
+                consider_preferred_result(
+                    preferred, sorted_entries, path_entry.second, operation_index);
             } else {
+                reader.last_operation_index_ = operation_index;
                 return {sorted_entries, path_entry.second};
             }
         }
     }
 
-    return {final_results, success_rate_dtype};
+    if (preferred.has_best) {
+        reader.last_operation_index_ = preferred.operation_index;
+    }
+    return {preferred.entries, preferred.dtype};
 }
 
 ReaderMoveResult evaluate_advanced_result_candidates(
@@ -2352,14 +2380,12 @@ ReaderMoveResult evaluate_advanced_result_candidates(
         return {blank_direction_entries(), {}};
     }
 
-    std::vector<OrderedReaderEntry> final_results = blank_direction_entries();
-    double max_success_rate = 0.0;
-    std::string success_rate_dtype;
+    PreferredResultAccumulator preferred;
     const std::string filename = pattern_full + "_" + std::to_string(nums) + "b";
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
-        if (!NativePath::exists(path_entry.first) || max_success_rate > 0.0) {
+        if (!NativePath::exists(path_entry.first) || preferred.has_best) {
             continue;
         }
 
@@ -2411,33 +2437,24 @@ ReaderMoveResult evaluate_advanced_result_candidates(
             }
 
             const std::vector<OrderedReaderEntry> sorted_entries = sort_adjusted_entries(adjusted_entries);
-            bool has_numeric = false;
-            double first_numeric = 0.0;
-            for (const auto &entry : sorted_entries) {
-                if (entry.kind == ReaderValueKind::Numeric) {
-                    has_numeric = true;
-                    first_numeric = entry.number;
-                    break;
-                }
-            }
-            if (!has_numeric) {
+            if (!first_numeric_value(sorted_entries)) {
                 continue;
             }
 
-            reader.last_operation_index_ = operation_index;
             if (reader.prefer_max_result_) {
-                if (first_numeric > max_success_rate) {
-                    max_success_rate = first_numeric;
-                    final_results = sorted_entries;
-                    success_rate_dtype = path_entry.second;
-                }
+                consider_preferred_result(
+                    preferred, sorted_entries, path_entry.second, operation_index);
             } else {
+                reader.last_operation_index_ = operation_index;
                 return {sorted_entries, path_entry.second};
             }
         }
     }
 
-    return {final_results, success_rate_dtype};
+    if (preferred.has_best) {
+        reader.last_operation_index_ = preferred.operation_index;
+    }
+    return {preferred.entries, preferred.dtype};
 }
 
 ReaderMoveResult evaluate_exad_result_candidates(
@@ -2455,9 +2472,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
         return {blank_direction_entries(), {}};
     }
 
-    std::vector<OrderedReaderEntry> final_results = blank_direction_entries();
-    double max_success_rate = 0.0;
-    std::string success_rate_dtype;
+    PreferredResultAccumulator preferred;
     const std::string filename = pattern_full + "_" + std::to_string(nums) + ".exadbook";
     const std::optional<fs::path> exadlut_path = first_existing_exad_lut_path(path_list, pattern_full);
     if (!exadlut_path) {
@@ -2466,7 +2481,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
     const std::vector<int> operations = operation_sequence(reader.is_variant_, reader.last_operation_index_);
 
     for (const auto &path_entry : path_list) {
-        if (!NativePath::exists(path_entry.first) || max_success_rate > 0.0) {
+        if (!NativePath::exists(path_entry.first) || preferred.has_best) {
             continue;
         }
 
@@ -2524,33 +2539,24 @@ ReaderMoveResult evaluate_exad_result_candidates(
             }
 
             const std::vector<OrderedReaderEntry> sorted_entries = sort_adjusted_entries(adjusted_entries);
-            bool has_numeric = false;
-            double first_numeric = 0.0;
-            for (const auto &entry : sorted_entries) {
-                if (entry.kind == ReaderValueKind::Numeric) {
-                    has_numeric = true;
-                    first_numeric = entry.number;
-                    break;
-                }
-            }
-            if (!has_numeric) {
+            if (!first_numeric_value(sorted_entries)) {
                 continue;
             }
 
-            reader.last_operation_index_ = operation_index;
             if (reader.prefer_max_result_) {
-                if (first_numeric > max_success_rate) {
-                    max_success_rate = first_numeric;
-                    final_results = sorted_entries;
-                    success_rate_dtype = path_entry.second;
-                }
+                consider_preferred_result(
+                    preferred, sorted_entries, path_entry.second, operation_index);
             } else {
+                reader.last_operation_index_ = operation_index;
                 return {sorted_entries, path_entry.second};
             }
         }
     }
 
-    return {final_results, success_rate_dtype};
+    if (preferred.has_best) {
+        reader.last_operation_index_ = preferred.operation_index;
+    }
+    return {preferred.entries, preferred.dtype};
 }
 
 ReaderMoveResult evaluate_ex_result_candidates(
@@ -2737,7 +2743,7 @@ ReaderMoveResult evaluate_bc_result_candidates(
     return {blank_direction_entries(), "uint32"};
 }
 
-bool parse_bc_layer_filename(
+bool parse_numbered_layer_filename(
     const fs::path &path,
     const std::string &pattern_full,
     const std::string &extension,
@@ -2787,7 +2793,7 @@ std::vector<std::pair<uint32_t, fs::path>> bc_compressed_candidates(
                 continue;
             }
             uint32_t ordinal = 0U;
-            if (parse_bc_layer_filename(
+            if (parse_numbered_layer_filename(
                     entry.path(),
                     pattern_full,
                     BCCompressedResult::kCompressedLayerFileExtension,
@@ -2838,9 +2844,9 @@ std::vector<BCExactCandidate> bc_exact_candidates(
                 continue;
             }
             uint32_t ordinal = 0U;
-            if (parse_bc_layer_filename(entry.path(), pattern_full, ".bcpos", ordinal)) {
+            if (parse_numbered_layer_filename(entry.path(), pattern_full, ".bcpos", ordinal)) {
                 partials[ordinal].position_paths.push_back(entry.path());
-            } else if (parse_bc_layer_filename(entry.path(), pattern_full, ".bcsuc", ordinal)) {
+            } else if (parse_numbered_layer_filename(entry.path(), pattern_full, ".bcsuc", ordinal)) {
                 partials[ordinal].success_paths.push_back(entry.path());
             }
         }
@@ -2862,6 +2868,67 @@ std::vector<BCExactCandidate> bc_exact_candidates(
         return lhs.ordinal < rhs.ordinal;
     });
     return candidates;
+}
+
+std::vector<uint32_t> exad_layer_ordinals(
+    const fs::path &root,
+    const std::string &pattern_full
+) {
+    std::vector<uint32_t> ordinals;
+    try {
+        if (!fs::exists(root) || !fs::is_directory(root)) {
+            return ordinals;
+        }
+        constexpr std::array<const char *, 3> extensions = {
+            ".exadbook",
+            EXADCompressedResult::kCompressedLayerFileExtension,
+            ".exadbook.exadzbook",
+        };
+        for (const auto &entry : fs::directory_iterator(root)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            uint32_t ordinal = 0U;
+            for (const char *extension : extensions) {
+                if (parse_numbered_layer_filename(
+                        entry.path(), pattern_full, extension, ordinal)) {
+                    ordinals.push_back(ordinal);
+                    break;
+                }
+            }
+        }
+    } catch (...) {
+        return {};
+    }
+    std::sort(ordinals.begin(), ordinals.end());
+    ordinals.erase(std::unique(ordinals.begin(), ordinals.end()), ordinals.end());
+    return ordinals;
+}
+
+std::optional<uint64_t> playable_exad_sample(
+    const EXADCompressedResult::ColdSampleResult &sample,
+    const AdvancedPatternSpec &spec,
+    const FormationAD::MaskerContext &masker,
+    std::mt19937 &rng
+) {
+    if (!sample.found) {
+        return std::nullopt;
+    }
+    std::vector<uint64_t> boards = FormationAD::unmask_board(
+        sample.board,
+        sample.original_board_sum,
+        masker.tiles_combination_table,
+        masker.permutation_table,
+        masker.param
+    );
+    std::shuffle(boards.begin(), boards.end(), rng);
+    for (uint64_t physical_board : boards) {
+        if (is_pattern(physical_board, spec.pattern_masks)) {
+            return apply_sym_like(
+                physical_board, static_cast<int>(spec.inverse_physical_transform));
+        }
+    }
+    return std::nullopt;
 }
 
 bool bc_result_has_numeric(const ReaderMoveResult &result) {
@@ -3066,7 +3133,8 @@ uint64_t sample_advanced_book_state(
 uint64_t sample_exad_book_state(
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full,
-    int inverse_transform,
+    const AdvancedPatternSpec &spec,
+    const FormationAD::MaskerContext &masker,
     double spawn_rate4
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -3075,33 +3143,43 @@ uint64_t sample_exad_book_state(
         return 0ULL;
     }
     for (const auto &path_entry : path_list) {
-        std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-        while (!book_indices.empty()) {
-            std::uniform_int_distribution<size_t> pick(0, book_indices.size() - 1U);
-            const size_t chosen = pick(rng);
-            const int book_id = book_indices[chosen];
-            book_indices.erase(book_indices.begin() + static_cast<ptrdiff_t>(chosen));
+        const fs::path root = NativePath::from_utf8(path_entry.first);
+        std::vector<uint32_t> layer_ordinals = exad_layer_ordinals(root, pattern_full);
+        const auto first_above_initial_range = std::upper_bound(
+            layer_ordinals.begin(), layer_ordinals.end(), 9U);
+        if (first_above_initial_range != layer_ordinals.begin()) {
+            layer_ordinals.erase(first_above_initial_range, layer_ordinals.end());
+            std::shuffle(layer_ordinals.begin(), layer_ordinals.end(), rng);
+        } else if (layer_ordinals.size() > 1U) {
+            layer_ordinals.resize(1U);
+        }
+        for (uint32_t layer_ordinal : layer_ordinals) {
+            const std::string layer_name = pattern_full + "_" + std::to_string(layer_ordinal);
+            const fs::path exadbook_path = root / (layer_name + ".exadbook");
+            EXADCompressedResult::ColdSampleResult sample;
 
-            const fs::path exadbook_path =
-                NativePath::from_utf8(path_entry.first) / (pattern_full + "_" + std::to_string(book_id) + ".exadbook");
-            uint64_t state = 0ULL;
-            if (fs::exists(exadbook_path) &&
-                EXADCompressedResult::sample_exadbook_cold(
+            if (fs::exists(exadbook_path)) {
+                sample = EXADCompressedResult::sample_exadbook_cold(
                     NativePath::to_utf8_string(exadbook_path),
-                    NativePath::to_utf8_string(*exadlut_path),
-                    state)) {
-                return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
+                    NativePath::to_utf8_string(*exadlut_path));
             }
-            for (const fs::path &candidate : exad_compressed_candidates(exadbook_path)) {
-                if (!fs::exists(candidate)) {
-                    continue;
-                }
-                if (EXADCompressedResult::sample_exad_cold(
+            if (!sample.found) {
+                for (const fs::path &candidate : exad_compressed_candidates(exadbook_path)) {
+                    if (!fs::exists(candidate)) {
+                        continue;
+                    }
+                    sample = EXADCompressedResult::sample_exad_cold(
                         NativePath::to_utf8_string(candidate),
-                        NativePath::to_utf8_string(*exadlut_path),
-                        state)) {
-                    return gen_new_num(apply_sym_like(state, inverse_transform), static_cast<float>(spawn_rate4)).first;
+                        NativePath::to_utf8_string(*exadlut_path));
+                    if (sample.found) {
+                        break;
+                    }
                 }
+            }
+            const std::optional<uint64_t> state = playable_exad_sample(
+                sample, spec, masker, rng);
+            if (state) {
+                return gen_new_num(*state, static_cast<float>(spawn_rate4)).first;
             }
         }
     }
@@ -3310,7 +3388,8 @@ uint64_t EXADBookReader::get_random_state(
     return sample_exad_book_state(
         path_list,
         pattern_full,
-        static_cast<int>(spec_.inverse_physical_transform),
+        spec_,
+        masker_,
         spawn_rate4
     );
 }
