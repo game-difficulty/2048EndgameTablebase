@@ -644,6 +644,8 @@ frontend_dist_path = get_resource_path(os.path.join("frontend", "dist"))
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
     if "--backend-server-child" in sys.argv:
         child_port = SERVER_PORT
         try:
@@ -655,8 +657,13 @@ if __name__ == "__main__":
         run_backend_server(child_port, host=SERVER_BIND_HOST)
         raise SystemExit(0)
 
+    if "--ai-test" in sys.argv:
+        from backend.ai_batch import main as run_ai_batch
+
+        argument_index = sys.argv.index("--ai-test")
+        raise SystemExit(run_ai_batch(sys.argv[argument_index + 1 :]))
+
     is_frozen = getattr(sys, "frozen", False)
-    multiprocessing.freeze_support()
     atexit.register(stop_server_process)
 
     for sig in (

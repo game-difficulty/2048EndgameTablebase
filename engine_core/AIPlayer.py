@@ -622,6 +622,7 @@ class CoreAILogic:
         self.last_sum = 0
         self.last_prune = np.uint8(0)
         self.last_move = ""
+        self.last_table = ""
         self.time_ratio = 4.0
         self.time_limit_ratio = 1.0
 
@@ -754,6 +755,7 @@ class CoreAILogic:
                 board, ai_player, move, table_type, win_rates, board_sum, threshold
             ):
                 self.last_move = "L3"
+                self.last_table = f"L3_{table_type}"
                 return move
 
         is_5tiler = (
@@ -872,6 +874,7 @@ class CoreAILogic:
         self.last_depth = final_depth
         self.last_prune = ai_player.prune
         self.last_move = "search"
+        self.last_table = ""
         # print(scores)
 
         return best_op

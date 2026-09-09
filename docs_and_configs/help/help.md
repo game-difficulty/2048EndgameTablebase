@@ -645,7 +645,17 @@ The strongest 2048 AI available.
 | 26.49% | 13.38%    | 1.41%     | 51.50%   | 7.22%      |
 
 ## 7.2 AI Testing
-Testing requires basic programming knowledge. Run `tools/AItest.py` independently; the `run_test` function will write individual game records to the specified directory.
+The packaged application can run the same complete AI used by the game page from the command line. It queries configured tablebases first and falls back to search when no table provides a move:
+
+```powershell
+Start-Process .\2048EndgameTablebase.exe -Wait -ArgumentList @(
+  "--ai-test", "--games", "100", "--output", "D:\ai-results"
+)
+```
+
+Each batch creates a separate `run_timestamp` directory. The `replays` subdirectory contains `.vrs` files accepted by replay analysis, while `decisions` contains the decision source for every move. Matching files include the game number, final score, and total move count, such as `game_000001_score_123456_steps_789`. Each decision line contains the 16-digit hexadecimal board before the move and the selected table name; search decisions are recorded as `AI`.
+
+From a source checkout, use `python -m backend.ai_batch` with the same arguments. Run `python -m backend.ai_batch --help` for worker, per-game thread, seed, and initial-board options.
 
 ## 7.3 General AI
 The AI is compatible with any calculated table. 

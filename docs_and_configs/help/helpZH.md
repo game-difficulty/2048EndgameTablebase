@@ -655,7 +655,17 @@ BC 模数应使用 13-256 范围内的质数。设置界面会把无效输入自
 
 
 ## 7.2 AI测试
-需要一定的编程知识。单独运行AItest.py，其中run_test函数将单次测试的游戏记录写入指定路径。
+打包版可通过命令行批量运行与游戏页面相同的完整 AI（定式优先，未命中时回退到搜索）：
+
+```powershell
+Start-Process .\2048EndgameTablebase.exe -Wait -ArgumentList @(
+  "--ai-test", "--games", "100", "--output", "D:\ai-results"
+)
+```
+
+每次批测会建立独立的 `run_时间` 目录。`replays` 子目录保存可供回放分析读取的 `.vrs`，`decisions` 子目录保存逐步决策来源。两个文件使用相同名称，并包含该局编号、最终得分和总步数，例如 `game_000001_score_123456_steps_789`。决策文件每行记录决策前的 16 进制棋盘以及所用定式名称；使用搜索时记录为 `AI`。
+
+源码环境也可使用 `python -m backend.ai_batch`，参数与打包版相同。运行 `python -m backend.ai_batch --help` 可查看并发数、每局线程数、随机种子和初始棋盘等选项。
 
 ## 7.3 通用AI
 AI能够使用任意已计算的定式。

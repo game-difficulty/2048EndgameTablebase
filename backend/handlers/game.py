@@ -12,6 +12,7 @@ from engine_core.BoardMover import (
 )
 
 from ..actions import Action, Message
+from ..ai_decision import choose_full_ai_move
 from ..session import GameSession
 from ..session import np_u64, safe_hex, u64
 from ..state import ConnectionManager
@@ -298,30 +299,16 @@ async def handle_game_action(
             allow_resolve_32768 = False
 
         ai_dispatcher = session.ensure_ai_dispatcher()
-        ai_dispatcher.reset(board_2d, u64(ai_board_encoded))
-        best_move = ai_dispatcher.dispatcher()
-        valid_moves = {"left", "right", "up", "down"}
-
-        if best_move == "AI":
-            if allow_resolve_32768:
-                from native_core import ai_core
-
-                ai_board_encoded = ai_core.resolve_32768_doubles(u64(ai_board_encoded))
-            player, logic = session.ensure_ai_fallback(
-                ai_board_encoded,
-                SingletonConfig().config["4_spawn_rate"],
-                getattr(ai_dispatcher, "time_limit_ratio", 1.0),
-            )
-            best_move_code = logic.calculate_step(
-                player, board_2d, ai_dispatcher.counts
-            )
-            # logger.warning(
-            #     f"{player.do_check} {player.masked_count} {player.max_d} {player.prune}"
-            # )
-            move_map = {1: "left", 2: "right", 3: "up", 4: "down"}
-            best_move = move_map.get(best_move_code, None)
-        else:
-            best_move = best_move.lower() if best_move else None
+        decision = choose_full_ai_move(
+            board_encoded=u64(ai_board_encoded),
+            board=board_2d,
+            dispatcher=ai_dispatcher,
+            fallback_provider=session.ensure_ai_fallback,
+            spawn_rate4=SingletonConfig().config["4_spawn_rate"],
+            time_limit_ratio=getattr(ai_dispatcher, "time_limit_ratio", 1.0),
+            allow_resolve_32768=allow_resolve_32768,
+        )
+        best_move = decision.direction
 
         # _log_ai_step_debug(
         #     best_move if best_move in valid_moves else None,
@@ -331,7 +318,7 @@ async def handle_game_action(
         await websocket.send_json(
             {
                 "action": Message.DO_AI_MOVE_CMD,
-                "data": {"dir": best_move if best_move in valid_moves else None},
+                "data": {"dir": best_move},
             }
         )
         return True

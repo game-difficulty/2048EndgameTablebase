@@ -28,6 +28,7 @@ def require_single_file(directory, pattern, label):
 
 hiddenimports = collect_submodules("webview")
 hiddenimports += [
+    "backend.ai_batch",
     "gi",
     "gi._gi",
     "gi._gi_cairo",
