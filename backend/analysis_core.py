@@ -270,16 +270,21 @@ class ReplayDecoder:
         first_position = (positions[0][0], positions[1][0])
         second_position = (positions[0][1], positions[1][1])
 
-        is_horizontal_pair = (
-            positions[0][0] == positions[0][1]
-            and abs(positions[1][0] - positions[1][1]) == 1
-            and replay_move in (1, 2)
-        )
-        is_vertical_pair = (
-            positions[1][0] == positions[1][1]
-            and abs(positions[0][0] - positions[0][1]) == 1
-            and replay_move in (3, 4)
-        )
+        is_horizontal_pair = False
+        if positions[0][0] == positions[0][1] and replay_move in (1, 2):
+            row = positions[0][0]
+            left, right = sorted((positions[1][0], positions[1][1]))
+            is_horizontal_pair = bool(
+                np.all(board_decoded[row, left + 1 : right] == 0)
+            )
+
+        is_vertical_pair = False
+        if positions[1][0] == positions[1][1] and replay_move in (3, 4):
+            column = positions[1][0]
+            top, bottom = sorted((positions[0][0], positions[0][1]))
+            is_vertical_pair = bool(
+                np.all(board_decoded[top + 1 : bottom, column] == 0)
+            )
         if is_horizontal_pair or is_vertical_pair:
             board_decoded[first_position] = 16384
             board_decoded[second_position] = 16384
@@ -433,14 +438,30 @@ class ReplayDecoder:
         self.record_list["f1"] = arr["f1"][:-1]
         self.record_list["f2"] = arr["f2"][1:]
         for i in range(transition_count):
-            moved = bm.move_board(arr["f0"][i], arr["f2"][i + 1])
-            diff = moved ^ arr["f0"][i + 1]
-            if diff == 0:
-                raise ValueError("Tester replay transition has no spawned tile")
-            pos = (int(diff).bit_length() - 1) // 4
-            value = diff >> (pos * 4)
-            if value not in (1, 2) or int(diff) != int(value) << (pos * 4):
+            source_board = np.uint64(arr["f0"][i])
+            move = int(arr["f2"][i + 1])
+            candidate_sources = [source_board]
+            if count_32ks(source_board) == 2:
+                adjusted_board, _ = self._apply_special_32k_rule(
+                    source_board, move, int(arr["f1"][i]), bm
+                )
+                if adjusted_board != source_board:
+                    candidate_sources.append(adjusted_board)
+
+            spawn = None
+            for candidate_source in candidate_sources:
+                moved = bm.move_board(candidate_source, move)
+                diff = moved ^ arr["f0"][i + 1]
+                if diff == 0:
+                    continue
+                pos = (int(diff).bit_length() - 1) // 4
+                value = diff >> (pos * 4)
+                if value in (1, 2) and int(diff) == int(value) << (pos * 4):
+                    spawn = (pos, value)
+                    break
+            if spawn is None:
                 raise ValueError("Invalid tester replay transition")
+            pos, value = spawn
             self.record_list["f3"][i] = value
             self.record_list["f4"][i] = 15 - pos
 
