@@ -439,6 +439,9 @@
           <button type="button" class="action-btn-small surface-prominent text-white" @click="openSponsorFromTokenRequired">
             {{ $t('auth.tokens.rechargeAction') }}
           </button>
+          <button type="button" class="action-btn-small" @click="openQuotaGuideFromTokenRequired">
+            {{ $t('billing.quotaGuide.open') }}
+          </button>
           <button type="button" class="action-btn-small" @click="closeTokenRequiredDialog">
             {{ $t('common.close') }}
           </button>
@@ -1211,6 +1214,11 @@ const closeTokenRequiredDialog = () => {
     required_tokens: 0,
     balance_tokens: 0,
   };
+};
+
+const openQuotaGuideFromTokenRequired = () => {
+  closeTokenRequiredDialog();
+  openQuotaGuideDialog();
 };
 
 const openSponsorFromTokenRequired = () => {
