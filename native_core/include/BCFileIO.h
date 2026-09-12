@@ -127,6 +127,10 @@ public:
 class BCReadableFile {
 public:
     virtual ~BCReadableFile() = default;
+    // Compressed cell backends must not decode unrelated cells in read gaps.
+    [[nodiscard]] virtual uint64_t max_read_coalesce_gap_bytes() const {
+        return 64ULL * 1024ULL;
+    }
     [[nodiscard]] virtual BCFileIOMode mode() const {
         return BCFileIOMode::Buffered;
     }

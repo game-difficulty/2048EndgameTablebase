@@ -750,6 +750,7 @@ class SingletonConfig:
             ".exadbook",
             ".exadzbook",
             ".bccmp",
+            ".bcraw",
         )
 
         for pattern_key in pattern_keys:

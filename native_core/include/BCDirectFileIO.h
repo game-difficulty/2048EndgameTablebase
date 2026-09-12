@@ -257,6 +257,57 @@ private:
     size_t size_ = 0U;
 };
 
+// Slots/events survive calls, but no kernel request retains borrowed data.
+// Keep only one-sector tail buffers between calls, not QD * chunk bytes for
+// every open temp/future/output file. Large scratch lives for one call only.
+template <class Pending>
+class BCPendingIOGuard {
+public:
+    BCPendingIOGuard(HANDLE handle, std::vector<Pending> &pending, uint32_t alignment)
+        : handle_(handle), pending_(pending), retained_bytes_(alignment) {}
+    BCPendingIOGuard(const BCPendingIOGuard &) = delete;
+    BCPendingIOGuard &operator=(const BCPendingIOGuard &) = delete;
+
+    ~BCPendingIOGuard() noexcept {
+        for (Pending &slot : pending_) {
+            if (slot.active) {
+                CancelIoEx(handle_, &slot.ov);
+            }
+        }
+        for (Pending &slot : pending_) {
+            if (slot.active) {
+                DWORD transferred = 0U;
+                GetOverlappedResult(handle_, &slot.ov, &transferred, TRUE);
+                slot.active = false;
+            }
+            if (slot.buffer.size() > retained_bytes_) {
+                slot.buffer.reset();
+            }
+        }
+    }
+
+private:
+    HANDLE handle_;
+    std::vector<Pending> &pending_;
+    uint32_t retained_bytes_;
+};
+
+template <class Pending>
+void prepare_pending_slots(std::vector<Pending> &pending, uint32_t count) {
+    // Called only outside a live guard, after all prior requests have completed.
+    if (pending.size() < count) {
+        pending.resize(count);
+    }
+    for (Pending &slot : pending) {
+        if (!slot.event.valid()) {
+            slot.event = BCWinHandle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+            if (!slot.event.valid()) {
+                throw std::runtime_error(bc_direct_win_error("BC direct IO CreateEventW failed"));
+            }
+        }
+    }
+}
+
 [[nodiscard]] inline BCDirectFileIOOptions normalize_direct_options(const BCDirectFileIOOptions &input) {
     BCDirectFileIOOptions options;
     options.alignment = input.alignment;
@@ -552,7 +603,7 @@ public:
             return;
         }
 
-        if (options_.overlapped && options_.queue_depth > 1U) {
+        if (options_.overlapped) {
             read_many_overlapped_pipeline(requests, stats);
             return;
         }
@@ -656,9 +707,6 @@ private:
         if (ranges.empty()) {
             return;
         }
-        const uint32_t worker_count = static_cast<uint32_t>(
-            std::min<uint64_t>(ranges.size(), std::max<uint32_t>(1U, options_.queue_depth))
-        );
         uint64_t bytes_sum = 0U;
         for (const detail::BCPhysicalRange &range : ranges) {
             if (bytes_sum > std::numeric_limits<uint64_t>::max() - range.bytes) {
@@ -667,33 +715,19 @@ private:
             bytes_sum += range.bytes;
         }
         const auto read_t0 = std::chrono::steady_clock::now();
-        if (!options_.overlapped || options_.queue_depth <= 1U) {
-            for (detail::BCPhysicalRange &range : ranges) {
-                detail::direct_read_sync(
-                    handle_.get(),
-                    range.offset,
-                    range.buffer.data(),
-                    range.bytes,
-                    options_.alignment,
-                    options_.max_transfer_bytes
-                );
-            }
-            uint64_t io_count = 0U;
-            for (const detail::BCPhysicalRange &range : ranges) {
-                io_count += detail::windows_io_chunk_count(
-                    range.bytes,
-                    options_.alignment,
-                    options_.max_transfer_bytes);
-            }
-            detail::add_backend_stats(stats, io_count, bytes_sum);
-            if (stats != nullptr) {
-                stats->backend_seconds +=
-                    std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
-            }
-            return;
+        // read_many routes every asynchronous handle (including QD 1) through
+        // the guarded pipeline before it can reach this synchronous helper.
+        for (detail::BCPhysicalRange &range : ranges) {
+            detail::direct_read_sync(
+                handle_.get(), range.offset, range.buffer.data(), range.bytes,
+                options_.alignment, options_.max_transfer_bytes);
         }
-        read_physical_ranges_overlapped(ranges, worker_count);
-        detail::add_backend_stats(stats, ranges.size(), bytes_sum);
+        uint64_t io_count = 0U;
+        for (const detail::BCPhysicalRange &range : ranges) {
+            io_count += detail::windows_io_chunk_count(
+                range.bytes, options_.alignment, options_.max_transfer_bytes);
+        }
+        detail::add_backend_stats(stats, io_count, bytes_sum);
         if (stats != nullptr) {
             stats->backend_seconds +=
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
@@ -783,83 +817,11 @@ private:
         }
         return true;
     }
-
-    void read_many_parallel_sync(
-        const std::vector<BCFileReadRequest> &requests,
-        BCFileIOStats *stats
-    ) const {
-        const uint32_t worker_count = static_cast<uint32_t>(
-            std::min<uint64_t>(options_.queue_depth, requests.size())
-        );
-        if (worker_count <= 1U) {
-            BCDirectFileIOOptions local_options = options_;
-            local_options.overlapped = false;
-            local_options.queue_depth = 1U;
-            BCDirectFileReader reader(path_, local_options);
-            reader.read_many(requests, stats);
-            return;
-        }
-
-        std::vector<std::vector<BCFileReadRequest>> shards(worker_count);
-        const size_t chunk = (requests.size() + worker_count - 1U) / worker_count;
-        size_t cursor = 0U;
-        for (uint32_t worker = 0U; worker < worker_count && cursor < requests.size(); ++worker) {
-            const size_t end = std::min<size_t>(requests.size(), cursor + chunk);
-            shards[worker].assign(requests.begin() + static_cast<std::ptrdiff_t>(cursor),
-                                  requests.begin() + static_cast<std::ptrdiff_t>(end));
-            cursor = end;
-        }
-
-        std::vector<BCFileIOStats> local_stats(worker_count);
-        std::vector<std::exception_ptr> errors(worker_count);
-        std::vector<std::thread> threads;
-        threads.reserve(worker_count);
-        for (uint32_t worker = 0U; worker < worker_count; ++worker) {
-            if (shards[worker].empty()) {
-                continue;
-            }
-            threads.emplace_back([&, worker] {
-                try {
-                    BCDirectFileIOOptions local_options = options_;
-                    local_options.overlapped = false;
-                    local_options.queue_depth = 1U;
-                    BCDirectFileReader reader(path_, local_options);
-                    reader.read_many(shards[worker], &local_stats[worker]);
-                } catch (...) {
-                    errors[worker] = std::current_exception();
-                }
-            });
-        }
-        for (std::thread &thread : threads) {
-            thread.join();
-        }
-        for (const std::exception_ptr &error : errors) {
-            if (error) {
-                std::rethrow_exception(error);
-            }
-        }
-
-        if (stats != nullptr) {
-            for (const BCFileIOStats &local : local_stats) {
-                if (stats->request_count > std::numeric_limits<uint64_t>::max() - local.request_count ||
-                    stats->requested_bytes > std::numeric_limits<uint64_t>::max() - local.requested_bytes ||
-                    stats->backend_io_count > std::numeric_limits<uint64_t>::max() - local.backend_io_count ||
-                    stats->backend_bytes > std::numeric_limits<uint64_t>::max() - local.backend_bytes) {
-                    throw std::overflow_error("BC direct parallel read stats overflow");
-                }
-                stats->request_count += local.request_count;
-                stats->requested_bytes += local.requested_bytes;
-                stats->backend_io_count += local.backend_io_count;
-                stats->backend_bytes += local.backend_bytes;
-                stats->backend_seconds += local.backend_seconds;
-            }
-        }
-    }
-
     struct PendingRead {
         OVERLAPPED ov = {};
         detail::BCWinHandle event;
         detail::BCAlignedBuffer buffer;
+        bool active = false;
         uint64_t physical_offset = 0U;
         uint64_t physical_bytes = 0U;
         uint64_t in_physical_offset = 0U;
@@ -867,7 +829,6 @@ private:
         uint64_t target_bytes = 0U;
         bool direct_to_target = false;
         DWORD immediate_bytes = 0U;
-        size_t range_index = 0U;
     };
 
     struct DirectLogicalRead {
@@ -960,15 +921,9 @@ private:
         const uint32_t queue_depth = static_cast<uint32_t>(
             std::min<uint64_t>(options_.queue_depth, reads.size())
         );
-        std::vector<PendingRead> pending(queue_depth);
-        for (PendingRead &request : pending) {
-            request.event = detail::BCWinHandle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-            if (!request.event.valid()) {
-                throw std::runtime_error(detail::bc_direct_win_error("BC direct read CreateEventW failed"));
-            }
-        }
-
-        std::vector<uint8_t> active(queue_depth, 0U);
+        detail::prepare_pending_slots(pending_, queue_depth);
+        auto &pending = pending_;
+        detail::BCPendingIOGuard<PendingRead> guard(handle_.get(), pending, options_.alignment);
         auto submit_slot = [&](uint32_t slot, size_t read_index) {
             const DirectLogicalRead &read = reads[read_index];
             if (read.physical_bytes > max_io_chunk) {
@@ -1004,14 +959,14 @@ private:
                     throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped ReadFile failed", error));
                 }
             }
-            active[slot] = 1U;
+            request.active = true;
         };
         auto wait_any_slot = [&]() -> uint32_t {
             std::array<HANDLE, MAXIMUM_WAIT_OBJECTS> events{};
             std::array<uint32_t, MAXIMUM_WAIT_OBJECTS> slots{};
             DWORD count = 0U;
             for (uint32_t slot = 0U; slot < queue_depth; ++slot) {
-                if (active[slot] == 0U) {
+                if (!pending[slot].active) {
                     continue;
                 }
                 events[count] = pending[slot].event.get();
@@ -1046,6 +1001,7 @@ private:
             if (!GetOverlappedResult(handle_.get(), &request.ov, &transferred, TRUE)) {
                 throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped GetOverlappedResult failed"));
             }
+            request.active = false;
             if (transferred != static_cast<DWORD>(request.physical_bytes)) {
                 throw std::runtime_error("BC direct overlapped read transferred unexpected byte count");
             }
@@ -1059,8 +1015,6 @@ private:
             ++completed;
             if (next_read < reads.size()) {
                 submit_slot(slot, next_read++);
-            } else {
-                active[slot] = 0U;
             }
         }
         detail::add_backend_stats(stats, reads.size(), backend_bytes);
@@ -1069,80 +1023,6 @@ private:
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - read_t0).count();
         }
     }
-
-    void read_physical_ranges_overlapped(
-        std::vector<detail::BCPhysicalRange> &ranges,
-        uint32_t queue_depth
-    ) const {
-        std::vector<PendingRead> pending(queue_depth);
-        for (PendingRead &request : pending) {
-            request.event = detail::BCWinHandle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-            if (!request.event.valid()) {
-                throw std::runtime_error(detail::bc_direct_win_error("BC direct read CreateEventW failed"));
-            }
-        }
-
-        size_t cursor = 0U;
-        while (cursor < ranges.size()) {
-            const uint32_t batch = static_cast<uint32_t>(
-                std::min<uint64_t>(queue_depth, ranges.size() - cursor)
-            );
-            for (uint32_t i = 0U; i < batch; ++i) {
-                PendingRead &request = pending[i];
-                detail::BCPhysicalRange &range = ranges[cursor + i];
-                if (range.bytes > detail::windows_max_io_chunk_bytes(
-                        options_.alignment,
-                        options_.max_transfer_bytes)) {
-                    throw std::logic_error("BC direct range read exceeds transfer limit");
-                }
-                ResetEvent(request.event.get());
-                request.ov = {};
-                request.ov.Offset = static_cast<DWORD>(range.offset & 0xFFFFFFFFULL);
-                request.ov.OffsetHigh = static_cast<DWORD>((range.offset >> 32U) & 0xFFFFFFFFULL);
-                request.ov.hEvent = request.event.get();
-                request.range_index = cursor + i;
-                const BOOL ok = ReadFile(
-                    handle_.get(),
-                    range.buffer.data(),
-                    static_cast<DWORD>(range.bytes),
-                    &request.immediate_bytes,
-                    &request.ov
-                );
-                if (!ok) {
-                    const DWORD error = GetLastError();
-                    if (error != ERROR_IO_PENDING) {
-                        throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped ReadFile failed", error));
-                    }
-                }
-            }
-            std::array<HANDLE, MAXIMUM_WAIT_OBJECTS> events{};
-            for (uint32_t i = 0U; i < batch; ++i) {
-                events[i] = pending[i].event.get();
-            }
-            const DWORD wait_result = WaitForMultipleObjects(
-                batch,
-                events.data(),
-                TRUE,
-                INFINITE
-            );
-            if (wait_result < WAIT_OBJECT_0 || wait_result >= WAIT_OBJECT_0 + batch) {
-                throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped WaitForMultipleObjects failed"));
-            }
-            for (uint32_t i = 0U; i < batch; ++i) {
-                PendingRead &request = pending[i];
-                const detail::BCPhysicalRange &range = ranges[request.range_index];
-                DWORD transferred = 0U;
-                    if (!GetOverlappedResult(handle_.get(), &request.ov, &transferred, TRUE)) {
-                        throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped GetOverlappedResult failed"));
-                    }
-                if (transferred != static_cast<DWORD>(range.bytes)) {
-                    throw std::runtime_error("BC direct overlapped read transferred unexpected byte count");
-                }
-            }
-            cursor += batch;
-        }
-    }
-
     static void copy_requests_from_ranges(
         const std::vector<BCFileReadRequest> &requests,
         const std::vector<detail::BCPhysicalRange> &ranges
@@ -1186,6 +1066,7 @@ private:
     detail::BCWinHandle handle_;
     mutable uint64_t logical_size_ = 0U;
     mutable uint64_t physical_size_ = 0U;
+    mutable std::vector<PendingRead> pending_;
 };
 
 // Direct reader wrapper for append/read phase separation. It opens a fresh
@@ -1244,21 +1125,30 @@ public:
         std::vector<std::exception_ptr> errors(worker_count);
         std::vector<std::thread> threads;
         threads.reserve(worker_count);
-        for (uint32_t worker = 0U; worker < worker_count; ++worker) {
-            if (shards[worker].empty()) {
-                continue;
-            }
-            threads.emplace_back([&, worker] {
-                try {
-                    BCDirectFileIOOptions local_options = options_;
-                    local_options.overlapped = false;
-                    local_options.queue_depth = 1U;
-                    BCDirectFileReader reader(path_, local_options);
-                    reader.read_many(shards[worker], &local_stats[worker]);
-                } catch (...) {
-                    errors[worker] = std::current_exception();
+        try {
+            for (uint32_t worker = 0U; worker < worker_count; ++worker) {
+                if (shards[worker].empty()) {
+                    continue;
                 }
-            });
+                threads.emplace_back([&, worker] {
+                    try {
+                        BCDirectFileIOOptions local_options = options_;
+                        local_options.overlapped = false;
+                        local_options.queue_depth = 1U;
+                        BCDirectFileReader reader(path_, local_options);
+                        reader.read_many(shards[worker], &local_stats[worker]);
+                    } catch (...) {
+                        errors[worker] = std::current_exception();
+                    }
+                });
+            }
+        } catch (...) {
+            // Thread construction can fail after earlier workers started.
+            // Drain them before their referenced shards/stats are destroyed.
+            for (std::thread &thread : threads) {
+                thread.join();
+            }
+            throw;
         }
         for (std::thread &thread : threads) {
             thread.join();
@@ -1305,8 +1195,10 @@ class BCDirectFileWriter final : public BCWritableFile {
 
 public:
     // Default mode does not preserve unwritten bytes inside aligned physical
-    // blocks; it is intended for new-file stream writes or planned full writes
-    // where the caller covers all logical bytes exactly once. Set
+    // blocks. The fast path requires disjoint aligned PHYSICAL extents within
+    // each call; logical non-overlap alone is insufficient. Across calls the
+    // caller must own every physical sector it writes (use a sequential stager
+    // to combine partial-sector appends). Set
     // preserve_unwritten_bytes for append-style streams that may update an
     // existing unaligned tail block; that mode performs synchronous RMW and is
     // slower.
@@ -1315,6 +1207,9 @@ public:
         const BCDirectFileIOOptions &options = BCDirectFileIOOptions{}
     )
         : path_(path), options_(detail::normalize_direct_options(options)) {
+        // Preserve mode uses synchronous read-modify-write helpers. Never give
+        // those helpers an asynchronous handle with a null OVERLAPPED.
+        options_.overlapped = options_.overlapped && !options_.preserve_unwritten_bytes;
         handle_ = detail::open_direct_handle(path_, true, options_.overlapped);
     }
 
@@ -1337,9 +1232,7 @@ public:
         if (stats != nullptr) {
             *stats = {};
         }
-        if (options_.overlapped &&
-            options_.queue_depth > 1U &&
-            !options_.preserve_unwritten_bytes) {
+        if (options_.overlapped) {
             write_many_overlapped_pipeline(requests, stats);
             return;
         }
@@ -1399,25 +1292,47 @@ public:
             options_.alignment,
             options_.max_transfer_bytes);
 
+        // Index only actual request/block intersections. Appending references
+        // in caller order preserves last-request-wins, including unsorted and
+        // overlapping requests, without rescanning every request per block.
+        // This stores pointers only, not another copy of the payload.
+        std::vector<std::vector<const PendingWriteView *>> writes_by_range(merged.size());
+        for (const PendingWriteView &request : pending) {
+            auto range = std::lower_bound(
+                merged.begin(), merged.end(), request.offset,
+                [](const detail::BCPhysicalRange &candidate, uint64_t offset) {
+                    return candidate.end() <= offset;
+                });
+            const uint64_t request_end = request.offset + request.bytes;
+            for (; range != merged.end() && range->offset < request_end; ++range) {
+                writes_by_range[static_cast<size_t>(range - merged.begin())].push_back(&request);
+            }
+        }
+
         const uint64_t old_physical_size = physical_size_;
         uint64_t max_physical_end = physical_size_;
         for (detail::BCPhysicalRange &range : merged) {
             max_physical_end = std::max(max_physical_end, range.end());
         }
         if (max_physical_end > physical_size_) {
+            detail::set_direct_file_size(handle_.get(), max_physical_end);
             physical_size_ = max_physical_end;
-            detail::set_direct_file_size(handle_.get(), physical_size_);
         }
 
-        for (detail::BCPhysicalRange &range : merged) {
-            range.buffer.reset(range.bytes, options_.alignment);
+        // Sync/QD=1 and preserve mode must not stage an entire large span.
+        // Reuse a single transfer-sized buffer, keeping original request order
+        // within each block so overlapping patches retain last-request-wins.
+        detail::BCAlignedBuffer buffer;
+        for (size_t range_index = 0U; range_index < merged.size(); ++range_index) {
+            const detail::BCPhysicalRange &range = merged[range_index];
+            buffer.ensure_at_least(range.bytes, options_.alignment);
             if (options_.preserve_unwritten_bytes && range.offset < old_physical_size) {
                 const uint64_t readable = std::min<uint64_t>(range.bytes, old_physical_size - range.offset);
                 if (readable != 0U) {
                     detail::direct_read_sync(
                         handle_.get(),
                         range.offset,
-                        range.buffer.data(),
+                        buffer.data(),
                         readable,
                         options_.alignment,
                         options_.max_transfer_bytes
@@ -1425,25 +1340,29 @@ public:
                 }
                 if (readable < range.bytes) {
                     std::memset(
-                        range.buffer.data() + static_cast<size_t>(readable),
+                        buffer.data() + static_cast<size_t>(readable),
                         0,
                         static_cast<size_t>(range.bytes - readable)
                     );
                 }
             } else {
-                std::memset(range.buffer.data(), 0, range.buffer.size());
+                std::memset(buffer.data(), 0, static_cast<size_t>(range.bytes));
             }
-        }
-        for (const PendingWriteView &request : pending) {
-            logical_size_ = std::max(logical_size_, request.offset + request.bytes);
-            copy_pending_request_to_ranges(request, merged);
-        }
-        const auto write_t0 = std::chrono::steady_clock::now();
-        for (detail::BCPhysicalRange &range : merged) {
+            for (const PendingWriteView *view : writes_by_range[range_index]) {
+                const PendingWriteView &request = *view;
+                const uint64_t begin = std::max(range.offset, request.offset);
+                const uint64_t end = std::min(range.end(), request.offset + request.bytes);
+                if (begin < end) {
+                    std::memcpy(buffer.data() + static_cast<size_t>(begin - range.offset),
+                                request.data + static_cast<size_t>(begin - request.offset),
+                                static_cast<size_t>(end - begin));
+                }
+            }
+            const auto write_t0 = std::chrono::steady_clock::now();
             detail::direct_write_sync(
                 handle_.get(),
                 range.offset,
-                range.buffer.data(),
+                buffer.data(),
                 range.bytes,
                 options_.alignment,
                 options_.max_transfer_bytes
@@ -1456,10 +1375,13 @@ public:
                     options_.max_transfer_bytes),
                 range.bytes
             );
+            if (stats != nullptr) {
+                stats->backend_seconds +=
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - write_t0).count();
+            }
         }
-        if (stats != nullptr) {
-            stats->backend_seconds +=
-                std::chrono::duration<double>(std::chrono::steady_clock::now() - write_t0).count();
+        for (const PendingWriteView &request : pending) {
+            logical_size_ = std::max(logical_size_, request.offset + request.bytes);
         }
     }
 
@@ -1480,6 +1402,7 @@ private:
         OVERLAPPED ov = {};
         detail::BCWinHandle event;
         detail::BCAlignedBuffer buffer;
+        bool active = false;
         const uint8_t *external_data = nullptr;
         DWORD immediate_bytes = 0U;
         uint64_t physical_bytes = 0U;
@@ -1501,8 +1424,11 @@ private:
     ) {
         std::vector<DirectLogicalWrite> writes;
         writes.reserve(requests.size());
+        std::vector<std::pair<uint64_t, uint64_t>> physical_extents;
+        physical_extents.reserve(requests.size());
         uint64_t backend_bytes = 0U;
         uint64_t max_physical_end = physical_size_;
+        uint64_t new_logical_size = logical_size_;
         const uint64_t max_io_chunk = detail::windows_max_io_chunk_bytes(
             options_.alignment,
             options_.max_transfer_bytes);
@@ -1526,8 +1452,9 @@ private:
             }
             const uint64_t physical_offset = bc_direct_align_down(request.offset, options_.alignment);
             const uint64_t physical_end = bc_direct_align_up(request_end, options_.alignment);
+            physical_extents.emplace_back(physical_offset, physical_end);
             max_physical_end = std::max(max_physical_end, physical_end);
-            logical_size_ = std::max(logical_size_, request_end);
+            new_logical_size = std::max(new_logical_size, request_end);
             for (uint64_t chunk_offset = physical_offset; chunk_offset < physical_end;) {
                 const uint64_t chunk_bytes =
                     std::min<uint64_t>(max_io_chunk, physical_end - chunk_offset);
@@ -1562,22 +1489,27 @@ private:
         if (writes.empty()) {
             return;
         }
-        if (max_physical_end > physical_size_) {
-            physical_size_ = max_physical_end;
-            detail::set_direct_file_size(handle_.get(), physical_size_);
+        std::sort(physical_extents.begin(), physical_extents.end());
+        for (size_t i = 1U; i < physical_extents.size(); ++i) {
+            if (physical_extents[i].first < physical_extents[i - 1U].second) {
+                // Reject before resizing or submitting anything. Synchronous
+                // preserve mode can safely merge/RMW these requests instead.
+                throw std::invalid_argument(
+                    "BC direct write physical extents overlap; use a sequential stager or preserve mode");
+            }
         }
+        if (max_physical_end > physical_size_) {
+            detail::set_direct_file_size(handle_.get(), max_physical_end);
+            physical_size_ = max_physical_end;
+        }
+        logical_size_ = new_logical_size;
 
         const uint32_t queue_depth = static_cast<uint32_t>(
             std::min<uint64_t>(options_.queue_depth, writes.size())
         );
-        std::vector<PendingWrite> pending(queue_depth);
-        for (PendingWrite &request : pending) {
-            request.event = detail::BCWinHandle(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-            if (!request.event.valid()) {
-                throw std::runtime_error(detail::bc_direct_win_error("BC direct write CreateEventW failed"));
-            }
-        }
-        std::vector<uint8_t> active(queue_depth, 0U);
+        detail::prepare_pending_slots(pending_, queue_depth);
+        auto &pending = pending_;
+        detail::BCPendingIOGuard<PendingWrite> guard(handle_.get(), pending, options_.alignment);
 
         auto submit_slot = [&](uint32_t slot, size_t write_index) {
             const DirectLogicalWrite &write = writes[write_index];
@@ -1590,7 +1522,17 @@ private:
             } else {
                 request.external_data = nullptr;
                 request.buffer.ensure_at_least(write.physical_bytes, options_.alignment);
-                std::memset(request.buffer.data(), 0, request.buffer.size());
+                // Only padding needs initialization. Fully covered chunks with
+                // an unaligned source address require memcpy, not memset+memcpy.
+                if (write.in_physical_offset != 0U) {
+                    std::memset(request.buffer.data(), 0,
+                                static_cast<size_t>(write.in_physical_offset));
+                }
+                const uint64_t tail = write.in_physical_offset + write.bytes;
+                if (tail < write.physical_bytes) {
+                    std::memset(request.buffer.data() + static_cast<size_t>(tail), 0,
+                                static_cast<size_t>(write.physical_bytes - tail));
+                }
                 std::memcpy(
                     request.buffer.data() + static_cast<size_t>(write.in_physical_offset),
                     write.data,
@@ -1618,7 +1560,7 @@ private:
                     throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped WriteFile failed", error));
                 }
             }
-            active[slot] = 1U;
+            request.active = true;
         };
 
         auto wait_any_slot = [&]() -> uint32_t {
@@ -1626,7 +1568,7 @@ private:
             std::array<uint32_t, MAXIMUM_WAIT_OBJECTS> slots{};
             DWORD count = 0U;
             for (uint32_t slot = 0U; slot < queue_depth; ++slot) {
-                if (active[slot] == 0U) {
+                if (!pending[slot].active) {
                     continue;
                 }
                 events[count] = pending[slot].event.get();
@@ -1661,14 +1603,13 @@ private:
             if (!GetOverlappedResult(handle_.get(), &request.ov, &transferred, TRUE)) {
                 throw std::runtime_error(detail::bc_direct_win_error("BC direct overlapped GetOverlappedResult failed"));
             }
+            request.active = false;
             if (transferred != static_cast<DWORD>(request.physical_bytes)) {
                 throw std::runtime_error("BC direct overlapped write transferred unexpected byte count");
             }
             ++completed;
             if (next_write < writes.size()) {
                 submit_slot(slot, next_write++);
-            } else {
-                active[slot] = 0U;
             }
         }
         detail::add_backend_stats(stats, writes.size(), backend_bytes);
@@ -1678,44 +1619,12 @@ private:
         }
     }
 
-    static void copy_pending_request_to_ranges(
-        PendingWriteView request,
-        std::vector<detail::BCPhysicalRange> &ranges
-    ) {
-        uint64_t copied = 0U;
-        while (copied < request.bytes) {
-            const uint64_t cursor = request.offset + copied;
-            const auto it = std::upper_bound(
-                ranges.begin(),
-                ranges.end(),
-                cursor,
-                [](uint64_t value, const detail::BCPhysicalRange &range) {
-                    return value < range.offset;
-                }
-            );
-            if (it == ranges.begin()) {
-                throw std::logic_error("BC direct write request is before physical ranges");
-            }
-            detail::BCPhysicalRange &range = *(it - 1);
-            if (cursor < range.offset || cursor >= range.end()) {
-                throw std::logic_error("BC direct write request is not covered by physical ranges");
-            }
-            const uint64_t in_range = cursor - range.offset;
-            const uint64_t take = std::min<uint64_t>(request.bytes - copied, range.bytes - in_range);
-            std::memcpy(
-                range.buffer.data() + static_cast<size_t>(in_range),
-                request.data + copied,
-                static_cast<size_t>(take)
-            );
-            copied += take;
-        }
-    }
-
     std::filesystem::path path_;
     BCDirectFileIOOptions options_;
     detail::BCWinHandle handle_;
     uint64_t logical_size_ = 0U;
     uint64_t physical_size_ = 0U;
+    std::vector<PendingWrite> pending_;
 };
 
 #elif defined(__linux__)
@@ -2048,23 +1957,31 @@ inline void run_parallel_jobs(size_t job_count, uint32_t queue_depth, Fn &&fn) {
     std::exception_ptr first_error;
     std::vector<std::thread> threads;
     threads.reserve(workers);
-    for (uint32_t worker = 0U; worker < workers; ++worker) {
-        threads.emplace_back([&]() {
-            try {
-                for (;;) {
-                    const size_t index = next.fetch_add(1U, std::memory_order_relaxed);
-                    if (index >= job_count) {
-                        break;
+    try {
+        for (uint32_t worker = 0U; worker < workers; ++worker) {
+            threads.emplace_back([&]() {
+                try {
+                    for (;;) {
+                        const size_t index = next.fetch_add(1U, std::memory_order_relaxed);
+                        if (index >= job_count) {
+                            break;
+                        }
+                        fn(index);
                     }
-                    fn(index);
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(error_mutex);
+                    if (first_error == nullptr) {
+                        first_error = std::current_exception();
+                    }
                 }
-            } catch (...) {
-                std::lock_guard<std::mutex> lock(error_mutex);
-                if (first_error == nullptr) {
-                    first_error = std::current_exception();
-                }
-            }
-        });
+            });
+        }
+    } catch (...) {
+        next.store(job_count, std::memory_order_relaxed);
+        for (std::thread &thread : threads) {
+            thread.join();
+        }
+        throw;
     }
     for (std::thread &thread : threads) {
         thread.join();
@@ -2084,7 +2001,8 @@ public:
     )
         : path_(path), options_(detail::normalize_direct_options(options)) {
         fd_ = detail::BCLinuxFd(detail::open_direct_fd(path_, false));
-        physical_size_ = options_.physical_size.value_or(detail::fd_file_size(fd_.get()));
+        physical_size_ = options_.physical_size.has_value()
+            ? *options_.physical_size : detail::fd_file_size(fd_.get());
         logical_size_ = options_.logical_size.value_or(physical_size_);
         if (logical_size_ > physical_size_) {
             throw std::runtime_error("BC direct reader logical size exceeds physical file size");
@@ -2123,6 +2041,8 @@ public:
             *stats = {};
         }
 
+        refresh_size_if_growing();
+
         struct DirectLogicalRead {
             uint64_t physical_offset = 0U;
             uint64_t physical_bytes = 0U;
@@ -2159,6 +2079,9 @@ public:
                 stats->requested_bytes += request.bytes;
             }
             const uint64_t physical_offset = bc_direct_align_down(request.offset, options_.alignment);
+            if (request.offset > std::numeric_limits<uint64_t>::max() - request.bytes) {
+                throw std::overflow_error("BC direct read request end overflow");
+            }
             const uint64_t physical_end = bc_direct_align_up(request.offset + request.bytes, options_.alignment);
             if (physical_end > physical_size_) {
                 throw std::out_of_range("BC direct read request exceeds physical file size");
@@ -2214,15 +2137,29 @@ public:
     }
 
     [[nodiscard]] uint64_t size() const override {
+        refresh_size_if_growing();
         return logical_size_;
     }
 
+    [[nodiscard]] uint32_t preferred_read_alignment() const override {
+        return options_.alignment;
+    }
+
 private:
+    void refresh_size_if_growing() const {
+        if (!options_.logical_size.has_value()) {
+            // Query the opened file, not a path that could now name a different
+            // checkpoint. Fixed logical sizes keep their original bounds.
+            physical_size_ = detail::fd_file_size(fd_.get());
+            logical_size_ = physical_size_;
+        }
+    }
+
     std::filesystem::path path_;
     BCDirectFileIOOptions options_;
     detail::BCLinuxFd fd_;
-    uint64_t logical_size_ = 0U;
-    uint64_t physical_size_ = 0U;
+    mutable uint64_t logical_size_ = 0U;
+    mutable uint64_t physical_size_ = 0U;
 };
 
 // Lazy reader for append-only files. On Linux, BCDirectFileReader already uses

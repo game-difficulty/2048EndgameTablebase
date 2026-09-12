@@ -686,6 +686,14 @@ private:
             direct_mode &&
             read_alignment > 1U &&
             (read_alignment & (read_alignment - 1U)) == 0U;
+        // Linux dispatches workers per logical request, not per transfer chunk.
+        // Keep its original coalescing cap even when using aligned buffers.
+        uint64_t max_coalesced_extent_bytes = 4ULL * 1024ULL * 1024ULL;
+#ifdef _WIN32
+        if (direct_aligned) {
+            max_coalesced_extent_bytes = 64ULL * 1024ULL * 1024ULL;
+        }
+#endif
         std::vector<BCFileExtent> extents;
         for (const ExtentRequest &request : requests) {
             if (request.bytes == 0U) {
@@ -703,14 +711,10 @@ private:
                     last.bytes,
                     "BC streaming position coalesced extent end overflow"
                 );
-                constexpr uint64_t kMaxCoalesceGapBytes = 64ULL * 1024ULL;
-                const uint64_t max_coalesced_extent_bytes = direct_aligned
-                    ? 64ULL * 1024ULL * 1024ULL
-                    : 4ULL * 1024ULL * 1024ULL;
                 if (bc_file_extents_can_coalesce(
                         last,
                         BCFileExtent{request.offset, request.bytes},
-                        kMaxCoalesceGapBytes,
+                        file_->max_read_coalesce_gap_bytes(),
                         max_coalesced_extent_bytes)) {
                     if (end > last_end) {
                         last.bytes = end - last.offset;

@@ -260,8 +260,6 @@ public:
         temp_path_ = final_path_ + ".tmp";
         std::error_code ec;
         NativePath::remove(temp_path_, ec);
-        ec.clear();
-        NativePath::remove(final_path_, ec);
         file_.open(NativePath::from_utf8(temp_path_), std::ios::binary | std::ios::trunc);
         if (!file_) {
             throw std::runtime_error("failed to open BC cell-compressed position temp file: " + temp_path_);
@@ -393,13 +391,15 @@ public:
         if (!file_) {
             throw std::runtime_error("failed to close BC cell-compressed position temp file: " + temp_path_);
         }
+        // Completed temp files survive publication errors for recovery. Before
+        // this point an abandoned/incomplete write still removes only its temp.
+        opened_ = false;
         std::error_code ec;
         NativePath::rename(temp_path_, final_path_, ec);
         if (ec) {
-            NativePath::remove(temp_path_, ec);
-            throw std::runtime_error("failed to publish BC cell-compressed position file: " + final_path_);
+            throw std::runtime_error("failed to publish BC cell-compressed position file: " +
+                                     final_path_ + " (" + ec.message() + ")");
         }
-        opened_ = false;
         return raw_logical_size;
     }
 
@@ -501,6 +501,15 @@ private:
 };
 
 class BCCellCompressedPositionReadableFile final : public BCReadableFile {
+    struct DecodedReadScope {
+        const BCCellCompressedPositionReadableFile &file;
+        explicit DecodedReadScope(const BCCellCompressedPositionReadableFile &owner) : file(owner) {
+            if (file.pass_scoped_decode_) file.clear_decoded_cache();
+        }
+        ~DecodedReadScope() {
+            if (file.pass_scoped_decode_) file.clear_decoded_cache();
+        }
+    };
 public:
     explicit BCCellCompressedPositionReadableFile(
         const std::filesystem::path &path,
@@ -509,7 +518,8 @@ public:
         uint32_t direct_queue_depth = 16U,
         uint64_t direct_max_transfer_bytes = kBCDirectDefaultMaxTransferBytes,
         uint64_t cache_budget_bytes = 256ULL * 1024ULL * 1024ULL,
-        uint32_t decode_threads = 4U
+        uint32_t decode_threads = 4U,
+        bool pass_scoped_decode = false
     )
         : path_(NativePath::to_utf8_string(path)),
           preload_cells_(preload_cells),
@@ -517,11 +527,25 @@ public:
           direct_queue_depth_(std::max<uint32_t>(1U, direct_queue_depth)),
           direct_max_transfer_bytes_(direct_max_transfer_bytes),
           cache_budget_bytes_(std::max<uint64_t>(1U, cache_budget_bytes)),
-          decode_threads_(std::max<uint32_t>(1U, decode_threads)) {
+          decode_threads_(std::max<uint32_t>(1U, decode_threads)),
+          pass_scoped_decode_(pass_scoped_decode) {
+        if (preload_cells_ && pass_scoped_decode_) {
+            throw std::invalid_argument("BC position pass-scoped decode cannot preload the layer");
+        }
         open();
     }
 
+    [[nodiscard]] uint64_t max_read_coalesce_gap_bytes() const override {
+        return pass_scoped_decode_ ? 0U : BCReadableFile::max_read_coalesce_gap_bytes();
+    }
+
     void read_at(uint64_t offset, void *data, uint64_t bytes) const override {
+        DecodedReadScope scope(*this);
+        read_at_impl(offset, data, bytes);
+    }
+
+private:
+    void read_at_impl(uint64_t offset, void *data, uint64_t bytes) const {
         if (bytes == 0U) {
             return;
         }
@@ -594,10 +618,14 @@ public:
         }
     }
 
+public:
     void read_many(
         const std::vector<BCFileReadRequest> &requests,
         BCFileIOStats *stats = nullptr
     ) const override {
+        // One load_cells/read_many call supplies one pass. Decoded staging is
+        // released after copying into that pass's owned cells, also on error.
+        DecodedReadScope scope(*this);
         if (stats != nullptr) {
             *stats = {};
         }
@@ -608,7 +636,7 @@ public:
             decode_requested_cells(requests, stats);
         }
         for (const BCFileReadRequest &request : requests) {
-            read_at(request.offset, request.data, request.bytes);
+            read_at_impl(request.offset, request.data, request.bytes);
             if (stats != nullptr) {
                 if (stats->request_count == std::numeric_limits<uint64_t>::max() ||
                     stats->requested_bytes >
@@ -619,7 +647,7 @@ public:
                 stats->requested_bytes += request.bytes;
             }
         }
-        trim_cache();
+        if (!pass_scoped_decode_) trim_cache();
     }
 
     [[nodiscard]] uint64_t size() const override {
@@ -627,6 +655,12 @@ public:
     }
 
 private:
+    void clear_decoded_cache() const noexcept {
+        cache_.clear();
+        cache_order_.clear();
+        cache_bytes_ = 0U;
+    }
+
     void open() {
         file_.open(NativePath::from_utf8(path_), std::ios::binary | std::ios::ate);
         if (!file_) {
@@ -1071,7 +1105,7 @@ private:
         );
         cache_order_.push_back(cid);
         auto inserted = cache_.emplace(cid, std::move(payload));
-        trim_cache();
+        if (!pass_scoped_decode_) trim_cache();
         return inserted.first->second;
     }
 
@@ -1175,6 +1209,7 @@ private:
     uint64_t direct_max_transfer_bytes_ = kBCDirectDefaultMaxTransferBytes;
     uint64_t cache_budget_bytes_ = 256ULL * 1024ULL * 1024ULL;
     int decode_threads_ = 1;
+    bool pass_scoped_decode_ = false;
     mutable bool preloaded_ = false;
     mutable std::vector<std::vector<uint8_t>> preloaded_payloads_;
 };

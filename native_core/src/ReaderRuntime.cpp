@@ -1657,6 +1657,8 @@ BCSearchResult find_bc_value(
         return {};
     }
     const std::string prefix = pattern_full + "_" + std::to_string(*ordinal);
+    std::exception_ptr archive_error;
+    std::vector<fs::path> archive_paths;
     for (const auto &path_entry : path_list) {
         if (path_entry.first.empty()) {
             continue;
@@ -1665,26 +1667,37 @@ BCSearchResult find_bc_value(
         if (!fs::exists(root)) {
             continue;
         }
-        const fs::path compressed_path =
-            root / (prefix + BCCompressedResult::kCompressedLayerFileExtension);
+        fs::path compressed_path = root / (prefix + BCCompressedResult::kCompressedLayerFileExtension);
+        const fs::path raw_path = root / (prefix + BCCompressedResult::kRawLayerFileExtension);
+        if (fs::exists(compressed_path) && fs::exists(raw_path)) {
+            throw std::runtime_error("BC conflicting archive formats: " + compressed_path.string());
+        }
+        if (fs::exists(raw_path)) compressed_path = raw_path;
+        if (fs::exists(compressed_path)) {
+            if (!archive_paths.empty() && archive_paths.front().extension() != compressed_path.extension()) {
+                throw std::runtime_error("BC conflicting archive formats for layer " + std::to_string(*ordinal));
+            }
+            archive_paths.push_back(std::move(compressed_path));
+        }
+    }
+    for (const auto &compressed_path : archive_paths) {
         try {
-            if (fs::exists(compressed_path)) {
-                const BCCompressedResult::ColdLookupResult lookup =
-                    BCRuntime::lookup_compressed_result_cached(
-                        compressed_path,
-                        reader.target_rank_,
-                        canonical_board,
-                        0U);
-                if (lookup.found) {
-                    const std::string dtype = bc_dtype_name(lookup.dtype);
-                    return BCSearchResult{
-                        numeric_search_value(normalize_bc_lookup_value(lookup), dtype),
-                        dtype,
-                        true
-                    };
-                }
+            const BCCompressedResult::ColdLookupResult lookup =
+                BCRuntime::lookup_compressed_result_cached(
+                    compressed_path,
+                    reader.target_rank_,
+                    canonical_board,
+                    0U);
+            if (lookup.found) {
+                const std::string dtype = bc_dtype_name(lookup.dtype);
+                return BCSearchResult{
+                    numeric_search_value(normalize_bc_lookup_value(lookup), dtype),
+                    dtype,
+                    true
+                };
             }
         } catch (...) {
+            archive_error = std::current_exception();
             continue;
         }
     }
@@ -1709,6 +1722,7 @@ BCSearchResult find_bc_value(
             continue;
         }
     }
+    if (archive_error) std::rethrow_exception(archive_error);
     return {};
 }
 
@@ -2797,7 +2811,8 @@ std::vector<std::pair<uint32_t, fs::path>> bc_compressed_candidates(
                     entry.path(),
                     pattern_full,
                     BCCompressedResult::kCompressedLayerFileExtension,
-                    ordinal)) {
+                    ordinal) || parse_numbered_layer_filename(
+                    entry.path(), pattern_full, BCCompressedResult::kRawLayerFileExtension, ordinal)) {
                 candidates.push_back({ordinal, entry.path()});
             }
         }
@@ -2805,6 +2820,12 @@ std::vector<std::pair<uint32_t, fs::path>> bc_compressed_candidates(
     std::sort(candidates.begin(), candidates.end(), [](const auto &lhs, const auto &rhs) {
         return lhs.first < rhs.first;
     });
+    for (size_t i = 1; i < candidates.size(); ++i) {
+        if (candidates[i - 1].first == candidates[i].first &&
+            candidates[i - 1].second.extension() != candidates[i].second.extension()) {
+            throw std::runtime_error("BC conflicting archive formats for layer " + std::to_string(candidates[i].first));
+        }
+    }
     return candidates;
 }
 
@@ -2971,8 +2992,8 @@ uint64_t sample_bc_book_state(
                     board == 0ULL) {
                     continue;
                 }
-            } catch (...) {
-                continue;
+            } catch (const std::exception &e) {
+                throw std::runtime_error("BC archive sampling failed: " + item.second.string() + ": " + e.what());
             }
             const uint64_t logical_board =
                 apply_sym_like(board, static_cast<int>(reader.spec_.inverse_physical_transform));

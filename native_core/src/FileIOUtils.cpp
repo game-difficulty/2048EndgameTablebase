@@ -213,12 +213,6 @@ bool is_transient_publish_error(DWORD error) {
            error == ERROR_BUSY;
 }
 
-bool is_transient_publish_error(const std::error_code &error) {
-    return is_transient_publish_error(static_cast<DWORD>(error.value())) ||
-           error == std::make_error_code(std::errc::permission_denied) ||
-           error == std::make_error_code(std::errc::device_or_resource_busy);
-}
-
 void sleep_before_publish_retry(int attempt) {
     const DWORD delay_ms = static_cast<DWORD>(std::min(500, 25 * (attempt + 1)));
     Sleep(delay_ms);
@@ -407,7 +401,24 @@ public:
     }
 
 private:
-    void cleanup() {
+    void cleanup() noexcept {
+        // Cancel every outstanding request first, then wait for terminal
+        // completion. Closing a handle or requesting cancellation alone does
+        // not release the kernel's references to OVERLAPPED/buffer storage.
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            for (auto &slot : slots_) {
+                if (slot.active) {
+                    CancelIoEx(handle_, &slot.overlapped);
+                }
+            }
+            for (auto &slot : slots_) {
+                if (slot.active) {
+                    DWORD transferred = 0U;
+                    GetOverlappedResult(handle_, &slot.overlapped, &transferred, TRUE);
+                    slot.active = false;
+                }
+            }
+        }
         for (auto &slot : slots_) {
             free_aligned_bytes(slot.buffer);
             slot.buffer = nullptr;
@@ -521,7 +532,12 @@ private:
         size_t active_count = 0U;
         for (size_t i = 0U; i < slots_.size(); ++i) {
             if (!slots_[i].active) {
-                return i;
+                if (!wait) {
+                    return i;
+                }
+                // drain(true) must wait for an ACTIVE request even if other
+                // slots are idle; otherwise close() spins instead of waiting.
+                continue;
             }
             active_events[active_count] = slots_[i].event;
             active_indices[active_count] = i;
@@ -876,25 +892,8 @@ void finalize_temporary_file(const std::string &temp_path, const std::string &fi
         sleep_before_publish_retry(attempt);
     }
 
-    std::error_code remove_error;
-    NativePath::remove(final_path, remove_error);
-    std::error_code rename_error;
-    for (int attempt = 0; attempt < kRenameRetryCount; ++attempt) {
-        NativePath::rename(temp_path, final_path, rename_error);
-        if (!rename_error) {
-            return;
-        }
-        if (!is_transient_publish_error(rename_error)) {
-            break;
-        }
-        sleep_before_publish_retry(attempt);
-    }
-
-    if (CopyFileW(temp.c_str(), final.c_str(), FALSE)) {
-        std::error_code cleanup_error;
-        NativePath::remove(temp_path, cleanup_error);
-        return;
-    }
+    // Never delete or copy over a valid destination as a fallback. A failed
+    // replacement (including cross-volume moves) must leave both files intact.
     throw std::runtime_error(
         "failed to finalize temporary file: " + final_path +
         " (win32=" + std::to_string(static_cast<unsigned long>(move_error)) + ")"
@@ -919,12 +918,10 @@ public:
         NativePath::remove(temp_path_, remove_error);
         if (!config_.enabled) {
             buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
-            finalize_buffered_temp_ = true;
             return;
         }
         if (!direct_io_supported_path(final_path_)) {
             buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
-            finalize_buffered_temp_ = true;
             return;
         }
         try {
@@ -937,12 +934,11 @@ public:
 #endif
         } catch (...) {
             buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
-            finalize_buffered_temp_ = true;
         }
     }
 
     void append(const void *src, size_t bytes) {
-        if (closed_) {
+        if (closed_ || (!direct_writer_ && !buffered_writer_)) {
             throw_io_error("append on closed writer: " + final_path_);
         }
         if (written_bytes_ + static_cast<uint64_t>(bytes) > logical_bytes_) {
@@ -966,14 +962,13 @@ public:
         if (direct_writer_) {
             direct_writer_->close();
             direct_writer_.reset();
-            finalize_temporary_file(temp_path_, final_path_);
         } else if (buffered_writer_) {
             buffered_writer_->close();
             buffered_writer_.reset();
-            if (finalize_buffered_temp_) {
-                finalize_temporary_file(temp_path_, final_path_);
-            }
         }
+        // A failed publication can be retried even though the I/O handle was
+        // already closed. Never silently turn a failed close into success.
+        finalize_temporary_file(temp_path_, final_path_);
         closed_ = true;
     }
 
@@ -984,7 +979,6 @@ private:
     uint64_t written_bytes_ = 0ULL;
     DirectIoConfig config_{};
     bool closed_ = false;
-    bool finalize_buffered_temp_ = false;
     std::unique_ptr<BufferedAppendWriter> buffered_writer_;
 #ifdef _WIN32
     std::unique_ptr<DirectFileWriterWin32> direct_writer_;

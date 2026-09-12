@@ -115,6 +115,7 @@ struct LzmaApi {
     void *module = nullptr;
 #endif
     size_t (*stream_buffer_bound)(size_t) = nullptr;
+    uint64_t (*crc64)(const uint8_t *, size_t, uint64_t) = nullptr;
     lzma_ret (*easy_buffer_encode)(
         uint32_t,
         lzma_check,
@@ -177,6 +178,8 @@ LzmaApi &lzma_api() {
 
         api.stream_buffer_bound =
             reinterpret_cast<size_t (*)(size_t)>(load_symbol("lzma_stream_buffer_bound"));
+        api.crc64 = reinterpret_cast<uint64_t (*)(const uint8_t *, size_t, uint64_t)>(
+            load_symbol("lzma_crc64"));
         api.easy_buffer_encode =
             reinterpret_cast<lzma_ret (*)(uint32_t, lzma_check, const lzma_allocator *, const uint8_t *, size_t, uint8_t *, size_t *, size_t)>(
                 load_symbol("lzma_easy_buffer_encode"));
@@ -1057,9 +1060,9 @@ struct SevenZipSequentialReader::Impl {
         opened = true;
     }
 
-    void read_exact(void *dst, size_t bytes) {
-        if (bytes == 0U) {
-            return;
+    size_t read_some(void *dst, size_t capacity) {
+        if (capacity == 0U) {
+            return 0U;
         }
         if (!opened) {
             throw std::runtime_error("7z archive reader is not open");
@@ -1067,31 +1070,42 @@ struct SevenZipSequentialReader::Impl {
         if (dst == nullptr) {
             throw std::runtime_error("attempted to read 7z archive into null buffer");
         }
-        uint8_t *out = static_cast<uint8_t *>(dst);
-        size_t offset = 0;
-        while (offset < bytes) {
 #ifdef _WIN32
-            DWORD read_bytes = 0;
-            const DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes - offset, 1U << 20));
-            const BOOL ok = ReadFile(stdout_read, out + offset, chunk, &read_bytes, nullptr);
-            if (!ok || read_bytes == 0) {
-                throw std::runtime_error("truncated 7z archive stream: " + archive_path);
+        DWORD read_bytes = 0;
+        const DWORD chunk = static_cast<DWORD>(std::min<size_t>(capacity, 1U << 20));
+        if (!ReadFile(stdout_read, dst, chunk, &read_bytes, nullptr)) {
+            if (GetLastError() == ERROR_BROKEN_PIPE) {
+                return 0U;
             }
-            offset += static_cast<size_t>(read_bytes);
+            throw std::runtime_error("failed while reading 7z archive stream: " + archive_path);
+        }
+        return static_cast<size_t>(read_bytes);
 #else
-            const size_t chunk = std::min<size_t>(bytes - offset, 1U << 20);
-            ssize_t read_bytes = ::read(stdout_fd, out + offset, chunk);
+        for (;;) {
+            const size_t chunk = std::min<size_t>(capacity, 1U << 20);
+            const ssize_t read_bytes = ::read(stdout_fd, dst, chunk);
             if (read_bytes < 0) {
                 if (errno == EINTR) {
                     continue;
                 }
                 throw std::runtime_error("failed while reading 7z archive stream: " + archive_path);
             }
-            if (read_bytes == 0) {
+            return static_cast<size_t>(read_bytes);
+        }
+#endif
+    }
+
+    void read_exact(void *dst, size_t bytes) {
+        size_t offset = 0U;
+        while (offset < bytes) {
+            // Keep the existing exact-read contract, including null checking.
+            const size_t count = read_some(
+                dst == nullptr ? nullptr : static_cast<uint8_t *>(dst) + offset,
+                bytes - offset);
+            if (count == 0U) {
                 throw std::runtime_error("truncated 7z archive stream: " + archive_path);
             }
-            offset += static_cast<size_t>(read_bytes);
-#endif
+            offset += count;
         }
     }
 
@@ -1190,6 +1204,13 @@ void SevenZipSequentialReader::read(void *dst, size_t bytes) {
     impl_->read_exact(dst, bytes);
 }
 
+size_t SevenZipSequentialReader::read_some(void *dst, size_t capacity) {
+    if (!impl_) {
+        throw std::runtime_error("7z archive reader is not open");
+    }
+    return impl_->read_some(dst, capacity);
+}
+
 void SevenZipSequentialReader::close() {
     if (impl_) {
         impl_->finish(true);
@@ -1256,6 +1277,14 @@ std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, 
 
 std::vector<uint8_t> decompress_xz_block_native(const uint8_t *data, size_t size) {
     return xz_decompress_bytes(data, size);
+}
+
+uint64_t crc64_bytes_native(const uint8_t *data, size_t size) {
+    const auto &api = lzma_api();
+    if (!api.crc64 || (size != 0U && data == nullptr)) {
+        throw std::runtime_error("BC RAW CRC64 is unavailable or input is null");
+    }
+    return api.crc64(data, size, 0U);
 }
 
 bool compress_with_7z_or_xz(const std::string &input_path, int lvl) {

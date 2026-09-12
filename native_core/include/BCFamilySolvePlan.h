@@ -27,6 +27,9 @@ namespace BC {
 template <typename T>
 struct BCFamilyNoInitAllocator : std::allocator<T> {
     using value_type = T;
+    // Numeric arrays can be passed directly to sector-aligned I/O. Keep the
+    // existing no-initialization behavior; this allocates no second value array.
+    static constexpr size_t alignment = alignof(T) > 4096U ? alignof(T) : 4096U;
 
     BCFamilyNoInitAllocator() noexcept = default;
 
@@ -37,6 +40,17 @@ struct BCFamilyNoInitAllocator : std::allocator<T> {
     struct rebind {
         using other = BCFamilyNoInitAllocator<U>;
     };
+
+    [[nodiscard]] T *allocate(size_t count) {
+        if (count > std::numeric_limits<size_t>::max() / sizeof(T)) {
+            throw std::bad_array_new_length();
+        }
+        return static_cast<T *>(::operator new(count * sizeof(T), std::align_val_t{alignment}));
+    }
+
+    void deallocate(T *ptr, size_t) noexcept {
+        ::operator delete(ptr, std::align_val_t{alignment});
+    }
 
     template <typename U, typename... Args>
     void construct(U *ptr, Args &&...args) {
@@ -117,10 +131,59 @@ public:
         }
     }
 
+    // Standalone plans assume ascending fid order; execute sweeps via make_passes.
     [[nodiscard]] BCFamilySolvePassPlan make_pass(
         FamilyId fid,
         BCSolveSpawnPhase phase,
         SpawnDeltaCoord delta_coord
+    ) const {
+        return make_pass_impl(fid, phase, delta_coord, nullptr);
+    }
+
+    [[nodiscard]] std::vector<BCFamilySolvePassPlan> make_passes(
+        BCSolveSpawnPhase phase,
+        SpawnDeltaCoord delta_coord
+    ) const {
+        const uint32_t family_count = current_axis_->family_count();
+        std::vector<BCFamilySolvePassPlan> passes;
+        passes.reserve(family_count);
+        if (family_count == 0U) {
+            return passes;
+        }
+
+        // Modulo Spawn4 dependencies usually contain {fid, fid + delta}.
+        // Follow that stride to reuse the overlapping future family. Exact
+        // axes may be sparse; keep their order, and Spawn2's order, unchanged.
+        uint32_t stride = 1U;
+        if (phase == BCSolveSpawnPhase::Spawn4 &&
+            current_partition_->policy.kind == BCFamilyPartitionKind::ModuloCoord) {
+            if (family_count != current_partition_->policy.modulus) {
+                throw std::invalid_argument("BC family solve modulo count mismatch");
+            }
+            stride = static_cast<uint32_t>(delta_coord) % family_count;
+        }
+
+        std::vector<uint8_t> visited(family_count, 0U);
+        // Start every unvisited modular cycle, including stride == 0 and
+        // non-coprime stride/modulus. Each family is visited exactly once.
+        for (uint32_t start = 0U; start < family_count; ++start) {
+            uint32_t fid = start;
+            while (visited[fid] == 0U) {
+                passes.push_back(make_pass_impl(
+                    static_cast<FamilyId>(fid), phase, delta_coord, &visited));
+                visited[fid] = 1U;
+                fid = (fid + stride) % family_count;
+            }
+        }
+        return passes;
+    }
+
+private:
+    [[nodiscard]] BCFamilySolvePassPlan make_pass_impl(
+        FamilyId fid,
+        BCSolveSpawnPhase phase,
+        SpawnDeltaCoord delta_coord,
+        const std::vector<uint8_t> *visited
     ) const {
         if (fid >= current_axis_->family_count()) {
             throw std::out_of_range("BC family solve fid out of range");
@@ -145,6 +208,11 @@ public:
         std::vector<BCSourceCellWork> source = scheduler_.source_cells_for_family(fid);
         plan.current_cells.reserve(source.size());
         const BCCellMatrix &matrix = scheduler_.source_matrix();
+        // Partial values exist only if the other family has already run.
+        // A standalone make_pass retains the historical ascending-fid order.
+        const auto is_first_visit = [&](FamilyId other) {
+            return visited == nullptr ? fid < other : (*visited)[other] == 0U;
+        };
         for (const BCSourceCellWork &work : source) {
             const FamilyId row = matrix.row(work.cid);
             const FamilyId col = matrix.col(work.cid);
@@ -155,14 +223,14 @@ public:
                 if (row != fid) {
                     throw std::logic_error("BC family solve horizontal work does not belong to row fid");
                 }
-                visit = fid < col
+                visit = is_first_visit(col)
                     ? BCFamilySolveCellVisitKind::FirstDirection
                     : BCFamilySolveCellVisitKind::SecondDirection;
             } else if (bc_has_vertical(work.directions)) {
                 if (col != fid) {
                     throw std::logic_error("BC family solve vertical work does not belong to col fid");
                 }
-                visit = fid < row
+                visit = is_first_visit(row)
                     ? BCFamilySolveCellVisitKind::FirstDirection
                     : BCFamilySolveCellVisitKind::SecondDirection;
             } else {
@@ -187,7 +255,6 @@ public:
         return plan;
     }
 
-private:
     const BCFamilyTable *current_axis_ = nullptr;
     const BCFamilyPartitionLayerMap *current_partition_ = nullptr;
     const BCFamilyTable *future_axis_ = nullptr;

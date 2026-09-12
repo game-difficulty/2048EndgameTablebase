@@ -4,15 +4,19 @@
 #include "BCFutureFamilyWindow.h"
 #include "BCSingleChunkSolve.h"
 #include "NativeLzma.h"
+#include "BCZeroTempIO.h"
+#include "BCFamilyTempWorker.h"
 
 #include <array>
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <limits>
 #include <memory>
@@ -32,6 +36,10 @@ struct BCFamilySolveStats {
     BCSingleChunkSolveStats single;
     uint64_t spawn4_passes = 0U;
     uint64_t spawn2_passes = 0U;
+    uint64_t value_batches = 0U;
+    uint64_t value_batch_cells_max = 0U;
+    uint64_t value_batch_planned_bytes_max = 0U;
+    uint64_t value_batch_oversize_cells = 0U;
     uint64_t family_current_cells_loaded = 0U;
     uint64_t partial4_cells_written = 0U;
     uint64_t partial4_cells_read = 0U;
@@ -97,6 +105,14 @@ struct BCFamilySolveStats {
     double temp_open_seconds = 0.0;
     double temp_close_seconds = 0.0;
     double temp_compress_seconds = 0.0;
+    uint64_t temp_cache_write_saved_bytes = 0U;
+    uint64_t temp_cache_read_saved_bytes = 0U;
+    uint64_t temp_pipeline_jobs = 0U;
+    uint64_t temp_pipeline_serial_batches = 0U;
+    uint64_t temp_pipeline_pair_planned_bytes_max = 0U;
+    uint64_t temp_pipeline_slot_capacity_bytes_max = 0U;
+    double temp_pipeline_wait_seconds = 0.0;
+    double temp_pipeline_active_seconds = 0.0;
     uint64_t future_release_all_calls = 0U;
     uint64_t future_release_except_calls = 0U;
     double future_release_all_seconds = 0.0;
@@ -121,14 +137,29 @@ struct BCFamilySolveOptions {
     uint32_t source_bitmap_words_per_work_item = 64U;
     uint32_t source_work_schedule_chunk = 1U;
     uint32_t cell_parallel_min_work_items = 4U;
+    // Partial + scratch/final numeric payload per execution batch. A cell is
+    // indivisible here: oversized cells run alone and are reported in stats.
+    // Current/future positions, indexes, I/O, bounded temp hot cache and thread
+    // workspaces are separate. This is not a whole-process RSS limit.
+    uint64_t value_batch_max_bytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
+    // Same-pass, two-slot pipeline. The existing numeric budget is split, not
+    // doubled. Does not reduce solve threads or the existing codec lane count.
+    bool temp_io_pipeline = true;
     uint32_t future_reuse_max_families = 4U;
     uint64_t future_index_recycle_max_bytes = 0U;
     bool temp_direct_io = false;
     bool force_temp_buffered_io = false;
     bool compress_temp_files = false;
     uint32_t temp_direct_queue_depth = 16U;
+    uint64_t temp_direct_max_transfer_bytes = kBCDirectDefaultMaxTransferBytes;
     uint64_t final_pending_value_memory_cap_bytes = 0U;
     uint64_t temp_hot_cache_max_bytes = 0U;
+    // Synchronous last-use consumer; it may mutate/release only the retired
+    // cell, never another lookup cell. Not called for unreferenced cells.
+    std::function<void(BCLoadedCell &, BCLoadedSuccessCell &)> retire_future4_cell;
+    std::function<bool()> retire_future4_needs_sample;
+    std::function<void(const std::vector<const BCLoadedSuccessCell *> &)> retire_future4_sample;
+    std::function<void()> retire_future4_finish;
 };
 
 struct BCFamilySolveFileResult {
@@ -371,6 +402,7 @@ template <typename StorageT>
 
 struct BCFamilySolveTempRecord {
     static constexpr uint64_t kUnwrittenOffset = std::numeric_limits<uint64_t>::max();
+    static constexpr uint64_t kHotOffset = kUnwrittenOffset - 1U;
 
     uint64_t value_offset = kUnwrittenOffset;
     uint64_t value_count = 0U;
@@ -407,8 +439,13 @@ public:
         const std::filesystem::path &path,
         uint32_t kind,
         bool direct_io = false,
-        uint32_t direct_queue_depth = 16U
+        uint32_t direct_queue_depth = 16U,
+        uint64_t direct_max_transfer_bytes = kBCDirectDefaultMaxTransferBytes,
+        BCZeroTempWorkspace *codec = nullptr, T zero = T{}, size_t max_blocks = 0U
     ) {
+        close();
+        codec_ = BCZeroTempIO<T>{};
+        value_cursor_ = 0U;
         path_ = path;
         kind_ = kind;
         direct_io_ = direct_io;
@@ -417,6 +454,7 @@ public:
         }
         if (direct_io_) {
             direct_options_.queue_depth = direct_queue_depth == 0U ? 1U : direct_queue_depth;
+            direct_options_.max_transfer_bytes = direct_max_transfer_bytes;
             direct_options_.overlapped = direct_options_.queue_depth > 1U;
             direct_options_.preserve_unwritten_bytes = false;
             alignment_ = direct_options_.alignment;
@@ -432,6 +470,7 @@ public:
             writer_ = std::make_unique<BCBufferedFileWriter>(path_);
             reader_ = std::make_unique<BCBufferedFileReader>(path_);
         }
+        if (codec) codec_.open(writer_.get(), reader_.get(), codec, zero, alignment_, payload_offset_, max_blocks);
         write_header();
     }
 
@@ -439,6 +478,7 @@ public:
         const BCFamilyValueVector<T> &values,
         BCFamilySolveStats *stats
     ) {
+        if (codec_.enabled()) return append_many({&values}, stats).at(0).value_offset;
         return append(values.data(), values.size(), stats);
     }
 
@@ -450,6 +490,7 @@ public:
         if (count != 0U && values == nullptr) {
             throw std::invalid_argument("BC family solve temp append pointer is null");
         }
+        if (codec_.enabled()) throw std::logic_error("BC zero temp requires vector batch append");
         if (direct_io_) {
             align_value_cursor_for_direct();
         }
@@ -495,6 +536,23 @@ public:
             return records;
         }
         const double t0 = bc_single_chunk_now_seconds();
+        if (codec_.enabled()) {
+            BCFileIOStats io;
+            const auto encoded = codec_.append_many(value_vectors, &io);
+            uint64_t bytes = 0;
+            for (size_t i=0;i<encoded.size();++i) {
+                records[i] = {encoded[i].first, encoded[i].second};
+                bytes += encoded[i].second * sizeof(T);
+            }
+            if (stats) {
+                bc_success_accumulate_file_stats(&stats->temp_write_io, io);
+                stats->temp_write_seconds += bc_single_chunk_now_seconds()-t0;
+                stats->temp_values_written += bytes/sizeof(T);
+                stats->temp_bytes_written += bytes;
+                stats->single.partial_write_bytes += bytes;
+            }
+            return records;
+        }
         std::vector<BCFileWriteRequest> requests;
         requests.reserve(value_vectors.size());
         uint64_t total_values = 0U;
@@ -559,6 +617,20 @@ public:
         uint64_t value_count,
         BCFamilySolveStats *stats
     ) {
+        if (codec_.enabled()) {
+            const double t0 = bc_single_chunk_now_seconds();
+            BCFileIOStats io;
+            std::vector<BCFamilyValueVector<T>> values;
+            codec_.read_many({{value_offset,value_count}}, values, &io);
+            if (stats) {
+                bc_success_accumulate_file_stats(&stats->temp_read_io, io);
+                stats->temp_read_seconds += bc_single_chunk_now_seconds()-t0;
+                stats->temp_values_read += value_count;
+                stats->temp_bytes_read += value_count*sizeof(T);
+                stats->single.partial_read_bytes += value_count*sizeof(T);
+            }
+            return std::move(values.at(0));
+        }
         if (value_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
             throw std::overflow_error("BC family solve temp read count exceeds size_t");
         }
@@ -607,6 +679,27 @@ public:
         std::vector<BCFamilyValueVector<T>> &out,
         BCFamilySolveStats *stats
     ) {
+        if (codec_.enabled()) {
+            const double t0 = bc_single_chunk_now_seconds();
+            std::vector<std::pair<uint64_t,uint64_t>> selected;
+            selected.reserve(cids.size());
+            uint64_t count=0;
+            for (CellId cid:cids) {
+                const auto &r=records.at(cid);
+                if (!r.written() || r.value_offset==BCFamilySolveTempRecord::kHotOffset)
+                    throw std::runtime_error("BC zero temp disk record missing");
+                selected.emplace_back(r.value_offset,r.value_count); count+=r.value_count;
+            }
+            BCFileIOStats io;
+            codec_.read_many(selected,out,&io);
+            if(stats) {
+                bc_success_accumulate_file_stats(&stats->temp_read_io,io);
+                stats->temp_read_seconds += bc_single_chunk_now_seconds()-t0;
+                stats->temp_values_read += count; stats->temp_bytes_read += count*sizeof(T);
+                stats->single.partial_read_bytes += count*sizeof(T);
+            }
+            return;
+        }
         out.clear();
         out.resize(cids.size());
         if (cids.empty()) {
@@ -726,7 +819,7 @@ private:
     void write_header() {
         std::array<uint8_t, static_cast<size_t>(kHeaderBytes)> header{};
         bc_append_u64_at(header, 0U, kBCFamilySolveTempMagic);
-        bc_append_u32_at(header, 8U, 1U);
+        bc_append_u32_at(header, 8U, codec_.enabled() ? 2U : 1U);
         bc_append_u32_at(header, 12U, kind_);
         bc_append_u32_at(header, 16U, static_cast<uint32_t>(sizeof(T)));
         writer_->write_many(
@@ -765,6 +858,15 @@ private:
     std::unique_ptr<BCWritableFile> writer_;
     std::unique_ptr<BCReadableFile> reader_;
     uint64_t value_cursor_ = 0U;
+    BCZeroTempIO<T> codec_;
+};
+
+struct BCFamilyTempUsePlan {
+    static constexpr uint32_t kNever=UINT32_MAX;
+    std::array<std::vector<uint32_t>,3> consumer;
+    std::array<size_t,3> max_blocks{};
+    uint32_t step=0;
+    uint64_t charged_bytes=0;
 };
 
 template <typename StorageT>
@@ -777,9 +879,12 @@ public:
         uint32_t cell_count,
         bool direct_io = false,
         uint32_t direct_queue_depth = 16U,
-        uint64_t hot_cache_max_bytes = 0U
+        uint64_t hot_cache_max_bytes = 0U,
+        uint64_t direct_max_transfer_bytes = kBCDirectDefaultMaxTransferBytes,
+        BCFamilyTempUsePlan *use_plan = nullptr, StorageT zero = StorageT{}, uint32_t threads = 1U
     ) {
-        open(dir, cell_count, direct_io, direct_queue_depth, hot_cache_max_bytes);
+        open(dir, cell_count, direct_io, direct_queue_depth, hot_cache_max_bytes, direct_max_transfer_bytes,
+             use_plan, zero, threads);
     }
 
     void open(
@@ -787,10 +892,31 @@ public:
         uint32_t cell_count,
         bool direct_io = false,
         uint32_t direct_queue_depth = 16U,
-        uint64_t hot_cache_max_bytes = 0U
+        uint64_t hot_cache_max_bytes = 0U,
+        uint64_t direct_max_transfer_bytes = kBCDirectDefaultMaxTransferBytes,
+        BCFamilyTempUsePlan *use_plan = nullptr, StorageT zero = StorageT{}, uint32_t threads = 1U
     ) {
+        close();
+        codec_workspace_.reset();
+        reserved_bytes_ = 0U;
         dir_ = dir;
-        hot_cache_max_bytes_ = hot_cache_max_bytes;
+        use_plan_ = use_plan;
+        hot_cache_max_bytes_ = use_plan ? hot_cache_max_bytes : 0U;
+        if (use_plan) {
+            if (use_plan->charged_bytes > hot_cache_max_bytes_) throw std::logic_error("BC temp plan exceeds cache budget");
+            reserved_bytes_ = use_plan->charged_bytes;
+            hot_cache_max_bytes_ -= reserved_bytes_;
+            const uint32_t lanes=std::min<uint32_t>(16U,std::max(1U,threads));
+            uint64_t codec_bytes=2ULL*lanes*kBCZeroBlockBytes+65536U;
+            for (auto blocks:use_plan->max_blocks)
+                codec_bytes=bc_checked_add_u64(codec_bytes,bc_family_checked_mul_u64(blocks,sizeof(BCZeroTempBlock),
+                    "BC temp directory budget overflow"),"BC temp codec budget overflow");
+            if (codec_bytes<=hot_cache_max_bytes_) {
+                codec_workspace_=std::make_unique<BCZeroTempWorkspace>(lanes);
+                hot_cache_max_bytes_-=codec_bytes;
+                reserved_bytes_+=codec_bytes;
+            }
+        }
         hot_cache_bytes_ = 0U;
         std::filesystem::create_directories(dir_);
         partial4_records_.assign(cell_count, {});
@@ -802,29 +928,29 @@ public:
         partial4_hot_present_.assign(cell_count, 0U);
         partial2_hot_present_.assign(cell_count, 0U);
         scratch4_hot_present_.assign(cell_count, 0U);
-        partial4_.open(dir_ / "family_partial4.bcfstmp", 1U, direct_io, direct_queue_depth);
-        partial2_.open(dir_ / "family_partial2.bcfstmp", 2U, direct_io, direct_queue_depth);
-        scratch4_.open(dir_ / "family_scratch4.bcfstmp", 3U, direct_io, direct_queue_depth);
+        partial4_.open(dir_ / "family_partial4.bcfstmp", 1U, direct_io, direct_queue_depth, direct_max_transfer_bytes,
+            codec_workspace_.get(), zero, use_plan ? use_plan->max_blocks[0] : 0U);
+        partial2_.open(dir_ / "family_partial2.bcfstmp", 2U, direct_io, direct_queue_depth, direct_max_transfer_bytes,
+            codec_workspace_.get(), zero, use_plan ? use_plan->max_blocks[1] : 0U);
+        scratch4_.open(dir_ / "family_scratch4.bcfstmp", 3U, direct_io, direct_queue_depth, direct_max_transfer_bytes,
+            codec_workspace_.get(), zero, use_plan ? use_plan->max_blocks[2] : 0U);
     }
 
     void write_partial4(CellId cid, BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
         wait_partial4_write(stats);
-        write_record(cid, values, partial4_, partial4_records_, stats);
-        retain_hot(cid, values, partial4_hot_, partial4_hot_present_);
+        write_planned_record(cid, values, partial4_, partial4_records_, partial4_hot_, partial4_hot_present_, 0U, stats);
         ++stats.partial4_cells_written;
     }
 
     void write_partial2(CellId cid, BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
         wait_partial2_write(stats);
-        write_record(cid, values, partial2_, partial2_records_, stats);
-        retain_hot(cid, values, partial2_hot_, partial2_hot_present_);
+        write_planned_record(cid, values, partial2_, partial2_records_, partial2_hot_, partial2_hot_present_, 1U, stats);
         ++stats.partial2_cells_written;
     }
 
     void write_scratch4(CellId cid, BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
         wait_scratch4_write(stats);
-        write_record(cid, values, scratch4_, scratch4_records_, stats);
-        retain_hot(cid, values, scratch4_hot_, scratch4_hot_present_);
+        write_planned_record(cid, values, scratch4_, scratch4_records_, scratch4_hot_, scratch4_hot_present_, 2U, stats);
         ++stats.scratch4_cells_written;
     }
 
@@ -834,8 +960,7 @@ public:
         BCFamilySolveStats &stats
     ) {
         wait_partial4_write(stats);
-        write_records_batch(cids, values, partial4_, partial4_records_, stats);
-        retain_hot_batch(cids, values, partial4_hot_, partial4_hot_present_);
+        write_planned_batch(cids, values, partial4_, partial4_records_, partial4_hot_, partial4_hot_present_, 0U, stats);
         stats.partial4_cells_written += cids.size();
     }
 
@@ -845,8 +970,7 @@ public:
         BCFamilySolveStats &stats
     ) {
         wait_partial2_write(stats);
-        write_records_batch(cids, values, partial2_, partial2_records_, stats);
-        retain_hot_batch(cids, values, partial2_hot_, partial2_hot_present_);
+        write_planned_batch(cids, values, partial2_, partial2_records_, partial2_hot_, partial2_hot_present_, 1U, stats);
         stats.partial2_cells_written += cids.size();
     }
 
@@ -856,8 +980,7 @@ public:
         BCFamilySolveStats &stats
     ) {
         wait_scratch4_write(stats);
-        write_records_batch(cids, values, scratch4_, scratch4_records_, stats);
-        retain_hot_batch(cids, values, scratch4_hot_, scratch4_hot_present_);
+        write_planned_batch(cids, values, scratch4_, scratch4_records_, scratch4_hot_, scratch4_hot_present_, 2U, stats);
         stats.scratch4_cells_written += cids.size();
     }
 
@@ -948,6 +1071,16 @@ public:
         (void)stats;
     }
 
+    void verify_consumed_and_log(const BCFamilySolveStats &stats) const {
+        if (hot_cache_bytes_ != 0U) throw std::logic_error("BC planned hot records were not consumed");
+        const auto *c=codec_workspace_.get();
+        std::fprintf(stderr,"BC_FAMILY_TEMP_IO codec=%u reserved_bytes=%llu hot_budget_bytes=%llu cache_saved_write_bytes=%llu cache_saved_read_bytes=%llu write_backend_bytes=%llu read_backend_bytes=%llu encode_seconds=%.6f decode_seconds=%.6f raw_bytes=%llu stored_bytes=%llu\n",
+            c?1U:0U,static_cast<unsigned long long>(reserved_bytes_),static_cast<unsigned long long>(hot_cache_max_bytes_),
+            static_cast<unsigned long long>(stats.temp_cache_write_saved_bytes),static_cast<unsigned long long>(stats.temp_cache_read_saved_bytes),
+            static_cast<unsigned long long>(stats.temp_write_io.backend_bytes),static_cast<unsigned long long>(stats.temp_read_io.backend_bytes),
+            c?c->encode_seconds:0.0,c?c->decode_seconds:0.0,static_cast<unsigned long long>(c?c->raw_bytes:0),static_cast<unsigned long long>(c?c->stored_bytes:0));
+    }
+
     void close() {
         partial4_.close();
         partial2_.close();
@@ -974,6 +1107,54 @@ public:
 
 private:
     using TempFile = BCFamilySolveTempValueFile<StorageT>;
+    void write_planned_record(CellId cid, BCFamilyValueVector<StorageT>& values, TempFile& file,
+            std::vector<BCFamilySolveTempRecord>& records, std::vector<BCFamilyValueVector<StorageT>>& hot,
+            std::vector<uint8_t>& present, size_t kind, BCFamilySolveStats& stats) {
+        require_cid(cid,records);
+        if(records[cid].written()) throw std::logic_error("BC duplicate planned temp record");
+        if(!retain_planned(cid,values,records,hot,present,kind,stats)) write_record(cid,values,file,records,stats);
+    }
+    void write_planned_batch(const std::vector<CellId>& cids, std::vector<BCFamilyValueVector<StorageT>>& values,
+            TempFile& file, std::vector<BCFamilySolveTempRecord>& records,
+            std::vector<BCFamilyValueVector<StorageT>>& hot, std::vector<uint8_t>& present,
+            size_t kind, BCFamilySolveStats& stats) {
+        if(cids.size()!=values.size()) throw std::logic_error("BC planned temp batch size mismatch");
+        std::vector<size_t> order(cids.size());
+        for(size_t i=0;i<cids.size();++i) {
+            require_cid(cids[i],records); order[i]=i;
+            if(records[cids[i]].written()) throw std::logic_error("BC duplicate planned temp batch record");
+        }
+        std::sort(order.begin(),order.end(),[&](size_t a,size_t b) {
+            const uint32_t sa=use_plan_?use_plan_->consumer[kind].at(cids[a]):0U;
+            const uint32_t sb=use_plan_?use_plan_->consumer[kind].at(cids[b]):0U;
+            return std::make_pair(sa,cids[a]) < std::make_pair(sb,cids[b]);
+        });
+        for(size_t i=1;i<order.size();++i)
+            if(cids[order[i-1]]==cids[order[i]]) throw std::logic_error("BC duplicate cid within temp batch");
+        for(size_t i:order) (void)retain_planned(cids[i],values[i],records,hot,present,kind,stats);
+        std::vector<const BCFamilyValueVector<StorageT>*> disk;
+        std::vector<CellId> disk_cids;
+        disk.reserve(cids.size()); disk_cids.reserve(cids.size());
+        for(size_t i=0;i<cids.size();++i) if(!present[cids[i]]) { disk.push_back(&values[i]); disk_cids.push_back(cids[i]); }
+        const auto appended=file.append_many(disk,&stats);
+        if(appended.size()!=disk_cids.size()) throw std::logic_error("BC planned temp append count mismatch");
+        for(size_t i=0;i<disk_cids.size();++i) records[disk_cids[i]]=appended[i];
+    }
+    bool retain_planned(CellId cid, BCFamilyValueVector<StorageT>& values,
+            std::vector<BCFamilySolveTempRecord>& records, std::vector<BCFamilyValueVector<StorageT>>& hot,
+            std::vector<uint8_t>& present, size_t kind, BCFamilySolveStats& stats) {
+        if(!use_plan_) return false;
+        const uint32_t when=use_plan_->consumer[kind].at(cid);
+        if(when==BCFamilyTempUsePlan::kNever || when<=use_plan_->step)
+            throw std::logic_error("BC temp producer has no later planned consumer");
+        if(when-use_plan_->step>2U || values.empty()) return false;
+        const uint64_t resident=hot_resident_bytes(values);
+        if(resident>hot_cache_max_bytes_-std::min(hot_cache_bytes_,hot_cache_max_bytes_)) return false;
+        records[cid]={BCFamilySolveTempRecord::kHotOffset,values.size()};
+        stats.temp_cache_write_saved_bytes+=hot_value_bytes(values);
+        hot[cid]=std::move(values); present[cid]=1U; hot_cache_bytes_+=resident;
+        return true;
+    }
     static constexpr size_t kArchiveStreamBufferBytes = 64ULL * 1024ULL * 1024ULL;
 
     [[nodiscard]] static std::string archive_entry_name_for_path(
@@ -1147,41 +1328,12 @@ private:
         return static_cast<uint64_t>(values.capacity()) * sizeof(StorageT);
     }
 
-    void retain_hot(
-        CellId cid,
-        BCFamilyValueVector<StorageT> &values,
-        std::vector<BCFamilyValueVector<StorageT>> &hot,
-        std::vector<uint8_t> &present
-    ) {
-        if (hot_cache_max_bytes_ == 0U || values.empty()) {
-            return;
-        }
-        require_cid(cid, partial4_records_);
-        const uint64_t bytes = hot_resident_bytes(values);
-        if (bytes > hot_cache_max_bytes_ - std::min(hot_cache_bytes_, hot_cache_max_bytes_)) {
-            return;
-        }
-        hot[static_cast<size_t>(cid)] = std::move(values);
-        present[static_cast<size_t>(cid)] = 1U;
-        hot_cache_bytes_ += bytes;
-    }
-
-    void retain_hot_batch(
-        const std::vector<CellId> &cids,
-        std::vector<BCFamilyValueVector<StorageT>> &values,
-        std::vector<BCFamilyValueVector<StorageT>> &hot,
-        std::vector<uint8_t> &present
-    ) {
-        for (size_t i = 0U; i < cids.size(); ++i) {
-            retain_hot(cids[i], values[i], hot, present);
-        }
-    }
-
     void account_hot_read(
         const BCFamilyValueVector<StorageT> &values,
         BCFamilySolveStats &stats
     ) {
         const uint64_t bytes = hot_value_bytes(values);
+        stats.temp_cache_read_saved_bytes += bytes;
         stats.temp_values_read = bc_checked_add_u64(
             stats.temp_values_read,
             values.size(),
@@ -1275,6 +1427,9 @@ private:
     }
 
     std::filesystem::path dir_;
+    BCFamilyTempUsePlan *use_plan_ = nullptr;
+    uint64_t reserved_bytes_ = 0U;
+    std::unique_ptr<BCZeroTempWorkspace> codec_workspace_;
     TempFile partial4_;
     TempFile partial2_;
     TempFile scratch4_;
@@ -1348,19 +1503,21 @@ public:
         const std::filesystem::path &dir,
         uint32_t cell_count,
         bool direct_io,
-        uint32_t direct_queue_depth
+        uint32_t direct_queue_depth,
+        uint64_t direct_max_transfer_bytes = kBCDirectDefaultMaxTransferBytes
     ) {
-        open(dir, cell_count, direct_io, direct_queue_depth);
+        open(dir, cell_count, direct_io, direct_queue_depth, direct_max_transfer_bytes);
     }
 
     void open(
         const std::filesystem::path &dir,
         uint32_t cell_count,
         bool direct_io,
-        uint32_t direct_queue_depth
+        uint32_t direct_queue_depth,
+        uint64_t direct_max_transfer_bytes = kBCDirectDefaultMaxTransferBytes
     ) {
         records_.assign(cell_count, {});
-        values_.open(dir / "family_final_values.bcfstmp", 4U, direct_io, direct_queue_depth);
+        values_.open(dir / "family_final_values.bcfstmp", 4U, direct_io, direct_queue_depth, direct_max_transfer_bytes);
     }
 
     void write(CellId cid, const BCFamilyValueVector<StorageT> &values, BCFamilySolveStats &stats) {
@@ -5011,6 +5168,9 @@ void bc_family_validate_solve_inputs(
     if (options.solve.row_width == 0U) {
         throw std::invalid_argument("BC family solve row_width must be non-zero");
     }
+    if (options.value_batch_max_bytes == 0U) {
+        throw std::invalid_argument("BC family solve value batch budget must be non-zero");
+    }
     if (!bc_success_dtype_matches_type<StorageT>(options.solve.dtype)) {
         throw std::invalid_argument("BC family solve dtype does not match storage type");
     }
@@ -5097,19 +5257,302 @@ struct BCFamilySolveCachedPass {
     std::vector<FamilyId> keep_families;
 };
 
-[[nodiscard]] inline std::vector<BCFamilySolvePassPlan> bc_family_build_passes(
-    const BCFamilySolvePlanner &planner,
-    BCSolveSpawnPhase phase,
-    SpawnDeltaCoord delta_coord,
-    uint32_t family_count
+struct BCFamilySolveValueBatch {
+    std::vector<size_t> indices;
+    uint64_t planned_bytes = 0U;
+};
+
+template <typename StorageT>
+[[nodiscard]] std::vector<BCFamilySolveValueBatch> bc_family_build_value_batches(
+    const std::vector<BCFamilySolveCellWork> &work,
+    const std::vector<BCFamilyPartialCellLayout> &layouts,
+    uint64_t max_bytes
 ) {
-    std::vector<BCFamilySolvePassPlan> passes;
-    passes.reserve(family_count);
-    for (FamilyId fid = 0U; fid < family_count; ++fid) {
-        passes.push_back(planner.make_pass(fid, phase, delta_coord));
+    if (max_bytes == 0U || work.size() != layouts.size()) {
+        throw std::invalid_argument("BC family value batch budget/layout mismatch");
     }
-    return passes;
+    // Separate first/second visits and direction groups. Never preload another
+    // group's old partial while producing first-visit partials in this batch.
+    std::array<std::vector<size_t>, 9U> groups;
+    for (size_t i = 0U; i < work.size(); ++i) {
+        if (layouts[i].success_rows == 0U) {
+            continue;
+        }
+        const uint32_t visit = static_cast<uint32_t>(work[i].visit);
+        const uint32_t direction = static_cast<uint32_t>(work[i].directions);
+        if (visit > 2U || direction == 0U || direction > 3U) {
+            throw std::logic_error("BC family value batch invalid visit/direction");
+        }
+        groups[visit * 3U + direction - 1U].push_back(i);
+    }
+    std::vector<BCFamilySolveValueBatch> batches;
+    for (const auto &indices : groups) {
+        BCFamilySolveValueBatch batch;
+        auto flush = [&]() {
+            if (!batch.indices.empty()) {
+                batches.push_back(std::move(batch));
+                batch = {};
+            }
+        };
+        for (size_t i : indices) {
+            const auto visit = work[i].visit;
+            uint64_t values = visit == BCFamilySolveCellVisitKind::DiagonalBoth
+                ? 0U : layouts[i].value_count;
+            if (visit != BCFamilySolveCellVisitKind::FirstDirection) {
+                values = bc_checked_add_u64(values, bc_family_checked_mul_u64(
+                    layouts[i].success_rows, layouts[i].row_width,
+                    "BC family batch scratch value overflow"),
+                    "BC family batch value overflow");
+            }
+            const uint64_t bytes = bc_family_checked_mul_u64(
+                values, sizeof(StorageT), "BC family batch byte overflow");
+            if (bytes > max_bytes || batch.planned_bytes > max_bytes - bytes) {
+                flush();
+            }
+            batch.indices.push_back(i);
+            batch.planned_bytes += bytes;
+            if (bytes > max_bytes) {
+                flush(); // One oversized cell, never accompanied by other cells.
+            }
+        }
+        flush();
+    }
+    return batches;
 }
+
+template <typename StorageT>
+[[nodiscard]] std::vector<BCFamilySolveValueBatch> bc_family_prepare_value_batches(
+    const BCLut &lut,
+    const BCFamilySolvePassPlan &pass,
+    const std::vector<BCLoadedCell> &cells,
+    const BCFamilySolveOptions<StorageT> &options,
+    std::vector<BCFamilyPartialCellLayout> &layouts,
+    BCFamilySolveStats &stats
+) {
+    if (options.value_batch_max_bytes == 0U)
+        throw std::invalid_argument("BC family value batch budget must be positive");
+    if (cells.size() != pass.current_cells.size()) {
+        throw std::logic_error("BC family batch current cell count mismatch");
+    }
+    const double t0 = bc_single_chunk_now_seconds();
+    layouts.resize(cells.size());
+    for (size_t i = 0U; i < cells.size(); ++i) {
+        if (cells[i].cid != pass.current_cells[i].cid) {
+            throw std::logic_error("BC family batch current cell order mismatch");
+        }
+        if (cells[i].success_rows == 0U || cells[i].buckets.empty()) {
+            if (pass.phase == BCSolveSpawnPhase::Spawn4) {
+                ++stats.single.current_empty_cells;
+            }
+            continue;
+        }
+        layouts[i] = bc_family_make_partial_cell_layout(lut, cells[i].view(), options.solve.row_width);
+    }
+    stats.current_layout_seconds += bc_single_chunk_now_seconds() - t0;
+    const double plan_t0 = bc_single_chunk_now_seconds();
+    auto batches = bc_family_build_value_batches<StorageT>(
+        pass.current_cells, layouts, options.temp_io_pipeline
+            ? std::max<uint64_t>(1U, options.value_batch_max_bytes / 2U)
+            : options.value_batch_max_bytes);
+    for (const auto &batch : batches) {
+        ++stats.value_batches;
+        stats.value_batch_cells_max = std::max<uint64_t>(
+            stats.value_batch_cells_max, batch.indices.size());
+        stats.value_batch_planned_bytes_max =
+            std::max(stats.value_batch_planned_bytes_max, batch.planned_bytes);
+        if (batch.planned_bytes > options.value_batch_max_bytes) {
+            if (stats.value_batch_oversize_cells == 0U) {
+                std::fprintf(stderr,
+                    "BC_FAMILY_VALUE_BATCH_OVERSIZE fid=%u cid=%u bytes=%llu budget_bytes=%llu action=single_cell\n",
+                    static_cast<unsigned>(pass.fid),
+                    static_cast<unsigned>(pass.current_cells[batch.indices.front()].cid),
+                    static_cast<unsigned long long>(batch.planned_bytes),
+                    static_cast<unsigned long long>(options.value_batch_max_bytes));
+            }
+            ++stats.value_batch_oversize_cells;
+        }
+    }
+    stats.plan_seconds += bc_single_chunk_now_seconds() - plan_t0;
+    return batches;
+}
+
+namespace detail {
+
+inline void bc_family_merge_temp_stats(BCFamilySolveStats &dst, BCFamilySolveStats &src) {
+    // Only the fields touched by TempStore/the IO worker. Main-thread compute,
+    // compact and output statistics must never be shared with the worker.
+#define BC_MERGE_TEMP(field) dst.field += src.field
+    BC_MERGE_TEMP(partial4_cells_written); BC_MERGE_TEMP(partial4_cells_read);
+    BC_MERGE_TEMP(partial2_cells_written); BC_MERGE_TEMP(partial2_cells_read);
+    BC_MERGE_TEMP(scratch4_cells_written); BC_MERGE_TEMP(scratch4_cells_read);
+    BC_MERGE_TEMP(temp_values_written); BC_MERGE_TEMP(temp_values_read);
+    BC_MERGE_TEMP(temp_bytes_written); BC_MERGE_TEMP(temp_bytes_read);
+    BC_MERGE_TEMP(temp_write_seconds); BC_MERGE_TEMP(temp_read_seconds);
+    BC_MERGE_TEMP(temp_read_prepare_seconds);
+    BC_MERGE_TEMP(temp_cache_write_saved_bytes); BC_MERGE_TEMP(temp_cache_read_saved_bytes);
+    BC_MERGE_TEMP(single.partial_write_bytes); BC_MERGE_TEMP(single.partial_read_bytes);
+    BC_MERGE_TEMP(workspace_release_spawn4_temp_values_seconds);
+    BC_MERGE_TEMP(workspace_release_spawn2_temp_values_seconds);
+    BC_MERGE_TEMP(temp_pipeline_active_seconds);
+#undef BC_MERGE_TEMP
+    bc_success_accumulate_file_stats(&dst.temp_write_io, src.temp_write_io);
+    bc_success_accumulate_file_stats(&dst.temp_read_io, src.temp_read_io);
+    dst.temp_pipeline_slot_capacity_bytes_max = std::max(
+        dst.temp_pipeline_slot_capacity_bytes_max, src.temp_pipeline_slot_capacity_bytes_max);
+    src = {};
+}
+
+// Slots contain only numeric vectors, moved to/from the existing kernels. No
+// extra current/future cells, codec workspace or third numeric batch is made.
+template <typename T>
+class BCFamilyPassTempPipeline {
+public:
+    using Values = std::vector<BCFamilyValueVector<T>>;
+    struct Input { Values partial, scratch; };
+    struct Output {
+        std::vector<CellId> partial_cids, scratch_cids;
+        Values partial, scratch;
+        bool empty() const { return partial_cids.empty() && scratch_cids.empty(); }
+    };
+    BCFamilyPassTempPipeline(BCFamilyTempWorker &worker, BCFamilySolveTempStore<T> &temp,
+            const BCFamilySolvePassPlan &pass, const std::vector<BCFamilySolveValueBatch> &batches,
+            uint64_t budget, int release_threads, BCFamilySolveStats &stats)
+        : worker_(worker), temp_(temp), pass_(pass), batches_(batches),
+          slot_budget_(worker.enabled() ? std::max<uint64_t>(1U, budget / 2U) : budget),
+          release_threads_(release_threads), stats_(stats) {}
+    ~BCFamilyPassTempPipeline() {
+        // On failure, finish in-flight IO but do not publish further outputs.
+        // This runs before the pass/batch vectors and TempStore are destroyed.
+        try { worker_.wait(); } catch (...) {}
+    }
+
+    Input take(size_t index) {
+        wait();
+        const size_t current = index % 2U, other = 1U - current;
+        if (slots_[current].loaded == kNone) {
+            submit([&, current, other, index] {
+                write(other); // Especially important before an oversized read.
+                read(current, index);
+            });
+            wait();
+        }
+        if (slots_[current].loaded != index)
+            throw std::logic_error("BC temp pipeline batch order mismatch");
+        const bool normal = batches_[index].planned_bytes <= slot_budget_;
+        if (worker_.enabled() && !normal) ++stats_.temp_pipeline_serial_batches;
+        uint64_t pair_bytes = batches_[index].planned_bytes;
+        const uint64_t previous_bytes = index != 0U && !slots_[other].output.empty()
+            ? batches_[index - 1U].planned_bytes : 0U;
+        if (worker_.enabled() && normal && index + 1U < batches_.size() &&
+                batches_[index + 1U].planned_bytes <= slot_budget_) {
+            pair_bytes += std::max(previous_bytes, batches_[index + 1U].planned_bytes);
+            // One job: previous write -> free its arrays -> next read. Never
+            // prefetch before the write buffers have actually been released.
+            submit([&, other, index] { write(other); read(other, index + 1U); });
+        } else if (!slots_[other].output.empty()) {
+            submit([&, other] { write(other); });
+            if (!normal) wait();
+            else pair_bytes += previous_bytes;
+        }
+        stats_.temp_pipeline_pair_planned_bytes_max = std::max(
+            stats_.temp_pipeline_pair_planned_bytes_max, pair_bytes);
+        slots_[current].loaded = kNone;
+        return std::move(slots_[current].input);
+    }
+
+    void put(size_t index, Output output) {
+        auto &slot = slots_[index % 2U]; // Worker may touch only the OTHER slot.
+        if (!slot.output.empty()) throw std::logic_error("BC temp pipeline slot still has output");
+        check_capacity(output.partial, output.scratch, index, stats_);
+        slot.output = std::move(output);
+        if (!worker_.enabled()) drain();
+    }
+
+    // Also used before formal exact output, retirement, pass change and close.
+    // Prefetched input stays in its slot; no extra read/copy is introduced.
+    void drain() {
+        wait();
+        if (!slots_[0].output.empty() || !slots_[1].output.empty()) {
+            submit([&] { write(0U); write(1U); });
+            wait();
+        }
+    }
+
+private:
+    static constexpr size_t kNone = std::numeric_limits<size_t>::max();
+    struct Slot { Input input; Output output; size_t loaded = kNone; };
+    void submit(std::function<void()> job) {
+        if (worker_.enabled()) ++stats_.temp_pipeline_jobs;
+        worker_.submit([this, job = std::move(job)] {
+            const double t0 = bc_single_chunk_now_seconds();
+            job();
+            if (worker_.enabled()) io_stats_.temp_pipeline_active_seconds +=
+                bc_single_chunk_now_seconds() - t0;
+        });
+    }
+    void wait() {
+        const double t0 = bc_single_chunk_now_seconds();
+        worker_.wait();
+        if (worker_.enabled()) stats_.temp_pipeline_wait_seconds += bc_single_chunk_now_seconds() - t0;
+        bc_family_merge_temp_stats(stats_, io_stats_);
+    }
+    void check_capacity(const Values &a, const Values &b, size_t index, BCFamilySolveStats &s) {
+        uint64_t bytes = 0U;
+        for (const auto *list : {&a, &b}) for (const auto &v : *list)
+            bytes = bc_checked_add_u64(bytes, static_cast<uint64_t>(v.capacity()) * sizeof(T),
+                                      "BC temp pipeline capacity overflow");
+        if (bytes > batches_[index].planned_bytes)
+            throw std::logic_error("BC temp pipeline numeric capacity exceeds planned batch");
+        s.temp_pipeline_slot_capacity_bytes_max = std::max(s.temp_pipeline_slot_capacity_bytes_max, bytes);
+    }
+    void read(size_t slot_index, size_t index) {
+        auto &slot = slots_[slot_index];
+        if (slot.loaded != kNone || !slot.output.empty())
+            throw std::logic_error("BC temp pipeline read into occupied slot");
+        std::vector<CellId> partial, scratch;
+        for (size_t i : batches_[index].indices) {
+            const auto &w = pass_.current_cells[i];
+            if (w.visit == BCFamilySolveCellVisitKind::SecondDirection) partial.push_back(w.cid);
+            if (pass_.phase == BCSolveSpawnPhase::Spawn2 &&
+                w.visit != BCFamilySolveCellVisitKind::FirstDirection) scratch.push_back(w.cid);
+        }
+        if (pass_.phase == BCSolveSpawnPhase::Spawn4)
+            temp_.read_partial4_batch(partial, slot.input.partial, io_stats_);
+        else {
+            temp_.read_partial2_batch(partial, slot.input.partial, io_stats_);
+            temp_.read_scratch4_batch(scratch, slot.input.scratch, io_stats_);
+        }
+        check_capacity(slot.input.partial, slot.input.scratch, index, io_stats_);
+        slot.loaded = index;
+    }
+    void write(size_t index) {
+        auto &out = slots_[index].output;
+        if (out.empty()) return;
+        if (pass_.phase == BCSolveSpawnPhase::Spawn4) {
+            temp_.write_partial4_batch(out.partial_cids, out.partial, io_stats_);
+            temp_.write_scratch4_batch(out.scratch_cids, out.scratch, io_stats_);
+        } else temp_.write_partial2_batch(out.partial_cids, out.partial, io_stats_);
+        const double t0 = bc_single_chunk_now_seconds();
+        bc_family_release_value_vectors(out.partial, release_threads_);
+        bc_family_release_value_vectors(out.scratch, release_threads_);
+        out = {};
+        auto &seconds = pass_.phase == BCSolveSpawnPhase::Spawn4
+            ? io_stats_.workspace_release_spawn4_temp_values_seconds
+            : io_stats_.workspace_release_spawn2_temp_values_seconds;
+        seconds += bc_single_chunk_now_seconds() - t0;
+    }
+    BCFamilyTempWorker &worker_;
+    BCFamilySolveTempStore<T> &temp_;
+    const BCFamilySolvePassPlan &pass_;
+    const std::vector<BCFamilySolveValueBatch> &batches_;
+    uint64_t slot_budget_;
+    int release_threads_;
+    BCFamilySolveStats &stats_;
+    BCFamilySolveStats io_stats_;
+    std::array<Slot, 2U> slots_;
+};
+
+} // namespace detail
 
 inline void bc_family_add_unique_cells(
     std::vector<CellId> &dst,
@@ -5188,6 +5631,78 @@ inline void bc_family_add_pass_families_unbounded(
         bc_family_sort_unique_cells(cached[i].keep_cids);
     }
     return cached;
+}
+
+// Derive lifetimes from the actual traversal (including Spawn4's strided order),
+// never from family-id distance. Temporary values have exactly one consumer.
+template <typename T>
+std::unique_ptr<detail::BCFamilyTempUsePlan> bc_family_make_temp_use_plan(
+    const BCPositionStreamingReader &position,
+    const std::vector<BCFamilySolveCachedPass> &spawn4,
+    const std::vector<BCFamilySolveCachedPass> &spawn2,
+    const BCFamilySolveOptions<T> &options
+) {
+    using Plan = detail::BCFamilyTempUsePlan;
+    // Kept diagnostic files retain the legacy, independently readable layout.
+    const uint64_t charge = 65536ULL + 6ULL * position.cell_count() * sizeof(uint32_t);
+    if (options.keep_temp_files || charge > options.temp_hot_cache_max_bytes) return nullptr;
+    if (spawn4.size() + spawn2.size() >= Plan::kNever)
+        throw std::overflow_error("BC temp plan step overflow");
+    auto plan = std::make_unique<Plan>();
+    plan->charged_bytes = charge; // Includes construction-time producer tables.
+    std::array<std::vector<uint32_t>, 3> producer;
+    for (size_t k = 0; k < 3; ++k) {
+        producer[k].assign(position.cell_count(), Plan::kNever);
+        plan->consumer[k].assign(position.cell_count(), Plan::kNever);
+    }
+    auto produce = [&](size_t kind, CellId cid, uint32_t step) {
+        auto &birth = producer[kind].at(cid);
+        if (birth != Plan::kNever) throw std::logic_error("BC temp plan duplicate producer");
+        birth = step;
+        const auto &desc = position.descriptor(cid);
+        // Only metadata is inspected. Sixteen is a safe empty-slot upper bound;
+        // reserving its small directory avoids scanning/unpacking positions here.
+        uint64_t bytes = bc_family_checked_mul_u64(desc.success_rows,
+            static_cast<uint64_t>(options.solve.row_width) * sizeof(T), "BC temp plan byte overflow");
+        if (kind != 2U) bytes = bc_family_checked_mul_u64(bytes, 16U, "BC temp partial plan overflow");
+        const uint64_t blocks = bytes / kBCZeroBlockBytes + (bytes % kBCZeroBlockBytes != 0U);
+        if (blocks > SIZE_MAX - plan->max_blocks[kind]) throw std::overflow_error("BC temp directory size overflow");
+        plan->max_blocks[kind] += static_cast<size_t>(blocks);
+    };
+    auto consume = [&](size_t kind, CellId cid, uint32_t step) {
+        auto &death = plan->consumer[kind].at(cid);
+        if (death != Plan::kNever || producer[kind].at(cid) == Plan::kNever || producer[kind][cid] >= step)
+            throw std::logic_error("BC temp plan missing/duplicate/out-of-order consumer");
+        death = step;
+    };
+    uint32_t step = 0;
+    for (const auto &cached : spawn4) {
+        for (const auto &work : cached.pass.current_cells) {
+            if (position.descriptor(work.cid).empty()) continue;
+            if (work.visit == BCFamilySolveCellVisitKind::FirstDirection) produce(0, work.cid, step);
+            else {
+                if (work.visit == BCFamilySolveCellVisitKind::SecondDirection) consume(0, work.cid, step);
+                produce(2, work.cid, step);
+            }
+        }
+        ++step;
+    }
+    for (const auto &cached : spawn2) {
+        for (const auto &work : cached.pass.current_cells) {
+            if (position.descriptor(work.cid).empty()) continue;
+            if (work.visit == BCFamilySolveCellVisitKind::FirstDirection) produce(1, work.cid, step);
+            else {
+                if (work.visit == BCFamilySolveCellVisitKind::SecondDirection) consume(1, work.cid, step);
+                consume(2, work.cid, step);
+            }
+        }
+        ++step;
+    }
+    for (size_t kind = 0; kind < 3; ++kind)
+        for (CellId cid = 0; cid < position.cell_count(); ++cid)
+            if ((producer[kind][cid] == Plan::kNever) != (plan->consumer[kind][cid] == Plan::kNever))
+                throw std::logic_error("BC temp plan has an unconsumed producer");
+    return plan;
 }
 
 inline void bc_family_add_future_window_stats(
@@ -5852,15 +6367,29 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         future4_position.axis(),
         future4_partition
     );
-    const uint32_t current_family_count = current_position.axis().family_count();
     const std::vector<BCFamilySolvePassPlan> spawn4_passes =
-        bc_family_build_passes(planner4, BCSolveSpawnPhase::Spawn4, delta4, current_family_count);
+        planner4.make_passes(BCSolveSpawnPhase::Spawn4, delta4);
     const std::vector<BCFamilySolveCachedPass> spawn4_cached =
         bc_family_build_cached_passes(spawn4_passes, options.future_reuse_max_families);
+    std::vector<std::vector<CellId>> retire4(spawn4_cached.size());
+    if (options.retire_future4_cell) {
+        std::vector<size_t> last_use(future4_position.cell_count(), spawn4_cached.size());
+        for (size_t i = 0U; i < spawn4_cached.size(); ++i) {
+            for (CellId cid : spawn4_cached[i].pass.future_cids) {
+                last_use.at(cid) = i;
+            }
+        }
+        for (CellId cid = 0U; cid < future4_position.cell_count(); ++cid) {
+            if (last_use[cid] != spawn4_cached.size()) {
+                retire4[last_use[cid]].push_back(cid);
+            }
+        }
+    }
     const std::vector<BCFamilySolvePassPlan> spawn2_passes =
-        bc_family_build_passes(planner2, BCSolveSpawnPhase::Spawn2, delta2, current_family_count);
+        planner2.make_passes(BCSolveSpawnPhase::Spawn2, delta2);
     const std::vector<BCFamilySolveCachedPass> spawn2_cached =
         bc_family_build_cached_passes(spawn2_passes, options.future_reuse_max_families);
+    auto temp_use_plan = bc_family_make_temp_use_plan(current_position, spawn4_cached, spawn2_cached, options);
     stats.plan_seconds += bc_single_chunk_now_seconds() - plan_t0;
 
     const double workspace_t0 = bc_single_chunk_now_seconds();
@@ -5880,9 +6409,14 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         current_position.cell_count(),
         temp_direct_io,
         options.temp_direct_queue_depth,
-        options.temp_hot_cache_max_bytes
+        options.temp_hot_cache_max_bytes,
+        options.temp_direct_max_transfer_bytes,
+        temp_use_plan.get(), options.solve.zero_value,
+        static_cast<uint32_t>(bc_resident_solve_effective_threads(options.solve.num_threads))
     );
     stats.temp_open_seconds += bc_single_chunk_now_seconds() - temp_open_t0;
+    // Lives across passes; no changes to solve.num_threads or codec lanes.
+    detail::BCFamilyTempWorker temp_worker(options.temp_io_pipeline);
     std::vector<detail::BCFamilyPendingOutputCell<StorageT>> pending(current_position.cell_count());
     uint64_t pending_value_bytes = 0U;
 
@@ -5914,27 +6448,11 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     }
     const double spawn4_phase_t0 = bc_single_chunk_now_seconds();
     for (size_t pass_index = 0U; pass_index < spawn4_cached.size(); ++pass_index) {
+        if (temp_use_plan) temp_use_plan->step = static_cast<uint32_t>(pass_index);
         const BCFamilySolveCachedPass &cached = spawn4_cached[pass_index];
         const BCFamilySolvePassPlan &pass = cached.pass;
         ++stats.spawn4_passes;
 
-        std::vector<size_t> spawn4_second_indices;
-        std::vector<CellId> spawn4_second_cids;
-        spawn4_second_indices.reserve(pass.current_cells.size());
-        spawn4_second_cids.reserve(pass.current_cells.size());
-        for (size_t i = 0U; i < pass.current_cells.size(); ++i) {
-            const BCFamilySolveCellWork &work = pass.current_cells[i];
-            if (work.visit != BCFamilySolveCellVisitKind::SecondDirection) {
-                continue;
-            }
-            if (current_position.descriptor(work.cid).empty()) {
-                continue;
-            }
-            spawn4_second_indices.push_back(i);
-            spawn4_second_cids.push_back(work.cid);
-        }
-        std::vector<BCFamilyValueVector<StorageT>> spawn4_partial_values;
-        temp.read_partial4_batch(spawn4_second_cids, spawn4_partial_values, stats);
         detail::BCFamilyCurrentCellLoadResult spawn4_current_result =
             spawn4_current_prefetch.get();
         if (pass_index + 1U < spawn4_cached.size()) {
@@ -6000,272 +6518,299 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
             );
         }
 
-        std::vector<BCLoadedCell> current_cells = std::move(spawn4_current_result.cells);
+        std::vector<BCLoadedCell> pass_current_cells = std::move(spawn4_current_result.cells);
         stats.single.current_position_read_seconds += spawn4_current_result.seconds;
         bc_single_chunk_add_cell_load_stats(
             stats.single.current_position_load,
             spawn4_current_result.load_stats
         );
-        stats.family_current_cells_loaded += current_cells.size();
+        stats.family_current_cells_loaded += pass_current_cells.size();
         ++stats.single.current_chunks;
-
-        std::vector<int64_t> spawn4_prefetch_index(current_cells.size(), -1);
-        for (size_t i = 0U; i < spawn4_second_indices.size(); ++i) {
-            spawn4_prefetch_index[spawn4_second_indices[i]] = static_cast<int64_t>(i);
-        }
-
-        std::vector<CellId> spawn4_partial_write_cids;
-        std::vector<BCFamilyValueVector<StorageT>> spawn4_partial_write_values;
-        std::vector<CellId> spawn4_scratch_write_cids;
-        std::vector<BCFamilyValueVector<StorageT>> spawn4_scratch_write_values;
-        spawn4_partial_write_cids.reserve(current_cells.size());
-        spawn4_partial_write_values.reserve(current_cells.size());
-        spawn4_scratch_write_cids.reserve(current_cells.size());
-        spawn4_scratch_write_values.reserve(current_cells.size());
-        const BCSolveTargetFamilyFilter spawn4_pass_filter =
-            bc_family_make_solve_filter(pass.future_families);
-
-        std::vector<BCFamilyPartialCellLayout> spawn4_layouts(current_cells.size());
-        std::vector<BCFamilyPartialMaxCellBuffer<StorageT>> spawn4_group_partials(
-            current_cells.size()
-        );
-        std::vector<BCFamilyCellSuccessScratch<StorageT>> spawn4_group_scratch(
-            current_cells.size()
-        );
-        std::array<std::vector<size_t>, 3U> spawn4_first_groups;
-        std::array<std::vector<size_t>, 3U> spawn4_second_groups;
-        std::vector<size_t> spawn4_fallback_indices;
-        auto append_spawn4_group = [](std::array<std::vector<size_t>, 3U> &groups,
-                                      BCDirectionMask directions,
-                                      size_t index) {
-            if (directions == BCDirectionMask::Horizontal) {
-                groups[0].push_back(index);
-            } else if (directions == BCDirectionMask::Vertical) {
-                groups[1].push_back(index);
-            } else {
-                groups[2].push_back(index);
+        std::vector<BCFamilyPartialCellLayout> pass_layouts;
+        const auto value_batches = bc_family_prepare_value_batches(
+            lut, pass, pass_current_cells, options, pass_layouts, stats);
+        detail::BCFamilyPassTempPipeline<StorageT> temp_pipeline(temp_worker, temp, pass,
+            value_batches, options.value_batch_max_bytes, workspace_release_threads, stats);
+        for (size_t batch_index = 0U; batch_index < value_batches.size(); ++batch_index) {
+            const auto &value_batch = value_batches[batch_index];
+            auto temp_input = temp_pipeline.take(batch_index);
+            BCFamilySolvePassPlan batch_pass;
+            batch_pass.future_families = cached.pass.future_families;
+            std::vector<BCLoadedCell> current_cells;
+            std::vector<BCFamilyPartialCellLayout> spawn4_layouts;
+            batch_pass.current_cells.reserve(value_batch.indices.size());
+            current_cells.reserve(value_batch.indices.size());
+            spawn4_layouts.reserve(value_batch.indices.size());
+            for (size_t i : value_batch.indices) {
+                batch_pass.current_cells.push_back(cached.pass.current_cells[i]);
+                current_cells.push_back(std::move(pass_current_cells[i]));
+                spawn4_layouts.push_back(std::move(pass_layouts[i]));
             }
-        };
-
-        const bool spawn4_use_grouped = options.solve.row_width == 1U;
-        for (size_t i = 0U; i < current_cells.size(); ++i) {
-            const BCLoadedCell &cell = current_cells[i];
-            if (cell.success_rows == 0U || cell.buckets.empty()) {
-                ++stats.single.current_empty_cells;
-                continue;
+            const BCFamilySolvePassPlan &pass = batch_pass;
+            std::vector<size_t> spawn4_second_indices;
+            std::vector<CellId> spawn4_second_cids;
+            for (size_t i = 0U; i < pass.current_cells.size(); ++i) {
+                if (pass.current_cells[i].visit == BCFamilySolveCellVisitKind::SecondDirection) {
+                    spawn4_second_indices.push_back(i);
+                    spawn4_second_cids.push_back(pass.current_cells[i].cid);
+                }
             }
-            ++stats.single.current_nonempty_cells;
-            stats.single.current_cells += 1U;
-            stats.single.current_rows += cell.success_rows;
-            stats.single.current_boards += cell.success_rows;
-            const double layout_t0 = bc_single_chunk_now_seconds();
-            spawn4_layouts[i] =
-                bc_family_make_partial_cell_layout(lut, cell.view(), options.solve.row_width);
-            stats.current_layout_seconds += bc_single_chunk_now_seconds() - layout_t0;
-            if (spawn4_use_grouped &&
-                pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection) {
-                append_spawn4_group(
-                    spawn4_first_groups,
-                    pass.current_cells[i].directions,
-                    i
-                );
-            } else if (spawn4_use_grouped &&
-                       pass.current_cells[i].visit == BCFamilySolveCellVisitKind::SecondDirection) {
-                append_spawn4_group(
-                    spawn4_second_groups,
-                    pass.current_cells[i].directions,
-                    i
-                );
-            } else {
-                spawn4_fallback_indices.push_back(i);
+            auto spawn4_partial_values = std::move(temp_input.partial);
+            std::vector<int64_t> spawn4_prefetch_index(current_cells.size(), -1);
+            for (size_t i = 0U; i < spawn4_second_indices.size(); ++i) {
+                spawn4_prefetch_index[spawn4_second_indices[i]] = static_cast<int64_t>(i);
             }
-        }
 
-        auto run_spawn4_first_group = [&](BCDirectionMask directions,
-                                          const std::vector<size_t> &indices) {
-            detail::bc_family_first_direction_cells_batch<StorageT>(
-                lut,
-                current_cells,
-                indices,
-                directions,
-                BCSolveSpawnPhase::Spawn4,
-                spawn4_layouts,
-                future4_position.axis(),
-                lookup,
-                spawn4_pass_filter,
-                options,
-                scratch,
-                stats,
-                spawn4_group_partials
+            std::vector<CellId> spawn4_partial_write_cids;
+            std::vector<BCFamilyValueVector<StorageT>> spawn4_partial_write_values;
+            std::vector<CellId> spawn4_scratch_write_cids;
+            std::vector<BCFamilyValueVector<StorageT>> spawn4_scratch_write_values;
+            spawn4_partial_write_cids.reserve(current_cells.size());
+            spawn4_partial_write_values.reserve(current_cells.size());
+            spawn4_scratch_write_cids.reserve(current_cells.size());
+            spawn4_scratch_write_values.reserve(current_cells.size());
+            const BCSolveTargetFamilyFilter spawn4_pass_filter =
+                bc_family_make_solve_filter(pass.future_families);
+
+            std::vector<BCFamilyPartialMaxCellBuffer<StorageT>> spawn4_group_partials(
+                current_cells.size()
             );
-        };
-        auto run_spawn4_second_group = [&](BCDirectionMask directions,
-                                           const std::vector<size_t> &indices) {
-            for (size_t index : indices) {
-                const int64_t prefetch = spawn4_prefetch_index[index];
-                if (prefetch < 0) {
-                    throw std::logic_error("BC family spawn4 grouped second missing partial");
-                }
-                spawn4_group_partials[index].values() =
-                    std::move(spawn4_partial_values[static_cast<size_t>(prefetch)]);
-                if (spawn4_group_partials[index].values().size() !=
-                    static_cast<size_t>(spawn4_layouts[index].value_count)) {
-                    throw std::runtime_error("BC family spawn4 grouped partial count mismatch");
-                }
-                const BCLoadedCell &cell = current_cells[index];
-                spawn4_group_scratch[index].reset(
-                    cell.cid,
-                    cell.success_rows,
-                    options.solve.row_width,
-                    options.solve.zero_value
-                );
-            }
-            detail::bc_family_partial_sum_cells_batch<StorageT>(
-                lut,
-                current_cells,
-                indices,
-                directions,
-                BCSolveSpawnPhase::Spawn4,
-                spawn4_layouts,
-                spawn4_group_partials,
-                future4_position.axis(),
-                lookup,
-                spawn4_pass_filter,
-                options,
-                scratch,
-                stats,
-                [&](uint32_t cell_index,
-                    uint32_t local_success_row,
-                    uint32_t /*local_bucket_index*/,
-                    const BCSolveBoardQuerySummary &summary,
-                    auto sum,
-                    BCFamilySolveCellWorkspace<StorageT> &/*local*/) {
-                BCFamilyCellSuccessScratch<StorageT> &cell_scratch =
-                    spawn4_group_scratch[static_cast<size_t>(cell_index)];
-                if (summary.terminal_success || summary.empty_count == 0U) {
-                    cell_scratch.write_zero_row(local_success_row, options.solve.zero_value);
+            std::vector<BCFamilyCellSuccessScratch<StorageT>> spawn4_group_scratch(
+                current_cells.size()
+            );
+            std::array<std::vector<size_t>, 3U> spawn4_first_groups;
+            std::array<std::vector<size_t>, 3U> spawn4_second_groups;
+            std::vector<size_t> spawn4_fallback_indices;
+            auto append_spawn4_group = [](std::array<std::vector<size_t>, 3U> &groups,
+                                          BCDirectionMask directions,
+                                          size_t index) {
+                if (directions == BCDirectionMask::Horizontal) {
+                    groups[0].push_back(index);
+                } else if (directions == BCDirectionMask::Vertical) {
+                    groups[1].push_back(index);
                 } else {
-                    cell_scratch.write_spawn4_sum_contribution_unchecked_row_width1(
-                        local_success_row,
-                        sum,
-                        summary.empty_count,
-                        options.solve.edge_options.spawn_rate4,
+                    groups[2].push_back(index);
+                }
+            };
+
+            const bool spawn4_use_grouped = options.solve.row_width == 1U;
+            for (size_t i = 0U; i < current_cells.size(); ++i) {
+                const BCLoadedCell &cell = current_cells[i];
+                if (cell.success_rows == 0U || cell.buckets.empty()) {
+                    ++stats.single.current_empty_cells;
+                    continue;
+                }
+                ++stats.single.current_nonempty_cells;
+                stats.single.current_cells += 1U;
+                stats.single.current_rows += cell.success_rows;
+                stats.single.current_boards += cell.success_rows;
+                if (spawn4_use_grouped &&
+                    pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection) {
+                    append_spawn4_group(
+                        spawn4_first_groups,
+                        pass.current_cells[i].directions,
+                        i
+                    );
+                } else if (spawn4_use_grouped &&
+                           pass.current_cells[i].visit == BCFamilySolveCellVisitKind::SecondDirection) {
+                    append_spawn4_group(
+                        spawn4_second_groups,
+                        pass.current_cells[i].directions,
+                        i
+                    );
+                } else {
+                    spawn4_fallback_indices.push_back(i);
+                }
+            }
+
+            auto run_spawn4_first_group = [&](BCDirectionMask directions,
+                                              const std::vector<size_t> &indices) {
+                detail::bc_family_first_direction_cells_batch<StorageT>(
+                    lut,
+                    current_cells,
+                    indices,
+                    directions,
+                    BCSolveSpawnPhase::Spawn4,
+                    spawn4_layouts,
+                    future4_position.axis(),
+                    lookup,
+                    spawn4_pass_filter,
+                    options,
+                    scratch,
+                    stats,
+                    spawn4_group_partials
+                );
+            };
+            auto run_spawn4_second_group = [&](BCDirectionMask directions,
+                                               const std::vector<size_t> &indices) {
+                for (size_t index : indices) {
+                    const int64_t prefetch = spawn4_prefetch_index[index];
+                    if (prefetch < 0) {
+                        throw std::logic_error("BC family spawn4 grouped second missing partial");
+                    }
+                    spawn4_group_partials[index].values() =
+                        std::move(spawn4_partial_values[static_cast<size_t>(prefetch)]);
+                    if (spawn4_group_partials[index].values().size() !=
+                        static_cast<size_t>(spawn4_layouts[index].value_count)) {
+                        throw std::runtime_error("BC family spawn4 grouped partial count mismatch");
+                    }
+                    const BCLoadedCell &cell = current_cells[index];
+                    spawn4_group_scratch[index].reset(
+                        cell.cid,
+                        cell.success_rows,
+                        options.solve.row_width,
                         options.solve.zero_value
                     );
                 }
-            });
-        };
-
-        const double spawn4_compute_t0 = bc_single_chunk_now_seconds();
-        run_spawn4_first_group(BCDirectionMask::Horizontal, spawn4_first_groups[0]);
-        run_spawn4_first_group(BCDirectionMask::Vertical, spawn4_first_groups[1]);
-        run_spawn4_first_group(BCDirectionMask::Both, spawn4_first_groups[2]);
-        run_spawn4_second_group(BCDirectionMask::Horizontal, spawn4_second_groups[0]);
-        run_spawn4_second_group(BCDirectionMask::Vertical, spawn4_second_groups[1]);
-        run_spawn4_second_group(BCDirectionMask::Both, spawn4_second_groups[2]);
-        for (size_t i : spawn4_fallback_indices) {
-            const BCLoadedCell &cell = current_cells[i];
-            BCFamilyValueVector<StorageT> *prefetched_partial = nullptr;
-            if (spawn4_prefetch_index[i] >= 0) {
-                prefetched_partial =
-                    &spawn4_partial_values[static_cast<size_t>(spawn4_prefetch_index[i])];
-            }
-            BCFamilyValueVector<StorageT> temp_output_values;
-            bc_family_spawn4_cell(
-                lut,
-                cell,
-                pass.current_cells[i].directions,
-                pass.current_cells[i].visit,
-                spawn4_layouts[i],
-                options,
-                future4_position.axis(),
-                spawn4_pass_filter,
-                lookup,
-                temp,
-                scratch,
-                stats,
-                prefetched_partial,
-                &temp_output_values
-            );
-            if (pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection) {
-                temp_output_values = detail::bc_family_prepare_partial_temp_output(
-                    spawn4_layouts[i],
-                    std::move(temp_output_values),
-                    true,
+                detail::bc_family_partial_sum_cells_batch<StorageT>(
+                    lut,
+                    current_cells,
+                    indices,
+                    directions,
+                    BCSolveSpawnPhase::Spawn4,
+                    spawn4_layouts,
+                    spawn4_group_partials,
+                    future4_position.axis(),
+                    lookup,
+                    spawn4_pass_filter,
                     options,
-                    stats
+                    scratch,
+                    stats,
+                    [&](uint32_t cell_index,
+                        uint32_t local_success_row,
+                        uint32_t /*local_bucket_index*/,
+                        const BCSolveBoardQuerySummary &summary,
+                        auto sum,
+                        BCFamilySolveCellWorkspace<StorageT> &/*local*/) {
+                    BCFamilyCellSuccessScratch<StorageT> &cell_scratch =
+                        spawn4_group_scratch[static_cast<size_t>(cell_index)];
+                    if (summary.terminal_success || summary.empty_count == 0U) {
+                        cell_scratch.write_zero_row(local_success_row, options.solve.zero_value);
+                    } else {
+                        cell_scratch.write_spawn4_sum_contribution_unchecked_row_width1(
+                            local_success_row,
+                            sum,
+                            summary.empty_count,
+                            options.solve.edge_options.spawn_rate4,
+                            options.solve.zero_value
+                        );
+                    }
+                });
+            };
+
+            const double spawn4_compute_t0 = bc_single_chunk_now_seconds();
+            run_spawn4_first_group(BCDirectionMask::Horizontal, spawn4_first_groups[0]);
+            run_spawn4_first_group(BCDirectionMask::Vertical, spawn4_first_groups[1]);
+            run_spawn4_first_group(BCDirectionMask::Both, spawn4_first_groups[2]);
+            run_spawn4_second_group(BCDirectionMask::Horizontal, spawn4_second_groups[0]);
+            run_spawn4_second_group(BCDirectionMask::Vertical, spawn4_second_groups[1]);
+            run_spawn4_second_group(BCDirectionMask::Both, spawn4_second_groups[2]);
+            for (size_t i : spawn4_fallback_indices) {
+                const BCLoadedCell &cell = current_cells[i];
+                BCFamilyValueVector<StorageT> *prefetched_partial = nullptr;
+                if (spawn4_prefetch_index[i] >= 0) {
+                    prefetched_partial =
+                        &spawn4_partial_values[static_cast<size_t>(spawn4_prefetch_index[i])];
+                }
+                if (pass.current_cells[i].visit == BCFamilySolveCellVisitKind::SecondDirection &&
+                    prefetched_partial == nullptr)
+                    throw std::logic_error("BC spawn4 batch missing prefetched partial");
+                BCFamilyValueVector<StorageT> temp_output_values;
+                bc_family_spawn4_cell(
+                    lut,
+                    cell,
+                    pass.current_cells[i].directions,
+                    pass.current_cells[i].visit,
+                    spawn4_layouts[i],
+                    options,
+                    future4_position.axis(),
+                    spawn4_pass_filter,
+                    lookup,
+                    temp,
+                    scratch,
+                    stats,
+                    prefetched_partial,
+                    &temp_output_values
                 );
-                spawn4_partial_write_cids.push_back(cell.cid);
-                spawn4_partial_write_values.push_back(std::move(temp_output_values));
-            } else {
-                spawn4_scratch_write_cids.push_back(cell.cid);
-                spawn4_scratch_write_values.push_back(std::move(temp_output_values));
-            }
-        }
-        stats.spawn4_cell_compute_seconds +=
-            bc_single_chunk_now_seconds() - spawn4_compute_t0;
-        for (const std::vector<size_t> &indices : spawn4_first_groups) {
-            for (size_t i : indices) {
-                BCFamilyValueVector<StorageT> temp_output_values =
-                    detail::bc_family_prepare_partial_temp_output(
+                if (pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection) {
+                    temp_output_values = detail::bc_family_prepare_partial_temp_output(
                         spawn4_layouts[i],
-                        std::move(spawn4_group_partials[i].values()),
+                        std::move(temp_output_values),
                         true,
                         options,
                         stats
                     );
-                spawn4_partial_write_cids.push_back(current_cells[i].cid);
-                spawn4_partial_write_values.push_back(std::move(temp_output_values));
+                    spawn4_partial_write_cids.push_back(cell.cid);
+                    spawn4_partial_write_values.push_back(std::move(temp_output_values));
+                } else {
+                    spawn4_scratch_write_cids.push_back(cell.cid);
+                    spawn4_scratch_write_values.push_back(std::move(temp_output_values));
+                }
             }
-        }
-        for (const std::vector<size_t> &indices : spawn4_second_groups) {
-            for (size_t i : indices) {
-                spawn4_scratch_write_cids.push_back(current_cells[i].cid);
-                spawn4_scratch_write_values.push_back(
-                    std::move(spawn4_group_scratch[i].values())
-                );
+            stats.spawn4_cell_compute_seconds +=
+                bc_single_chunk_now_seconds() - spawn4_compute_t0;
+            for (const std::vector<size_t> &indices : spawn4_first_groups) {
+                for (size_t i : indices) {
+                    BCFamilyValueVector<StorageT> temp_output_values =
+                        detail::bc_family_prepare_partial_temp_output(
+                            spawn4_layouts[i],
+                            std::move(spawn4_group_partials[i].values()),
+                            true,
+                            options,
+                            stats
+                        );
+                    spawn4_partial_write_cids.push_back(current_cells[i].cid);
+                    spawn4_partial_write_values.push_back(std::move(temp_output_values));
+                }
             }
+            for (const std::vector<size_t> &indices : spawn4_second_groups) {
+                for (size_t i : indices) {
+                    spawn4_scratch_write_cids.push_back(current_cells[i].cid);
+                    spawn4_scratch_write_values.push_back(
+                        std::move(spawn4_group_scratch[i].values())
+                    );
+                }
+            }
+            double workspace_release_t0 = bc_single_chunk_now_seconds();
+            detail::bc_family_release_value_vectors(
+                spawn4_partial_values,
+                workspace_release_threads);
+            stats.workspace_release_spawn4_temp_values_seconds +=
+                bc_single_chunk_now_seconds() - workspace_release_t0;
+            std::vector<int64_t>().swap(spawn4_prefetch_index);
+            temp_pipeline.put(batch_index, {
+                std::move(spawn4_partial_write_cids), std::move(spawn4_scratch_write_cids),
+                std::move(spawn4_partial_write_values), std::move(spawn4_scratch_write_values)});
+            workspace_release_t0 = bc_single_chunk_now_seconds();
+            detail::bc_family_release_partial_buffers(
+                spawn4_group_partials,
+                workspace_release_threads);
+            stats.workspace_release_spawn4_partial_seconds +=
+                bc_single_chunk_now_seconds() - workspace_release_t0;
+            workspace_release_t0 = bc_single_chunk_now_seconds();
+            detail::bc_family_release_success_scratch(
+                spawn4_group_scratch,
+                workspace_release_threads);
+            stats.workspace_release_spawn4_scratch_seconds +=
+                bc_single_chunk_now_seconds() - workspace_release_t0;
+        } // Batch payloads released; the separately bounded temp hot cache may retain values.
+        temp_pipeline.drain();
+        // Every batch using this pass's lookup has joined. No live query may
+        // observe the in-place archive pruning below.
+        lookup = {};
+        if (!retire4[pass_index].empty() && options.retire_future4_sample && options.retire_future4_needs_sample &&
+            options.retire_future4_needs_sample()) {
+            std::vector<const BCLoadedSuccessCell *> sample_cells;
+            const auto &cids = retire4[pass_index];
+            const size_t count = std::min<size_t>(4U, cids.size());
+            for (size_t i = 0; i < count; ++i) {
+                sample_cells.push_back(&future4_window.loaded_success_cell(cids[i * cids.size() / count]));
+            }
+            options.retire_future4_sample(sample_cells);
         }
-        double workspace_release_t0 = bc_single_chunk_now_seconds();
-        detail::bc_family_release_value_vectors(
-            spawn4_partial_values,
-            workspace_release_threads);
-        stats.workspace_release_spawn4_temp_values_seconds +=
-            bc_single_chunk_now_seconds() - workspace_release_t0;
-        std::vector<int64_t>().swap(spawn4_prefetch_index);
-        temp.write_partial4_batch(
-            spawn4_partial_write_cids,
-            spawn4_partial_write_values,
-            stats
-        );
-        temp.write_scratch4_batch(
-            spawn4_scratch_write_cids,
-            spawn4_scratch_write_values,
-            stats
-        );
-        std::vector<CellId>().swap(spawn4_partial_write_cids);
-        std::vector<CellId>().swap(spawn4_scratch_write_cids);
-        workspace_release_t0 = bc_single_chunk_now_seconds();
-        detail::bc_family_release_value_vectors(
-            spawn4_partial_write_values,
-            workspace_release_threads);
-        detail::bc_family_release_value_vectors(
-            spawn4_scratch_write_values,
-            workspace_release_threads);
-        stats.workspace_release_spawn4_temp_values_seconds +=
-            bc_single_chunk_now_seconds() - workspace_release_t0;
-        workspace_release_t0 = bc_single_chunk_now_seconds();
-        detail::bc_family_release_partial_buffers(
-            spawn4_group_partials,
-            workspace_release_threads);
-        stats.workspace_release_spawn4_partial_seconds +=
-            bc_single_chunk_now_seconds() - workspace_release_t0;
-        workspace_release_t0 = bc_single_chunk_now_seconds();
-        detail::bc_family_release_success_scratch(
-            spawn4_group_scratch,
-            workspace_release_threads);
-        stats.workspace_release_spawn4_scratch_seconds +=
-            bc_single_chunk_now_seconds() - workspace_release_t0;
+        for (CellId cid : retire4[pass_index]) {
+            future4_window.retire_cell(cid, options.retire_future4_cell);
+        }
         const double release_t0 = bc_single_chunk_now_seconds();
         future4_window.release_except(cached.keep_cids);
         stats.single.future_release_seconds += bc_single_chunk_now_seconds() - release_t0;
@@ -6273,6 +6818,9 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     const double future4_release_all_t0 = bc_single_chunk_now_seconds();
     future4_window.release_all();
     stats.single.future_release_seconds += bc_single_chunk_now_seconds() - future4_release_all_t0;
+    if (options.retire_future4_finish) {
+        options.retire_future4_finish();
+    }
     bc_family_add_future_window_stats(stats, future4_window.stats(), true);
     stats.spawn4_phase_wall_seconds += bc_single_chunk_now_seconds() - spawn4_phase_t0;
 
@@ -6317,36 +6865,11 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     }
     const double spawn2_phase_t0 = bc_single_chunk_now_seconds();
     for (size_t pass_index = 0U; pass_index < spawn2_cached.size(); ++pass_index) {
+        if (temp_use_plan) temp_use_plan->step = static_cast<uint32_t>(spawn4_cached.size() + pass_index);
         const BCFamilySolveCachedPass &cached = spawn2_cached[pass_index];
         const BCFamilySolvePassPlan &pass = cached.pass;
         ++stats.spawn2_passes;
 
-        std::vector<size_t> spawn2_partial_indices;
-        std::vector<CellId> spawn2_partial_cids;
-        std::vector<size_t> spawn2_scratch_indices;
-        std::vector<CellId> spawn2_scratch_cids;
-        spawn2_partial_indices.reserve(pass.current_cells.size());
-        spawn2_partial_cids.reserve(pass.current_cells.size());
-        spawn2_scratch_indices.reserve(pass.current_cells.size());
-        spawn2_scratch_cids.reserve(pass.current_cells.size());
-        for (size_t i = 0U; i < pass.current_cells.size(); ++i) {
-            const BCFamilySolveCellWork &work = pass.current_cells[i];
-            if (current_position.descriptor(work.cid).empty()) {
-                continue;
-            }
-            if (work.visit == BCFamilySolveCellVisitKind::SecondDirection) {
-                spawn2_partial_indices.push_back(i);
-                spawn2_partial_cids.push_back(work.cid);
-            }
-            if (work.visit != BCFamilySolveCellVisitKind::FirstDirection) {
-                spawn2_scratch_indices.push_back(i);
-                spawn2_scratch_cids.push_back(work.cid);
-            }
-        }
-        std::vector<BCFamilyValueVector<StorageT>> spawn2_partial_values;
-        std::vector<BCFamilyValueVector<StorageT>> spawn2_scratch_values;
-        temp.read_partial2_batch(spawn2_partial_cids, spawn2_partial_values, stats);
-        temp.read_scratch4_batch(spawn2_scratch_cids, spawn2_scratch_values, stats);
         detail::BCFamilyCurrentCellLoadResult spawn2_current_result =
             spawn2_current_prefetch.get();
         if (pass_index + 1U < spawn2_cached.size()) {
@@ -6412,369 +6935,400 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
             );
         }
 
-        std::vector<BCLoadedCell> current_cells = std::move(spawn2_current_result.cells);
+        std::vector<BCLoadedCell> pass_current_cells = std::move(spawn2_current_result.cells);
         stats.single.current_position_read_seconds += spawn2_current_result.seconds;
         bc_single_chunk_add_cell_load_stats(
             stats.single.current_position_load,
             spawn2_current_result.load_stats
         );
-        stats.family_current_cells_loaded += current_cells.size();
+        stats.family_current_cells_loaded += pass_current_cells.size();
         ++stats.single.current_chunks;
-
-        std::vector<int64_t> spawn2_partial_prefetch_index(current_cells.size(), -1);
-        for (size_t i = 0U; i < spawn2_partial_indices.size(); ++i) {
-            spawn2_partial_prefetch_index[spawn2_partial_indices[i]] = static_cast<int64_t>(i);
-        }
-        std::vector<int64_t> spawn2_scratch_prefetch_index(current_cells.size(), -1);
-        for (size_t i = 0U; i < spawn2_scratch_indices.size(); ++i) {
-            spawn2_scratch_prefetch_index[spawn2_scratch_indices[i]] = static_cast<int64_t>(i);
-        }
-
-        struct DenseFinalizeCell {
-            size_t cell_index = 0U;
-            BCFamilyValueVector<StorageT> values;
-        };
-        const int compact_threads = bc_resident_solve_effective_threads(options.solve.num_threads);
-        const size_t compact_batch_limit = std::max<size_t>(1U, static_cast<size_t>(compact_threads));
-        std::vector<DenseFinalizeCell> dense_batch;
-        dense_batch.reserve(compact_batch_limit);
-        std::vector<CellId> spawn2_partial_write_cids;
-        std::vector<BCFamilyValueVector<StorageT>> spawn2_partial_write_values;
-        spawn2_partial_write_cids.reserve(current_cells.size());
-        spawn2_partial_write_values.reserve(current_cells.size());
-        auto flush_dense_batch = [&]() {
-            if (dense_batch.empty()) {
-                return;
+        std::vector<BCFamilyPartialCellLayout> pass_layouts;
+        const auto value_batches = bc_family_prepare_value_batches(
+            lut, pass, pass_current_cells, options, pass_layouts, stats);
+        detail::BCFamilyPassTempPipeline<StorageT> temp_pipeline(temp_worker, temp, pass,
+            value_batches, options.value_batch_max_bytes, workspace_release_threads, stats);
+        for (size_t batch_index = 0U; batch_index < value_batches.size(); ++batch_index) {
+            const auto &value_batch = value_batches[batch_index];
+            auto temp_input = temp_pipeline.take(batch_index);
+            BCFamilySolvePassPlan batch_pass;
+            batch_pass.future_families = cached.pass.future_families;
+            std::vector<BCLoadedCell> current_cells;
+            std::vector<BCFamilyPartialCellLayout> spawn2_layouts;
+            batch_pass.current_cells.reserve(value_batch.indices.size());
+            current_cells.reserve(value_batch.indices.size());
+            spawn2_layouts.reserve(value_batch.indices.size());
+            for (size_t i : value_batch.indices) {
+                batch_pass.current_cells.push_back(cached.pass.current_cells[i]);
+                current_cells.push_back(std::move(pass_current_cells[i]));
+                spawn2_layouts.push_back(std::move(pass_layouts[i]));
             }
-            std::vector<detail::BCFamilyCompactedOutputCell<StorageT>> compacted(dense_batch.size());
-            std::vector<BCResidentCompactStats> per_compact_thread(
-                static_cast<size_t>(compact_threads)
-            );
-            std::exception_ptr first_compact_exception;
-            const double compact_t0 = bc_single_chunk_now_seconds();
-#pragma omp parallel for schedule(dynamic, kBCResidentCellDynamicChunk) num_threads(compact_threads)
-            for (int64_t i_signed = 0;
-                 i_signed < static_cast<int64_t>(dense_batch.size());
-                 ++i_signed) {
-                const size_t i = static_cast<size_t>(i_signed);
-#if defined(_OPENMP)
-                const int tid = omp_get_thread_num();
-#else
-                const int tid = 0;
-#endif
-                try {
-                    detail::bc_family_compact_dense_cell<StorageT>(
-                        lut,
-                        current_cells[dense_batch[i].cell_index],
-                        std::move(dense_batch[i].values),
-                        options.solve.row_width,
-                        options.solve.zero_value,
-                        compacted[i]
-                    );
-                    per_compact_thread[static_cast<size_t>(tid)].input_rows +=
-                        compacted[i].compact_stats.input_rows;
-                    per_compact_thread[static_cast<size_t>(tid)].live_rows +=
-                        compacted[i].compact_stats.live_rows;
-                    per_compact_thread[static_cast<size_t>(tid)].zero_pruned_rows +=
-                        compacted[i].compact_stats.zero_pruned_rows;
-                    per_compact_thread[static_cast<size_t>(tid)].live_cells +=
-                        compacted[i].compact_stats.live_cells;
-                    per_compact_thread[static_cast<size_t>(tid)].empty_cells +=
-                        compacted[i].compact_stats.empty_cells;
-                } catch (...) {
-#pragma omp critical(BCFamilySolveCompactException)
-                    {
-                        if (!first_compact_exception) {
-                            first_compact_exception = std::current_exception();
+            const BCFamilySolvePassPlan &pass = batch_pass;
+            std::vector<size_t> spawn2_partial_indices;
+            std::vector<CellId> spawn2_partial_cids;
+            std::vector<size_t> spawn2_scratch_indices;
+            std::vector<CellId> spawn2_scratch_cids;
+            for (size_t i = 0U; i < pass.current_cells.size(); ++i) {
+                const BCFamilySolveCellWork &work = pass.current_cells[i];
+                if (work.visit == BCFamilySolveCellVisitKind::SecondDirection) {
+                    spawn2_partial_indices.push_back(i);
+                    spawn2_partial_cids.push_back(work.cid);
+                }
+                if (work.visit != BCFamilySolveCellVisitKind::FirstDirection) {
+                    spawn2_scratch_indices.push_back(i);
+                    spawn2_scratch_cids.push_back(work.cid);
+                }
+            }
+            auto spawn2_partial_values = std::move(temp_input.partial);
+            auto spawn2_scratch_values = std::move(temp_input.scratch);
+            std::vector<int64_t> spawn2_partial_prefetch_index(current_cells.size(), -1);
+            for (size_t i = 0U; i < spawn2_partial_indices.size(); ++i) {
+                spawn2_partial_prefetch_index[spawn2_partial_indices[i]] = static_cast<int64_t>(i);
+            }
+            std::vector<int64_t> spawn2_scratch_prefetch_index(current_cells.size(), -1);
+            for (size_t i = 0U; i < spawn2_scratch_indices.size(); ++i) {
+                spawn2_scratch_prefetch_index[spawn2_scratch_indices[i]] = static_cast<int64_t>(i);
+            }
+
+            struct DenseFinalizeCell {
+                size_t cell_index = 0U;
+                BCFamilyValueVector<StorageT> values;
+            };
+            const int compact_threads = bc_resident_solve_effective_threads(options.solve.num_threads);
+            const size_t compact_batch_limit = std::max<size_t>(1U, static_cast<size_t>(compact_threads));
+            std::vector<DenseFinalizeCell> dense_batch;
+            dense_batch.reserve(compact_batch_limit);
+            std::vector<CellId> spawn2_partial_write_cids;
+            std::vector<BCFamilyValueVector<StorageT>> spawn2_partial_write_values;
+            spawn2_partial_write_cids.reserve(current_cells.size());
+            spawn2_partial_write_values.reserve(current_cells.size());
+            auto flush_dense_batch = [&]() {
+                if (dense_batch.empty()) {
+                    return;
+                }
+                std::vector<detail::BCFamilyCompactedOutputCell<StorageT>> compacted(dense_batch.size());
+                std::vector<BCResidentCompactStats> per_compact_thread(
+                    static_cast<size_t>(compact_threads)
+                );
+                std::exception_ptr first_compact_exception;
+                const double compact_t0 = bc_single_chunk_now_seconds();
+    #pragma omp parallel for schedule(dynamic, kBCResidentCellDynamicChunk) num_threads(compact_threads)
+                for (int64_t i_signed = 0;
+                     i_signed < static_cast<int64_t>(dense_batch.size());
+                     ++i_signed) {
+                    const size_t i = static_cast<size_t>(i_signed);
+    #if defined(_OPENMP)
+                    const int tid = omp_get_thread_num();
+    #else
+                    const int tid = 0;
+    #endif
+                    try {
+                        detail::bc_family_compact_dense_cell<StorageT>(
+                            lut,
+                            current_cells[dense_batch[i].cell_index],
+                            std::move(dense_batch[i].values),
+                            options.solve.row_width,
+                            options.solve.zero_value,
+                            compacted[i]
+                        );
+                        per_compact_thread[static_cast<size_t>(tid)].input_rows +=
+                            compacted[i].compact_stats.input_rows;
+                        per_compact_thread[static_cast<size_t>(tid)].live_rows +=
+                            compacted[i].compact_stats.live_rows;
+                        per_compact_thread[static_cast<size_t>(tid)].zero_pruned_rows +=
+                            compacted[i].compact_stats.zero_pruned_rows;
+                        per_compact_thread[static_cast<size_t>(tid)].live_cells +=
+                            compacted[i].compact_stats.live_cells;
+                        per_compact_thread[static_cast<size_t>(tid)].empty_cells +=
+                            compacted[i].compact_stats.empty_cells;
+                    } catch (...) {
+    #pragma omp critical(BCFamilySolveCompactException)
+                        {
+                            if (!first_compact_exception) {
+                                first_compact_exception = std::current_exception();
+                            }
                         }
                     }
                 }
-            }
-            stats.single.compact_seconds += bc_single_chunk_now_seconds() - compact_t0;
-            if (first_compact_exception) {
-                std::rethrow_exception(first_compact_exception);
-            }
-            for (const BCResidentCompactStats &compact_stats : per_compact_thread) {
-                stats.single.compact_input_rows += compact_stats.input_rows;
-                stats.single.compact_live_rows += compact_stats.live_rows;
-                stats.single.compact_zero_pruned_rows += compact_stats.zero_pruned_rows;
-                stats.single.compact_live_cells += compact_stats.live_cells;
-                stats.single.compact_empty_cells += compact_stats.empty_cells;
-            }
-            detail::bc_family_mark_compacted_outputs_ready(
-                compacted,
-                pending,
-                pending_value_bytes,
-                options.final_pending_value_memory_cap_bytes,
-                next_output_cid,
-                output_streamer,
-                stats
-            );
-            detail::bc_family_update_pending_stats(pending, stats);
-            dense_batch.clear();
-            detail::bc_family_flush_ready_outputs(
-                pending,
-                pending_value_bytes,
-                next_output_cid,
-                output_streamer,
-                stats
-            );
-        };
-
-        const BCSolveTargetFamilyFilter spawn2_pass_filter =
-            bc_family_make_solve_filter(pass.future_families);
-        std::vector<BCFamilyPartialCellLayout> spawn2_layouts(current_cells.size());
-        std::vector<BCFamilyPartialMaxCellBuffer<StorageT>> spawn2_group_partials(
-            current_cells.size()
-        );
-        std::vector<BCFamilyCellSuccessScratch<StorageT>> spawn2_group_final_values(
-            current_cells.size()
-        );
-        std::array<std::vector<size_t>, 3U> spawn2_first_groups;
-        std::array<std::vector<size_t>, 3U> spawn2_second_groups;
-        std::vector<size_t> spawn2_fallback_indices;
-        auto append_spawn2_group = [](std::array<std::vector<size_t>, 3U> &groups,
-                                      BCDirectionMask directions,
-                                      size_t index) {
-            if (directions == BCDirectionMask::Horizontal) {
-                groups[0].push_back(index);
-            } else if (directions == BCDirectionMask::Vertical) {
-                groups[1].push_back(index);
-            } else {
-                groups[2].push_back(index);
-            }
-        };
-
-        const bool spawn2_use_grouped = options.solve.row_width == 1U;
-        for (size_t i = 0U; i < current_cells.size(); ++i) {
-            const BCLoadedCell &cell = current_cells[i];
-            if (cell.success_rows == 0U || cell.buckets.empty()) {
-                continue;
-            }
-            const double layout_t0 = bc_single_chunk_now_seconds();
-            spawn2_layouts[i] =
-                bc_family_make_partial_cell_layout(lut, cell.view(), options.solve.row_width);
-            stats.current_layout_seconds += bc_single_chunk_now_seconds() - layout_t0;
-            if (spawn2_use_grouped &&
-                pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection) {
-                append_spawn2_group(
-                    spawn2_first_groups,
-                    pass.current_cells[i].directions,
-                    i
-                );
-            } else if (spawn2_use_grouped &&
-                       pass.current_cells[i].visit == BCFamilySolveCellVisitKind::SecondDirection) {
-                append_spawn2_group(
-                    spawn2_second_groups,
-                    pass.current_cells[i].directions,
-                    i
-                );
-            } else {
-                spawn2_fallback_indices.push_back(i);
-            }
-        }
-
-        auto run_spawn2_first_group = [&](BCDirectionMask directions,
-                                          const std::vector<size_t> &indices) {
-            detail::bc_family_first_direction_cells_batch<StorageT>(
-                lut,
-                current_cells,
-                indices,
-                directions,
-                BCSolveSpawnPhase::Spawn2,
-                spawn2_layouts,
-                future2_position.axis(),
-                lookup,
-                spawn2_pass_filter,
-                options,
-                scratch,
-                stats,
-                spawn2_group_partials
-            );
-        };
-        auto run_spawn2_second_group = [&](BCDirectionMask directions,
-                                           const std::vector<size_t> &indices) {
-            for (size_t index : indices) {
-                const int64_t partial_prefetch = spawn2_partial_prefetch_index[index];
-                const int64_t scratch_prefetch = spawn2_scratch_prefetch_index[index];
-                if (partial_prefetch < 0 || scratch_prefetch < 0) {
-                    throw std::logic_error("BC family spawn2 grouped second missing temp input");
+                stats.single.compact_seconds += bc_single_chunk_now_seconds() - compact_t0;
+                if (first_compact_exception) {
+                    std::rethrow_exception(first_compact_exception);
                 }
-                spawn2_group_partials[index].values() =
-                    std::move(spawn2_partial_values[static_cast<size_t>(partial_prefetch)]);
-                if (spawn2_group_partials[index].values().size() !=
-                    static_cast<size_t>(spawn2_layouts[index].value_count)) {
-                    throw std::runtime_error("BC family spawn2 grouped partial count mismatch");
+                for (const BCResidentCompactStats &compact_stats : per_compact_thread) {
+                    stats.single.compact_input_rows += compact_stats.input_rows;
+                    stats.single.compact_live_rows += compact_stats.live_rows;
+                    stats.single.compact_zero_pruned_rows += compact_stats.zero_pruned_rows;
+                    stats.single.compact_live_cells += compact_stats.live_cells;
+                    stats.single.compact_empty_cells += compact_stats.empty_cells;
                 }
-                const BCLoadedCell &cell = current_cells[index];
-                spawn2_group_final_values[index].adopt(
-                    cell.cid,
-                    cell.success_rows,
-                    options.solve.row_width,
-                    std::move(spawn2_scratch_values[static_cast<size_t>(scratch_prefetch)])
-                );
-            }
-            detail::bc_family_partial_sum_cells_batch<StorageT>(
-                lut,
-                current_cells,
-                indices,
-                directions,
-                BCSolveSpawnPhase::Spawn2,
-                spawn2_layouts,
-                spawn2_group_partials,
-                future2_position.axis(),
-                lookup,
-                spawn2_pass_filter,
-                options,
-                scratch,
-                stats,
-                [&](uint32_t cell_index,
-                    uint32_t local_success_row,
-                    uint32_t /*local_bucket_index*/,
-                    const BCSolveBoardQuerySummary &summary,
-                    auto sum,
-                    BCFamilySolveCellWorkspace<StorageT> &/*local*/) {
-                BCFamilyCellSuccessScratch<StorageT> &final_values =
-                    spawn2_group_final_values[static_cast<size_t>(cell_index)];
-                if (summary.terminal_success) {
-                    final_values.write_terminal_row(
-                        local_success_row,
-                        options.solve.terminal_value
-                    );
-                } else if (summary.empty_count == 0U) {
-                    final_values.write_zero_row(local_success_row, options.solve.zero_value);
-                } else {
-                    final_values.finalize_spawn2_sum_row_unchecked_row_width1(
-                        local_success_row,
-                        sum,
-                        summary.empty_count,
-                        options.solve.edge_options.spawn_rate4,
-                        options.solve.zero_value
-                    );
-                }
-            });
-        };
-
-        const double spawn2_compute_t0 = bc_single_chunk_now_seconds();
-        run_spawn2_first_group(BCDirectionMask::Horizontal, spawn2_first_groups[0]);
-        run_spawn2_first_group(BCDirectionMask::Vertical, spawn2_first_groups[1]);
-        run_spawn2_first_group(BCDirectionMask::Both, spawn2_first_groups[2]);
-        run_spawn2_second_group(BCDirectionMask::Horizontal, spawn2_second_groups[0]);
-        run_spawn2_second_group(BCDirectionMask::Vertical, spawn2_second_groups[1]);
-        run_spawn2_second_group(BCDirectionMask::Both, spawn2_second_groups[2]);
-        for (size_t i : spawn2_fallback_indices) {
-            const BCLoadedCell &cell = current_cells[i];
-            BCFamilyValueVector<StorageT> dense_final_values;
-            const bool first_visit =
-                pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection;
-            BCFamilyValueVector<StorageT> temp_output_values;
-            BCFamilyValueVector<StorageT> *prefetched_partial = nullptr;
-            if (spawn2_partial_prefetch_index[i] >= 0) {
-                prefetched_partial =
-                    &spawn2_partial_values[static_cast<size_t>(spawn2_partial_prefetch_index[i])];
-            }
-            BCFamilyValueVector<StorageT> *prefetched_scratch4 = nullptr;
-            if (spawn2_scratch_prefetch_index[i] >= 0) {
-                prefetched_scratch4 =
-                    &spawn2_scratch_values[static_cast<size_t>(spawn2_scratch_prefetch_index[i])];
-            }
-            bc_family_spawn2_cell(
-                lut,
-                cell,
-                pass.current_cells[i].directions,
-                pass.current_cells[i].visit,
-                spawn2_layouts[i],
-                options,
-                future2_position.axis(),
-                spawn2_pass_filter,
-                lookup,
-                temp,
-                scratch,
-                pending,
-                stats,
-                &dense_final_values,
-                prefetched_partial,
-                prefetched_scratch4,
-                first_visit ? &temp_output_values : nullptr
-            );
-            if (first_visit) {
-                temp_output_values = detail::bc_family_prepare_partial_temp_output(
-                    spawn2_layouts[i],
-                    std::move(temp_output_values),
-                    false,
-                    options,
+                // The mark operation can already emit formal exact data.
+                // Finish temporary IO before either formal output entry point.
+                temp_pipeline.drain();
+                detail::bc_family_mark_compacted_outputs_ready(
+                    compacted,
+                    pending,
+                    pending_value_bytes,
+                    options.final_pending_value_memory_cap_bytes,
+                    next_output_cid,
+                    output_streamer,
                     stats
                 );
-                spawn2_partial_write_cids.push_back(cell.cid);
-                spawn2_partial_write_values.push_back(std::move(temp_output_values));
-            }
-            if (!dense_final_values.empty()) {
-                dense_batch.push_back(DenseFinalizeCell{i, std::move(dense_final_values)});
-                if (dense_batch.size() >= compact_batch_limit) {
-                    flush_dense_batch();
+                detail::bc_family_update_pending_stats(pending, stats);
+                dense_batch.clear();
+                detail::bc_family_flush_ready_outputs(
+                    pending,
+                    pending_value_bytes,
+                    next_output_cid,
+                    output_streamer,
+                    stats
+                );
+            };
+
+            const BCSolveTargetFamilyFilter spawn2_pass_filter =
+                bc_family_make_solve_filter(pass.future_families);
+            std::vector<BCFamilyPartialMaxCellBuffer<StorageT>> spawn2_group_partials(
+                current_cells.size()
+            );
+            std::vector<BCFamilyCellSuccessScratch<StorageT>> spawn2_group_final_values(
+                current_cells.size()
+            );
+            std::array<std::vector<size_t>, 3U> spawn2_first_groups;
+            std::array<std::vector<size_t>, 3U> spawn2_second_groups;
+            std::vector<size_t> spawn2_fallback_indices;
+            auto append_spawn2_group = [](std::array<std::vector<size_t>, 3U> &groups,
+                                          BCDirectionMask directions,
+                                          size_t index) {
+                if (directions == BCDirectionMask::Horizontal) {
+                    groups[0].push_back(index);
+                } else if (directions == BCDirectionMask::Vertical) {
+                    groups[1].push_back(index);
+                } else {
+                    groups[2].push_back(index);
+                }
+            };
+
+            const bool spawn2_use_grouped = options.solve.row_width == 1U;
+            for (size_t i = 0U; i < current_cells.size(); ++i) {
+                const BCLoadedCell &cell = current_cells[i];
+                if (cell.success_rows == 0U || cell.buckets.empty()) {
+                    continue;
+                }
+                if (spawn2_use_grouped &&
+                    pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection) {
+                    append_spawn2_group(
+                        spawn2_first_groups,
+                        pass.current_cells[i].directions,
+                        i
+                    );
+                } else if (spawn2_use_grouped &&
+                           pass.current_cells[i].visit == BCFamilySolveCellVisitKind::SecondDirection) {
+                    append_spawn2_group(
+                        spawn2_second_groups,
+                        pass.current_cells[i].directions,
+                        i
+                    );
+                } else {
+                    spawn2_fallback_indices.push_back(i);
                 }
             }
-        }
-        stats.spawn2_cell_compute_seconds +=
-            bc_single_chunk_now_seconds() - spawn2_compute_t0;
-        for (const std::vector<size_t> &indices : spawn2_first_groups) {
-            for (size_t i : indices) {
-                BCFamilyValueVector<StorageT> temp_output_values =
-                    detail::bc_family_prepare_partial_temp_output(
+
+            auto run_spawn2_first_group = [&](BCDirectionMask directions,
+                                              const std::vector<size_t> &indices) {
+                detail::bc_family_first_direction_cells_batch<StorageT>(
+                    lut,
+                    current_cells,
+                    indices,
+                    directions,
+                    BCSolveSpawnPhase::Spawn2,
+                    spawn2_layouts,
+                    future2_position.axis(),
+                    lookup,
+                    spawn2_pass_filter,
+                    options,
+                    scratch,
+                    stats,
+                    spawn2_group_partials
+                );
+            };
+            auto run_spawn2_second_group = [&](BCDirectionMask directions,
+                                               const std::vector<size_t> &indices) {
+                for (size_t index : indices) {
+                    const int64_t partial_prefetch = spawn2_partial_prefetch_index[index];
+                    const int64_t scratch_prefetch = spawn2_scratch_prefetch_index[index];
+                    if (partial_prefetch < 0 || scratch_prefetch < 0) {
+                        throw std::logic_error("BC family spawn2 grouped second missing temp input");
+                    }
+                    spawn2_group_partials[index].values() =
+                        std::move(spawn2_partial_values[static_cast<size_t>(partial_prefetch)]);
+                    if (spawn2_group_partials[index].values().size() !=
+                        static_cast<size_t>(spawn2_layouts[index].value_count)) {
+                        throw std::runtime_error("BC family spawn2 grouped partial count mismatch");
+                    }
+                    const BCLoadedCell &cell = current_cells[index];
+                    spawn2_group_final_values[index].adopt(
+                        cell.cid,
+                        cell.success_rows,
+                        options.solve.row_width,
+                        std::move(spawn2_scratch_values[static_cast<size_t>(scratch_prefetch)])
+                    );
+                }
+                detail::bc_family_partial_sum_cells_batch<StorageT>(
+                    lut,
+                    current_cells,
+                    indices,
+                    directions,
+                    BCSolveSpawnPhase::Spawn2,
+                    spawn2_layouts,
+                    spawn2_group_partials,
+                    future2_position.axis(),
+                    lookup,
+                    spawn2_pass_filter,
+                    options,
+                    scratch,
+                    stats,
+                    [&](uint32_t cell_index,
+                        uint32_t local_success_row,
+                        uint32_t /*local_bucket_index*/,
+                        const BCSolveBoardQuerySummary &summary,
+                        auto sum,
+                        BCFamilySolveCellWorkspace<StorageT> &/*local*/) {
+                    BCFamilyCellSuccessScratch<StorageT> &final_values =
+                        spawn2_group_final_values[static_cast<size_t>(cell_index)];
+                    if (summary.terminal_success) {
+                        final_values.write_terminal_row(
+                            local_success_row,
+                            options.solve.terminal_value
+                        );
+                    } else if (summary.empty_count == 0U) {
+                        final_values.write_zero_row(local_success_row, options.solve.zero_value);
+                    } else {
+                        final_values.finalize_spawn2_sum_row_unchecked_row_width1(
+                            local_success_row,
+                            sum,
+                            summary.empty_count,
+                            options.solve.edge_options.spawn_rate4,
+                            options.solve.zero_value
+                        );
+                    }
+                });
+            };
+
+            const double spawn2_compute_t0 = bc_single_chunk_now_seconds();
+            run_spawn2_first_group(BCDirectionMask::Horizontal, spawn2_first_groups[0]);
+            run_spawn2_first_group(BCDirectionMask::Vertical, spawn2_first_groups[1]);
+            run_spawn2_first_group(BCDirectionMask::Both, spawn2_first_groups[2]);
+            run_spawn2_second_group(BCDirectionMask::Horizontal, spawn2_second_groups[0]);
+            run_spawn2_second_group(BCDirectionMask::Vertical, spawn2_second_groups[1]);
+            run_spawn2_second_group(BCDirectionMask::Both, spawn2_second_groups[2]);
+            for (size_t i : spawn2_fallback_indices) {
+                const BCLoadedCell &cell = current_cells[i];
+                BCFamilyValueVector<StorageT> dense_final_values;
+                const bool first_visit =
+                    pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection;
+                BCFamilyValueVector<StorageT> temp_output_values;
+                BCFamilyValueVector<StorageT> *prefetched_partial = nullptr;
+                if (spawn2_partial_prefetch_index[i] >= 0) {
+                    prefetched_partial =
+                        &spawn2_partial_values[static_cast<size_t>(spawn2_partial_prefetch_index[i])];
+                }
+                BCFamilyValueVector<StorageT> *prefetched_scratch4 = nullptr;
+                if (spawn2_scratch_prefetch_index[i] >= 0) {
+                    prefetched_scratch4 =
+                        &spawn2_scratch_values[static_cast<size_t>(spawn2_scratch_prefetch_index[i])];
+                }
+                if ((!first_visit && prefetched_scratch4 == nullptr) ||
+                    (pass.current_cells[i].visit == BCFamilySolveCellVisitKind::SecondDirection &&
+                     prefetched_partial == nullptr))
+                    throw std::logic_error("BC spawn2 batch missing prefetched temp values");
+                bc_family_spawn2_cell(
+                    lut,
+                    cell,
+                    pass.current_cells[i].directions,
+                    pass.current_cells[i].visit,
+                    spawn2_layouts[i],
+                    options,
+                    future2_position.axis(),
+                    spawn2_pass_filter,
+                    lookup,
+                    temp,
+                    scratch,
+                    pending,
+                    stats,
+                    &dense_final_values,
+                    prefetched_partial,
+                    prefetched_scratch4,
+                    first_visit ? &temp_output_values : nullptr
+                );
+                if (first_visit) {
+                    temp_output_values = detail::bc_family_prepare_partial_temp_output(
                         spawn2_layouts[i],
-                        std::move(spawn2_group_partials[i].values()),
+                        std::move(temp_output_values),
                         false,
                         options,
                         stats
                     );
-                spawn2_partial_write_cids.push_back(current_cells[i].cid);
-                spawn2_partial_write_values.push_back(std::move(temp_output_values));
-            }
-        }
-        for (const std::vector<size_t> &indices : spawn2_second_groups) {
-            for (size_t i : indices) {
-                dense_batch.push_back(DenseFinalizeCell{
-                    i,
-                    std::move(spawn2_group_final_values[i].values())
-                });
-                if (dense_batch.size() >= compact_batch_limit) {
-                    flush_dense_batch();
+                    spawn2_partial_write_cids.push_back(cell.cid);
+                    spawn2_partial_write_values.push_back(std::move(temp_output_values));
+                }
+                if (!dense_final_values.empty()) {
+                    dense_batch.push_back(DenseFinalizeCell{i, std::move(dense_final_values)});
+                    if (dense_batch.size() >= compact_batch_limit) {
+                        flush_dense_batch();
+                    }
                 }
             }
-        }
-        flush_dense_batch();
-        double workspace_release_t0 = bc_single_chunk_now_seconds();
-        detail::bc_family_release_value_vectors(
-            spawn2_partial_values,
-            workspace_release_threads);
-        std::vector<int64_t>().swap(spawn2_partial_prefetch_index);
-        detail::bc_family_release_value_vectors(
-            spawn2_scratch_values,
-            workspace_release_threads);
-        stats.workspace_release_spawn2_prefetch_seconds +=
-            bc_single_chunk_now_seconds() - workspace_release_t0;
-        std::vector<int64_t>().swap(spawn2_scratch_prefetch_index);
-        temp.write_partial2_batch(
-            spawn2_partial_write_cids,
-            spawn2_partial_write_values,
-            stats
-        );
-        std::vector<CellId>().swap(spawn2_partial_write_cids);
-        workspace_release_t0 = bc_single_chunk_now_seconds();
-        detail::bc_family_release_value_vectors(
-            spawn2_partial_write_values,
-            workspace_release_threads);
-        stats.workspace_release_spawn2_temp_values_seconds +=
-            bc_single_chunk_now_seconds() - workspace_release_t0;
-        workspace_release_t0 = bc_single_chunk_now_seconds();
-        detail::bc_family_release_partial_buffers(
-            spawn2_group_partials,
-            workspace_release_threads);
-        detail::bc_family_release_success_scratch(
-            spawn2_group_final_values,
-            workspace_release_threads);
-        stats.workspace_release_spawn2_dense_seconds +=
-            bc_single_chunk_now_seconds() - workspace_release_t0;
+            stats.spawn2_cell_compute_seconds +=
+                bc_single_chunk_now_seconds() - spawn2_compute_t0;
+            for (const std::vector<size_t> &indices : spawn2_first_groups) {
+                for (size_t i : indices) {
+                    BCFamilyValueVector<StorageT> temp_output_values =
+                        detail::bc_family_prepare_partial_temp_output(
+                            spawn2_layouts[i],
+                            std::move(spawn2_group_partials[i].values()),
+                            false,
+                            options,
+                            stats
+                        );
+                    spawn2_partial_write_cids.push_back(current_cells[i].cid);
+                    spawn2_partial_write_values.push_back(std::move(temp_output_values));
+                }
+            }
+            for (const std::vector<size_t> &indices : spawn2_second_groups) {
+                for (size_t i : indices) {
+                    dense_batch.push_back(DenseFinalizeCell{
+                        i,
+                        std::move(spawn2_group_final_values[i].values())
+                    });
+                    if (dense_batch.size() >= compact_batch_limit) {
+                        flush_dense_batch();
+                    }
+                }
+            }
+            flush_dense_batch();
+            double workspace_release_t0 = bc_single_chunk_now_seconds();
+            detail::bc_family_release_value_vectors(
+                spawn2_partial_values,
+                workspace_release_threads);
+            std::vector<int64_t>().swap(spawn2_partial_prefetch_index);
+            detail::bc_family_release_value_vectors(
+                spawn2_scratch_values,
+                workspace_release_threads);
+            stats.workspace_release_spawn2_prefetch_seconds +=
+                bc_single_chunk_now_seconds() - workspace_release_t0;
+            std::vector<int64_t>().swap(spawn2_scratch_prefetch_index);
+            temp_pipeline.put(batch_index, {
+                std::move(spawn2_partial_write_cids), {}, std::move(spawn2_partial_write_values), {}});
+            workspace_release_t0 = bc_single_chunk_now_seconds();
+            detail::bc_family_release_partial_buffers(
+                spawn2_group_partials,
+                workspace_release_threads);
+            detail::bc_family_release_success_scratch(
+                spawn2_group_final_values,
+                workspace_release_threads);
+            stats.workspace_release_spawn2_dense_seconds +=
+                bc_single_chunk_now_seconds() - workspace_release_t0;
+        } // Current batch is released before its slot is reused by the worker.
+        temp_pipeline.drain();
         const double release_t0 = bc_single_chunk_now_seconds();
         future2_window.release_except(cached.keep_cids);
         stats.single.future_release_seconds += bc_single_chunk_now_seconds() - release_t0;
@@ -6803,6 +7357,7 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     stats.output_finish_seconds += bc_single_chunk_now_seconds() - output_finish_t0;
     const double temp_close_t0 = bc_single_chunk_now_seconds();
     temp.wait_all_writes(stats);
+    temp.verify_consumed_and_log(stats);
     temp.close();
     stats.temp_close_seconds += bc_single_chunk_now_seconds() - temp_close_t0;
     if (options.compress_temp_files && options.keep_temp_files) {
@@ -6820,6 +7375,26 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     result.success_bytes = single_result.success_bytes;
     stats.single.output_values = single_result.stats.output_values;
     stats.single.output_bytes = single_result.stats.output_bytes;
+    std::fprintf(stderr,
+        "BC_FAMILY_TEMP_PIPELINE enabled=%u compute_threads=%u codec_lanes=%u io_workers=%u slot_budget_bytes=%llu jobs=%llu serial_batches=%llu pair_planned_peak_bytes=%llu slot_capacity_peak_bytes=%llu main_wait_seconds=%.6f worker_active_seconds=%.6f\n",
+        options.temp_io_pipeline ? 1U : 0U,
+        static_cast<unsigned>(bc_resident_solve_effective_threads(options.solve.num_threads)),
+        std::min(16U, static_cast<unsigned>(bc_resident_solve_effective_threads(options.solve.num_threads))),
+        options.temp_io_pipeline ? 1U : 0U,
+        static_cast<unsigned long long>(options.temp_io_pipeline ? std::max<uint64_t>(1U, options.value_batch_max_bytes / 2U) : options.value_batch_max_bytes),
+        static_cast<unsigned long long>(stats.temp_pipeline_jobs),
+        static_cast<unsigned long long>(stats.temp_pipeline_serial_batches),
+        static_cast<unsigned long long>(stats.temp_pipeline_pair_planned_bytes_max),
+        static_cast<unsigned long long>(stats.temp_pipeline_slot_capacity_bytes_max),
+        stats.temp_pipeline_wait_seconds, stats.temp_pipeline_active_seconds);
+    std::fprintf(stderr,
+        "BC_FAMILY_VALUE_BATCHES budget_bytes=%llu hot_cache_budget_bytes=%llu batches=%llu max_cells=%llu planned_peak_bytes=%llu oversize_cells=%llu\n",
+        static_cast<unsigned long long>(options.value_batch_max_bytes),
+        static_cast<unsigned long long>(options.temp_hot_cache_max_bytes),
+        static_cast<unsigned long long>(stats.value_batches),
+        static_cast<unsigned long long>(stats.value_batch_cells_max),
+        static_cast<unsigned long long>(stats.value_batch_planned_bytes_max),
+        static_cast<unsigned long long>(stats.value_batch_oversize_cells));
     result.stats = std::move(stats);
     return result;
 }

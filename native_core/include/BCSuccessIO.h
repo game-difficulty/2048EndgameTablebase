@@ -1070,47 +1070,41 @@ private:
             throw std::logic_error("BC success streaming external stream is not file-aligned");
         }
         flush_active_group();
-
-        uint64_t remaining = bytes;
-        while (remaining != 0U) {
+        // Windows async refills bounded slots; its synchronous fallback reuses
+        // one transfer-sized buffer. Neither stages the entire borrowed span.
+#ifdef _WIN32
+        const uint64_t end = bc_checked_add_u64(
+            file_cursor_, bytes, "BC success streaming write cursor overflow");
+        BCFileIOStats local;
+        file_.write_many({BCFileWriteRequest{file_cursor_, cursor, bytes}},
+                         stats_ == nullptr ? nullptr : &local);
+        bc_success_accumulate_file_stats(stats_, local);
+        file_cursor_ = end;
+#else
+        // Linux schedules aligned writes per logical request. Preserve both the
+        // byte bound and the multi-request groups (normally 8 x 16 MiB).
+        while (bytes != 0U) {
             std::vector<BCFileWriteRequest> requests;
             requests.reserve(max_pending_chunks_);
-            uint64_t batch_cursor = file_cursor_;
-            uint64_t batch_bytes = 0U;
-            while (remaining != 0U && requests.size() < max_pending_chunks_) {
-                uint64_t take = std::min<uint64_t>(remaining, external_chunk_bytes_);
-                if (take != remaining) {
-                    take -= take % alignment_;
-                }
+            uint64_t end = file_cursor_;
+            while (bytes != 0U && requests.size() < max_pending_chunks_) {
+                uint64_t take = std::min(bytes, external_chunk_bytes_);
+                take -= take % alignment_;
                 if (take == 0U) {
-                    take = remaining;
+                    take = std::min(bytes, static_cast<uint64_t>(alignment_));
                 }
-                if ((take % alignment_) != 0U) {
-                    throw std::logic_error("BC success streaming external chunk is not aligned");
-                }
-                requests.push_back(BCFileWriteRequest{batch_cursor, cursor, take});
-                batch_cursor = bc_checked_add_u64(
-                    batch_cursor,
-                    take,
-                    "BC success streaming external write cursor overflow"
-                );
+                requests.push_back(BCFileWriteRequest{end, cursor, take});
+                end = bc_checked_add_u64(
+                    end, take, "BC success streaming write cursor overflow");
                 cursor += take;
-                remaining -= take;
-                batch_bytes = bc_checked_add_u64(
-                    batch_bytes,
-                    take,
-                    "BC success streaming external write batch byte overflow"
-                );
+                bytes -= take;
             }
             BCFileIOStats local;
             file_.write_many(requests, stats_ == nullptr ? nullptr : &local);
             bc_success_accumulate_file_stats(stats_, local);
-            file_cursor_ = bc_checked_add_u64(
-                file_cursor_,
-                batch_bytes,
-                "BC success streaming write cursor overflow"
-            );
+            file_cursor_ = end;
         }
+#endif
     }
 
     void ensure_active_buffer() {

@@ -310,6 +310,11 @@ def _count_bc_prefixed_files(folder: Path, prefix: str, suffix: str) -> int:
 
 
 def _count_bc_prefixed_files_multi(folders: tuple[Path, ...], prefix: str, suffix: str) -> int:
+    if suffix == ".bccmp":
+        # RAW values are still a pruned BC archive, not an exact frontier.
+        names = _bc_prefixed_file_names(folders, prefix, ".bccmp")
+        names |= _bc_prefixed_file_names(folders, prefix, ".bcraw")
+        return len({name[:-6] for name in names if name[len(prefix):-6].isdigit()})
     return len(_bc_prefixed_file_names(folders, prefix, suffix))
 
 
@@ -446,7 +451,7 @@ def _has_bc_solve_resume_files(
     return (
         _has_bc_prefixed_exact_pairs(solved_dir, prefix) or
         _has_bc_prefixed_exact_pairs(archive_dir, prefix) or
-        _has_bc_prefixed_files(archive_dir, prefix, (".bccmp",))
+        _has_bc_prefixed_files(archive_dir, prefix, (".bccmp", ".bcraw"))
     )
 
 
@@ -460,7 +465,7 @@ def _has_bc_solve_resume_files_multi(
     candidate_dirs = tuple(dict.fromkeys((*solved_dirs, *archive_dirs)))
     return (
         _has_bc_prefixed_exact_pairs_multi(candidate_dirs, prefix) or
-        _has_bc_prefixed_files_multi(archive_dirs, prefix, (".bccmp",))
+        _has_bc_prefixed_files_multi(archive_dirs, prefix, (".bccmp", ".bcraw"))
     )
 
 

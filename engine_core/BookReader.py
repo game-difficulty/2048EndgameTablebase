@@ -231,7 +231,7 @@ class BookReaderDispatcher:
                         entry.name.endswith(".exadbook") or entry.name.endswith(".exadzbook")
                     ):
                         has_exad_layer = True
-                    elif entry.name.startswith(ex_prefix) and entry.name.endswith(".bccmp"):
+                    elif entry.name.startswith(ex_prefix) and entry.name.endswith((".bccmp", ".bcraw")):
                         found_bc = True
                     elif entry.name.startswith(ex_prefix) and entry.name.endswith(".bcpos"):
                         bc_positions.add(entry.name[:-len(".bcpos")])

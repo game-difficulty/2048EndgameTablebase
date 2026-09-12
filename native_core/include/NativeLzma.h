@@ -64,6 +64,8 @@ public:
 
     void open(const std::string &archive_path);
     void read(void *dst, size_t bytes);
+    // Returns zero at pipe EOF. Call close() afterwards to verify 7z/CRC success.
+    size_t read_some(void *dst, size_t capacity);
     void close();
     [[nodiscard]] bool is_open() const;
 
@@ -74,6 +76,7 @@ private:
 
 std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, int lvl = 1);
 std::vector<uint8_t> decompress_xz_block_native(const uint8_t *data, size_t size);
+uint64_t crc64_bytes_native(const uint8_t *data, size_t size);
 
 bool compress_uint64_array_native(const std::vector<uint64_t> &data, const std::string &output_base, int lvl = 1);
 std::vector<uint64_t> decompress_uint64_array_native(const std::string &compressed_path);

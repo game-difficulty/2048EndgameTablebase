@@ -13,6 +13,19 @@
 namespace BCCompressedResult {
 
 inline constexpr const char *kCompressedLayerFileExtension = ".bccmp";
+inline constexpr const char *kRawLayerFileExtension = ".bcraw";
+void validate_archive_file(const std::filesystem::path &path);
+
+// Shared only within one build. Resume deliberately samples again rather than
+// trusting an uncommitted or differently thresholded decision from another run.
+struct ValueEncodingPolicy {
+    bool valid = false;
+    bool raw = false;
+    int64_t sampled_ordinal = 0;
+    double threshold = 0.0;
+    uint32_t dtype = 0;
+    uint32_t row_width = 0;
+};
 
 struct CompressOptions {
     uint32_t bucket_block_raw_target_bytes = 32U * 1024U;
@@ -21,6 +34,13 @@ struct CompressOptions {
     uint32_t value_block_raw_hard_cap_bytes = 1024U * 1024U;
     uint32_t compression_level = 1U;
     uint32_t worker_count = 0U;
+    // Cell directories already carry explicit block ranges and value bases.
+    // Permit last-use order without buffering cells to restore cid order.
+    bool unordered_cells = false;
+    bool raw_values = false; // explicit mode for callers without an auto policy
+    std::shared_ptr<ValueEncodingPolicy> value_policy;
+    int64_t ordinal = 0;
+    double sampling_threshold = 0.0;
 };
 
 struct CompressStats {
@@ -41,6 +61,8 @@ struct CompressStats {
     double write_seconds = 0.0;
     double compress_worker_seconds = 0.0;
     double total_seconds = 0.0;
+    bool raw_values = false;
+    std::filesystem::path output_path;
 };
 
 struct ColdLookupResult {
@@ -115,7 +137,7 @@ private:
 
 class StreamingBuilder {
 public:
-    StreamingBuilder() = default;
+    StreamingBuilder();
     StreamingBuilder(
         const BC::BCPositionStreamingReader &position,
         uint32_t row_width,
@@ -145,6 +167,20 @@ public:
         uint64_t success_value_count,
         std::shared_ptr<const void> owner = {}
     );
+
+    // No cell-sized value copy/owner. All tasks borrowing this span complete
+    // before return (also on failure), so the caller can immediately release it.
+    void write_cell_borrowed(
+        BC::CellId cid,
+        const BC::FinalizedCellPayload &payload,
+        const void *success_values,
+        uint64_t success_value_count
+    );
+
+    // Must precede any nonempty value payload. Samples contain post-pruning
+    // bytes, at most four blocks of 256 KiB. No cell ownership is retained.
+    [[nodiscard]] bool needs_value_sample() const;
+    void select_value_encoding(const std::vector<std::vector<uint8_t>> &samples);
 
     [[nodiscard]] CompressStats finish();
     [[nodiscard]] bool is_open() const noexcept;

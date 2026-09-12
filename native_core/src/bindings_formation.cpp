@@ -218,6 +218,7 @@ BC::BCFamilySolveRunOptions bc_solve_options_from_dict(const nb::dict &options) 
         dict_get_or<std::string>(options, "success_dtype", "uint32"));
     run.compress = dict_get_or<bool>(options, "compress", true);
     run.compress_temp_files = dict_get_or<bool>(options, "compress_temp_files", false);
+    run.temp_io_pipeline = dict_get_or<bool>(options, "temp_io_pipeline", true);
     run.deletion_threshold = dict_get_or<double>(options, "deletion_threshold", 0.0);
     run.relative_deletion_threshold = dict_get_or<double>(
         options,
@@ -354,6 +355,8 @@ nb::dict bc_compress_stats_to_python(const BCCompressedResult::CompressStats &st
     result["output_bytes"] = stats.output_bytes;
     result["original_position_bytes"] = stats.original_position_bytes;
     result["original_success_bytes"] = stats.original_success_bytes;
+    result["value_mode"] = stats.raw_values ? "raw" : "xz";
+    result["output_path"] = NativePath::to_utf8_string(stats.output_path);
     result["total_seconds"] = stats.total_seconds;
     return result;
 }

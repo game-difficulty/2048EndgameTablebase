@@ -149,7 +149,33 @@ public:
     }
 
     [[nodiscard]] bool contains(CellId cid) const {
-        return find_active(cid) != active_.end();
+        const auto it = find_active(cid);
+        return it != active_.end() && it->cid == cid;
+    }
+
+    // Borrow only; the sampling callback must not retain this reference.
+    [[nodiscard]] const BCLoadedSuccessCell &loaded_success_cell(CellId cid) const {
+        const auto it = find_active(cid);
+        if (it == active_.end() || it->cid != cid) throw std::logic_error("BC archive sample cell not loaded");
+        return it->success;
+    }
+
+    // Caller has proved there are no remaining queries for this cell. Consume
+    // synchronously, then release it before consuming the next retired cell.
+    template <class Consumer>
+    void retire_cell(CellId cid, Consumer &&consume) {
+        auto it = find_active(cid);
+        if (it == active_.end() || it->cid != cid) {
+            throw std::logic_error("BC future last-use cell is not loaded");
+        }
+        consume(it->position, it->success);
+        it->success = {};
+        recycle_released_cell(std::move(*it), true);
+        active_.erase(it);
+        const auto id = std::lower_bound(active_cell_ids_.begin(), active_cell_ids_.end(), cid);
+        active_cell_ids_.erase(id);
+        ++stats_.future_cells_released;
+        update_active_stats();
     }
 
     [[nodiscard]] uint32_t active_cell_count() const {

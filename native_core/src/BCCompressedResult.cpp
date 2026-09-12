@@ -11,6 +11,7 @@
 #include <deque>
 #include <exception>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <mutex>
 #include <random>
@@ -21,6 +22,7 @@ namespace BCCompressedResult {
 namespace {
 
 constexpr char kMagic[8] = {'B', 'C', 'C', 'M', 'P', '1', '\0', '\0'};
+constexpr char kRawMagic[8] = {'B', 'C', 'R', 'A', 'W', '1', '\0', '\0'};
 constexpr uint32_t kFormatVersion = 1U;
 
 template <typename T>
@@ -82,6 +84,11 @@ void read_exact(std::ifstream &in, uint64_t offset, void *data, uint64_t size, c
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open BC compressed file: " + path.string());
+    }
+    in.seekg(0, std::ios::end);
+    const auto length = in.tellg();
+    if (length < 0 || offset > static_cast<uint64_t>(length) || size > static_cast<uint64_t>(length) - offset) {
+        throw std::runtime_error("BC archive range exceeds file: " + path.string());
     }
     std::vector<uint8_t> bytes(static_cast<size_t>(size));
     read_exact(in, offset, bytes.data(), size, what);
@@ -249,7 +256,88 @@ struct BuilderState {
     std::vector<ValueBlockDirEntry> value_dirs;
     uint64_t value_cursor = 0U;
     uint64_t data_begin = sizeof(Header);
+    bool value_mode_selected = false;
 };
+
+bool is_raw_value_archive(const Header &header) {
+    return std::memcmp(header.magic, kRawMagic, sizeof(kRawMagic)) == 0;
+}
+
+void set_value_mode(BuilderState &state, bool raw) {
+    std::memcpy(state.header.magic, raw ? kRawMagic : kMagic, sizeof(kMagic));
+    state.stats.raw_values = raw;
+    state.value_mode_selected = true;
+}
+
+void initialize_value_mode(BuilderState &state) {
+    const auto &p = state.options.value_policy;
+    if (!p) {
+        set_value_mode(state, state.options.raw_values);
+    } else if (p->valid && p->threshold == state.options.sampling_threshold &&
+               p->dtype == state.header.dtype && p->row_width == state.header.row_width &&
+               std::abs(state.options.ordinal - p->sampled_ordinal) < 10) {
+        set_value_mode(state, p->raw);
+        std::cerr << "BC_ARCHIVE_VALUE_MODE ordinal=" << state.options.ordinal
+                  << " mode=" << (p->raw ? "raw" : "xz")
+                  << " reason=inherited sampled_ordinal=" << p->sampled_ordinal << '\n';
+    }
+}
+
+void select_value_mode(BuilderState &state, const std::vector<std::vector<uint8_t>> &samples) {
+    if (state.value_mode_selected) return;
+    const double t0 = now_seconds();
+    if (samples.size() > 4U) throw std::invalid_argument("BC archive sample count exceeds four");
+    uint64_t bytes = 0U;
+    for (const auto &s : samples) {
+        if (s.size() > 256U * 1024U) throw std::invalid_argument("BC archive sample exceeds 256 KiB");
+        bytes += s.size();
+    }
+    uint64_t encoded = 0U;
+    if (bytes >= 256U * 1024U) {
+        for (const auto &s : samples) {
+            if (s.empty()) continue;
+            const auto compressed = compress_xz_block_native(
+                s.data(), s.size(), static_cast<int>(state.options.compression_level));
+            if (compressed.empty()) throw std::runtime_error("BC archive sampling compression failed");
+            encoded += compressed.size();
+        }
+    }
+    // Both sides are bounded by the one-MiB sample budget. Equality selects RAW.
+    const bool raw = bytes >= 256U * 1024U && encoded * 100U >= bytes * 95U;
+    set_value_mode(state, raw);
+    if (state.options.value_policy) {
+        *state.options.value_policy = ValueEncodingPolicy{
+            true, raw, state.options.ordinal, state.options.sampling_threshold,
+            state.header.dtype, state.header.row_width};
+    }
+    std::cerr << "BC_ARCHIVE_VALUE_MODE ordinal=" << state.options.ordinal
+              << " mode=" << (raw ? "raw" : "xz")
+              << " reason=" << (bytes >= 256U * 1024U ? "sampled" : "insufficient_sample")
+              << " sample_raw_bytes=" << bytes << " sample_stored_bytes=" << encoded
+              << " sample_seconds=" << now_seconds() - t0 << '\n';
+}
+
+std::filesystem::path encoded_output_path(const std::filesystem::path &path, bool raw) {
+    std::string name = path.filename().string();
+    const auto pos = name.rfind(kCompressedLayerFileExtension);
+    if (raw && pos != std::string::npos &&
+        (pos + 6U == name.size() || name.substr(pos + 6U) == ".retire_tmp")) {
+        name.replace(pos, 6U, kRawLayerFileExtension);
+        return path.parent_path() / name;
+    }
+    return path;
+}
+
+void append_value_sample(std::vector<std::vector<uint8_t>> &samples,
+                         const uint8_t *data, uint64_t bytes, uint32_t value_size) {
+    if (bytes == 0U || samples.size() == 4U) return;
+    if (data == nullptr || value_size == 0U || bytes % value_size != 0U) {
+        throw std::invalid_argument("BC archive sample view invalid");
+    }
+    const size_t take = static_cast<size_t>(std::min<uint64_t>(bytes, 256U * 1024U));
+    const uint64_t start = ((bytes - take) / 2U / value_size) * value_size;
+    samples.emplace_back(data + start, data + start + take);
+}
 
 [[nodiscard]] uint32_t normalized_worker_count(const CompressOptions &options) {
     if (options.worker_count != 0U) {
@@ -319,11 +407,32 @@ public:
         }
     }
 
-    void finish() {
+    void drain() {
         while (pending_count_.load() != 0U) {
             flush_one();
         }
+    }
+
+    void finish() {
+        drain();
         stop_workers();
+    }
+
+    void write_raw_value(size_t dir_index, const uint8_t *data, uint64_t bytes) {
+        if (bytes > std::numeric_limits<size_t>::max()) throw std::overflow_error("BC RAW block exceeds size_t");
+        const uint64_t crc = crc64_bytes_native(data, static_cast<size_t>(bytes));
+        auto &dir = state_.value_dirs.at(dir_index);
+        dir.compressed_offset = file_offset(out_);
+        dir.raw_size = bytes;
+        dir.compressed_size = bytes + sizeof(uint64_t);
+        std::array<uint8_t, 8> checksum{};
+        for (unsigned i = 0; i < 8; ++i) checksum[i] = static_cast<uint8_t>(crc >> (8U * i));
+        const double t0 = now_seconds();
+        write_bytes(out_, data, bytes, "BC RAW value block");
+        write_bytes(out_, checksum.data(), checksum.size(), "BC RAW CRC64");
+        state_.stats.write_seconds += now_seconds() - t0;
+        state_.stats.value_raw_bytes += bytes;
+        state_.stats.value_compressed_bytes += dir.compressed_size; // stored bytes, including checksum
     }
 
 private:
@@ -351,6 +460,7 @@ private:
                 const int level = static_cast<int>(state_.options.compression_level);
                 result.compressed =
                     compress_xz_block_native(task.data, task.bytes, level);
+                if (result.compressed.empty()) throw std::runtime_error("BC archive block compression failed");
                 result.worker_seconds = now_seconds() - t0;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -664,12 +774,12 @@ void emit_value_blocks_for_cell(
         if (raw_offset > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
             throw std::overflow_error("BC compressed value block offset exceeds size_t");
         }
-        compressor.submit_span(
-            BlockKind::Value,
-            dir_index,
-            bytes + static_cast<size_t>(raw_offset),
-            raw_bytes,
-            owner);
+        if (is_raw_value_archive(state.header)) {
+            compressor.write_raw_value(dir_index, bytes + static_cast<size_t>(raw_offset), raw_bytes);
+        } else {
+            compressor.submit_span(BlockKind::Value, dir_index,
+                bytes + static_cast<size_t>(raw_offset), raw_bytes, owner);
+        }
         cursor += take;
     }
     state.value_cursor += value_count;
@@ -707,12 +817,12 @@ void emit_value_blocks_for_payload(
         if (raw_offset > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
             throw std::overflow_error("BC compressed value block offset exceeds size_t");
         }
-        compressor.submit_span(
-            BlockKind::Value,
-            dir_index,
-            bytes + static_cast<size_t>(raw_offset),
-            raw_bytes,
-            owner);
+        if (is_raw_value_archive(state.header)) {
+            compressor.write_raw_value(dir_index, bytes + static_cast<size_t>(raw_offset), raw_bytes);
+        } else {
+            compressor.submit_span(BlockKind::Value, dir_index,
+                bytes + static_cast<size_t>(raw_offset), raw_bytes, owner);
+        }
         cursor += take;
     }
     state.stats.success_values += value_count;
@@ -798,9 +908,11 @@ void initialize_state_from_position(
     state.axis_coords = position.axis().coords();
     state.cell_dirs.assign(position.cell_count(), CellDirEntry{});
     state.stats.cells = position.cell_count();
+    initialize_value_mode(state);
 }
 
 void finalize_file(std::fstream &out, BuilderState &state, const std::filesystem::path &tmp_path) {
+    if (!state.value_mode_selected) select_value_mode(state, {});
     state.header.data_bytes = file_offset(out) - state.header.data_offset;
     state.header.axis_offset = file_offset(out);
     state.header.axis_bytes = static_cast<uint64_t>(state.axis_coords.size()) * sizeof(uint32_t);
@@ -846,6 +958,12 @@ void finalize_file(std::fstream &out, BuilderState &state, const std::filesystem
     state.stats.output_bytes = final_output_bytes;
     state.stats.original_position_bytes = state.header.original_position_bytes;
     state.stats.original_success_bytes = state.header.original_success_bytes;
+    std::cerr << "BC_ARCHIVE_VALUE_RESULT ordinal=" << state.options.ordinal
+              << " mode=" << (state.stats.raw_values ? "raw" : "xz")
+              << " value_raw_bytes=" << state.stats.value_raw_bytes
+              << " value_stored_bytes=" << state.stats.value_compressed_bytes
+              << " block_write_seconds=" << state.stats.write_seconds
+              << " compress_worker_seconds=" << state.stats.compress_worker_seconds << '\n';
 }
 
 [[nodiscard]] BC::BCSuccessHeader read_success_header_from_path(const std::filesystem::path &path) {
@@ -859,17 +977,20 @@ void finalize_file(std::fstream &out, BuilderState &state, const std::filesystem
 }
 
 void publish_file(const std::filesystem::path &tmp, const std::filesystem::path &target) {
+    if (target.extension() == kCompressedLayerFileExtension || target.extension() == kRawLayerFileExtension) {
+        auto other = target;
+        other.replace_extension(target.extension() == kRawLayerFileExtension ?
+            kCompressedLayerFileExtension : kRawLayerFileExtension);
+        if (std::filesystem::exists(other)) throw std::runtime_error("BC conflicting archive formats: " + other.string());
+    }
     std::error_code ec;
     std::filesystem::rename(tmp, target, ec);
     if (!ec) {
         return;
     }
-    std::filesystem::remove(target, ec);
-    ec.clear();
-    std::filesystem::rename(tmp, target, ec);
-    if (ec) {
-        throw std::runtime_error("failed to publish BC compressed file: " + ec.message());
-    }
+    // rename replaces an existing file; on failure keep the old target and
+    // completed temporary file, rather than deleting the target and retrying.
+    throw std::runtime_error("failed to publish BC compressed file: " + ec.message());
 }
 
 void validate_options(const CompressOptions &options) {
@@ -942,6 +1063,19 @@ void validate_options(const CompressOptions &options) {
         }
 
         std::vector<uint8_t> scratch;
+        if (!state.value_mode_selected) {
+            std::vector<std::vector<uint8_t>> samples;
+            for (size_t j = 0; j < std::min<size_t>(4U, success_cells.size()); ++j) {
+                const size_t i = j * success_cells.size() / std::min<size_t>(4U, success_cells.size());
+                auto &c = success_cells[i];
+                const uint8_t *data = c.external_value_data ? c.external_value_data :
+                    (!c.raw_bytes.empty() ? c.raw_bytes.data() :
+                    reinterpret_cast<const uint8_t *>(c.uint32_values_data()));
+                append_value_sample(samples, data,
+                    static_cast<uint64_t>(c.success_rows) * c.row_width * c.value_size(), c.value_size());
+            }
+            select_value_mode(state, samples);
+        }
         for (size_t i = 0U; i < batch_cids.size(); ++i) {
             const BC::CellId cid = batch_cids[i];
             const BC::BCPositionCellDescriptor &desc = position.descriptor(cid);
@@ -1014,7 +1148,8 @@ void validate_options(const CompressOptions &options) {
     finalize_file(out, state, tmp_path);
     state.stats.write_seconds += now_seconds() - write_t0;
     out.close();
-    publish_file(tmp_path, output_path);
+    state.stats.output_path = encoded_output_path(output_path, state.stats.raw_values);
+    publish_file(tmp_path, state.stats.output_path);
     state.stats.total_seconds = now_seconds() - t0;
     return state.stats;
 }
@@ -1155,6 +1290,15 @@ template <class SuccessAdapter>
     state.axis_coords = position.axis().coords();
     state.cell_dirs.assign(position.cell_count(), CellDirEntry{});
     state.stats.cells = position.cell_count();
+    initialize_value_mode(state);
+    if (!state.value_mode_selected) {
+        std::vector<std::vector<uint8_t>> samples;
+        for (BC::CellId cid = 0; cid < position.cell_count() && samples.size() < 4U; ++cid) {
+            const auto view = success.cell_raw_view(cid);
+            append_value_sample(samples, view.data, view.bytes, state.header.value_size);
+        }
+        select_value_mode(state, samples);
+    }
 
     const std::filesystem::path tmp_path = output_path.string() + ".tmp";
     if (!output_path.parent_path().empty()) {
@@ -1224,13 +1368,14 @@ template <class SuccessAdapter>
     finalize_file(out, state, tmp_path);
     state.stats.write_seconds += now_seconds() - write_t0;
     out.close();
-    publish_file(tmp_path, output_path);
+    state.stats.output_path = encoded_output_path(output_path, state.stats.raw_values);
+    publish_file(tmp_path, state.stats.output_path);
     state.stats.total_seconds = now_seconds() - t0;
     return state.stats;
 }
 
 void validate_header(const Header &header) {
-    if (std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0) {
+    if (std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0 && !is_raw_value_archive(header)) {
         throw std::runtime_error("BC compressed magic mismatch");
     }
     if (header.version != kFormatVersion || header.header_bytes != sizeof(Header)) {
@@ -1430,6 +1575,30 @@ void validate_header(const Header &header) {
 
 } // namespace
 
+void validate_archive_file(const std::filesystem::path &path) {
+    const Header h = read_pod_at<Header>(path, 0U, "BC archive header");
+    validate_header(h);
+    const uint64_t size = std::filesystem::file_size(path);
+    auto end_of = [&](uint64_t offset, uint64_t count, uint64_t stride) {
+        if (offset > size || count > (size - offset) / stride) {
+            throw std::runtime_error("BC archive directory exceeds file: " + path.string());
+        }
+        return offset + count * stride;
+    };
+    if (h.data_offset != sizeof(Header) ||
+        end_of(h.data_offset, h.data_bytes, 1U) != h.axis_offset ||
+        h.axis_bytes != static_cast<uint64_t>(h.family_count) * sizeof(uint32_t) ||
+        end_of(h.axis_offset, h.axis_bytes, 1U) != h.cell_dir_offset ||
+        h.cell_count != static_cast<uint64_t>(h.family_count) * h.family_count ||
+        h.cell_dir_count != h.cell_count ||
+        end_of(h.cell_dir_offset, h.cell_dir_count, sizeof(CellDirEntry)) != h.bucket_dir_offset ||
+        end_of(h.bucket_dir_offset, h.bucket_block_count, sizeof(BucketBlockDirEntry)) != h.value_dir_offset ||
+        end_of(h.value_dir_offset, h.value_block_count, sizeof(ValueBlockDirEntry)) != size ||
+        h.value_block_raw_hard_cap_bytes == 0U) {
+        throw std::runtime_error("BC archive layout invalid: " + path.string());
+    }
+}
+
 CompressStats compress_exact_layer_to_result(
     const std::filesystem::path &position_path,
     const std::filesystem::path &success_path,
@@ -1499,12 +1668,15 @@ struct StreamingBuilder::Impl {
     std::fstream out;
     std::unique_ptr<BlockCompressor> compressor;
     const BC::BCLut *lut = nullptr;
-    BC::CellId next_cid = 0U;
+    uint64_t written_cells = 0U;
+    std::vector<uint8_t> written;
     uint64_t position_bucket_bytes = 0U;
     uint64_t position_rank_bytes = 0U;
     double start_seconds = 0.0;
     bool finished = false;
 };
+
+StreamingBuilder::StreamingBuilder() = default;
 
 StreamingBuilder::StreamingBuilder(
     const BC::BCPositionStreamingReader &position,
@@ -1552,6 +1724,7 @@ void StreamingBuilder::open(
         success_header,
         0U,
         0U);
+    impl->written.assign(position.cell_count(), 0U);
     impl->output_path = output_path;
     impl->tmp_path = output_path.string() + ".tmp";
     impl->lut = &position.lut();
@@ -1590,13 +1763,18 @@ void StreamingBuilder::write_cell(
         throw std::logic_error("BC compressed streaming builder is not open");
     }
     Impl &impl = *impl_;
-    if (cid != impl.next_cid) {
+    if (!impl.state.value_mode_selected && success_value_count != 0U) {
+        throw std::logic_error("BC archive value encoding must be sampled before writing cells");
+    }
+    if (!impl.state.options.unordered_cells && cid != impl.written_cells) {
         throw std::logic_error("BC compressed streaming builder requires cid order");
     }
     if (cid >= impl.state.cell_dirs.size()) {
         throw std::out_of_range("BC compressed streaming builder cid out of range");
     }
-    ++impl.next_cid;
+    if (impl.written[cid] != 0U) {
+        throw std::logic_error("BC compressed streaming builder duplicate cell");
+    }
 
     const uint32_t row_width = impl.state.header.row_width;
     const uint64_t expected_values =
@@ -1607,6 +1785,8 @@ void StreamingBuilder::write_cell(
     if (success_value_count != 0U && success_values == nullptr) {
         throw std::invalid_argument("BC compressed streaming cell values are null");
     }
+    impl.written[cid] = 1U;
+    ++impl.written_cells;
     if (payload.buckets.empty()) {
         if (payload.success_rows != 0U || !payload.rank_payload.empty() ||
             success_value_count != 0U) {
@@ -1657,7 +1837,7 @@ void StreamingBuilder::write_cell(
         throw std::runtime_error("BC streaming compression requires little-endian native values");
     }
 #endif
-    if (!owner && success_bytes != 0U) {
+    if (!owner && success_bytes != 0U && !is_raw_value_archive(impl.state.header)) {
         if (success_bytes > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
             throw std::overflow_error("BC compressed streaming success cell exceeds size_t");
         }
@@ -1676,14 +1856,42 @@ void StreamingBuilder::write_cell(
         std::move(owner));
 }
 
+void StreamingBuilder::write_cell_borrowed(
+    BC::CellId cid,
+    const BC::FinalizedCellPayload &payload,
+    const void *success_values,
+    uint64_t success_value_count
+) {
+    try {
+        write_cell(cid, payload, success_values, success_value_count,
+            std::shared_ptr<const void>(success_values, [](const void *) {}));
+        impl_->compressor->drain();
+    } catch (...) {
+        // Joining workers must precede destruction of the caller's value span.
+        impl_.reset();
+        throw;
+    }
+}
+
+bool StreamingBuilder::needs_value_sample() const {
+    return impl_ && !impl_->state.value_mode_selected;
+}
+
+void StreamingBuilder::select_value_encoding(const std::vector<std::vector<uint8_t>> &samples) {
+    if (!impl_ || impl_->finished) throw std::logic_error("BC archive builder is not open");
+    if (impl_->state.value_cursor != 0U) throw std::logic_error("BC archive encoding selected after values");
+    select_value_mode(impl_->state, samples);
+}
+
 CompressStats StreamingBuilder::finish() {
     if (!impl_ || impl_->finished) {
         throw std::logic_error("BC compressed streaming builder is not open");
     }
     Impl &impl = *impl_;
-    if (impl.next_cid != impl.state.cell_dirs.size()) {
+    if (impl.written_cells != impl.state.cell_dirs.size()) {
         throw std::logic_error("BC compressed streaming builder has unwritten cells");
     }
+    if (!impl.state.value_mode_selected) select_value_mode(impl.state, {});
     impl.compressor->finish();
     impl.compressor.reset();
 
@@ -1725,7 +1933,8 @@ CompressStats StreamingBuilder::finish() {
     finalize_file(impl.out, impl.state, impl.tmp_path);
     impl.state.stats.write_seconds += now_seconds() - write_t0;
     impl.out.close();
-    publish_file(impl.tmp_path, impl.output_path);
+    impl.state.stats.output_path = encoded_output_path(impl.output_path, impl.state.stats.raw_values);
+    publish_file(impl.tmp_path, impl.state.stats.output_path);
     impl.state.stats.total_seconds = now_seconds() - impl.start_seconds;
     impl.finished = true;
     CompressStats stats = impl.state.stats;
@@ -1778,6 +1987,7 @@ void PointReader::open(
     const std::filesystem::path &compressed_path,
     const BC::BCLut &lut
 ) {
+    validate_archive_file(compressed_path);
     auto impl = std::make_shared<Impl>();
     impl->path = compressed_path;
     impl->lut = &lut;
@@ -1980,13 +2190,35 @@ ColdLookupResult PointReader::lookup(uint64_t board, uint32_t lane) const {
     if (!value_block_found) {
         throw std::runtime_error("BC compressed value block not found");
     }
+    if (value_dir.value_size != impl_->header.value_size || value_dir.value_count == 0U ||
+        value_dir.raw_size != static_cast<uint64_t>(value_dir.value_count) * value_dir.value_size ||
+        value_dir.raw_size > impl_->header.value_block_raw_hard_cap_bytes ||
+        value_dir.compressed_offset < impl_->header.data_offset ||
+        value_dir.compressed_offset > impl_->header.axis_offset ||
+        value_dir.compressed_size > impl_->header.axis_offset - value_dir.compressed_offset) {
+        throw std::runtime_error("BC archive value block directory invalid");
+    }
+    if (is_raw_value_archive(impl_->header) &&
+        (value_dir.raw_size > std::numeric_limits<uint64_t>::max() - 8U ||
+         value_dir.compressed_size != value_dir.raw_size + 8U)) {
+        throw std::runtime_error("BC RAW value block stored size mismatch");
+    }
     std::vector<uint8_t> compressed_value = read_range(
         impl_->path,
         value_dir.compressed_offset,
         value_dir.compressed_size,
         "BC compressed value block");
-    std::vector<uint8_t> value_raw =
-        decompress_xz_block_native(compressed_value.data(), compressed_value.size());
+    std::vector<uint8_t> value_raw;
+    if (is_raw_value_archive(impl_->header)) {
+        const auto crc = BC::load_u64_le(compressed_value.data() + value_dir.raw_size);
+        if (crc != crc64_bytes_native(compressed_value.data(), static_cast<size_t>(value_dir.raw_size))) {
+            throw std::runtime_error("BC RAW value block CRC64 mismatch: " + impl_->path.string());
+        }
+        compressed_value.resize(static_cast<size_t>(value_dir.raw_size));
+        value_raw = std::move(compressed_value);
+    } else {
+        value_raw = decompress_xz_block_native(compressed_value.data(), compressed_value.size());
+    }
     if (value_raw.size() != value_dir.raw_size ||
         value_dir.value_size != impl_->header.value_size) {
         throw std::runtime_error("BC compressed value block raw size mismatch");
