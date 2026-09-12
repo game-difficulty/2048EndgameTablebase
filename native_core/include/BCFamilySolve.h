@@ -137,7 +137,7 @@ struct BCFamilySolveOptions {
     uint32_t source_bitmap_words_per_work_item = 64U;
     uint32_t source_work_schedule_chunk = 1U;
     uint32_t cell_parallel_min_work_items = 4U;
-    // Partial + scratch/final numeric payload per execution batch. A cell is
+    // Partial + scratch/final values and queued exact metadata. A cell is
     // indivisible here: oversized cells run alone and are reported in stats.
     // Current/future positions, indexes, I/O, bounded temp hot cache and thread
     // workspaces are separate. This is not a whole-process RSS limit.
@@ -157,6 +157,7 @@ struct BCFamilySolveOptions {
     // Synchronous last-use consumer; it may mutate/release only the retired
     // cell, never another lookup cell. Not called for unreferenced cells.
     std::function<void(BCLoadedCell &, BCLoadedSuccessCell &)> retire_future4_cell;
+    std::function<void()> retire_future4_group_end;
     std::function<bool()> retire_future4_needs_sample;
     std::function<void(const std::vector<const BCLoadedSuccessCell *> &)> retire_future4_sample;
     std::function<void()> retire_future4_finish;
@@ -5266,7 +5267,8 @@ template <typename StorageT>
 [[nodiscard]] std::vector<BCFamilySolveValueBatch> bc_family_build_value_batches(
     const std::vector<BCFamilySolveCellWork> &work,
     const std::vector<BCFamilyPartialCellLayout> &layouts,
-    uint64_t max_bytes
+    uint64_t max_bytes,
+    const std::vector<uint64_t> *output_overhead = nullptr
 ) {
     if (max_bytes == 0U || work.size() != layouts.size()) {
         throw std::invalid_argument("BC family value batch budget/layout mismatch");
@@ -5304,8 +5306,10 @@ template <typename StorageT>
                     "BC family batch scratch value overflow"),
                     "BC family batch value overflow");
             }
-            const uint64_t bytes = bc_family_checked_mul_u64(
+            uint64_t bytes = bc_family_checked_mul_u64(
                 values, sizeof(StorageT), "BC family batch byte overflow");
+            if (output_overhead) bytes = bc_checked_add_u64(bytes, output_overhead->at(i),
+                "BC family output batch byte overflow");
             if (bytes > max_bytes || batch.planned_bytes > max_bytes - bytes) {
                 flush();
             }
@@ -5350,10 +5354,26 @@ template <typename StorageT>
     }
     stats.current_layout_seconds += bc_single_chunk_now_seconds() - t0;
     const double plan_t0 = bc_single_chunk_now_seconds();
+    std::vector<uint64_t> output_overhead(cells.size(), 0U);
+    if (pass.phase == BCSolveSpawnPhase::Spawn2) {
+        for (size_t i = 0; i < cells.size(); ++i) {
+            if (pass.current_cells[i].visit == BCFamilySolveCellVisitKind::FirstDirection) continue;
+            // Charge retained compact metadata, its vector capacity, and the
+            // streamer's temporary serialized bucket bytes to the SAME slot.
+            output_overhead[i] = bc_checked_add_u64(
+                bc_family_checked_mul_u64(cells[i].buckets.size(),
+                    2U * sizeof(BCBucketEntry) + kBCPositionBucketEntryBytes,
+                    "BC output bucket budget overflow"),
+                bc_checked_add_u64(bc_family_checked_mul_u64(cells[i].rank_payload.size(), 2U,
+                    "BC output rank budget overflow"),
+                    2U * sizeof(detail::BCFamilyCompactedOutputCell<StorageT>),
+                    "BC output metadata budget overflow"), "BC output metadata budget overflow");
+        }
+    }
     auto batches = bc_family_build_value_batches<StorageT>(
         pass.current_cells, layouts, options.temp_io_pipeline
             ? std::max<uint64_t>(1U, options.value_batch_max_bytes / 2U)
-            : options.value_batch_max_bytes);
+            : options.value_batch_max_bytes, &output_overhead);
     for (const auto &batch : batches) {
         ++stats.value_batches;
         stats.value_batch_cells_max = std::max<uint64_t>(
@@ -5394,6 +5414,7 @@ inline void bc_family_merge_temp_stats(BCFamilySolveStats &dst, BCFamilySolveSta
     BC_MERGE_TEMP(workspace_release_spawn4_temp_values_seconds);
     BC_MERGE_TEMP(workspace_release_spawn2_temp_values_seconds);
     BC_MERGE_TEMP(temp_pipeline_active_seconds);
+    BC_MERGE_TEMP(finalized_cells);
 #undef BC_MERGE_TEMP
     bc_success_accumulate_file_stats(&dst.temp_write_io, src.temp_write_io);
     bc_success_accumulate_file_stats(&dst.temp_read_io, src.temp_read_io);
@@ -5402,8 +5423,8 @@ inline void bc_family_merge_temp_stats(BCFamilySolveStats &dst, BCFamilySolveSta
     src = {};
 }
 
-// Slots contain only numeric vectors, moved to/from the existing kernels. No
-// extra current/future cells, codec workspace or third numeric batch is made.
+// Slots own temp or final values (and charged final metadata), never a third
+// numeric batch. The same worker serializes temp IO and formal exact output.
 template <typename T>
 class BCFamilyPassTempPipeline {
 public:
@@ -5412,14 +5433,16 @@ public:
     struct Output {
         std::vector<CellId> partial_cids, scratch_cids;
         Values partial, scratch;
-        bool empty() const { return partial_cids.empty() && scratch_cids.empty(); }
+        std::vector<BCFamilyCompactedOutputCell<T>> final;
+        bool empty() const { return partial_cids.empty() && scratch_cids.empty() && final.empty(); }
     };
     BCFamilyPassTempPipeline(BCFamilyTempWorker &worker, BCFamilySolveTempStore<T> &temp,
             const BCFamilySolvePassPlan &pass, const std::vector<BCFamilySolveValueBatch> &batches,
-            uint64_t budget, int release_threads, BCFamilySolveStats &stats)
+            uint64_t budget, int release_threads, BCFamilySolveStats &stats,
+            BCFinalLayerFileStreamer<T> *streamer = nullptr)
         : worker_(worker), temp_(temp), pass_(pass), batches_(batches),
           slot_budget_(worker.enabled() ? std::max<uint64_t>(1U, budget / 2U) : budget),
-          release_threads_(release_threads), stats_(stats) {}
+          release_threads_(release_threads), stats_(stats), streamer_(streamer) {}
     ~BCFamilyPassTempPipeline() {
         // On failure, finish in-flight IO but do not publish further outputs.
         // This runs before the pass/batch vectors and TempStore are destroyed.
@@ -5463,12 +5486,12 @@ public:
     void put(size_t index, Output output) {
         auto &slot = slots_[index % 2U]; // Worker may touch only the OTHER slot.
         if (!slot.output.empty()) throw std::logic_error("BC temp pipeline slot still has output");
-        check_capacity(output.partial, output.scratch, index, stats_);
+        check_capacity(output.partial, output.scratch, index, stats_, &output.final);
         slot.output = std::move(output);
         if (!worker_.enabled()) drain();
     }
 
-    // Also used before formal exact output, retirement, pass change and close.
+    // Used before retirement, pass change and close; exact output is a slot job.
     // Prefetched input stays in its slot; no extra read/copy is introduced.
     void drain() {
         wait();
@@ -5496,11 +5519,25 @@ private:
         if (worker_.enabled()) stats_.temp_pipeline_wait_seconds += bc_single_chunk_now_seconds() - t0;
         bc_family_merge_temp_stats(stats_, io_stats_);
     }
-    void check_capacity(const Values &a, const Values &b, size_t index, BCFamilySolveStats &s) {
+    void check_capacity(const Values &a, const Values &b, size_t index, BCFamilySolveStats &s,
+                        const std::vector<BCFamilyCompactedOutputCell<T>> *final = nullptr) {
         uint64_t bytes = 0U;
         for (const auto *list : {&a, &b}) for (const auto &v : *list)
             bytes = bc_checked_add_u64(bytes, static_cast<uint64_t>(v.capacity()) * sizeof(T),
                                       "BC temp pipeline capacity overflow");
+        if (final && !final->empty()) {
+            bytes = bc_checked_add_u64(bytes, final->capacity() * sizeof(BCFamilyCompactedOutputCell<T>),
+                "BC exact slot metadata overflow");
+            uint64_t serialized = 0U;
+            for (const auto &cell : *final) {
+                const uint64_t owned = cell.values.capacity() * sizeof(T) +
+                    cell.payload.buckets.capacity() * sizeof(BCBucketEntry) + cell.payload.rank_payload.capacity();
+                bytes = bc_checked_add_u64(bytes, owned, "BC exact slot capacity overflow");
+                serialized = std::max<uint64_t>(serialized,
+                    cell.payload.buckets.size() * kBCPositionBucketEntryBytes);
+            }
+            bytes = bc_checked_add_u64(bytes, serialized, "BC exact slot serialization overflow");
+        }
         if (bytes > batches_[index].planned_bytes)
             throw std::logic_error("BC temp pipeline numeric capacity exceeds planned batch");
         s.temp_pipeline_slot_capacity_bytes_max = std::max(s.temp_pipeline_slot_capacity_bytes_max, bytes);
@@ -5532,6 +5569,15 @@ private:
             temp_.write_partial4_batch(out.partial_cids, out.partial, io_stats_);
             temp_.write_scratch4_batch(out.scratch_cids, out.scratch, io_stats_);
         } else temp_.write_partial2_batch(out.partial_cids, out.partial, io_stats_);
+        if (!out.final.empty()) {
+            if (!streamer_) throw std::logic_error("BC exact slot has no output streamer");
+            for (auto &cell : out.final) {
+                streamer_->write_cell_metadata(cell.cid, cell.payload);
+                if (cell.payload.success_rows != 0U || !cell.payload.buckets.empty())
+                    streamer_->write_success_cell_values(cell.cid, cell.values);
+                ++io_stats_.finalized_cells;
+            }
+        }
         const double t0 = bc_single_chunk_now_seconds();
         bc_family_release_value_vectors(out.partial, release_threads_);
         bc_family_release_value_vectors(out.scratch, release_threads_);
@@ -5548,6 +5594,7 @@ private:
     uint64_t slot_budget_;
     int release_threads_;
     BCFamilySolveStats &stats_;
+    BCFinalLayerFileStreamer<T> *streamer_ = nullptr;
     BCFamilySolveStats io_stats_;
     std::array<Slot, 2U> slots_;
 };
@@ -6808,8 +6855,12 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
             }
             options.retire_future4_sample(sample_cells);
         }
-        for (CellId cid : retire4[pass_index]) {
-            future4_window.retire_cell(cid, options.retire_future4_cell);
+        if (options.retire_future4_group_end) {
+            future4_window.retire_cells_grouped(retire4[pass_index],
+                options.retire_future4_cell, options.retire_future4_group_end);
+        } else {
+            for (CellId cid : retire4[pass_index])
+                future4_window.retire_cell(cid, options.retire_future4_cell);
         }
         const double release_t0 = bc_single_chunk_now_seconds();
         future4_window.release_except(cached.keep_cids);
@@ -6825,20 +6876,21 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     stats.spawn4_phase_wall_seconds += bc_single_chunk_now_seconds() - spawn4_phase_t0;
 
     const double output_streamer_t0 = bc_single_chunk_now_seconds();
-    const double position_write_before = stats.single.position_write_seconds;
-    const double success_write_before = stats.single.success_write_seconds;
+    BCSingleChunkSolveStats output_stats; // Worker-owned until the last slot joins.
+    const double position_write_before = output_stats.position_write_seconds;
+    const double success_write_before = output_stats.success_write_seconds;
     BCFinalLayerFileStreamer<StorageT> output_streamer(
         current_position,
         position_file,
         success_file,
         options.solve.row_width,
         options.solve.dtype,
-        stats.single
+        output_stats
     );
     stats.output_streamer_open_seconds += detail::bc_family_positive_remainder(
         bc_single_chunk_now_seconds() - output_streamer_t0,
-        (stats.single.position_write_seconds - position_write_before) +
-            (stats.single.success_write_seconds - success_write_before)
+        (output_stats.position_write_seconds - position_write_before) +
+            (output_stats.success_write_seconds - success_write_before)
     );
     {
         const double mark_empty_t0 = bc_single_chunk_now_seconds();
@@ -6947,7 +6999,7 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
         const auto value_batches = bc_family_prepare_value_batches(
             lut, pass, pass_current_cells, options, pass_layouts, stats);
         detail::BCFamilyPassTempPipeline<StorageT> temp_pipeline(temp_worker, temp, pass,
-            value_batches, options.value_batch_max_bytes, workspace_release_threads, stats);
+            value_batches, options.value_batch_max_bytes, workspace_release_threads, stats, &output_streamer);
         for (size_t batch_index = 0U; batch_index < value_batches.size(); ++batch_index) {
             const auto &value_batch = value_batches[batch_index];
             auto temp_input = temp_pipeline.take(batch_index);
@@ -6998,6 +7050,10 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
             const size_t compact_batch_limit = std::max<size_t>(1U, static_cast<size_t>(compact_threads));
             std::vector<DenseFinalizeCell> dense_batch;
             dense_batch.reserve(compact_batch_limit);
+            std::vector<detail::BCFamilyCompactedOutputCell<StorageT>> final_output;
+            if (!pass.current_cells.empty() && pass.current_cells.front().visit !=
+                    BCFamilySolveCellVisitKind::FirstDirection)
+                final_output.reserve(current_cells.size());
             std::vector<CellId> spawn2_partial_write_cids;
             std::vector<BCFamilyValueVector<StorageT>> spawn2_partial_write_values;
             spawn2_partial_write_cids.reserve(current_cells.size());
@@ -7061,27 +7117,10 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
                     stats.single.compact_live_cells += compact_stats.live_cells;
                     stats.single.compact_empty_cells += compact_stats.empty_cells;
                 }
-                // The mark operation can already emit formal exact data.
-                // Finish temporary IO before either formal output entry point.
-                temp_pipeline.drain();
-                detail::bc_family_mark_compacted_outputs_ready(
-                    compacted,
-                    pending,
-                    pending_value_bytes,
-                    options.final_pending_value_memory_cap_bytes,
-                    next_output_cid,
-                    output_streamer,
-                    stats
-                );
-                detail::bc_family_update_pending_stats(pending, stats);
+                // Move compacted values into this batch's existing slot.
+                // Only the worker touches the writer and its separate statistics.
+                for (auto &cell : compacted) final_output.push_back(std::move(cell));
                 dense_batch.clear();
-                detail::bc_family_flush_ready_outputs(
-                    pending,
-                    pending_value_bytes,
-                    next_output_cid,
-                    output_streamer,
-                    stats
-                );
             };
 
             const BCSolveTargetFamilyFilter spawn2_pass_filter =
@@ -7317,7 +7356,8 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
                 bc_single_chunk_now_seconds() - workspace_release_t0;
             std::vector<int64_t>().swap(spawn2_scratch_prefetch_index);
             temp_pipeline.put(batch_index, {
-                std::move(spawn2_partial_write_cids), {}, std::move(spawn2_partial_write_values), {}});
+                std::move(spawn2_partial_write_cids), {}, std::move(spawn2_partial_write_values), {},
+                std::move(final_output)});
             workspace_release_t0 = bc_single_chunk_now_seconds();
             detail::bc_family_release_partial_buffers(
                 spawn2_group_partials,
@@ -7354,6 +7394,15 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
 
     const double output_finish_t0 = bc_single_chunk_now_seconds();
     BCSingleChunkSolveFileResult single_result = output_streamer.finish();
+    // Every pass pipeline has joined. Merge only the streamer's fields.
+#define BC_MERGE_EXACT(field) stats.single.field += output_stats.field
+    BC_MERGE_EXACT(position_prepare_seconds); BC_MERGE_EXACT(success_prepare_seconds);
+    BC_MERGE_EXACT(position_write_seconds); BC_MERGE_EXACT(success_write_seconds);
+    BC_MERGE_EXACT(success_finish_seconds); BC_MERGE_EXACT(success_header_seconds);
+    BC_MERGE_EXACT(result_assembly_seconds);
+#undef BC_MERGE_EXACT
+    bc_success_accumulate_file_stats(&stats.single.output_position_write, output_stats.output_position_write);
+    bc_success_accumulate_file_stats(&stats.single.output_success_write, output_stats.output_success_write);
     stats.output_finish_seconds += bc_single_chunk_now_seconds() - output_finish_t0;
     const double temp_close_t0 = bc_single_chunk_now_seconds();
     temp.wait_all_writes(stats);
@@ -7375,6 +7424,11 @@ BCFamilySolveFileResult bc_family_solve_layer_to_files(
     result.success_bytes = single_result.success_bytes;
     stats.single.output_values = single_result.stats.output_values;
     stats.single.output_bytes = single_result.stats.output_bytes;
+    std::fprintf(stderr,
+        "BC_FAMILY_OVERLAP exact_slot_output=1 exact_cells=%llu future4_index_hidden_seconds=%.6f future2_index_hidden_seconds=%.6f\n",
+        static_cast<unsigned long long>(stats.finalized_cells),
+        future4_window.stats().prepare_read_index_overlap_seconds,
+        future2_window.stats().prepare_read_index_overlap_seconds);
     std::fprintf(stderr,
         "BC_FAMILY_TEMP_PIPELINE enabled=%u compute_threads=%u codec_lanes=%u io_workers=%u slot_budget_bytes=%llu jobs=%llu serial_batches=%llu pair_planned_peak_bytes=%llu slot_capacity_peak_bytes=%llu main_wait_seconds=%.6f worker_active_seconds=%.6f\n",
         options.temp_io_pipeline ? 1U : 0U,

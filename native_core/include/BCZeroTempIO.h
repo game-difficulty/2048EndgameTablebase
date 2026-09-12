@@ -41,8 +41,9 @@ public:
         blocks_.reserve(max_blocks); // Exact upper bound is charged against the old cache budget.
     }
     bool enabled() const { return workspace_ != nullptr; }
+    template<class ValueBuffer = BCFamilyValueVector<T>>
     std::vector<std::pair<uint64_t,uint64_t>> append_many(
-            const std::vector<const BCFamilyValueVector<T>*>& values, BCFileIOStats* stats) {
+            const std::vector<const ValueBuffer*>& values, BCFileIOStats* stats) {
         if (stats) *stats = {};
         std::vector<std::pair<uint64_t,uint64_t>> records;
         records.reserve(values.size());
@@ -125,6 +126,26 @@ public:
                 throw std::runtime_error("BC zero temp record invalid");
             out[i].resize(static_cast<size_t>(count));
         }
+        std::vector<T*> targets;
+        targets.reserve(out.size());
+        for (auto &values : out) targets.push_back(values.data());
+        read_many_into(records, targets, stats);
+    }
+
+    // Decode directly into caller-owned arrays. In particular SingleChunk can
+    // reuse its aligned sum4 allocation instead of constructing a second array.
+    void read_many_into(const std::vector<std::pair<uint64_t,uint64_t>>& records,
+                        const std::vector<T*>& destinations, BCFileIOStats* stats) {
+        if (stats) *stats = {};
+        if (records.size() != destinations.size())
+            throw std::invalid_argument("BC zero temp destination count mismatch");
+        for (size_t i = 0; i < records.size(); ++i) {
+            const auto [begin,count] = records[i];
+            const uint64_t n = count/kValues + (count%kValues != 0U);
+            if (begin > blocks_.size() || n > blocks_.size()-begin || count > SIZE_MAX ||
+                (count != 0U && destinations[i] == nullptr))
+                throw std::runtime_error("BC zero temp destination record invalid");
+        }
         if(writer_->mode()!=BCFileIOMode::Direct) writer_->flush();
         size_t ri=0, block_in_record=0;
         while(ri<records.size()) {
@@ -140,7 +161,7 @@ public:
                 const auto& b=blocks_.at(static_cast<size_t>(records[ri].first)+block_in_record);
                 if(b.count!=std::min<uint64_t>(kValues,count-value_offset))
                     throw std::runtime_error("BC zero temp block count mismatch");
-                wave[n]=&b; targets[n]=out[ri].data()+value_offset;
+                wave[n]=&b; targets[n]=destinations[ri]+value_offset;
                 ++n; ++block_in_record;
             }
             if(n==0) continue;

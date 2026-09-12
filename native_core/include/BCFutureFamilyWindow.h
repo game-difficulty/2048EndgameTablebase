@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iterator>
+#include <future>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -61,6 +62,7 @@ struct BCFutureFamilyWindowStats {
     double prepare_normalize_seconds = 0.0;
     double prepare_select_seconds = 0.0;
     double prepare_index_build_seconds = 0.0;
+    double prepare_read_index_overlap_seconds = 0.0;
     double prepare_insert_sort_seconds = 0.0;
     double release_all_clear_seconds = 0.0;
     double release_except_normalize_seconds = 0.0;
@@ -180,6 +182,30 @@ public:
 
     [[nodiscard]] uint32_t active_cell_count() const {
         return checked_u32_size(active_.size(), "BC future family active cell count exceeds uint32");
+    }
+
+    // Bounded groups borrow only cells already resident in this pass. No cell
+    // is released (including on an exception) before the consumer joins IO.
+    template <class Consumer, class Drain>
+    void retire_cells_grouped(const std::vector<CellId> &cids, Consumer &&consume, Drain &&drain) {
+        constexpr size_t kGroupCells = 8U;
+        for (size_t begin = 0; begin < cids.size(); begin += kGroupCells) {
+            const size_t end = std::min(cids.size(), begin + kGroupCells);
+            try {
+                for (size_t i = begin; i < end; ++i) {
+                    auto it = find_active(cids[i]);
+                    if (it == active_.end() || it->cid != cids[i])
+                        throw std::logic_error("BC archive group cell not loaded");
+                    consume(it->position, it->success);
+                }
+            } catch (...) {
+                try { drain(); } catch (...) {}
+                throw;
+            }
+            drain();
+            for (size_t i = begin; i < end; ++i)
+                retire_cell(cids[i], [](BCLoadedCell &, BCLoadedSuccessCell &) {});
+        }
     }
 
     void prepare_cells(const std::vector<CellId> &need_cells) {
@@ -596,42 +622,48 @@ private:
         position_reader_->load_cells_into(missing, position_cells, &position_stats);
         stats_.position_read_seconds += seconds_since(position_begin);
 
+        if (position_cells.size() != missing.size())
+            throw std::logic_error("BC future position cell count mismatch");
         BCSuccessLoadStats success_stats;
-        const auto success_begin = std::chrono::steady_clock::now();
-        std::vector<BCLoadedSuccessCell> success_cells =
-            success_reader_->load_cells(
-                missing,
-                &success_stats,
-                true
-            );
-        stats_.success_read_seconds += seconds_since(success_begin);
-
-        if (position_cells.size() != missing.size() || success_cells.size() != missing.size()) {
-            throw std::logic_error("BC future family window loaded cell count mismatch");
+        double success_seconds = 0.0;
+        // Only this window's already requested cells. The reader allocates the
+        // same final success arrays as before; no next-pass data or copy exists.
+        // Declare future last so it joins before captured locals unwind.
+        const auto overlap_begin = std::chrono::steady_clock::now();
+        auto success_future = std::async(std::launch::async, [&] {
+            const auto begin = std::chrono::steady_clock::now();
+            auto cells = success_reader_->load_cells(missing, &success_stats, true);
+            success_seconds = seconds_since(begin);
+            return cells;
+        });
+        double index_seconds = 0.0;
+        for (size_t i = 0U; i < missing.size(); ++i) {
+            if (position_cells[i].cid != missing[i])
+                throw std::logic_error("BC future position cell order mismatch");
+            ActiveCell &cell = loaded[i];
+            cell.position = std::move(position_cells[i]);
+            const auto index_begin = std::chrono::steady_clock::now();
+            BCFutureSuccessLookupView<SuccessT>::build_loaded_cell_index(
+                position_reader_->lut(), cell.position, cell.index);
+            index_seconds += seconds_since(index_begin);
         }
-
+        auto success_cells = success_future.get(); // Includes read failure propagation.
+        const double combined_seconds = seconds_since(overlap_begin);
+        stats_.success_read_seconds += success_seconds;
+        stats_.prepare_index_build_seconds += index_seconds;
+        stats_.prepare_read_index_overlap_seconds +=
+            std::max(0.0, success_seconds + index_seconds - combined_seconds);
+        if (success_cells.size() != missing.size())
+            throw std::logic_error("BC future success cell count mismatch");
+        for (size_t i = 0U; i < missing.size(); ++i) {
+            if (success_cells[i].cid != missing[i] ||
+                loaded[i].position.success_rows != success_cells[i].success_rows)
+                throw std::logic_error("BC future success cell shape mismatch");
+            loaded[i].success = std::move(success_cells[i]);
+        }
         add_position_stats(position_stats);
         add_success_stats(success_stats);
         stats_.future_cells_loaded += missing.size();
-
-        for (size_t i = 0U; i < missing.size(); ++i) {
-            if (position_cells[i].cid != missing[i] || success_cells[i].cid != missing[i]) {
-                throw std::logic_error("BC future family window loaded cell order mismatch");
-            }
-            if (position_cells[i].success_rows != success_cells[i].success_rows) {
-                throw std::logic_error("BC future family window position/success row mismatch");
-            }
-            ActiveCell &cell = loaded[i];
-            cell.position = std::move(position_cells[i]);
-            cell.success = std::move(success_cells[i]);
-            const auto index_begin = std::chrono::steady_clock::now();
-            BCFutureSuccessLookupView<SuccessT>::build_loaded_cell_index(
-                position_reader_->lut(),
-                cell.position,
-                cell.index
-            );
-            stats_.prepare_index_build_seconds += seconds_since(index_begin);
-        }
         return loaded;
     }
 

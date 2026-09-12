@@ -60,6 +60,7 @@ struct CompressStats {
     double read_seconds = 0.0;
     double write_seconds = 0.0;
     double compress_worker_seconds = 0.0;
+    double raw_checksum_worker_seconds = 0.0;
     double total_seconds = 0.0;
     bool raw_values = false;
     std::filesystem::path output_path;
@@ -176,6 +177,13 @@ public:
         const void *success_values,
         uint64_t success_value_count
     );
+
+    // Deferred callers keep all borrowed spans immutable/alive until drain.
+    // A failed enqueue/drain joins workers before propagating the exception.
+    void enqueue_cell_borrowed(
+        BC::CellId cid, const BC::FinalizedCellPayload &payload,
+        const void *success_values, uint64_t success_value_count);
+    void drain_borrowed();
 
     // Must precede any nonempty value payload. Samples contain post-pruning
     // bytes, at most four blocks of 256 KiB. No cell ownership is retained.

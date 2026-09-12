@@ -228,6 +228,7 @@ static_assert(sizeof(BucketBlockRawHeader) == 16U);
 enum class BlockKind : uint8_t {
     Bucket,
     Value,
+    RawValue,
 };
 
 struct CompressionTask {
@@ -244,6 +245,9 @@ struct CompressedBlock {
     uint64_t raw_size = 0U;
     std::vector<uint8_t> compressed;
     double worker_seconds = 0.0;
+    const uint8_t *raw_data = nullptr;
+    uint64_t checksum = 0U;
+    std::shared_ptr<const void> owner;
 };
 
 struct BuilderState {
@@ -418,21 +422,9 @@ public:
         stop_workers();
     }
 
-    void write_raw_value(size_t dir_index, const uint8_t *data, uint64_t bytes) {
-        if (bytes > std::numeric_limits<size_t>::max()) throw std::overflow_error("BC RAW block exceeds size_t");
-        const uint64_t crc = crc64_bytes_native(data, static_cast<size_t>(bytes));
-        auto &dir = state_.value_dirs.at(dir_index);
-        dir.compressed_offset = file_offset(out_);
-        dir.raw_size = bytes;
-        dir.compressed_size = bytes + sizeof(uint64_t);
-        std::array<uint8_t, 8> checksum{};
-        for (unsigned i = 0; i < 8; ++i) checksum[i] = static_cast<uint8_t>(crc >> (8U * i));
-        const double t0 = now_seconds();
-        write_bytes(out_, data, bytes, "BC RAW value block");
-        write_bytes(out_, checksum.data(), checksum.size(), "BC RAW CRC64");
-        state_.stats.write_seconds += now_seconds() - t0;
-        state_.stats.value_raw_bytes += bytes;
-        state_.stats.value_compressed_bytes += dir.compressed_size; // stored bytes, including checksum
+    void write_raw_value(size_t dir_index, const uint8_t *data, uint64_t bytes,
+                         std::shared_ptr<const void> owner = {}) {
+        submit_span(BlockKind::RawValue, dir_index, data, bytes, std::move(owner));
     }
 
 private:
@@ -458,9 +450,14 @@ private:
                 result.dir_index = task.dir_index;
                 result.raw_size = static_cast<uint64_t>(task.bytes);
                 const int level = static_cast<int>(state_.options.compression_level);
-                result.compressed =
-                    compress_xz_block_native(task.data, task.bytes, level);
-                if (result.compressed.empty()) throw std::runtime_error("BC archive block compression failed");
+                if (task.kind == BlockKind::RawValue) {
+                    result.checksum = crc64_bytes_native(task.data, task.bytes);
+                    result.raw_data = task.data;
+                    result.owner = std::move(task.owner); // Retain through actual writeout.
+                } else {
+                    result.compressed = compress_xz_block_native(task.data, task.bytes, level);
+                    if (result.compressed.empty()) throw std::runtime_error("BC archive block compression failed");
+                }
                 result.worker_seconds = now_seconds() - t0;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -515,6 +512,22 @@ private:
         }
         const uint64_t offset = file_offset(out_);
         const double write_t0 = now_seconds();
+        if (block.kind == BlockKind::RawValue) {
+            std::array<uint8_t, 8> checksum{};
+            for (unsigned i = 0; i < 8; ++i) checksum[i] = static_cast<uint8_t>(block.checksum >> (8U * i));
+            write_bytes(out_, block.raw_data, block.raw_size, "BC RAW value block");
+            write_bytes(out_, checksum.data(), checksum.size(), "BC RAW CRC64");
+            state_.stats.write_seconds += now_seconds() - write_t0;
+            auto &dir = state_.value_dirs.at(block.dir_index);
+            dir.compressed_offset = offset;
+            dir.raw_size = block.raw_size;
+            dir.compressed_size = block.raw_size + sizeof(uint64_t);
+            state_.stats.value_raw_bytes += block.raw_size;
+            state_.stats.value_compressed_bytes += dir.compressed_size;
+            state_.stats.raw_checksum_worker_seconds += block.worker_seconds;
+            --pending_count_;
+            return;
+        }
         write_bytes(
             out_,
             block.compressed.data(),
@@ -775,7 +788,7 @@ void emit_value_blocks_for_cell(
             throw std::overflow_error("BC compressed value block offset exceeds size_t");
         }
         if (is_raw_value_archive(state.header)) {
-            compressor.write_raw_value(dir_index, bytes + static_cast<size_t>(raw_offset), raw_bytes);
+            compressor.write_raw_value(dir_index, bytes + static_cast<size_t>(raw_offset), raw_bytes, owner);
         } else {
             compressor.submit_span(BlockKind::Value, dir_index,
                 bytes + static_cast<size_t>(raw_offset), raw_bytes, owner);
@@ -818,7 +831,7 @@ void emit_value_blocks_for_payload(
             throw std::overflow_error("BC compressed value block offset exceeds size_t");
         }
         if (is_raw_value_archive(state.header)) {
-            compressor.write_raw_value(dir_index, bytes + static_cast<size_t>(raw_offset), raw_bytes);
+            compressor.write_raw_value(dir_index, bytes + static_cast<size_t>(raw_offset), raw_bytes, owner);
         } else {
             compressor.submit_span(BlockKind::Value, dir_index,
                 bytes + static_cast<size_t>(raw_offset), raw_bytes, owner);
@@ -963,6 +976,7 @@ void finalize_file(std::fstream &out, BuilderState &state, const std::filesystem
               << " value_raw_bytes=" << state.stats.value_raw_bytes
               << " value_stored_bytes=" << state.stats.value_compressed_bytes
               << " block_write_seconds=" << state.stats.write_seconds
+              << " raw_checksum_worker_seconds=" << state.stats.raw_checksum_worker_seconds
               << " compress_worker_seconds=" << state.stats.compress_worker_seconds << '\n';
 }
 
@@ -1109,6 +1123,9 @@ void validate_options(const CompressOptions &options) {
                 std::move(success_data.owner));
         }
 
+        // RAW now uses asynchronous block checksums. Do not carry owners from
+        // this loaded batch into the next disk batch (no extra resident batch).
+        if (state.stats.raw_values) compressor.drain();
         batch_cids.clear();
         batch_estimated_bytes = 0U;
     };
@@ -1847,13 +1864,22 @@ void StreamingBuilder::write_cell(
         owner = bytes;
         success_values = bytes->data();
     }
-    emit_value_blocks_for_cell(
-        impl.state,
-        *impl.compressor,
-        cid,
-        reinterpret_cast<const uint8_t *>(success_values),
-        success_bytes,
-        std::move(owner));
+    // RAW callers without an owner retain the original synchronous lifetime.
+    // Borrowed/group APIs pass an explicit non-owning owner and drain themselves.
+    const bool sync_raw = !owner && is_raw_value_archive(impl.state.header);
+    try {
+        emit_value_blocks_for_cell(
+            impl.state,
+            *impl.compressor,
+            cid,
+            reinterpret_cast<const uint8_t *>(success_values),
+            success_bytes,
+            std::move(owner));
+        if (sync_raw) impl.compressor->drain();
+    } catch (...) {
+        if (sync_raw) impl_.reset(); // Join before caller storage may be released.
+        throw;
+    }
 }
 
 void StreamingBuilder::write_cell_borrowed(
@@ -1862,10 +1888,17 @@ void StreamingBuilder::write_cell_borrowed(
     const void *success_values,
     uint64_t success_value_count
 ) {
+    enqueue_cell_borrowed(cid, payload, success_values, success_value_count);
+    drain_borrowed();
+}
+
+void StreamingBuilder::enqueue_cell_borrowed(
+    BC::CellId cid, const BC::FinalizedCellPayload &payload,
+    const void *success_values, uint64_t success_value_count
+) {
     try {
         write_cell(cid, payload, success_values, success_value_count,
             std::shared_ptr<const void>(success_values, [](const void *) {}));
-        impl_->compressor->drain();
     } catch (...) {
         // Joining workers must precede destruction of the caller's value span.
         impl_.reset();
@@ -1875,6 +1908,12 @@ void StreamingBuilder::write_cell_borrowed(
 
 bool StreamingBuilder::needs_value_sample() const {
     return impl_ && !impl_->state.value_mode_selected;
+}
+
+void StreamingBuilder::drain_borrowed() {
+    if (!impl_ || !impl_->compressor) throw std::logic_error("BC borrowed archive is not open");
+    try { impl_->compressor->drain(); }
+    catch (...) { impl_.reset(); throw; }
 }
 
 void StreamingBuilder::select_value_encoding(const std::vector<std::vector<uint8_t>> &samples) {

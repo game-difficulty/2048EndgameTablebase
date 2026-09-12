@@ -3,6 +3,7 @@
 #include "BCDirectFileIO.h"
 #include "BCLoadedCellScanner.h"
 #include "BCResidentSolve.h"
+#include "BCZeroTempIO.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -137,6 +140,8 @@ using BCSingleChunkSolveTraceFn = void (*)(
     void *user
 );
 
+template <typename StorageT> struct BCSingleChunkFrontierLayer;
+
 template <typename StorageT>
 struct BCSingleChunkSolveOptions {
     BCResidentSolveOptions<StorageT> solve;
@@ -145,6 +150,9 @@ struct BCSingleChunkSolveOptions {
     uint32_t current_chunk_rows = 128U;
     uint64_t current_chunk_max_bytes = 512ULL * 1024ULL * 1024ULL;
     bool restrict_future_cells_to_current_chunk = false;
+    // Strict frontier route only; synchronous, after all Spawn4 queries and
+    // before releasing future4/loading future2. May prune the retired values.
+    std::function<void(BCSingleChunkFrontierLayer<StorageT> &)> retire_future4;
     BCSingleChunkSolveTraceFn trace = nullptr;
     void *trace_user = nullptr;
 };
@@ -1927,6 +1935,101 @@ void bc_single_chunk_read_tmp4_values(
     }
 }
 
+// Layer-local, non-resumable tmp4. The existing fixed-block codec owns only its
+// small workspace and block directory; the value array belongs to the solver.
+template<class T>
+class BCSingleChunkTempStore {
+public:
+    BCSingleChunkTempStore(const BCPositionStreamingReader &current,
+                          const std::filesystem::path &dir,
+                          const BCSingleChunkSolveOptions<T> &options, bool direct)
+        : budget_(options.current_chunk_max_bytes), dir_(dir), direct_(direct) {
+        uint64_t rows = 0U;
+        for (CellId cid = 0; cid < current.cell_count(); ++cid)
+            rows = bc_checked_add_u64(rows, current.descriptor(cid).success_rows,
+                "BC single temp row count overflow");
+        if (rows > UINT64_MAX / options.solve.row_width / sizeof(T))
+            throw std::overflow_error("BC single temp value bytes overflow");
+        const uint64_t bytes = rows * options.solve.row_width * sizeof(T);
+        // A chunk contains one or more complete family rows. Charge every
+        // possible chunk tail as well as every complete 1 MiB block.
+        const uint64_t blocks = bc_checked_add_u64(bytes / kBCZeroBlockBytes,
+            current.axis().family_count(), "BC single temp directory overflow");
+        const uint32_t lanes = std::min(16, bc_resident_solve_effective_threads(options.solve.num_threads));
+        if (blocks > SIZE_MAX / sizeof(BCZeroTempBlock))
+            throw std::overflow_error("BC single temp directory exceeds size_t");
+        const uint64_t reserve = bc_checked_add_u64(blocks * sizeof(BCZeroTempBlock),
+            2ULL * lanes * kBCZeroBlockBytes + 65536U +
+                static_cast<uint64_t>(current.axis().family_count()) * sizeof(Record),
+            "BC single temp workspace bytes overflow");
+        // No extra growing budget: take workspace/directory overhead from the
+        // old per-chunk value allowance; small configured budgets retain RAW.
+        if (budget_ == 0U || reserve >= budget_) return;
+        budget_ -= reserve;
+        workspace_ = std::make_unique<BCZeroTempWorkspace>(lanes);
+        const auto path = dir / "values.tmp4.zero";
+        if (direct) {
+            BCDirectFileIOOptions io;
+            io.queue_depth = 16U;
+            io.overlapped = true;
+            writer_ = std::make_unique<BCDirectFileWriter>(path, io);
+            reader_ = std::make_unique<BCDirectFileReader>(path, io);
+        } else {
+            writer_ = std::make_unique<BCBufferedFileWriter>(path);
+            reader_ = std::make_unique<BCBufferedFileReader>(path);
+        }
+        records_.reserve(current.axis().family_count());
+        codec_.open(writer_.get(), reader_.get(), workspace_.get(), options.solve.zero_value,
+            direct ? 4096U : 1U, 0U, static_cast<size_t>(blocks));
+    }
+    bool enabled() const { return workspace_ != nullptr; }
+    uint64_t chunk_budget() const { return budget_; }
+    uint64_t write(size_t index, BCSingleChunkValueBuffer<T> &values, BCFileIOStats *stats) {
+        if (!enabled()) {
+            bc_single_chunk_write_tmp4_values(bc_single_chunk_partial_path(dir_, index), values, direct_, stats);
+            return bc_single_chunk_tmp4_file_bytes(values, direct_);
+        }
+        if (index != records_.size()) throw std::logic_error("BC single temp write order mismatch");
+        BCFileIOStats io;
+        const auto records = codec_.append_many(
+            std::vector<const BCSingleChunkValueBuffer<T>*>{&values}, &io);
+        records_.push_back(records.at(0));
+        bc_success_accumulate_file_stats(stats, io);
+        return io.backend_bytes;
+    }
+    uint64_t read(size_t index, size_t count, BCSingleChunkValueBuffer<T> &values, BCFileIOStats *stats) {
+        if (!enabled()) {
+            bc_single_chunk_read_tmp4_values(bc_single_chunk_partial_path(dir_, index), values, count, direct_, stats);
+            return bc_single_chunk_tmp4_file_bytes(values, direct_);
+        }
+        const auto &record = records_.at(index);
+        if (record.second != count) throw std::runtime_error("BC single encoded tmp4 count mismatch");
+        values.resize_uninitialized(count);
+        BCFileIOStats io;
+        codec_.read_many_into({record}, {values.data()}, &io);
+        bc_success_accumulate_file_stats(stats, io);
+        return io.backend_bytes;
+    }
+    void report() const {
+        if (!workspace_) return;
+        std::cerr << "BC_SINGLE_TEMP_IO codec=1 chunks=" << records_.size()
+            << " chunk_budget=" << budget_ << " raw_bytes=" << workspace_->raw_bytes
+            << " stored_bytes=" << workspace_->stored_bytes
+            << " encode_seconds=" << workspace_->encode_seconds
+            << " decode_seconds=" << workspace_->decode_seconds << '\n';
+    }
+private:
+    using Record = std::pair<uint64_t, uint64_t>;
+    uint64_t budget_;
+    std::filesystem::path dir_;
+    bool direct_;
+    std::unique_ptr<BCZeroTempWorkspace> workspace_;
+    std::unique_ptr<BCWritableFile> writer_;
+    std::unique_ptr<BCReadableFile> reader_;
+    BCZeroTempIO<T> codec_;
+    std::vector<Record> records_;
+};
+
 [[nodiscard]] inline uint64_t bc_single_chunk_position_fingerprint(
     const BCFamilyTable &axis,
     const BCPositionHeader &header
@@ -3378,6 +3481,9 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
     const bool tmp_direct_io =
         position_file.mode() == BCFileIOMode::Direct ||
         success_file.mode() == BCFileIOMode::Direct;
+    scratch.raw_values.reset(); // Strict Spawn2 merges into sum4 in place.
+    scratch.sum4_values.reset(); // Drop the old capacity before charging codec workspace.
+    BCSingleChunkTempStore<StorageT> temp_store(current_position, temp_dir, options, tmp_direct_io);
     const std::vector<CellId> future4_cids = bc_single_chunk_nonempty_cell_ids(future4_position);
     const std::vector<CellId> future2_cids = bc_single_chunk_nonempty_cell_ids(future2_position);
     stats.future_cid_select_seconds = 0.0;
@@ -3433,7 +3539,7 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
                 current_position,
                 row_begin,
                 options.current_chunk_rows,
-                options.current_chunk_max_bytes,
+                temp_store.chunk_budget(),
                 options.solve.row_width,
                 value_size
             );
@@ -3488,14 +3594,8 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
                 &scratch.batch_workspaces
             );
             const double partial_t0 = bc_single_chunk_now_seconds();
-            const uint64_t tmp4_bytes =
-                bc_single_chunk_tmp4_file_bytes(scratch.sum4_values, tmp_direct_io);
-            bc_single_chunk_write_tmp4_values(
-                bc_single_chunk_partial_path(temp_dir, pass1_chunks),
-                scratch.sum4_values,
-                tmp_direct_io,
-                &stats.partial_write_io
-            );
+            const uint64_t tmp4_bytes = temp_store.write(
+                pass1_chunks, scratch.sum4_values, &stats.partial_write_io);
             stats.partial_write_seconds += bc_single_chunk_now_seconds() - partial_t0;
             stats.partial_write_bytes = bc_checked_add_u64(
                 stats.partial_write_bytes,
@@ -3575,7 +3675,7 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
                 current_position,
                 row_begin,
                 options.current_chunk_rows,
-                options.current_chunk_max_bytes,
+                temp_store.chunk_budget(),
                 options.solve.row_width,
                 value_size
             );
@@ -3622,26 +3722,22 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
             }
             const size_t value_count = static_cast<size_t>(chunk_rows * options.solve.row_width);
             const double partial_read_t0 = bc_single_chunk_now_seconds();
-            bc_single_chunk_read_tmp4_values(
-                bc_single_chunk_partial_path(temp_dir, pass2_chunks),
-                scratch.sum4_values,
-                value_count,
-                tmp_direct_io,
-                &stats.partial_read_io
-            );
+            const uint64_t tmp4_read_bytes = temp_store.read(
+                pass2_chunks, value_count, scratch.sum4_values, &stats.partial_read_io);
             stats.partial_read_seconds += bc_single_chunk_now_seconds() - partial_read_t0;
             stats.partial_read_bytes = bc_checked_add_u64(
                 stats.partial_read_bytes,
-                bc_single_chunk_tmp4_file_bytes(scratch.sum4_values, tmp_direct_io),
+                tmp4_read_bytes,
                 "BC strict single tmp4 read byte stats overflow"
             );
 
-            scratch.raw_values.resize_uninitialized(value_count);
+            // Each output index reads its old sum4 before replacing it. No second value array.
+
             bc_single_chunk_solve_phase_for_current_cells<StorageT>(
                 current_cells,
                 work_items,
                 cell_offsets,
-                scratch.raw_values,
+                scratch.sum4_values,
                 scratch.sum4_values,
                 lut,
                 future2_position.axis(),
@@ -3670,7 +3766,7 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
                 bc_single_chunk_compact_loaded_cell_in_place<StorageT>(
                     lut,
                     cell,
-                    scratch.raw_values,
+                    scratch.sum4_values,
                     cell_offsets[i],
                     options.solve.row_width,
                     options.solve.zero_value,
@@ -3689,7 +3785,7 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
             output_streamer.write_chunk_from_raw_spans(
                 current_cells,
                 payloads,
-                scratch.raw_values,
+                scratch.sum4_values,
                 cell_offsets
             );
             const double partial_cleanup_t0 = bc_single_chunk_now_seconds();
@@ -3722,6 +3818,7 @@ BCSingleChunkSolveFileResult bc_single_chunk_solve_strict_1x_to_files(
         result.stats.output_bytes = output_bytes;
         result.position_bytes = result_position_bytes;
         result.success_bytes = result_success_bytes;
+        temp_store.report();
         return result;
     }
     throw std::logic_error("BC strict single solve exited without pass2 result");
@@ -3774,6 +3871,9 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
     const bool tmp_direct_io =
         position_file.mode() == BCFileIOMode::Direct ||
         success_file.mode() == BCFileIOMode::Direct;
+    scratch.raw_values.reset(); // Strict Spawn2 merges into sum4 in place.
+    scratch.sum4_values.reset(); // Drop the old capacity before charging codec workspace.
+    BCSingleChunkTempStore<StorageT> temp_store(current_position, temp_dir, options, tmp_direct_io);
 
     const auto record_future4_resident = [&]() {
         const uint64_t position_bytes =
@@ -3809,7 +3909,7 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
             current_position,
             row_begin,
             options.current_chunk_rows,
-            options.current_chunk_max_bytes,
+            temp_store.chunk_budget(),
             options.solve.row_width,
             value_size
         );
@@ -3864,14 +3964,8 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
             &scratch.batch_workspaces
         );
         const double partial_t0 = bc_single_chunk_now_seconds();
-        const uint64_t tmp4_bytes =
-            bc_single_chunk_tmp4_file_bytes(scratch.sum4_values, tmp_direct_io);
-        bc_single_chunk_write_tmp4_values(
-            bc_single_chunk_partial_path(temp_dir, pass1_chunks),
-            scratch.sum4_values,
-            tmp_direct_io,
-            &stats.partial_write_io
-        );
+        const uint64_t tmp4_bytes = temp_store.write(
+            pass1_chunks, scratch.sum4_values, &stats.partial_write_io);
         stats.partial_write_seconds += bc_single_chunk_now_seconds() - partial_t0;
         stats.partial_write_bytes = bc_checked_add_u64(
             stats.partial_write_bytes,
@@ -3887,6 +3981,7 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
         ++pass1_chunks;
     }
 
+    if (options.retire_future4) options.retire_future4(future4_layer);
     const double future4_release_t0 = bc_single_chunk_now_seconds();
     future4_layer = BCSingleChunkFrontierLayer<StorageT>();
     stats.future_release_seconds += bc_single_chunk_now_seconds() - future4_release_t0;
@@ -3946,7 +4041,7 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
             current_position,
             row_begin,
             options.current_chunk_rows,
-            options.current_chunk_max_bytes,
+            temp_store.chunk_budget(),
             options.solve.row_width,
             value_size
         );
@@ -3993,26 +4088,22 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
         }
         const size_t value_count = static_cast<size_t>(chunk_rows * options.solve.row_width);
         const double partial_read_t0 = bc_single_chunk_now_seconds();
-        bc_single_chunk_read_tmp4_values(
-            bc_single_chunk_partial_path(temp_dir, pass2_chunks),
-            scratch.sum4_values,
-            value_count,
-            tmp_direct_io,
-            &stats.partial_read_io
-        );
+        const uint64_t tmp4_read_bytes = temp_store.read(
+            pass2_chunks, value_count, scratch.sum4_values, &stats.partial_read_io);
         stats.partial_read_seconds += bc_single_chunk_now_seconds() - partial_read_t0;
         stats.partial_read_bytes = bc_checked_add_u64(
             stats.partial_read_bytes,
-            bc_single_chunk_tmp4_file_bytes(scratch.sum4_values, tmp_direct_io),
+            tmp4_read_bytes,
             "BC strict frontier tmp4 read byte stats overflow"
         );
 
-        scratch.raw_values.resize_uninitialized(value_count);
+        // Each output index reads its old sum4 before replacing it. No second value array.
+
         bc_single_chunk_solve_phase_for_current_cells<StorageT>(
             current_cells,
             work_items,
             cell_offsets,
-            scratch.raw_values,
+            scratch.sum4_values,
             scratch.sum4_values,
             lut,
             future2_layer.position.axis(),
@@ -4041,7 +4132,7 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
             bc_single_chunk_compact_loaded_cell_in_place<StorageT>(
                 lut,
                 cell,
-                scratch.raw_values,
+                scratch.sum4_values,
                 cell_offsets[i],
                 options.solve.row_width,
                 options.solve.zero_value,
@@ -4060,7 +4151,7 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
         output_streamer.write_chunk_from_raw_spans(
             current_cells,
             payloads,
-            scratch.raw_values,
+            scratch.sum4_values,
             cell_offsets
         );
         const double partial_cleanup_t0 = bc_single_chunk_now_seconds();
@@ -4089,6 +4180,7 @@ bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier(
     result.stats.output_values = file_result.stats.output_values;
     result.stats.output_bytes = file_result.stats.output_bytes;
     result.next_future4_layer = std::move(future2_layer);
+    temp_store.report();
     return result;
 }
 
