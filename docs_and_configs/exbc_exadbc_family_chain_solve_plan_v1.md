@@ -75,15 +75,18 @@ The implemented scheduler is source-family ordered, not target-family-major.
 For a modulus/family count `F`:
 
 ```text
-for fid = 0..F-1:
+for fid in phase_family_order:
     row side:    cells (fid, x)       -> horizontal moves
     column side: cells (x, fid), x!=fid -> vertical moves
     diagonal:    cell  (fid, fid)     -> both horizontal and vertical moves
 ```
 
-The order is fid ascending. This gives a controlled completion order for the
-L-shaped cell boundary. Physical final-value writes may still be staged when a
-cell completes before it can be flushed.
+Modulo Spawn4 follows the dependency stride `(fid + delta_coord) % F`, where
+`delta_coord = spawn tile sum / family_unit`. Start each remaining modular cycle
+at its smallest unvisited fid so non-coprime strides also cover every family.
+Spawn2 and exact-coordinate axes retain ascending fid order. First/second
+direction visits are assigned using actual traversal history; direction
+ownership and cell-keyed partial/scratch records do not change.
 
 The removed interleave/block route is not a production path. Spawn4 and Spawn2
 are separate full fid sweeps.
@@ -164,6 +167,14 @@ generic fields such as bucket key copies, bucket index copies, and
 `empty_slot_ordinals[16]` are not on the production hot path.
 
 ## 8. Temporary Files
+
+Before reading temp records, each pass is split into homogeneous visit/direction
+cell batches using the numeric partial + scratch/final payload size. The default
+budget is 2 GiB (2048 MiB); oversized individual cells run alone and are reported. A
+batch is written/compacted and released before the next batch's temp reads and
+allocations. Source/future loading, indexes, I/O buffers, thread workspaces and
+the separately capped temp hot cache are outside this budget. See the execution
+value-batch section in `bc_family_chain_double_block_solve_discussion_v1.md`.
 
 FamilyChain uses file-backed temporary values for:
 

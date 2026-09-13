@@ -82,10 +82,15 @@ special case that avoids all partial/scratch bookkeeping.
 
 ## 3. Family Sweep And Direction Ownership
 
-The sweep order is by increasing family id:
+Spawn4 with modulo partitioning follows the dependency stride
+`delta_coord = spawn tile sum / family_unit`. Walk `(fid + delta_coord) % M`
+from zero, then start at the smallest unvisited fid until every modular cycle
+is covered. For `M=37`, `family_unit=2`, Spawn4 visits
+`0,2,...,36,1,3,...,35`. Spawn2 and exact-coordinate partitioning keep ascending
+family-id order (exact axes can have gaps).
 
 ```text
-for fid = 0..F-1:
+for fid in phase_family_order:
     load current family cross for fid
 ```
 
@@ -122,10 +127,13 @@ second appearance -> read partial max, compute the other direction, finalize
 For a diagonal cell, both directions can be computed in one appearance and no
 partial max file is needed for that cell.
 
-The completed cells form the controlled L-shaped boundary of the top-left
-rectangle as `fid` increases. Calculation order is fid order. Physical write
-order does not have to be identical to cell-id order, as long as the final file
-format remains logically compatible.
+First/second appearance is determined by whether the other family has already
+been visited in this phase, never by comparing numeric family ids. The planner
+constructs the sweep and visit kinds together. Cross direction ownership,
+sorted cell order within each pass, and the actual future fanout are unchanged;
+prefetch and future retention follow the resulting pass vector. The only added
+planning state is one visited byte per family, released before solving. No
+future-cache limit, per-board work, checkpoint, or file format is changed.
 
 ## 4. Future Family Fanout
 
@@ -410,6 +418,88 @@ bucket hit masks as per-empty-slot fallback filters.
 
 ## 10. Memory Window Invariant
 
+### Execution value batches (2026-09-11)
+
+Family dependency windows and execution-memory batches are separate. Both
+Spawn4 and Spawn2 now plan cell batches **before** loading partial/scratch
+records or allocating partial arrays. `value_batch_max_bytes` defaults to
+2 GiB (2048 MiB) and budgets numeric payloads using existing bucket layouts:
+
+```text
+P = sizeof(StorageT) * row_width * sum(bucket_rows * bucket_empty_count)
+S = sizeof(StorageT) * row_width * cell_success_rows
+first direction: P       second direction: P + S       diagonal: S
+```
+
+Batches contain one visit kind and one direction mask. Old partials are read
+only for second-visit batches; first-visit batches only produce new partials.
+Existing ownership moves and parallel kernels are retained. Each batch writes
+its partial/scratch or compacts and writes final values before its arrays and
+loaded source cells are released. No value array is allocated for a future
+execution batch. The existing 64-bitmap-word work items and 512-board thread
+batches continue inside each execution batch.
+
+The future lookup/window is prepared once per family pass, not once per value
+batch; retain/release and Spawn4 dependency-stride order are unchanged. Current
+cross loading and next-pass prefetch still operate at pass granularity. Temp
+hot caching remains separately capped and may adopt a written batch's arrays;
+it is not a duplicate copy. Indexes, thread workspace capacity, source/future
+payloads, compacted position metadata, allocator overhead and I/O buffers are
+outside the numeric-payload budget. Thus 2 GiB is **not** an RSS hard limit.
+
+Cells remain indivisible to keep temp records and exact output formats intact.
+An oversized cell is processed alone, never with additional cells. The first
+such cell is reported before allocation; the per-layer
+`BC_FAMILY_VALUE_BATCHES` diagnostic reports budget, separate hot-cache budget,
+batch count, maximum planned payload and oversized-cell visits. A hard bound
+below the largest individual cell would require bucket/range streaming and is
+not implemented in this change. No checkpoint or CSV schema changes are made.
+
+### Last-use future4 archive (2026-09-11)
+
+For compressed archives with an absolute threshold, the Family runner freezes
+the threshold at layer entry and uses each future4 cell's last **actual pass**
+in the Spawn4 schedule. After all value batches/queries in that pass join, the
+lookup view is closed, the cell is pruned and compressed, and its payload is
+released immediately. This is not the first cache eviction: a cell that will
+be reloaded by a later pass must remain eligible for queries until its true
+last use. It works for exact/modulo axes and dependency-stride wraparound.
+
+The existing threshold predicate and bitmap/prefix rebuilding are reused.
+Success values compact in place only in an exclusively owned loaded buffer;
+there is no second cell-sized value array. Position metadata needs one cell's
+scratch. The existing compressor queue is bounded to twice the worker count,
+with bounded bucket/value blocks. Borrowed value tasks drain before each cell
+returns, so compression cannot pin a cross or a batch of cells. There is no
+additional board expansion and no additional background whole-cell queue.
+
+`StreamingBuilder` accepts unique cells in arbitrary order when explicitly
+enabled. The existing `.bccmp` cell directory records the actual bucket ranges
+and value bases; value blocks still have monotonically increasing global value
+indices. The format/version and point-reader interface do not change. After
+Spawn4, empty unvisited cells get directory entries and unreferenced nonempty
+cells are read one at a time. The compressor then closes before Spawn2.
+
+The complete candidate is named `.bccmp.retire_tmp` (its incomplete stream adds
+`.tmp`). Neither name is a discoverable archive. Only after the new exact output
+and next checkpoint succeed is the threshold rechecked and the candidate
+renamed to `.bccmp`; original retired exact files are removed using the existing
+post-publication rule. Checkpoint writes now check flush/close errors. Exceptions
+clean the candidate but preserve the on-disk future frontier; startup discards
+stale candidates and recovers retired exact layers through the old path.
+
+A changed absolute/relative threshold discards the candidate and rereads exact
+through the original archive path. Relative thresholds, uncompressed archives,
+Resident/Single routes, resume cleanup, and the final two frontier layers keep
+the original path. No checkpoint schema changes or live binary replacement.
+
+`BC_ARCHIVE_LAST_USE` reports reused cells/value bytes, unreferenced cells read,
+and archive active seconds. Interleaved archive work is part of solve wall time;
+the archive metric adds only post-checkpoint publication to total wall time,
+while its compression fields describe active work rather than builder lifetime.
+
+### Family dependency window
+
 For double-block solve, board-scale resident data must stay bounded by the
 family window, not by layer board count.
 
@@ -478,3 +568,27 @@ The solve-layer CSV ends with a `total` row.
 
 The standalone `bc_family_solve_full` executable is a thin CLI wrapper around
 the same runtime and emits the same solve stats shape.
+
+## 12. Current-Layer Input And TODO (2026-09-12)
+
+Legacy generated `.bcpos.7z` inputs are decoded once through a fixed 32 MiB
+buffer into a private temporary raw file. The normal raw reader supplies the
+current pass and the existing next-pass prefetch. The input reservation uses
+configured hot/cold work paths; after materialization, actual free space includes
+the file before the solve workspace is reserved. Full stream EOF and successful
+7z exit are required before the file is opened for solving. The reader owns and
+removes its temporary file/directory on close, including exception unwinding.
+Unfinished scratch left by a process/OS crash is never discovered as generated
+data or reused as a checkpoint. Extraction itself does not modify the archive;
+the existing post-checkpoint generated-layer cleanup remains unchanged.
+
+For `.bcposc`, solve readers decode only the cells requested by a pass load,
+without coalescing through unrelated cells. Decoded staging is cleared after
+copying into the pass's owned cell data, including error paths. There is no new
+byte-budget scheduler, no whole-layer preload and no decoded cache across passes.
+The existing one-pass-ahead prefetch remains unchanged.
+
+- TODO: Gradually unify newly generated compressed intermediate position layers
+  on the existing independently compressed per-cell `.bcposc` format across
+  generation routes. Keep old `.bcpos` / `.bcpos.7z` inputs readable; do not
+  batch-recompress existing generated layers as part of this change.

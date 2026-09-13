@@ -613,15 +613,19 @@ layer1 max success     = 3996176335 / 4000000000 = 0.99904408375
 ## 13. FamilyChain Solve Boundary
 
 FamilyChain solve is the production fallback route when resident and
-single-chunk do not fit. Its scheduler is source-family fid order:
+single-chunk do not fit. Its scheduler uses a phase-specific source-family order:
 
 ```text
 for phase in Spawn4 then Spawn2:
-    for fid = 0..F-1:
+    for fid in phase_family_order:
         row cross cells    -> horizontal moves
         column cross cells -> vertical moves
         diagonal cell      -> both directions
 ```
+
+Modulo Spawn4 follows `(fid + delta_coord) % M`, covering all modular cycles;
+Spawn2 and exact-coordinate axes retain ascending fid order. First/second
+direction visits follow actual phase order, not numeric fid comparisons.
 
 Spawn4 writes compact partial4 and per-cell scratch4. Spawn2 writes compact
 partial2, reads partial2 and scratch4, then finalizes compacted cells. The
