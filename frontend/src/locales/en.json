@@ -967,8 +967,9 @@
       "openTrainer": "Open Trainer",
       "liveRanking": "Live Ranking",
       "viewResults": "View Results",
-      "exitBattle": "Exit Battle",
-      "exited": "Exited"
+      "exitBattle": "Forfeit",
+      "exited": "Forfeited",
+      "watching": "Watching"
     },
     "replay": {
       "save": "Save Replay",
@@ -980,7 +981,7 @@
       "timed_out": "Timed Out",
       "disconnected": "Offline",
       "disqualified": "Finished",
-      "forfeited": "Exited"
+      "forfeited": "Forfeited"
     },
     "result": {
       "kicker": "Round Result",
@@ -997,7 +998,7 @@
       "finished": "You've finished",
       "compactFinished": "Finished",
       "timedOut": "Timed out",
-      "exited": "Left the round",
+      "exited": "Round forfeited",
       "ended": "Round ended",
       "unranked": "Too few ranked steps",
       "solo": "Challenge complete",
@@ -1012,10 +1013,17 @@
       "roundEnded": "Round complete"
     },
     "forfeit": {
-      "kicker": "EXIT ROUND",
-      "title": "Exit this Battle?",
-      "body": "Exiting removes you from the ranking and cannot be undone. You can stay and watch.",
-      "confirm": "Exit Battle"
+      "kicker": "FORFEIT ROUND",
+      "title": "Forfeit this round?",
+      "body": "You will stop playing and receive no rank this round. Other players can continue.",
+      "cancel": "Keep playing",
+      "confirm": "Confirm forfeit"
+    },
+    "closeRoom": {
+      "kicker": "CLOSE ROOM",
+      "title": "Close this room?",
+      "body": "You are the host. Closing removes everyone from the room and ends any ongoing round.",
+      "confirm": "Close room"
     },
     "chat": {
       "kicker": "ROOM CHAT",

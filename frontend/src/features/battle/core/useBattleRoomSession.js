@@ -405,16 +405,20 @@ export function useBattleRoomSession(
     ) return false;
     forfeitPending.value = true;
     error.value = '';
+    const forfeitingRoom = room.value;
+    const roundId = forfeitingRoom.round.round_id;
+    const isSameRound = () => room.value?.room_id === forfeitingRoom.room_id
+      && room.value?.round?.round_id === roundId;
     try {
       const response = await battleClient.forfeit(
-        room.value.room_code,
-        room.value.round.round_id,
+        forfeitingRoom.room_code,
+        roundId,
         battleRequestId('forfeit'),
       );
-      await applyRoom(response.room);
+      if (isSameRound()) await applyRoom(response.room);
       return true;
     } catch (requestError) {
-      error.value = errorKey(requestError, 'battle_forfeit_failed');
+      if (isSameRound()) error.value = errorKey(requestError, 'battle_forfeit_failed');
       return false;
     } finally {
       forfeitPending.value = false;

@@ -2,6 +2,19 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { correctionOverlayForResult } from '../src/features/battle/core/battleCorrection.js';
+import { isBattlePlaybackStopped } from '../src/features/battle/core/battlePlaybackState.js';
+
+test('forfeits and timeouts clear corrections, but completed certainty tails remain playable', () => {
+  const mode_data = { correction: { selected_direction: 'left', standard_direction: 'up' } };
+  for (const status of ['disqualified', 'forfeited', 'timed_out']) {
+    assert.equal(isBattlePlaybackStopped({ status }), true);
+    assert.equal(correctionOverlayForResult({ status, mode_data }), null);
+  }
+  for (const status of ['playing', 'completed']) {
+    assert.equal(isBattlePlaybackStopped({ status }), false);
+    assert.ok(correctionOverlayForResult({ status, mode_data }));
+  }
+});
 
 test('normalizes a live opponent correction', () => {
   const visibleUntil = '2026-09-04T12:00:15+00:00';

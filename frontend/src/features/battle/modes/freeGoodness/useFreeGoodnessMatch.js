@@ -23,6 +23,7 @@ import {
 } from '../../../replay/engine/replayTransition.js';
 import { battleRequestId } from '../../services/battleClient.js';
 import { correctionOverlayForResult } from '../../core/battleCorrection.js';
+import { isBattlePlaybackStopped } from '../../core/battlePlaybackState.js';
 import { createObserverPlayback } from '../../core/observerPlayback.js';
 
 const KEY_DIRECTIONS = Object.freeze({
@@ -275,6 +276,14 @@ export function useFreeGoodnessMatch(
       localSequence = Math.max(localSequence, Number(own?.last_sequence || 0));
     }
     const stateStatus = String(own?.mode_data?.state_status || '');
+    if (isBattlePlaybackStopped(own)) {
+      clearCorrection();
+      clearAutoPlayback();
+      pendingRequest.value = '';
+      setSnapshot(own.mode_data?.board_hex, 'free-stopped');
+      updateOpponentBoards();
+      return;
+    }
     if (['input', 'finished'].includes(stateStatus) && !autoPlaybackActive && !correctionResponse) {
       pendingRequest.value = '';
     }
@@ -315,6 +324,8 @@ export function useFreeGoodnessMatch(
   const handleMessage = async (message) => {
     if (message?.action === 'BATTLE_ACTION_ACCEPTED') {
       const response = message.data || {};
+      if (response.round_id && response.round_id !== localRoundId) return true;
+      if (isBattlePlaybackStopped(ownResult.value)) return true;
       localSequence = Math.max(localSequence, Number(response.sequence || 0));
       if (response.board_hex) {
         if (response.corrected) showCorrection(response);

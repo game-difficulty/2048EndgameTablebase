@@ -18,6 +18,7 @@ import { isVariantPattern } from '../../../../utils/patternCategories.js';
 import { createBattleController } from './engine/battleController.js';
 import { battleClient, battleRequestId } from '../../services/battleClient.js';
 import { correctionOverlayForResult } from '../../core/battleCorrection.js';
+import { isBattlePlaybackStopped } from '../../core/battlePlaybackState.js';
 import { createObserverPlayback } from '../../core/observerPlayback.js';
 import { createRoutePresentation } from './engine/routePresentation.js';
 
@@ -180,7 +181,7 @@ export function useGoodnessMatch(
     const finishingCertaintyRoute = (
       ownResult.value.status === 'completed' && localState.mode === 'auto'
     );
-    if (!finishingCertaintyRoute && serverIndex !== Number(localState.index)) {
+    if (isBattlePlaybackStopped(ownResult.value) || (!finishingCertaintyRoute && serverIndex !== Number(localState.index))) {
       const state = controller.seek(serverIndex, {
         goodnessOfFit: Number(ownResult.value.goodness_of_fit ?? 1),
       });
@@ -216,7 +217,7 @@ export function useGoodnessMatch(
       goodnessOfFit: Number(result?.goodness_of_fit ?? 1),
     });
     setFrameSnapshot(state, 'route');
-    if (!spectatorMode.value && result) {
+    if (!spectatorMode.value && result && !isBattlePlaybackStopped(result)) {
       const correction = correctionOverlayForResult(result);
       if (correction) {
         setFrameSnapshot(controller.seek(correction.previousRouteIndex), 'restore-correction');
@@ -252,6 +253,11 @@ export function useGoodnessMatch(
       opponentOverlays.value = {};
       return;
     }
+    if (isBattlePlaybackStopped(ownResult.value)) {
+      clearPlaybackTimers();
+      pendingInputs.clear();
+      pendingCorrections.clear();
+    }
     await loadRoute();
     for (const [requestId, payload] of pendingCorrections) {
       if (payload.round_id !== routeRoundId || Number(ownResult.value?.last_sequence) !== payload.sequence
@@ -271,6 +277,7 @@ export function useGoodnessMatch(
     ) {
       const accepted = message?.data || {};
       if (accepted.round_id && accepted.round_id !== routeRoundId) return true;
+      if (isBattlePlaybackStopped(ownResult.value)) return true;
       if (accepted.kind === 'correction_complete') {
         pendingCorrections.delete(String(accepted.request_id || ''));
         return true;

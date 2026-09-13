@@ -1,6 +1,9 @@
+import { isBattlePlaybackStopped } from './battlePlaybackState.js';
+
 const DIRECTIONS = new Set(['left', 'right', 'up', 'down']);
 
 export function correctionOverlayForResult(result, now = Date.now()) {
+  if (isBattlePlaybackStopped(result)) return null;
   const correction = result?.mode_data?.correction;
   if (!correction || typeof correction !== 'object') return null;
   const selectedDirection = String(correction.selected_direction || '').toLowerCase();

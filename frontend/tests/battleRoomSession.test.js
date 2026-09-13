@@ -68,6 +68,61 @@ async function joined() {
   return session;
 }
 
+const playingSnapshot = () => ({
+  ...snapshot(), status: 'running', round: { round_id: 'round-1', status: 'running' },
+  results: [{ actor_key: 'u:2', user_id: 2, status: 'playing', goodness_of_fit: .9 }],
+});
+const forfeitedSnapshot = () => ({
+  ...playingSnapshot(), revision: 2,
+  results: [{ actor_key: 'u:2', user_id: 2, status: 'disqualified', goodness_of_fit: .9,
+    mode_data: { finish_reason: 'forfeit' } }],
+});
+
+test('forfeit waits for confirmation and preserves membership, role and host identity', async () => {
+  api.join = async () => ({ room: { ...playingSnapshot(), viewer: { ...snapshot().viewer, is_host: true } } });
+  const session = await joined();
+  const response = deferred();
+  let calls = 0;
+  api.forfeit = () => { calls++; return response.promise; };
+  const pending = session.forfeit();
+  assert.equal(session.ownResult.value.status, 'playing');
+  assert.equal(session.forfeitPending.value, true);
+  assert.equal(await session.forfeit(), false);
+  response.resolve({ room: { ...forfeitedSnapshot(), viewer: { ...snapshot().viewer, is_host: true } } });
+  assert.equal(await pending, true);
+  assert.equal(calls, 1);
+  assert.equal(session.room.value.room_id, 'room-1');
+  assert.equal(session.room.value.viewer.is_host, true);
+  assert.equal(session.room.value.viewer.role, 'player');
+  assert.equal(session.ownFinished.value, true);
+  assert.equal(session.forfeitPending.value, false);
+});
+
+test('failed forfeit leaves the game playable and can be retried', async () => {
+  api.join = async () => ({ room: playingSnapshot() });
+  const session = await joined();
+  api.forfeit = async () => { throw Object.assign(new Error('offline'), { code: 'NETWORK_ERROR' }); };
+  assert.equal(await session.forfeit(), false);
+  assert.equal(session.ownResult.value.status, 'playing');
+  assert.equal(session.ownFinished.value, false);
+  assert.equal(session.error.value, 'NETWORK_ERROR');
+  api.forfeit = async () => ({ room: forfeitedSnapshot() });
+  assert.equal(await session.forfeit(), true);
+  assert.equal(session.error.value, '');
+});
+
+test('a late forfeit response cannot reopen a room already left', async () => {
+  api.join = async () => ({ room: playingSnapshot() });
+  const session = await joined();
+  const response = deferred();
+  api.forfeit = () => response.promise;
+  const pending = session.forfeit();
+  await session.leave();
+  response.resolve({ room: forfeitedSnapshot() });
+  await pending;
+  assert.equal(session.room.value, null);
+});
+
 for (const code of ['ROOM_MEMBERSHIP_REQUIRED', 'ROOM_CLOSED']) {
   test(`voluntary leave ignores ${code} arriving before HTTP success`, async () => {
     const session = await joined();

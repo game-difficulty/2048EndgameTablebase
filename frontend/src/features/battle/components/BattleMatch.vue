@@ -10,6 +10,7 @@
         </div>
       </div>
       <div v-if="roundCompleted" class="battle-round-finished" role="status">{{ $t('battle.finish.roundEnded') }}</div>
+      <div v-else-if="watchingView" class="battle-round-finished" role="status">{{ $t('battle.match.watching') }}</div>
       <div v-else
         :class="[
           'battle-match-clock',
@@ -51,16 +52,20 @@
           @click="$emit('forfeit')"
         >{{ $t('battle.match.exitBattle') }}</button>
         <button
-          v-else-if="spectator"
+          v-if="canWatch && !watchingView"
+          type="button"
+          @click="watchOthers"
+        >{{ $t('battle.finish.watch') }}</button>
+        <button
+          v-if="spectator || ownFinished"
           type="button"
           class="danger"
           @click="$emit('leave-room')"
-        >{{ $t('battle.actions.leave') }}</button>
-        <button v-else-if="ownForfeited" type="button" disabled>{{ $t('battle.match.exited') }}</button>
+        >{{ $t(leaveLabelKey) }}</button>
       </div>
     </header>
 
-    <div v-if="spectator" class="battle-spectator-stage" :style="{ maxWidth: spectatorGrid.maxWidth }">
+    <div v-if="watchingView" class="battle-spectator-stage" :style="{ maxWidth: spectatorGrid.maxWidth }">
       <article v-for="(player, index) in playerRows" :key="battleActorRenderKey(player)" class="battle-spectator-board" :style="spectatorGrid.items[index]">
         <div class="battle-mini-head">
           <div class="battle-player-identity">
@@ -97,7 +102,7 @@
                   @continue="$emit('continue-correction')"
                 />
               </Transition>
-              <BattleFinishNotice v-if="visibleFinishNotice" :notice="visibleFinishNotice" @dismiss="dismissFinishNotice" @show-results="showFinishResults" @return-lobby="returnFromFinish" />
+              <BattleFinishNotice v-if="visibleFinishNotice" :notice="visibleFinishNotice" :leave-label="$t(leaveLabelKey)" @dismiss="dismissFinishNotice" @watch="watchOthers" @leave-room="$emit('leave-room')" @show-results="showFinishResults" @return-lobby="returnFromFinish" />
             </template>
           </BaseBoard>
         </div>
@@ -147,6 +152,7 @@ import {
   sameBattleActor,
 } from '../core/battleActor.js';
 import { battleCountdownState } from '../core/battleCountdown.js';
+import { isPermanentBattleRoom } from '../core/battleRoomSettings.js';
 
 const props = defineProps({
   room: { type: Object, required: true },
@@ -188,13 +194,20 @@ const currentIdentity = computed(() => (
 ));
 const isCurrentActor = (candidate) => sameBattleActor(candidate, currentIdentity.value);
 const ownResult = computed(() => props.room.results?.find(isCurrentActor) || null);
+const watchingRoundKey = ref('');
+const viewKey = computed(() => JSON.stringify([props.room.room_id, props.room.round?.round_id, battleActorRenderKey(currentIdentity.value)]));
+const canWatch = computed(() => !roundCompleted.value && props.ownFinished && !props.spectator);
+// Watching is a local view choice, not a room role or host change.
+const watchingView = computed(() => props.spectator || (canWatch.value && watchingRoundKey.value === viewKey.value));
+const leaveLabelKey = computed(() => props.room.viewer?.is_host && !isPermanentBattleRoom(props.room)
+  ? 'battle.actions.closeRoom' : 'battle.actions.leave');
 const finishNotices = computed(() => battleFinishNotices(props.room));
 const ownFinishNotice = computed(() => finishNotices.value[battleActorRenderKey(currentIdentity.value)] || null);
 const finishDismissals = createBattleFinishDismissals();
 const dismissedFinishKey = ref('');
 const visibleFinishNotice = computed(() => {
   const notice = ownFinishNotice.value;
-  return !props.spectator && !props.wrongOverlay && notice
+  return !watchingView.value && !props.wrongOverlay && notice
     && dismissedFinishKey.value !== notice.key && !finishDismissals.has(notice.key) ? notice : null;
 });
 const dismissFinishNotice = () => {
@@ -204,11 +217,12 @@ const dismissFinishNotice = () => {
 };
 const showFinishResults = () => { dismissFinishNotice(); emit('show-results'); };
 const returnFromFinish = () => { dismissFinishNotice(); emit('return-lobby'); };
-const canForfeit = computed(() => !props.spectator && ownResult.value?.status === 'playing');
-const ownForfeited = computed(() => (
-  ownResult.value?.status === 'disqualified'
-  && ownResult.value?.mode_data?.finish_reason === 'forfeit'
-));
+const watchOthers = () => {
+  if (!canWatch.value) return;
+  dismissFinishNotice();
+  watchingRoundKey.value = viewKey.value;
+};
+const canForfeit = computed(() => !props.spectator && ['playing', 'disconnected'].includes(ownResult.value?.status));
 const playerRows = computed(() => (props.room.results || []).map((result) => {
   const member = props.room.members?.find((item) => sameBattleActor(item, result)) || {};
   return { ...member, ...result };

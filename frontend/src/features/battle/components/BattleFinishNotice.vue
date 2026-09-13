@@ -10,14 +10,19 @@
         <h3>{{ title }}</h3>
         <div class="battle-finish-score"><span>{{ $t('battle.match.goodness') }}</span><strong>{{ goodness }}</strong></div>
         <p v-if="!notice.final">{{ $t(notice.remaining ? 'battle.finish.waiting' : 'battle.finish.confirming', { count: notice.remaining }) }}</p>
-        <p v-else-if="notice.rank == null">{{ $t('battle.finish.rank') }} —</p>
+        <p v-if="notice.rank == null && (notice.final || forfeited)">{{ $t('battle.finish.rank') }} —</p>
       </div>
       <div class="battle-finish-actions">
-        <template v-if="notice.final">
+        <template v-if="forfeited">
+          <button v-if="notice.final" type="button" class="primary" @click="$emit('return-lobby')">{{ $t('battle.result.backToRoom') }}</button>
+          <button v-else type="button" class="primary" @click="$emit('watch')">{{ $t('battle.finish.watch') }}</button>
+          <button type="button" @click="$emit('leave-room')">{{ leaveLabel || $t('battle.actions.leave') }}</button>
+        </template>
+        <template v-else-if="notice.final">
           <button type="button" @click="$emit('show-results')">{{ $t('battle.finish.fullRanking') }}</button>
           <button type="button" class="primary" @click="$emit('return-lobby')">{{ $t('battle.result.backToRoom') }}</button>
         </template>
-        <button v-else type="button" @click="$emit('dismiss')">{{ $t('battle.finish.watch') }}</button>
+        <button v-else type="button" @click="$emit('watch')">{{ $t('battle.finish.watch') }}</button>
       </div>
     </section>
   </div>
@@ -26,9 +31,10 @@
 <script setup>
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-const props = defineProps({ notice: { type: Object, required: true }, compact: Boolean });
-defineEmits(['dismiss', 'show-results', 'return-lobby']);
+const props = defineProps({ notice: { type: Object, required: true }, compact: Boolean, leaveLabel: { type: String, default: '' } });
+defineEmits(['dismiss', 'show-results', 'return-lobby', 'watch', 'leave-room']);
 const { t } = useI18n();
+const forfeited = computed(() => props.notice.title === 'exited');
 const title = computed(() => t(`battle.finish.${props.compact && props.notice.title === 'finished' ? 'compactFinished' : props.notice.title}`, { rank: props.notice.rank }));
 const goodness = computed(() => `${(props.notice.goodness * 100).toFixed(2)}%`);
 </script>

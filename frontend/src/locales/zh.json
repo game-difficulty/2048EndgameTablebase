@@ -967,8 +967,9 @@
       "openTrainer": "跳转训练",
       "liveRanking": "实时排名",
       "viewResults": "查看结算",
-      "exitBattle": "退出对战",
-      "exited": "已退出"
+      "exitBattle": "放弃本局",
+      "exited": "已放弃",
+      "watching": "正在观战"
     },
     "replay": {
       "save": "保存回放",
@@ -980,7 +981,7 @@
       "timed_out": "已超时",
       "disconnected": "已离线",
       "disqualified": "已结束",
-      "forfeited": "已退出"
+      "forfeited": "已放弃"
     },
     "result": {
       "kicker": "本局结果",
@@ -997,7 +998,7 @@
       "finished": "你已完成",
       "compactFinished": "已完成",
       "timedOut": "本局已超时",
-      "exited": "已退出本局",
+      "exited": "已放弃本局",
       "ended": "本局已结束",
       "unranked": "未达到排名步数",
       "solo": "挑战完成",
@@ -1012,10 +1013,17 @@
       "roundEnded": "本轮已结束"
     },
     "forfeit": {
-      "kicker": "退出本轮",
-      "title": "确认退出对战？",
-      "body": "退出后本局不计名次，也无法继续。你仍可留在这里观战。",
-      "confirm": "确认退出"
+      "kicker": "放弃本局",
+      "title": "确认放弃本局？",
+      "body": "放弃后，本局不计名次，无法继续操作。其他玩家不受影响。",
+      "cancel": "继续对战",
+      "confirm": "确认放弃"
+    },
+    "closeRoom": {
+      "kicker": "关闭房间",
+      "title": "确认关闭房间？",
+      "body": "你是房主。关闭后，所有人都会离开房间，正在进行的对战也会结束。",
+      "confirm": "确认关闭"
     },
     "chat": {
       "kicker": "ROOM CHAT",

@@ -71,8 +71,8 @@
         v-on="modeMatchListeners"
         @open-trainer="openTrainer"
         @show-results="openResults"
-        @forfeit="forfeitDialogOpen = true"
-        @leave-room="leave"
+        @forfeit="requestForfeit"
+        @leave-room="requestLeave"
         @return-lobby="returnToLobby"
         @save-replay="saveOwnReplay"
         @open-replay="openOwnReplay"
@@ -91,7 +91,7 @@
         @ready="toggleReady"
         @start="start"
         @kick="kickMember"
-        @leave="leave"
+        @leave="requestLeave"
         @role="setRole"
         @save-settings="updateRoomSettings"
         @renew-host="renewHosting"
@@ -126,8 +126,17 @@
       <BattleExitDialog
         v-if="forfeitDialogOpen"
         :pending="forfeitPending"
+        :error="error ? localizedError : ''"
         @cancel="forfeitDialogOpen = false"
         @confirm="confirmForfeit"
+      />
+      <BattleExitDialog
+        v-if="closeRoomDialogId"
+        intent="closeRoom"
+        :pending="closeRoomPending"
+        :error="error ? localizedError : ''"
+        @cancel="closeRoomDialogId = ''"
+        @confirm="confirmCloseRoom"
       />
     </div>
   </div>
@@ -158,6 +167,7 @@ import {
   normalizeBattleActor,
 } from '../core/battleActor.js';
 import { shouldLeaveBattleRoomOnTabClose } from '../core/battleRoomViewState.js';
+import { isPermanentBattleRoom } from '../core/battleRoomSettings.js';
 import { battleClient } from '../services/battleClient.js';
 
 const props = defineProps({
@@ -172,6 +182,8 @@ const emit = defineEmits(['navigate-tab']);
 const now = ref(Date.now());
 const rulesOpen = ref(false);
 const forfeitDialogOpen = ref(false);
+const closeRoomDialogId = ref('');
+const closeRoomPending = ref(false);
 const replayBusy = ref(false);
 const ensuredGuestActor = ref(null);
 const { t, te } = useI18n();
@@ -249,7 +261,7 @@ const {
 } = useBattleSession(
   toRef(props, 'active'),
   toRef(props, 'authUser'),
-  toRef(props, 'hotkeysEnabled'),
+  computed(() => props.hotkeysEnabled && !forfeitDialogOpen.value && !closeRoomDialogId.value),
   battleActor,
   ensureBattleGuestSession,
 );
@@ -287,6 +299,27 @@ const openTrainer = () => {
 };
 const confirmForfeit = async () => {
   if (await forfeit()) forfeitDialogOpen.value = false;
+};
+const requestForfeit = () => {
+  error.value = '';
+  forfeitDialogOpen.value = true;
+};
+const requestLeave = () => {
+  if (room.value?.viewer?.is_host && !isPermanentBattleRoom(room.value)) {
+    error.value = '';
+    closeRoomDialogId.value = room.value.room_id;
+    return;
+  }
+  void leave();
+};
+const confirmCloseRoom = async () => {
+  if (closeRoomPending.value || !closeRoomDialogId.value || closeRoomDialogId.value !== room.value?.room_id) return;
+  closeRoomPending.value = true;
+  try {
+    if (await leave()) closeRoomDialogId.value = '';
+  } finally {
+    closeRoomPending.value = false;
+  }
 };
 const fetchOwnReplay = async () => {
   const roomCode = String(room.value?.room_code || '');
@@ -345,6 +378,7 @@ watch([() => props.active, loading, room], ([active, busy, currentRoom]) => {
   join(inviteCode, 'auto');
 });
 watch(() => room.value?.round?.round_id, () => { forfeitDialogOpen.value = false; });
+watch(() => room.value?.room_id, () => { closeRoomDialogId.value = ''; });
 watch(matchActive, (active) => {
   if (!active) clearTrainerPracticeContext('battle');
 });
