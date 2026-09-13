@@ -75,6 +75,7 @@ native_core/egtb_data_1256.h
 native_core/egtb_data_256.h
 native_core/egtb_data_512.h
 native_core/tests/
+native_core/tests_src/
 native_core/test_adaptive_index.exe
 .vscode/
 .idea/
