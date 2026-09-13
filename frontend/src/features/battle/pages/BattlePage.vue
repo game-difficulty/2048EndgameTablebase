@@ -86,6 +86,7 @@
         :current-user-id="Number(room.viewer?.user_id || authUser?.id || 0)"
         :now="now"
         :settings-pending="settingsPending"
+        :role-pending="rolePending"
         :host-renew-pending="hostRenewPending"
         @ready="toggleReady"
         @start="start"
@@ -217,6 +218,7 @@ const {
   resultMode,
   forfeitPending,
   settingsPending,
+  rolePending,
   hostRenewPending,
   chatMessages,
   chatNotice,

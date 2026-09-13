@@ -32,6 +32,7 @@ export function useBattleRoomSession(
   const resultVisibleRound = ref('');
   const forfeitPending = ref(false);
   const settingsPending = ref(false);
+  const rolePending = ref(false);
   const hostRenewPending = ref(false);
   const chat = createBattleChatState();
   const roomViewState = createBattleRoomViewState();
@@ -40,6 +41,8 @@ export function useBattleRoomSession(
   let roomListTimer = null;
   let roomsRefreshPromise = null;
   let roomStateEpoch = 0;
+  let leavePromise = null;
+  let leavingRoomId = '';
 
   const errorKey = (requestError, fallback) => (
     requestError?.code || requestError?.message || fallback
@@ -155,6 +158,7 @@ export function useBattleRoomSession(
     clientId: `battle_${globalThis.crypto?.randomUUID?.() || Date.now()}`,
     onOpen: () => {
       wsStatus.value = 'connected';
+      if (!room.value?.room_code || leavingRoomId) return;
       client.send(
         'BATTLE_SUBSCRIBE',
         room.value?.room_code ? { room_code: room.value.room_code } : {},
@@ -165,15 +169,18 @@ export function useBattleRoomSession(
       if (message?.action === 'BATTLE_ROOM_STATE') {
         const data = message?.data || {};
         if (data.room) {
+          if (!room.value || data.room.room_id !== room.value.room_id || leavingRoomId) return;
           await applyRoom(data.room);
           return;
         }
         if (!data.closed) return;
         const closedRoomId = String(data.room_id || '');
-        if (closedRoomId && room.value && closedRoomId !== String(room.value.room_id || '')) {
+        if (!room.value || (closedRoomId && closedRoomId !== String(room.value.room_id || ''))) {
           return;
         }
-        if (data.code) error.value = String(data.code);
+        const expectedLeave = leavingRoomId === String(room.value.room_id)
+          && ['ROOM_MEMBERSHIP_REQUIRED', 'ROOM_CLOSED'].includes(data.code);
+        if (data.code && !expectedLeave) error.value = String(data.code);
         await applyRoom(null);
         return;
       }
@@ -250,13 +257,14 @@ export function useBattleRoomSession(
   };
 
   const refreshCurrent = async () => {
+    if (leavingRoomId) return;
     if (!currentActor.value) {
       await applyRoom(null);
       return;
     }
     const requestEpoch = roomStateEpoch;
     const payload = await battleClient.current();
-    if (!payload.room && requestEpoch !== roomStateEpoch) return;
+    if (leavingRoomId || requestEpoch !== roomStateEpoch) return;
     await applyRoom(payload.room || null);
     if (payload.room) ensureSocket();
   };
@@ -327,23 +335,39 @@ export function useBattleRoomSession(
     }
   };
 
-  const leave = async ({ refreshRoomList = true } = {}) => {
-    if (!room.value) return true;
-    try {
-      const code = room.value.room_code;
-      await battleClient.leave(code, { request_id: battleRequestId('leave') });
-      await applyRoom(null);
-      client.disconnect();
-      if (refreshRoomList) await refreshRooms();
-      return true;
-    } catch (requestError) {
-      error.value = errorKey(requestError, 'battle_leave_failed');
-      return false;
-    }
+  const leave = ({ refreshRoomList = true } = {}) => {
+    if (leavePromise) return leavePromise;
+    if (!room.value) return Promise.resolve(true);
+    const departingRoom = room.value;
+    leavingRoomId = String(departingRoom.room_id);
+    error.value = '';
+    leavePromise = Promise.resolve().then(async () => {
+      try {
+        await battleClient.leave(departingRoom.room_code, { request_id: battleRequestId('leave') });
+        if (!room.value || room.value.room_id === departingRoom.room_id) {
+          await applyRoom(null);
+          client.disconnect();
+          wsStatus.value = 'disconnected';
+          error.value = '';
+        }
+        // Leaving succeeded even if the subsequent lobby refresh is unavailable.
+        if (refreshRoomList) await refreshRooms({ silent: true });
+        return true;
+      } catch (requestError) {
+        if (!room.value || room.value.room_id === departingRoom.room_id) {
+          error.value = errorKey(requestError, 'battle_leave_failed');
+        }
+        return false;
+      }
+    }).finally(() => {
+      leavingRoomId = '';
+      leavePromise = null;
+    });
+    return leavePromise;
   };
 
   const toggleReady = async () => {
-    if (!room.value || !viewer.value) return;
+    if (!room.value || !viewer.value || rolePending.value) return;
     try {
       const member = room.value.members.find(
         isOwnActor,
@@ -411,19 +435,26 @@ export function useBattleRoomSession(
   };
 
   const setRole = async (role) => {
+    if (!room.value || rolePending.value || !['player', 'spectator'].includes(role)) return;
+    if (!['preparing', 'waiting'].includes(room.value.status) || viewer.value?.role === role) return;
     if (
       role === 'spectator'
       && Boolean(viewer.value?.is_host)
     ) return;
+    const roomCode = room.value.room_code;
+    rolePending.value = true;
+    error.value = '';
     try {
       const response = await battleClient.role(
-        room.value.room_code,
+        roomCode,
         role,
         battleRequestId('role'),
       );
-      await applyRoom(response.room);
+      if (room.value?.room_code === roomCode) await applyRoom(response.room);
     } catch (requestError) {
-      error.value = errorKey(requestError, 'battle_role_failed');
+      if (room.value?.room_code === roomCode) error.value = errorKey(requestError, 'battle_role_failed');
+    } finally {
+      rolePending.value = false;
     }
   };
 
@@ -493,7 +524,7 @@ export function useBattleRoomSession(
   onMounted(() => {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     heartbeatTimer = window.setInterval(() => {
-      if (room.value && wsStatus.value === 'connected') {
+      if (room.value && !leavingRoomId && wsStatus.value === 'connected') {
         client.send('BATTLE_HEARTBEAT', { room_code: room.value.room_code });
       }
     }, 15_000);
@@ -531,6 +562,7 @@ export function useBattleRoomSession(
     resultMode,
     forfeitPending,
     settingsPending,
+    rolePending,
     hostRenewPending,
     activeModeKey: computed(() => modeKeyFor()),
     registerModeAdapter,

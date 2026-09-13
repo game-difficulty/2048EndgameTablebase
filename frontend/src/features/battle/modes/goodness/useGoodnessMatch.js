@@ -17,8 +17,9 @@ import {
 import { isVariantPattern } from '../../../../utils/patternCategories.js';
 import { createBattleController } from './engine/battleController.js';
 import { battleClient, battleRequestId } from '../../services/battleClient.js';
-import { battleActorRenderKey } from '../../core/battleActor.js';
 import { correctionOverlayForResult } from '../../core/battleCorrection.js';
+import { createObserverPlayback } from '../../core/observerPlayback.js';
+import { createRoutePresentation } from './engine/routePresentation.js';
 
 const KEY_DIRECTIONS = Object.freeze({
   ArrowLeft: 'left',
@@ -69,6 +70,7 @@ export function useGoodnessMatch(
   const opponentBoards = ref({});
   const opponentOverlays = ref({});
   const pendingInputs = new Map();
+  const pendingCorrections = new Map();
   let controller = null;
   let routeRoundId = '';
   let frameRevision = 0;
@@ -76,6 +78,15 @@ export function useGoodnessMatch(
   let correctionResult = null;
   let autoTimer = null;
   let localSequence = 0;
+  let routePresentation = null;
+  const observer = createObserverPlayback({
+    resolve: (result, time) => routePresentation?.(result, time),
+    canSee: (result) => spectatorMode.value || ownFinished.value || roomSession.isOwnActor(result),
+    publish: (frames, overlays) => {
+      opponentBoards.value = frames;
+      opponentOverlays.value = overlays;
+    },
+  });
 
   const catalogGroups = computed(() => groupTablebasesByPattern(catalog.value));
   const multiplierForPattern = (fullPattern) => {
@@ -131,13 +142,14 @@ export function useGoodnessMatch(
     const result = correctionResult;
     correctionResult = null;
     wrongOverlay.value = null;
-    if (result.state.mode === 'input') {
-      roomSession.sendModeAction('correction_complete', {
-        round_id: room.value.round.round_id,
-        sequence: localSequence,
-        route_index: result.state.index,
-      });
-    }
+    const payload = {
+      round_id: result.roundId,
+      sequence: result.sequence,
+      route_index: result.state.index,
+    };
+    const requestId = battleRequestId('correction');
+    pendingCorrections.set(requestId, payload);
+    roomSession.sendModeAction('correction_complete', payload, { requestId });
     animateTransition(result, 'wrong-correction');
     if (result.state.mode === 'auto') runAutoPlayback();
     return true;
@@ -152,38 +164,7 @@ export function useGoodnessMatch(
   };
 
   const updateOpponentBoards = () => {
-    if (!controller || !room.value?.results) {
-      opponentBoards.value = {};
-      opponentOverlays.value = {};
-      return;
-    }
-    const frames = {};
-    const overlays = {};
-    for (const result of room.value.results) {
-      if (
-        !spectatorMode.value
-        && !ownFinished.value
-        && !roomSession.isOwnActor(result)
-      ) continue;
-      const copy = createBattleController({
-        route: controller.route,
-        certaintyStep: controller.certaintyStep,
-        useVariant: controller.useVariant,
-      });
-      const correction = correctionOverlayForResult(result);
-      const visibleIndex = correction?.previousRouteIndex ?? Number(result.route_index || 0);
-      const state = copy.seek(visibleIndex, {
-        goodnessOfFit: Number(result.goodness_of_fit ?? 1),
-      });
-      const actorKey = battleActorRenderKey(result);
-      frames[actorKey] = createSnapshotBoardFrame(
-        `opponent-${actorKey}-${result.route_index}`,
-        state.board,
-      );
-      if (correction) overlays[actorKey] = correction;
-    }
-    opponentBoards.value = frames;
-    opponentOverlays.value = overlays;
+    observer.update(controller ? room.value : null);
   };
 
   const syncControllerToServer = () => {
@@ -192,6 +173,7 @@ export function useGoodnessMatch(
       return;
     }
     if (pendingInputs.size > 0) return;
+    if (correctionResult) { updateOpponentBoards(); return; }
     localSequence = Number(ownResult.value.last_sequence || 0);
     const serverIndex = Number(ownResult.value.route_index || 0);
     const localState = controller.getState();
@@ -214,33 +196,71 @@ export function useGoodnessMatch(
       return;
     }
     const payload = await battleClient.route(room.value.room_code, roundId);
+    if (room.value?.round?.round_id !== roundId) return;
+    if (routeRoundId === roundId) { syncControllerToServer(); return; }
+    clearPlaybackTimers();
+    observer.clear();
+    pendingInputs.clear();
+    pendingCorrections.clear();
     controller = createBattleController({
       route: payload.buffer,
       certaintyStep: payload.certaintyStep >= 0 ? payload.certaintyStep : null,
       useVariant: useVariant.value,
     });
+    routePresentation = createRoutePresentation(controller);
     routeRoundId = roundId;
     const result = ownResult.value;
+    localSequence = Number(result?.last_sequence || 0);
     const initialIndex = spectatorMode.value ? 0 : Number(result?.route_index || 0);
     const state = controller.seek(initialIndex, {
       goodnessOfFit: Number(result?.goodness_of_fit ?? 1),
     });
     setFrameSnapshot(state, 'route');
+    if (!spectatorMode.value && result) {
+      const correction = correctionOverlayForResult(result);
+      if (correction) {
+        setFrameSnapshot(controller.seek(correction.previousRouteIndex), 'restore-correction');
+        const restored = controller.input(correction.selectedDirection);
+        if (restored.accepted) {
+          controller.goodnessOfFit = Number(result.goodness_of_fit ?? 1);
+          restored.state = controller.getState();
+          correctionResult = { ...restored, roundId, sequence: Number(result.last_sequence) };
+          wrongOverlay.value = correction;
+          overlayTimer = window.setTimeout(continueCorrection,
+            Math.max(0, correction.visibleUntil - Date.now()));
+        }
+      } else if (result.status === 'completed' && result.mode_data?.auto_playback) {
+        const view = routePresentation(result, Date.now());
+        setFrameSnapshot(controller.seek(view.index, { goodnessOfFit: result.goodness_of_fit }), 'restore-auto');
+        runAutoPlayback();
+      }
+    }
     updateOpponentBoards();
   };
 
   const onRoomApplied = async (nextRoom) => {
     if (!nextRoom) {
       clearPlaybackTimers();
+      observer.clear();
       controller = null;
+      routePresentation = null;
       routeRoundId = '';
       pendingInputs.clear();
+      pendingCorrections.clear();
       controllerState.value = null;
       opponentBoards.value = {};
       opponentOverlays.value = {};
       return;
     }
     await loadRoute();
+    for (const [requestId, payload] of pendingCorrections) {
+      if (payload.round_id !== routeRoundId || Number(ownResult.value?.last_sequence) !== payload.sequence
+          || !ownResult.value?.mode_data?.correction) {
+        pendingCorrections.delete(requestId);
+      } else {
+        roomSession.sendModeAction('correction_complete', payload, { requestId });
+      }
+    }
     syncControllerToServer();
   };
 
@@ -250,6 +270,11 @@ export function useGoodnessMatch(
       || message?.action === 'BATTLE_CHOICE_ACCEPTED'
     ) {
       const accepted = message?.data || {};
+      if (accepted.round_id && accepted.round_id !== routeRoundId) return true;
+      if (accepted.kind === 'correction_complete') {
+        pendingCorrections.delete(String(accepted.request_id || ''));
+        return true;
+      }
       pendingInputs.delete(String(accepted.request_id || ''));
       const confirmedResult = room.value?.results?.find(roomSession.isOwnActor);
       if (confirmedResult) {
@@ -272,6 +297,10 @@ export function useGoodnessMatch(
       message?.action === 'BATTLE_ACTION_CONFLICT'
       || message?.action === 'BATTLE_PROGRESS_CONFLICT'
     ) {
+      if (pendingCorrections.delete(String(message?.data?.request_id || ''))) {
+        await roomSession.refreshCurrent();
+        return true;
+      }
       pendingInputs.clear();
       error.value = message?.data?.code || 'PROGRESS_CONFLICT';
       await roomSession.refreshCurrent();
@@ -309,7 +338,7 @@ export function useGoodnessMatch(
     }, { requestId });
     if (result.wrong) {
       if (overlayTimer != null) window.clearTimeout(overlayTimer);
-      correctionResult = result;
+      correctionResult = { ...result, roundId: routeRoundId, sequence: localSequence };
       wrongOverlay.value = {
         selectedDirection: result.selectedDirection,
         standardDirection: result.standardDirection,
@@ -342,7 +371,10 @@ export function useGoodnessMatch(
     if (!direction) return;
     if (submitMove(direction)) event.preventDefault();
   };
-  const dispose = () => clearPlaybackTimers();
+  const dispose = () => {
+    clearPlaybackTimers();
+    observer.clear();
+  };
 
   roomSession.registerModeAdapter({
     key: 'goodness',

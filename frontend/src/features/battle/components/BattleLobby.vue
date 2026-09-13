@@ -20,11 +20,6 @@
       <section class="battle-seats-panel">
         <div class="battle-panel-title">
           <div><h3>{{ $t('battle.lobby.players') }}</h3><p>{{ players.length }}/{{ room.max_players }}</p></div>
-          <div v-if="selfMember && ['preparing', 'waiting'].includes(room.status)" class="battle-role-segment">
-            <button type="button" :class="selfMember.role === 'player' ? 'active' : ''" :disabled="players.length >= room.max_players && selfMember.role !== 'player'" @click="$emit('role', 'player')">{{ $t('battle.roles.player') }}</button>
-            <button v-if="isHost" type="button" @click="viewSpectators">{{ $t('battle.roles.spectator') }}</button>
-            <button v-else type="button" :class="selfMember.role === 'spectator' ? 'active' : ''" :disabled="!room.allow_spectators" @click="$emit('role', 'spectator')">{{ $t('battle.roles.spectator') }}</button>
-          </div>
         </div>
 
         <div class="battle-seat-grid">
@@ -36,7 +31,7 @@
                 <i :class="seat.member.online ? 'online' : 'offline'" aria-hidden="true"></i>
               </div>
               <div class="battle-seat-identity">
-                <strong>{{ seat.member.display_name }} <small v-if="isBattleGuest(seat.member)" class="battle-guest-marker">{{ $t('battle.guest.marker') }}</small></strong>
+                <strong>{{ seat.member.display_name }} <small v-if="sameBattleActor(seat.member, selfMember)" class="battle-self-marker">{{ $t('battle.lobby.you') }}</small><small v-if="isBattleGuest(seat.member)" class="battle-guest-marker">{{ $t('battle.guest.marker') }}</small></strong>
                 <span>{{ memberIsHost(seat.member) ? $t('battle.roles.host') : (seat.member.ready ? $t('battle.status.ready') : $t('battle.status.not_ready')) }}</span>
               </div>
               <button v-if="isHost && !sameBattleActor(seat.member, selfMember) && ['preparing', 'waiting'].includes(room.status)" type="button" class="battle-kick-btn" :title="$t('battle.actions.kick')" @click="$emit('kick', seat.member)">×</button>
@@ -48,9 +43,13 @@
           </article>
         </div>
 
-        <div class="battle-lobby-actions">
-          <button v-if="selfMember?.role === 'player'" type="button" :class="['battle-ready-btn', selfMember.ready ? 'ready' : '']" :disabled="room.status !== 'waiting'" @click="$emit('ready', !selfMember.ready)">
+        <p v-if="selfMember" class="battle-self-role" role="status">{{ $t('battle.lobby.yourRole') }} <strong>{{ $t(`battle.roles.${isHost ? 'host' : selfMember.role}`) }}</strong></p>
+        <div class="battle-lobby-actions" :aria-busy="rolePending">
+          <button v-if="selfMember?.role === 'player'" type="button" :class="['battle-ready-btn', selfMember.ready ? 'ready' : '']" :disabled="room.status !== 'waiting' || rolePending" @click="$emit('ready', !selfMember.ready)">
             {{ selfMember.ready ? $t('battle.actions.cancelReady') : $t('battle.actions.ready') }}
+          </button>
+          <button v-if="selfMember && !isHost && canChangeRole" type="button" class="battle-role-btn" :disabled="rolePending || (selfMember.role === 'spectator' ? seatsFull : !room.allow_spectators)" @click="$emit('role', selfMember.role === 'spectator' ? 'player' : 'spectator')">
+            {{ $t(rolePending ? 'battle.actions.processing' : selfMember.role === 'spectator' ? (seatsFull ? 'battle.lobby.seatsFull' : 'battle.lobby.joinPlayer') : 'battle.lobby.becomeSpectator') }}
           </button>
           <button v-if="isHost" type="button" class="battle-start-btn" :disabled="!canStart" @click="$emit('start')">{{ $t('battle.actions.start') }}</button>
           <button type="button" class="battle-leave-btn" @click="$emit('leave')">{{ isHost && !permanentRoom ? $t('battle.actions.closeRoom') : $t('battle.actions.leave') }}</button>
@@ -123,11 +122,11 @@
             </dl>
           </slot>
         </section>
-        <section ref="spectatorList" class="battle-spectator-list" tabindex="-1">
+        <section class="battle-spectator-list">
           <div class="battle-panel-title"><div><h3>{{ $t('battle.lobby.spectators') }}</h3><p>{{ spectators.length }}</p></div></div>
           <div v-if="!spectators.length" class="battle-sidebar-empty">{{ $t('battle.lobby.noSpectators') }}</div>
           <div v-else class="battle-spectator-chips">
-            <span v-for="member in spectators" :key="battleActorRenderKey(member)">{{ member.display_name }}<small v-if="isBattleGuest(member)" class="battle-guest-marker">{{ $t('battle.guest.marker') }}</small></span>
+            <span v-for="member in spectators" :key="battleActorRenderKey(member)">{{ member.display_name }}<small v-if="sameBattleActor(member, selfMember)" class="battle-self-marker">{{ $t('battle.lobby.you') }}</small><small v-if="isBattleGuest(member)" class="battle-guest-marker">{{ $t('battle.guest.marker') }}</small></span>
           </div>
         </section>
       </aside>
@@ -159,13 +158,13 @@ const props = defineProps({
   currentActorKey: { type: String, default: '' },
   now: { type: Number, default: () => Date.now() },
   settingsPending: { type: Boolean, default: false },
+  rolePending: { type: Boolean, default: false },
   hostRenewPending: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['ready', 'start', 'kick', 'leave', 'role', 'save-settings', 'renew-host']);
 const { t } = useI18n();
 const copied = ref(false);
-const spectatorList = ref(null);
 const editingSettings = ref(false);
 const settingsValidationError = ref('');
 const settingsRevision = ref(0);
@@ -178,6 +177,8 @@ const selfMember = computed(() => props.members.find((member) => (
   || (!props.currentActorKey && Number(member.user_id) === Number(props.currentUserId))
 )) || null);
 const isHost = computed(() => Boolean(props.room.viewer?.is_host));
+const canChangeRole = computed(() => ['preparing', 'waiting'].includes(props.room.status));
+const seatsFull = computed(() => players.value.length >= Number(props.room.max_players));
 const permanentRoom = computed(() => isPermanentBattleRoom(props.room));
 const freeGoodnessRoom = computed(() => String(props.room.mode_key || '') === 'free_goodness');
 const canEditSettings = computed(() => (
@@ -270,10 +271,6 @@ const saveSettings = () => {
     settingsRevision.value,
   ));
 };
-const viewSpectators = () => {
-  spectatorList.value?.focus?.({ preventScroll: true });
-  spectatorList.value?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
-};
 const copyInvite = async () => {
   const url = `${window.location.origin}${window.location.pathname}?tab=battle&room=${props.room.room_code}`;
   const invite = t('battle.lobby.inviteText', {
@@ -314,7 +311,6 @@ watch(canEditSettings, (editable) => {
 .battle-seats-panel { padding: 18px; }
 .battle-room-sidebar { display: flex; flex-direction: column; gap: 16px; }
 .battle-settings-summary, .battle-spectator-list { padding: 17px; }
-.battle-spectator-list:focus { outline: 2px solid color-mix(in srgb, var(--accent) 58%, transparent); outline-offset: 2px; }
 .battle-panel-title { display: flex; align-items: center; justify-content: space-between; min-height: 40px; margin-bottom: 13px; }
 .battle-panel-title > div:first-child { display: flex; align-items: baseline; gap: 9px; }
 .battle-panel-title h3 { margin: 0; color: var(--text-main); font-size: var(--font-ui-base); font-weight: 900; }
@@ -340,10 +336,9 @@ watch(canEditSettings, (editable) => {
 .battle-settings-actions button { min-height: 36px; border: 1px solid var(--border-main); border-radius: 7px; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; }
 .battle-settings-actions button.primary { border-color: var(--btn-bg); background: var(--btn-bg); color: white; }
 .battle-settings-actions button:disabled { opacity: .42; }
-.battle-role-segment { display: flex; border: 1px solid var(--border-main); border-radius: 7px; overflow: hidden; }
-.battle-role-segment button { min-width: 80px; padding: 7px 10px; border: 0; background: var(--bg-main); color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 900; }
-.battle-role-segment button.active { background: var(--btn-bg); color: white; }
-.battle-role-segment button:disabled { opacity: .4; }
+.battle-self-role { margin: 16px 0 8px; color: var(--text-secondary); font-size: var(--font-ui-xs); }
+.battle-self-role strong { margin-left: 5px; color: var(--text-main); }
+.battle-self-marker { margin-left: 4px; color: var(--accent); font-size: var(--font-ui-xs); }
 .battle-seat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .battle-seat { min-height: 68px; display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--border-main); border-radius: 7px; position: relative; }
 .battle-seat.occupied { background: color-mix(in srgb, var(--bg-main) 72%, transparent); }
@@ -360,8 +355,11 @@ watch(canEditSettings, (editable) => {
 .battle-guest-marker { display: inline-block; margin-left: 4px; color: var(--accent); font-size: 8px; font-weight: 900; vertical-align: 1px; }
 .battle-seat-identity span { color: var(--text-secondary); font-size: var(--font-ui-xs); }
 .battle-kick-btn { width: 28px; height: 28px; padding: 0; color: #dc4c4c; }
-.battle-lobby-actions { display: grid; grid-template-columns: 1fr 1fr auto; gap: 9px; margin-top: 15px; }
-.battle-ready-btn, .battle-start-btn, .battle-leave-btn { min-height: 42px; border: 1px solid var(--border-main); border-radius: 7px; font-size: var(--font-ui-sm); font-weight: 900; }
+.battle-lobby-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 8px; }
+.battle-lobby-actions > button { flex: 1 1 130px; min-width: 0; padding: 8px 14px; overflow-wrap: anywhere; }
+.battle-ready-btn, .battle-start-btn, .battle-leave-btn, .battle-role-btn { min-height: 42px; border: 1px solid var(--border-main); border-radius: 7px; font-size: var(--font-ui-sm); font-weight: 900; }
+.battle-role-btn { background: var(--bg-main); color: var(--text-main); }
+.battle-lobby-actions > button:disabled { opacity: .4; cursor: not-allowed; }
 .battle-ready-btn { background: var(--bg-main); color: var(--text-main); }
 .battle-ready-btn.ready { border-color: #3ba86b; color: #258453; }
 .battle-start-rule { margin: 8px 0 0; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 700; }
@@ -373,6 +371,6 @@ watch(canEditSettings, (editable) => {
 .battle-settings-summary dt { color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 800; }
 .battle-settings-summary dd { margin: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 900; text-align: right; }
 .battle-sidebar-empty { padding: 22px 0; color: var(--text-secondary); text-align: center; font-size: var(--font-ui-xs); }
-.battle-spectator-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.battle-spectator-chips { display: flex; flex-wrap: wrap; gap: 7px; max-height: 180px; overflow-y: auto; align-content: flex-start; }
 .battle-spectator-chips span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; border: 1px solid var(--border-main); border-radius: 999px; padding: 5px 9px; color: var(--text-main); font-size: var(--font-ui-xs); }
 </style>

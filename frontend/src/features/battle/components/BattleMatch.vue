@@ -59,8 +59,8 @@
       </div>
     </header>
 
-    <div v-if="spectator" class="battle-spectator-stage">
-      <article v-for="player in playerRows" :key="battleActorRenderKey(player)" class="battle-spectator-board">
+    <div v-if="spectator" class="battle-spectator-stage" :style="{ maxWidth: spectatorGrid.maxWidth }">
+      <article v-for="(player, index) in playerRows" :key="battleActorRenderKey(player)" class="battle-spectator-board" :style="spectatorGrid.items[index]">
         <div class="battle-mini-head">
           <div class="battle-player-identity">
             <img v-if="player.avatar_url && !isBattleGuest(player)" :src="player.avatar_url" alt="" />
@@ -73,15 +73,7 @@
           </div>
         </div>
         <div v-if="opponentBoards[battleActorRenderKey(player)]" class="battle-visible-board">
-          <BaseBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant">
-            <template #overlay>
-              <BattleCorrectionOverlay
-                v-if="opponentOverlayFor(player)"
-                :overlay="opponentOverlayFor(player)"
-                compact
-              />
-            </template>
-          </BaseBoard>
+          <BattleObservedBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" :overlay="opponentOverlayFor(player)" />
         </div>
       </article>
     </div>
@@ -128,15 +120,7 @@
             <div class="battle-progress-track"><i :style="{ width: progressPercent(player.route_index) }"></i></div>
             <div class="battle-opponent-footer"><span>{{ player.route_index }}/{{ totalSteps }}</span><span>{{ $t(playerStatusKey(player)) }}</span></div>
             <div v-if="canSeeBoard(player) && opponentBoards[battleActorRenderKey(player)]" class="battle-revealed-board">
-              <BaseBoard compact :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant">
-                <template #overlay>
-                  <BattleCorrectionOverlay
-                    v-if="opponentOverlayFor(player)"
-                    :overlay="opponentOverlayFor(player)"
-                    compact
-                  />
-                </template>
-              </BaseBoard>
+              <BattleObservedBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" :overlay="opponentOverlayFor(player)" />
             </div>
           </article>
         </div>
@@ -151,6 +135,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
 import BattleCorrectionOverlay from './BattleCorrectionOverlay.vue';
+import BattleObservedBoard from './BattleObservedBoard.vue';
+import { spectatorLayout } from '../core/spectatorLayout.js';
 import {
   battleActorRenderKey,
   isBattleGuest,
@@ -207,6 +193,7 @@ const playerRows = computed(() => (props.room.results || []).map((result) => {
   const member = props.room.members?.find((item) => sameBattleActor(item, result)) || {};
   return { ...member, ...result };
 }));
+const spectatorGrid = computed(() => spectatorLayout(playerRows.value.length));
 const countdownState = computed(() => battleCountdownState({
   deadline: ownResult.value?.timeout_at,
   now: now.value,
@@ -232,10 +219,7 @@ const canSeeBoard = (player) => (
   && (props.spectator || props.ownFinished)
 );
 const opponentOverlayFor = (player) => {
-  const overlay = props.opponentOverlays[battleActorRenderKey(player)] || null;
-  return overlay && (overlay.visibleUntil == null || overlay.visibleUntil > now.value)
-    ? overlay
-    : null;
+  return props.opponentOverlays[battleActorRenderKey(player)] || null;
 };
 
 onMounted(() => { timer = window.setInterval(() => { now.value = Date.now(); }, 250); });
@@ -300,7 +284,7 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-opponent-footer { color: var(--text-secondary); font-size: 9px; font-weight: 800; }
 .battle-revealed-board { position: relative; width: 160px; margin: 10px auto 0; }
 .battle-visible-board { position: relative; }
-.battle-spectator-stage { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
+.battle-spectator-stage { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 12px; width: 100%; margin: 0 auto; align-items: start; }
 .battle-spectator-board { min-width: 0; padding: 10px; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); }
 .battle-mini-head { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-bottom: 8px; }
 .battle-mini-stats { text-align: right; }

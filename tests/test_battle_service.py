@@ -9,6 +9,7 @@ import types
 import unittest
 import uuid
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 if "cpuinfo" not in sys.modules:
@@ -180,6 +181,30 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(player_member["role"], "spectator")
         service.leave_room(room["room_code"], user_id=self.host_id)
 
+    async def test_role_retry_preserves_ready_and_lists_remain_visible(self) -> None:
+        room = await self._create_ready_room(max_players=2)
+        code = room["room_code"]
+        service.join_room(code, user_id=self.player_id, role="player")
+        before = service.set_ready(code, user_id=self.player_id, ready=True)
+        retried = service.set_role(code, user_id=self.player_id, role="player")
+        player = next(m for m in retried["members"] if int(m["user_id"]) == self.player_id)
+        self.assertTrue(player["ready"])
+        self.assertEqual(retried["revision"], before["revision"])
+
+        switched = service.set_role(code, user_id=self.player_id, role="spectator")
+        player = next(m for m in switched["members"] if int(m["user_id"]) == self.player_id)
+        self.assertFalse(player["ready"])
+        self.assertEqual(player["role"], "spectator")
+        self.assertTrue(any(int(m["user_id"]) == self.host_id and m["role"] == "player"
+                            for m in switched["members"]))
+        retried = service.set_role(code, user_id=self.player_id, role="spectator")
+        self.assertEqual(retried["revision"], switched["revision"])
+        restored = service.set_role(code, user_id=self.player_id, role="player")
+        player = next(m for m in restored["members"] if int(m["user_id"]) == self.player_id)
+        self.assertEqual(player["role"], "player")
+        self.assertFalse(player["ready"])
+        service.leave_room(code, user_id=self.host_id)
+
     async def test_registered_host_can_start_and_finish_with_guest_player(self) -> None:
         room = await self._create_ready_room(
             generated_route=self._generated_route(step_count=2),
@@ -316,6 +341,51 @@ class BattleServiceTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(repeated["timeout_at"], resumed["timeout_at"])
+
+    async def _check_finished_correction(self, auto_tail: bool) -> None:
+        route = self._generated_route(step_count=2 if auto_tail else 1)
+        if auto_tail:
+            route = replace(route, certainty_step=1)
+        room = await self._create_ready_room(generated_route=route)
+        service.join_room(room["room_code"], user_id=self.spectator_id, role="spectator")
+        service.set_ready(room["room_code"], user_id=self.host_id, ready=True)
+        started = await service.start_room(room["room_code"], user_id=self.host_id, session_id=None)
+        round_id = started["round"]["round_id"]
+        choice = service.record_choice(room["room_code"], user_id=self.host_id,
+            round_id=round_id, sequence=1, route_index=0, direction="right")
+        self.assertTrue(choice["complete"])
+        before = repository.get_room(room["room_code"])
+        before_result = before["results"][0]
+        self.assertEqual(before["round"]["status"], "completed")
+        payload = {"round_id": round_id, "sequence": 1, "route_index": 1}
+        service.handle_mode_action(room["room_code"], user_id=self.host_id,
+            action="correction_complete", payload=payload)
+        after = service.room_snapshot(room["room_code"], user_id=self.spectator_id)
+        result = after["results"][0]
+        self.assertNotIn("correction", result["mode_data"])
+        self.assertIsNone(result["timeout_at"])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["goodness_of_fit"], before_result["goodness_of_fit"])
+        self.assertEqual(result["route_index"], before_result["route_index"])
+        if auto_tail:
+            self.assertEqual(result["mode_data"]["auto_playback"]["from_index"], 1)
+            self.assertLessEqual(datetime.fromisoformat(result["mode_data"]["auto_playback"]["started_at"]),
+                                 datetime.now(timezone.utc))
+        with patch.object(goodness_runtime, 'utcnow', return_value=datetime.now(timezone.utc) + timedelta(seconds=5)):
+            service.handle_mode_action(room["room_code"], user_id=self.host_id,
+                action="correction_complete", payload=payload)
+        repeated = service.room_snapshot(room["room_code"], user_id=self.spectator_id)
+        self.assertEqual(repeated["revision"], after["revision"])
+        self.assertEqual(repeated["results"][0]["mode_data"], result["mode_data"])
+        with self.assertRaises(service.BattleServiceError):
+            service.handle_mode_action(room["room_code"], user_id=self.host_id,
+                action="correction_complete", payload={**payload, "sequence": 0})
+
+    async def test_final_move_correction_can_close_after_round_completion(self) -> None:
+        await self._check_finished_correction(False)
+
+    async def test_certainty_correction_uses_choice_sequence_not_fast_forwarded_index(self) -> None:
+        await self._check_finished_correction(True)
 
     async def test_forfeit_ends_only_the_players_round_and_keeps_membership(self) -> None:
         room = await self._create_ready_room(

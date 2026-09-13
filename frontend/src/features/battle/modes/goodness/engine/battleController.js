@@ -35,7 +35,7 @@ function isParsedRoute(route) {
     && route.rates instanceof Uint32Array;
 }
 
-function applyStandardStep(boardEncoded, step, useVariant) {
+export function applyStandardStep(boardEncoded, step, useVariant) {
   const board = decodeBoard(boardEncoded);
   const transition = buildOptimisticMoveOnlyTransition(
     board,

@@ -289,14 +289,15 @@ def set_role(
                 seat = int(member["seat_index"])
             if seat is None:
                 raise BattleServiceError("PLAYER_SLOTS_FULL", "Player slots are full.", 409)
-        db.execute(
-            "UPDATE battle_members SET role = ?, seat_index = ?, ready = 0, updated_at = ? WHERE member_id = ?",
-            (role, seat, now, member["member_id"]),
-        )
-        db.execute(
-            "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
-            (now, room["room_id"]),
-        )
+        if member["role"] != role:
+            db.execute(
+                "UPDATE battle_members SET role = ?, seat_index = ?, ready = 0, updated_at = ? WHERE member_id = ?",
+                (role, seat, now, member["member_id"]),
+            )
+            db.execute(
+                "UPDATE battle_rooms SET revision = revision + 1, updated_at = ? WHERE room_id = ?",
+                (now, room["room_id"]),
+            )
     from ..permanent.service import claim_host_if_vacant, note_activity
 
     claim_host_if_vacant(room_code, identity)

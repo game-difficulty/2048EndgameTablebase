@@ -890,6 +890,7 @@ def _record_choice_goodness(
             mode_data = {}
         if wrong:
             mode_data["correction"] = {
+                "sequence": expected_sequence,
                 "selected_direction": direction,
                 "standard_direction": standard_direction,
                 "goodness_drop": score.goodness_drop,
@@ -900,6 +901,12 @@ def _record_choice_goodness(
             }
         else:
             mode_data.pop("correction", None)
+        if complete and next_index < len(route.steps):
+            mode_data["auto_playback"] = {
+                "from_index": next_index,
+                "started_at": mode_data["correction"]["visible_until"] if wrong else now,
+                "step_ms": 150,
+            }
         db.execute(
             """
             UPDATE battle_player_results
@@ -958,42 +965,48 @@ def _complete_correction_goodness(
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         room = repository._find_room(db, room_code)
-        if room["status"] != "running":
-            raise BattleServiceError("ROUND_NOT_RUNNING", "Round is not running.", 409)
         result = db.execute(
-            "SELECT * FROM battle_player_results WHERE round_id = ? AND actor_key = ?",
-            (str(round_id), actor_key),
+            """SELECT result.* FROM battle_player_results AS result
+               JOIN battle_rounds AS round ON round.round_id = result.round_id
+               WHERE result.round_id = ? AND result.actor_key = ? AND round.room_id = ?""",
+            (str(round_id), actor_key, room["room_id"]),
         ).fetchone()
         route_row = db.execute(
             "SELECT * FROM battle_routes WHERE round_id = ?", (str(round_id),)
         ).fetchone()
         if result is None or route_row is None:
             raise BattleServiceError("ROUND_NOT_FOUND", "Round state is unavailable.", 404)
-        if result["status"] != "playing":
-            raise BattleServiceError("PLAYER_FINISHED", "This player has already finished.", 409)
         current_index = int(result["route_index"])
         current_sequence = int(result["last_sequence"])
-        if int(sequence) != current_sequence or int(route_index) != current_index:
+        # Completion can fast-forward the stored index to the end of the route.
+        # The sequence identifies the actual scored choice, including its correction.
+        if int(sequence) != current_sequence:
             raise BattleServiceError("PROGRESS_CONFLICT", "Battle progress is out of date.", 409)
         choices = bytes(result["choice_blob"] or b"")
         route = decode_route(bytes(route_row["route_blob"]))
-        if current_index <= 0 or current_index > len(route.steps) or not choices:
+        if current_index <= 0 or current_index > len(route.steps) or not choices or len(choices) > len(route.steps):
             raise BattleServiceError("NO_CORRECTION_PENDING", "No correction is pending.", 409)
-        standard_direction = decode_changes(route.steps[current_index - 1].changes).direction
+        standard_direction = decode_changes(route.steps[len(choices) - 1].changes).direction
         if int(choices[-1]) == int(DIRECTION_CODES[standard_direction]):
             raise BattleServiceError("NO_CORRECTION_PENDING", "No correction is pending.", 409)
 
-        current_deadline = parse_iso(result["timeout_at"])
-        if current_deadline is None:
-            raise BattleServiceError("NO_CORRECTION_PENDING", "No correction is pending.", 409)
-        resumed_deadline = utcnow() + timedelta(seconds=int(room["step_timeout_seconds"]))
-        timeout_at = iso(min(current_deadline, resumed_deadline))
+        timeout_at = result["timeout_at"]
         now = iso()
         try:
             mode_data = json.loads(result["mode_data_json"] or "{}")
         except (TypeError, ValueError):
             mode_data = {}
-        mode_data.pop("correction", None)
+        correction = mode_data.pop("correction", None)
+        if correction is None:
+            return {"kind": "correction_complete", "round_id": str(round_id),
+                    "sequence": current_sequence, "timeout_at": timeout_at}
+        if result["status"] == "playing" and timeout_at:
+            resumed_deadline = utcnow() + timedelta(seconds=int(room["step_timeout_seconds"]))
+            timeout_at = iso(min(parse_iso(timeout_at), resumed_deadline))
+        playback = mode_data.get("auto_playback")
+        if playback:
+            # A late or duplicate continuation must not restart an automatic tail.
+            playback["started_at"] = iso(min(parse_iso(playback["started_at"]), utcnow()))
         db.execute(
             "UPDATE battle_player_results SET timeout_at = ?, mode_data_json = ?, updated_at = ? WHERE result_id = ?",
             (
@@ -1011,10 +1024,7 @@ def _complete_correction_goodness(
         "kind": "correction_complete",
         "round_id": str(round_id),
         "sequence": current_sequence,
-        "route_index": current_index,
-        "goodness_of_fit": float(result["goodness_of_fit"]),
         "timeout_at": timeout_at,
-        "complete": False,
     }
 
 

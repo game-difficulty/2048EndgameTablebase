@@ -22,8 +22,8 @@ import {
   encodeBoard,
 } from '../../../replay/engine/replayTransition.js';
 import { battleRequestId } from '../../services/battleClient.js';
-import { battleActorRenderKey } from '../../core/battleActor.js';
 import { correctionOverlayForResult } from '../../core/battleCorrection.js';
+import { createObserverPlayback } from '../../core/observerPlayback.js';
 
 const KEY_DIRECTIONS = Object.freeze({
   ArrowLeft: 'left',
@@ -236,30 +236,25 @@ export function useFreeGoodnessMatch(
     correctionTimer = window.setTimeout(continueCorrection, CORRECTION_TIMEOUT_MS);
   };
 
-  const updateOpponentBoards = () => {
-    const frames = {};
-    const overlays = {};
-    for (const result of room.value?.results || []) {
-      const correction = correctionOverlayForResult(result);
+  const observer = createObserverPlayback({
+    canSee: (result) => spectatorMode.value || ownFinished.value || roomSession.isOwnActor(result),
+    resolve: (result, time) => {
+      const correction = correctionOverlayForResult(result, time);
       const hex = correction?.previousBoardHex || result.mode_data?.board_hex;
-      if (!hex) continue;
-      if (
-        !spectatorMode.value
-        && !ownFinished.value
-        && !roomSession.isOwnActor(result)
-      ) continue;
-      const actorKey = battleActorRenderKey(result);
-      frames[actorKey] = createSnapshotBoardFrame(
-        `free-opponent-${actorKey}-${result.route_index}`,
-        boardFromHex(hex),
-      );
-      if (correction) overlays[actorKey] = correction;
-    }
-    opponentBoards.value = frames;
-    opponentOverlays.value = overlays;
+      return hex ? { board: boardFromHex(hex), index: Number(result.route_index || 0),
+        overlay: correction, nextAt: correction?.visibleUntil } : null;
+    },
+    publish: (frames, overlays) => {
+      opponentBoards.value = frames;
+      opponentOverlays.value = overlays;
+    },
+  });
+  const updateOpponentBoards = () => {
+    observer.update(room.value);
   };
   const onRoomApplied = async (nextRoom) => {
     if (!nextRoom) {
+      observer.clear();
       clearCorrection();
       clearAutoPlayback();
       seenAutoPlaybackKeys.clear();
@@ -381,6 +376,7 @@ export function useFreeGoodnessMatch(
     if (direction && submitMove(direction)) event.preventDefault();
   };
   const dispose = () => {
+    observer.clear();
     clearCorrection();
     clearAutoPlayback();
   };
