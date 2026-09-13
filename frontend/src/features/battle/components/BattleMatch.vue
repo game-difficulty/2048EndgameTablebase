@@ -9,7 +9,8 @@
           <span :class="['battle-live-badge', wsStatus === 'connected' ? 'online' : 'offline']">{{ $t(`status.${wsStatus}`) }}</span>
         </div>
       </div>
-      <div
+      <div v-if="roundCompleted" class="battle-round-finished" role="status">{{ $t('battle.finish.roundEnded') }}</div>
+      <div v-else
         :class="[
           'battle-match-clock',
           { urgent: countdownState.urgent, critical: countdownState.critical },
@@ -23,7 +24,7 @@
       <div class="battle-match-actions">
         <button type="button" @click="$emit('open-trainer')">{{ $t('battle.match.openTrainer') }}</button>
         <button type="button" @click="$emit('show-results')">
-          {{ $t(roundCompleted ? 'battle.match.viewResults' : 'battle.match.liveRanking') }}
+          {{ $t(roundCompleted ? 'battle.finish.fullRanking' : 'battle.match.liveRanking') }}
         </button>
         <button
           v-if="replayAvailable"
@@ -73,7 +74,7 @@
           </div>
         </div>
         <div v-if="opponentBoards[battleActorRenderKey(player)]" class="battle-visible-board">
-          <BattleObservedBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" :overlay="opponentOverlayFor(player)" />
+          <BattleObservedBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" :overlay="opponentOverlayFor(player)" :finish-notice="finishNotices[battleActorRenderKey(player)]" />
         </div>
       </article>
     </div>
@@ -96,10 +97,11 @@
                   @continue="$emit('continue-correction')"
                 />
               </Transition>
+              <BattleFinishNotice v-if="visibleFinishNotice" :notice="visibleFinishNotice" @dismiss="dismissFinishNotice" @show-results="showFinishResults" @return-lobby="returnFromFinish" />
             </template>
           </BaseBoard>
         </div>
-        <p v-if="!roundCompleted" class="battle-input-hint">{{ $t('battle.match.inputHint') }}</p>
+        <p v-if="!roundCompleted && !ownFinishNotice" class="battle-input-hint">{{ $t('battle.match.inputHint') }}</p>
       </section>
 
       <aside class="battle-opponents-panel">
@@ -120,7 +122,7 @@
             <div class="battle-progress-track"><i :style="{ width: progressPercent(player.route_index) }"></i></div>
             <div class="battle-opponent-footer"><span>{{ player.route_index }}/{{ totalSteps }}</span><span>{{ $t(playerStatusKey(player)) }}</span></div>
             <div v-if="canSeeBoard(player) && opponentBoards[battleActorRenderKey(player)]" class="battle-revealed-board">
-              <BattleObservedBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" :overlay="opponentOverlayFor(player)" />
+              <BattleObservedBoard :frame="opponentBoards[battleActorRenderKey(player)]" :dis32k="dis32k" :is-variant="isVariant" :overlay="opponentOverlayFor(player)" :finish-notice="finishNotices[battleActorRenderKey(player)]" />
             </div>
           </article>
         </div>
@@ -136,6 +138,8 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import BaseBoard from '../../../components/BaseBoard.vue';
 import BattleCorrectionOverlay from './BattleCorrectionOverlay.vue';
 import BattleObservedBoard from './BattleObservedBoard.vue';
+import BattleFinishNotice from './BattleFinishNotice.vue';
+import { battleFinishNotices, createBattleFinishDismissals } from '../core/battleFinishNotice.js';
 import { spectatorLayout } from '../core/spectatorLayout.js';
 import {
   battleActorRenderKey,
@@ -163,7 +167,7 @@ const props = defineProps({
   replayBusy: { type: Boolean, default: false },
 });
 
-defineEmits([
+const emit = defineEmits([
   'move',
   'continue-correction',
   'open-trainer',
@@ -184,6 +188,22 @@ const currentIdentity = computed(() => (
 ));
 const isCurrentActor = (candidate) => sameBattleActor(candidate, currentIdentity.value);
 const ownResult = computed(() => props.room.results?.find(isCurrentActor) || null);
+const finishNotices = computed(() => battleFinishNotices(props.room));
+const ownFinishNotice = computed(() => finishNotices.value[battleActorRenderKey(currentIdentity.value)] || null);
+const finishDismissals = createBattleFinishDismissals();
+const dismissedFinishKey = ref('');
+const visibleFinishNotice = computed(() => {
+  const notice = ownFinishNotice.value;
+  return !props.spectator && !props.wrongOverlay && notice
+    && dismissedFinishKey.value !== notice.key && !finishDismissals.has(notice.key) ? notice : null;
+});
+const dismissFinishNotice = () => {
+  const key = ownFinishNotice.value?.key;
+  finishDismissals.dismiss(key);
+  dismissedFinishKey.value = key || '';
+};
+const showFinishResults = () => { dismissFinishNotice(); emit('show-results'); };
+const returnFromFinish = () => { dismissFinishNotice(); emit('return-lobby'); };
 const canForfeit = computed(() => !props.spectator && ownResult.value?.status === 'playing');
 const ownForfeited = computed(() => (
   ownResult.value?.status === 'disqualified'
@@ -230,6 +250,7 @@ onUnmounted(() => { if (timer != null) window.clearInterval(timer); });
 .battle-match { display: flex; flex-direction: column; gap: 14px; }
 .battle-match-header { min-height: 60px; display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 14px; padding: 9px 12px 9px 16px; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-card); box-shadow: 0 12px 30px rgba(0,0,0,.06); }
 .battle-match-identity { min-width: 0; }
+.battle-round-finished { color: var(--accent); font-size: var(--font-ui-sm); font-weight: 900; }
 .battle-match-title-line { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
 .battle-match-title-line h2 { min-width: 0; margin: 0; overflow: hidden; color: var(--text-main); font-size: 21px; font-weight: 900; text-overflow: ellipsis; white-space: nowrap; }
 .battle-room-code, .battle-live-badge { border: 1px solid var(--border-main); border-radius: 999px; padding: 4px 8px; color: var(--text-secondary); font-size: var(--font-ui-xs); font-weight: 900; }

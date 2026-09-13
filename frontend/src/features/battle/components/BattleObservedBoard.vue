@@ -3,6 +3,7 @@
     <BaseBoard :frame="frame" :dis32k="dis32k" :is-variant="isVariant">
       <template #overlay>
         <BattleCorrectionOverlay v-if="overlay" :overlay="overlay" :compact="width < 280" />
+        <BattleFinishNotice v-else-if="finishNotice" :notice="finishNotice" compact />
       </template>
     </BaseBoard>
   </div>
@@ -13,12 +14,14 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import BaseBoard from '../../../components/BaseBoard.vue';
 import { createBoardViewport, createBoardViewportLayout } from '../../../utils/boardViewport.js';
 import BattleCorrectionOverlay from './BattleCorrectionOverlay.vue';
+import BattleFinishNotice from './BattleFinishNotice.vue';
 
 const props = defineProps({
   frame: { type: Object, required: true },
   dis32k: Boolean,
   isVariant: Boolean,
   overlay: { type: Object, default: null },
+  finishNotice: { type: Object, default: null },
 });
 const container = ref(null);
 const width = ref(160);

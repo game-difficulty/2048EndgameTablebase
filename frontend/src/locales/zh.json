@@ -993,6 +993,24 @@
       "stayOnMatch": "继续查看终盘",
       "closeLive": "关闭排名"
     },
+    "finish": {
+      "finished": "你已完成",
+      "compactFinished": "已完成",
+      "timedOut": "本局已超时",
+      "exited": "已退出本局",
+      "ended": "本局已结束",
+      "unranked": "未达到排名步数",
+      "solo": "挑战完成",
+      "winner": "本局获胜",
+      "jointFirst": "并列第一",
+      "placed": "本局第 {rank} 名",
+      "rank": "名次",
+      "waiting": "还有 {count} 位玩家进行中",
+      "confirming": "正在确认本轮结果",
+      "watch": "继续观战",
+      "fullRanking": "查看完整排名",
+      "roundEnded": "本轮已结束"
+    },
     "forfeit": {
       "kicker": "退出本轮",
       "title": "确认退出对战？",

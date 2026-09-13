@@ -993,6 +993,24 @@
       "stayOnMatch": "Stay on Final Board",
       "closeLive": "Close Ranking"
     },
+    "finish": {
+      "finished": "You've finished",
+      "compactFinished": "Finished",
+      "timedOut": "Timed out",
+      "exited": "Left the round",
+      "ended": "Round ended",
+      "unranked": "Too few ranked steps",
+      "solo": "Challenge complete",
+      "winner": "Round winner",
+      "jointFirst": "Joint first",
+      "placed": "Rank #{rank}",
+      "rank": "Rank",
+      "waiting": "{count} players still playing",
+      "confirming": "Confirming round results",
+      "watch": "Keep watching",
+      "fullRanking": "Full ranking",
+      "roundEnded": "Round complete"
+    },
     "forfeit": {
       "kicker": "EXIT ROUND",
       "title": "Exit this Battle?",
