@@ -119,6 +119,9 @@ export class TableDispatcher {
   async choose(lookup, isCurrent = () => true) {
     for (const candidate of this.candidates()) {
       const masked = maskLargeTiles(this.board, candidate.table.n);
+      // Early free10 layers may not cover all move successors (AIPlayer.py).
+      if (candidate.table.pattern === 'free10'
+        && masked.reduce((sum, value) => sum + (value === 32768 ? 0 : value), 0) < 32) continue;
       if (matchTableStructure(this.board, masked, candidate.table.n, candidate.table.structureRules) === 'mismatch') continue;
       const payload = await lookup(candidate, packedLookupBoard(masked));
       if (!isCurrent()) return null;
