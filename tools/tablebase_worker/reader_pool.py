@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import math
 import logging
 import math
@@ -55,7 +56,7 @@ def _count_available_layers(table: TableConfig) -> int:
     )
     layers: set[int] = set()
     try:
-        for item in table.path.iterdir():
+        for item in itertools.chain.from_iterable(path.iterdir() for path in table.paths):
             match = layer_re.fullmatch(item.name)
             if match and (item.is_file() or item.is_dir()):
                 layers.add(int(match.group(1)))

@@ -4,6 +4,14 @@
       "worker_id": "home-main",
       "tables": [
         {
+          "pattern": "free12",
+          "target": "2048",
+          "full_pattern": "free12_2048",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-d"
+        },
+        {
           "pattern": "4442f",
           "target": "1024",
           "full_pattern": "4442f_1024",
@@ -25,7 +33,7 @@
           "full_pattern": "free11_512",
           "dtype": "uint32",
           "spawn_rate": 0.1,
-          "resource_group": "hdd-free11"
+          "resource_group": "disk-c"
         },
         {
           "pattern": "free11",

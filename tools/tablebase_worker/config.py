@@ -56,10 +56,15 @@ class TableConfig:
     spawn_rate: float
     resource_group: str
     concurrency: int
+    additional_paths: tuple[Path, ...] = ()
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return (self.path, *self.additional_paths)
 
     @property
     def path_list(self) -> list[tuple[str, str]]:
-        return [(str(self.path), self.dtype)]
+        return [(str(path), self.dtype) for path in self.paths]
 
 
 @dataclass(frozen=True)
@@ -100,6 +105,7 @@ _TABLE_KEYS = {
     "pattern",
     "target",
     "path",
+    "paths",
     "dtype",
     "spawn_rate",
     "resource_group",
@@ -259,11 +265,21 @@ def load_worker_config(
         spawn_rate = float(table.get("spawn_rate", 0.1))
         if not 0 <= spawn_rate <= 1:
             raise WorkerConfigError(f"spawn_rate must be between 0 and 1 for {table_id}")
+        if "paths" in table:
+            raw_paths = table["paths"]
+            if "path" in table or not isinstance(raw_paths, list) or not 1 <= len(raw_paths) <= 16:
+                raise WorkerConfigError(f"{table_id}: use path or a non-empty paths array (up to 16)")
+        else:
+            raw_paths = [table.get("path")]
+        paths = tuple(_resolve_local_path(value, f"tables[{index}].paths") for value in raw_paths)
+        if len(set(paths)) != len(paths):
+            raise WorkerConfigError(f"Duplicate paths for {table_id}")
         tables[table_id] = TableConfig(
             table_id=table_id,
             pattern=pattern,
             target=target,
-            path=_resolve_local_path(table.get("path"), f"tables[{index}].path"),
+            path=paths[0],
+            additional_paths=paths[1:],
             dtype=dtype,
             spawn_rate=spawn_rate,
             resource_group=resource_group,
@@ -309,12 +325,19 @@ def load_worker_config(
 
 
 def table_path_status(table: TableConfig) -> tuple[bool, str | None]:
-    path = table.path
+    for path in table.paths:
+        ready, error = _table_directory_status(path, table.table_id)
+        if not ready:
+            return ready, error
+    return True, None
+
+
+def _table_directory_status(path: Path, table_id: str) -> tuple[bool, str | None]:
     if not path.exists():
         return False, "TABLE_PATH_MISSING"
     if not path.is_dir():
         return False, "TABLE_PATH_NOT_DIRECTORY"
-    prefix = f"{table.table_id}_"
+    prefix = f"{table_id}_"
     sampled_shards = 0
     try:
         for item in path.iterdir():

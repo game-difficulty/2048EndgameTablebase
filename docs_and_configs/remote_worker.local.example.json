@@ -27,6 +27,16 @@
   },
   "tables": [
     {
+      "table_id": "free12_2048",
+      "pattern": "free12",
+      "target": "2048",
+      "paths": ["D:/free12", "F:/free12"],
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-d",
+      "concurrency": 1
+    },
+    {
       "table_id": "4442f_1024",
       "pattern": "4442f",
       "target": "1024",
@@ -50,10 +60,10 @@
       "table_id": "free11_512",
       "pattern": "free11",
       "target": "512",
-      "path": "D:/free11-512",
+      "path": "C:/2048_tables/free11-512",
       "dtype": "uint32",
       "spawn_rate": 0.1,
-      "resource_group": "disk-d",
+      "resource_group": "disk-c",
       "concurrency": 1
     },
     {

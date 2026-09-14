@@ -43,6 +43,8 @@ class PublicQuotaRulesTests(unittest.TestCase):
         self.assertEqual(groups["3x3free8"], 1)
         self.assertEqual(groups["free10"], 8)
         self.assertEqual(groups["free11"], 50)
+        self.assertEqual(groups["free12"], 500)
+        self.assertEqual(table_multiplier_units("free12_2048"), 500_000)
         self.assertEqual(groups["2432t"], 5)
         self.assertEqual(groups["4421"], 5)
         self.assertEqual(groups["444"], 5)
@@ -60,7 +62,8 @@ class PublicQuotaRulesTests(unittest.TestCase):
             row["full_pattern"]: row
             for row in rules["tablebase_thresholds"]
         }
-        self.assertEqual(len(thresholds), 26)
+        self.assertEqual(len(thresholds), 27)
+        self.assertEqual(thresholds["free12_2048"]["threshold"], 0.4)
         self.assertEqual(thresholds["4442f_1024"]["threshold"], 0.995)
         self.assertEqual(thresholds["free11_2048"]["mode"], "relative")
         self.assertEqual(

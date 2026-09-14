@@ -10,6 +10,7 @@ from tools.tablebase_worker.config import (
     load_worker_config,
     table_path_status,
 )
+from tools.tablebase_worker.reader_pool import _count_available_layers
 
 
 def write_config(root: Path, **overrides) -> Path:
@@ -52,6 +53,44 @@ def write_config(root: Path, **overrides) -> Path:
 
 
 class WorkerConfigTests(unittest.TestCase):
+    def test_multiple_paths_are_preserved_checked_and_layers_deduplicated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = write_config(root)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            table = data["tables"][0]
+            first = table.pop("path")
+            second = root / "second-part"
+            second.mkdir()
+            (second / "free11_512_0.bccmp").touch()
+            (second / "free11_512_20.bccmp").touch()
+            table["paths"] = [first, str(second)]
+            path.write_text(json.dumps(data), encoding="utf-8")
+            config = load_worker_config(path, require_auth=False).tables["free11_512"]
+            self.assertEqual(config.path_list, [(first, "uint32"), (str(second), "uint32")])
+            self.assertEqual(table_path_status(config), (True, None))
+            self.assertEqual(_count_available_layers(config), 2)
+            second.rename(root / "offline")
+            self.assertEqual(table_path_status(config), (False, "TABLE_PATH_MISSING"))
+
+    def test_rejects_ambiguous_empty_or_duplicate_paths(self):
+        for paths in ([], "not-an-array", ["same", "same"]):
+            with self.subTest(paths=paths), tempfile.TemporaryDirectory() as temp:
+                path = write_config(Path(temp))
+                data = json.loads(path.read_text(encoding="utf-8"))
+                data["tables"][0].pop("path")
+                data["tables"][0]["paths"] = paths
+                path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(WorkerConfigError):
+                    load_worker_config(path, require_auth=False)
+        with tempfile.TemporaryDirectory() as temp:
+            path = write_config(Path(temp))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["tables"][0]["paths"] = [data["tables"][0]["path"]]
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(WorkerConfigError):
+                load_worker_config(path, require_auth=False)
+
     def test_loads_allowlist_without_touching_real_tables(self):
         with tempfile.TemporaryDirectory() as temp:
             path = write_config(Path(temp))
