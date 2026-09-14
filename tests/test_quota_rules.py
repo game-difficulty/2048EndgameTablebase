@@ -6,6 +6,7 @@ from backend.quota.config import (
     table_multiplier_config,
     table_threshold_config,
     token_cost_config,
+    table_multiplier_units,
 )
 from backend.quota.routes import public_quota_rules
 
@@ -46,7 +47,10 @@ class PublicQuotaRulesTests(unittest.TestCase):
         self.assertEqual(groups["4421"], 5)
         self.assertEqual(groups["444"], 5)
         self.assertEqual(groups["LL"], 8)
-        self.assertNotIn("4442f", groups)
+        self.assertEqual(groups["4442f"], 50)
+        self.assertEqual(table_multiplier_units("4442f_1024"), 50_000)
+        self.assertEqual(table_multiplier_units("free11_2048"), 50_000)
+        self.assertEqual(table_multiplier_units("444_1024"), 5_000)
         self.assertEqual(rules["operation_costs"]["analysis_per_replay"], 100)
         self.assertEqual(rules["operation_costs"]["replay_load"], 3)
         self.assertEqual(rules["operation_costs"]["battle_route_generation"], 100)
@@ -56,7 +60,9 @@ class PublicQuotaRulesTests(unittest.TestCase):
             row["full_pattern"]: row
             for row in rules["tablebase_thresholds"]
         }
-        self.assertEqual(len(thresholds), 24)
+        self.assertEqual(len(thresholds), 26)
+        self.assertEqual(thresholds["4442f_1024"]["threshold"], 0.995)
+        self.assertEqual(thresholds["free11_2048"]["mode"], "relative")
         self.assertEqual(
             thresholds["444_1024"],
             {

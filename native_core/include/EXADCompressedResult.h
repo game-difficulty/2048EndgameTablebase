@@ -40,6 +40,12 @@ struct ColdLookupResult {
     uint64_t value_block_compressed_bytes = 0;
 };
 
+struct ColdSampleResult {
+    bool found = false;
+    uint64_t board = 0;
+    uint32_t original_board_sum = 0;
+};
+
 bool is_exad_compressed_file(const std::string& path);
 
 CompressStats compress_exad_solved_layer_to_result(
@@ -80,14 +86,12 @@ ColdLookupResult lookup_exadbook_cold(
     uint64_t canonical_board,
     uint32_t column);
 
-bool sample_exad_cold(
+ColdSampleResult sample_exad_cold(
     const std::string& compressed_path,
-    const std::string& exadlut_path,
-    uint64_t& board);
+    const std::string& exadlut_path);
 
-bool sample_exadbook_cold(
+ColdSampleResult sample_exadbook_cold(
     const std::string& exadbook_path,
-    const std::string& exadlut_path,
-    uint64_t& board);
+    const std::string& exadlut_path);
 
 } // namespace EXADCompressedResult

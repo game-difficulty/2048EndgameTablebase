@@ -4,6 +4,22 @@
       "worker_id": "home-main",
       "tables": [
         {
+          "pattern": "4442f",
+          "target": "1024",
+          "full_pattern": "4442f_1024",
+          "dtype": "1-float32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-g"
+        },
+        {
+          "pattern": "free11",
+          "target": "2048",
+          "full_pattern": "free11_2048",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-g"
+        },
+        {
           "pattern": "free11",
           "target": "512",
           "full_pattern": "free11_512",

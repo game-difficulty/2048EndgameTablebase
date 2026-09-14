@@ -15,6 +15,9 @@
     "level": "INFO"
   },
   "resource_groups": {
+    "disk-g": {
+      "concurrency": 1
+    },
     "disk-d": {
       "concurrency": 1
     },
@@ -23,6 +26,26 @@
     }
   },
   "tables": [
+    {
+      "table_id": "4442f_1024",
+      "pattern": "4442f",
+      "target": "1024",
+      "path": "G:/4442f-1k",
+      "dtype": "1-float32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-g",
+      "concurrency": 1
+    },
+    {
+      "table_id": "free11_2048",
+      "pattern": "free11",
+      "target": "2048",
+      "path": "G:/free11-2k",
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-g",
+      "concurrency": 1
+    },
     {
       "table_id": "free11_512",
       "pattern": "free11",

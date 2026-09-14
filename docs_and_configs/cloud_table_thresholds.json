@@ -17,6 +17,8 @@
     "free10_512": { "threshold": 0.1, "mode": "absolute" },
     "free11_512": { "threshold": 0.1, "mode": "absolute" },
     "free11_1024": { "threshold": 0.1, "mode": "absolute" },
+    "free11_2048": { "threshold": 0.2, "mode": "relative" },
+    "4442f_1024": { "threshold": 0.995, "mode": "absolute" },
     "4421_1024": { "threshold": 0.05, "mode": "absolute" },
     "4421_2048": { "threshold": 0.2, "mode": "relative" },
     "2432t_2048": { "threshold": 0.2, "mode": "relative" },

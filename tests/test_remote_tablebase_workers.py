@@ -291,6 +291,8 @@ class RemoteCatalogTests(unittest.TestCase):
             {
                 "free11_512",
                 "free11_1024",
+                "free11_2048",
+                "4442f_1024",
                 "free10_128",
                 "free10_256",
                 "free10_512",
@@ -304,6 +306,8 @@ class RemoteCatalogTests(unittest.TestCase):
             },
         )
         self.assertNotIn("4442f_2048", tables)
+        self.assertEqual(tables["4442f_1024"]["dtype"], "1-float32")
+        self.assertEqual(tables["free11_2048"]["resource_group"], "disk-g")
 
 
 class RemoteQuotaFailureTests(unittest.IsolatedAsyncioTestCase):
