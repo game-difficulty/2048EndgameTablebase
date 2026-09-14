@@ -183,6 +183,9 @@ class DispatcherCommon(BaseDispatcher):
             return None
 
         masked_board = self.mask(_32k)
+        # Early free10 layers may not cover all move successors.
+        if pattern == "free10" and masked_board[masked_board != 32768].sum() < 32:
+            return None
 
         r1, success_rate_dtype = self.book_reader.move_on_dic(
             masked_board, pattern, target_str, table
