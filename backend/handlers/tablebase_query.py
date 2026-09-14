@@ -13,6 +13,7 @@ from engine_core.VBoardMover import decode_board, encode_board, s_move_board as 
 from ..actions import Action, Message
 from ..gamer_ranked.prng import Xoshiro128StarStar
 from ..quota.errors import InsufficientTokens
+from ..quota.config import MULTIPLIER_UNIT, table_multiplier_units
 from ..auth.guest_service import (
     GuestLimitError,
     GuestQueryReservation,
@@ -45,6 +46,13 @@ from ..tester import _tester_append_post_lookup_logs
 _TABLEBASE_QUERY_TASKS: set[asyncio.Task] = set()
 _DIRECTION_MAP = {"left": 1, "right": 2, "up": 3, "down": 4}
 _PREFETCH_RNG_VERSION = 1
+
+
+def _prefetch_limit(full_pattern: str) -> int:
+    # Use table cost, not promotional pricing, to bound speculative disk reads.
+    if table_multiplier_units(full_pattern) >= 50 * MULTIPLIER_UNIT:
+        return MAX_PREFETCH_CHILDREN // 2
+    return MAX_PREFETCH_CHILDREN
 
 
 @dataclass(frozen=True)
@@ -428,6 +436,7 @@ async def _run_prefetch(
         best_move=parent_result.best_move,
         use_variant=parent_spec.use_variant,
     )
+    child_boards = child_boards[:_prefetch_limit(parent_spec.full_pattern)]
     if not child_boards:
         return
     handles = []
@@ -506,6 +515,7 @@ async def _run_deterministic_prefetch(
     prefetch_rng: _PrefetchRngContext,
 ) -> None:
     seen_boards = {u64(parent_spec.board_encoded)}
+    budget = _prefetch_limit(parent_spec.full_pattern)
     frontier = _deterministic_prefetch_nodes(
         parent_spec.board_encoded,
         directions=_direction_order(parent_result),
@@ -519,8 +529,8 @@ async def _run_deterministic_prefetch(
     async def wait_for_node(handle, node):
         return node, await handle.wait()
 
-    while frontier and scheduled_count < MAX_PREFETCH_CHILDREN:
-        wave = frontier[: MAX_PREFETCH_CHILDREN - scheduled_count]
+    while frontier and scheduled_count < budget:
+        wave = frontier[: budget - scheduled_count]
         scheduled_count += len(wave)
         waiters = []
         handles = []
@@ -600,7 +610,7 @@ async def _run_deterministic_prefetch(
 
         frontier = []
         for node, result in sorted(completed, key=lambda item: item[0].order):
-            if scheduled_count + len(frontier) >= MAX_PREFETCH_CHILDREN:
+            if scheduled_count + len(frontier) >= budget:
                 break
             if not result.best_move:
                 continue

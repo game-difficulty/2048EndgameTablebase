@@ -40,6 +40,18 @@ class ConstantReader:
 
 
 class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
+    def test_prefetch_limit_uses_base_multiplier_boundary(self):
+        for units, expected in ((49999, 8), (50000, 4), (500000, 4)):
+            with patch.object(query_handler, 'table_multiplier_units', return_value=units):
+                self.assertEqual(query_handler._prefetch_limit('example_2048'), expected)
+
+    async def test_expensive_table_prefetch_limits_across_both_pages(self):
+        for pattern in ('free11_512', 'free12_2048', '4442f_1024'):
+            with self.subTest(pattern=pattern):
+                await self.test_tester_prefetch_streams_eight_complete_board_results(pattern, 4)
+                await self.test_trainer_prefetch_uses_the_deterministic_rng_contract(pattern, 4)
+                await self.test_current_result_is_sent_before_eight_two_tile_prefetches(pattern, 4)
+
     async def test_guest_trainer_query_consumes_once_without_prefetch(self):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("guest_trainer_query_test")
@@ -299,13 +311,13 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
             ["right", "left", "down", "up"],
         )
 
-    async def test_tester_prefetch_streams_eight_complete_board_results(self):
+    async def test_tester_prefetch_streams_eight_complete_board_results(self, pattern="L3_256", count=8):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("tester_deterministic_prefetch_test")
         session.user_id = 1
         session.auth_session_id = 2
-        session.tester_full_pattern = "L3_256"
-        session.tester_pattern = ["L3", "256"]
+        session.tester_full_pattern = pattern
+        session.tester_pattern = pattern.rsplit("_", 1)
         session.tester_table_found = True
         session.tester_tablebase_provider_kind = "local"
         session.book_reader = ConstantReader()
@@ -327,7 +339,7 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "page": "tester",
                         "query_id": "query-deterministic",
-                        "full_pattern": "L3_256",
+                        "full_pattern": pattern,
                         "board_hex": f"{int(session.board_encoded):016x}",
                         "prefetch_rng": {
                             "version": 1,
@@ -350,11 +362,11 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 message for message in websocket.messages
                 if message["action"] == "TABLEBASE_PREFETCH"
             ]
-            self.assertEqual(len(prefetch_messages), 8)
+            self.assertEqual(len(prefetch_messages), count)
             self.assertTrue(
                 all(len(message["data"]["entries"]) == 1 for message in prefetch_messages)
             )
-            self.assertEqual(len(session.book_reader.calls), 9)
+            self.assertEqual(len(session.book_reader.calls), count + 1)
             depths = [message["data"]["entries"][0]["depth"] for message in prefetch_messages]
             self.assertEqual(depths.count(1), 3)
             self.assertGreater(max(depths), 1)
@@ -445,13 +457,13 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["board_hex"], f"{int(requested_board):016x}")
         self.assertEqual(int(session.board_encoded), 0x11)
 
-    async def test_trainer_prefetch_uses_the_deterministic_rng_contract(self):
+    async def test_trainer_prefetch_uses_the_deterministic_rng_contract(self, pattern="L3_256", count=8):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("trainer_deterministic_prefetch_test")
         session.user_id = 1
         session.auth_session_id = 2
-        session.current_pattern = "L3_256"
-        session.pattern_settings = ["L3", "256"]
+        session.current_pattern = pattern
+        session.pattern_settings = pattern.rsplit("_", 1)
         session.use_variant = False
         session.book_reader = ConstantReader()
         board = np.zeros((4, 4), dtype=np.int32)
@@ -472,7 +484,7 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "page": "trainer",
                         "query_id": "trainer-deterministic",
-                        "full_pattern": "L3_256",
+                        "full_pattern": pattern,
                         "board_hex": f"{int(session.board_encoded):016x}",
                         "prefetch_rng": {
                             "version": 1,
@@ -494,21 +506,21 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
                 message for message in websocket.messages
                 if message["action"] == "TABLEBASE_PREFETCH"
             ]
-            self.assertEqual(len(prefetch_messages), 8)
+            self.assertEqual(len(prefetch_messages), count)
             depths = [message["data"]["entries"][0]["depth"] for message in prefetch_messages]
             self.assertEqual(depths.count(1), 3)
             self.assertGreater(max(depths), 1)
         finally:
             await scheduler.close()
 
-    async def test_current_result_is_sent_before_eight_two_tile_prefetches(self):
+    async def test_current_result_is_sent_before_eight_two_tile_prefetches(self, pattern="L3_256", count=8):
         scheduler = TablebaseQueryScheduler(worker_count=4)
         session = GameSession("trainer_handler_test")
         session.user_id = 1
         session.auth_session_id = 2
         session.user_entitlement_tier = "supporter"
-        session.current_pattern = "L3_256"
-        session.pattern_settings = ["L3", "256"]
+        session.current_pattern = pattern
+        session.pattern_settings = pattern.rsplit("_", 1)
         session.use_variant = False
         session.book_reader = ConstantReader()
         board = np.zeros((4, 4), dtype=np.int32)
@@ -534,7 +546,7 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
                     {
                         "page": "trainer",
                         "query_id": "query-1",
-                        "full_pattern": "L3_256",
+                        "full_pattern": pattern,
                         "board_hex": f"{int(session.board_encoded):016x}",
                     },
                     session,
@@ -550,8 +562,8 @@ class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(websocket.messages[0]["action"], "TABLEBASE_QUERY_RESULT")
             self.assertEqual(websocket.messages[1]["action"], "TABLEBASE_PREFETCH")
             entries = websocket.messages[1]["data"]["entries"]
-            self.assertEqual(len(entries), 8)
-            self.assertEqual(len(session.book_reader.calls), 9)
+            self.assertEqual(len(entries), count)
+            self.assertEqual(len(session.book_reader.calls), count + 1)
             finalize.assert_called_once()
             for entry in entries:
                 child = decode_board(np_u64(int(entry["board_hex"], 16)))
