@@ -1084,7 +1084,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     return { requestId, fullPattern, version, cacheHit, prefetchRng, actor };
   };
 
-  const queryResults = (reason = 'manual', lookupActor = null) => {
+  const queryResults = (reason = 'manual', lookupActor = null, defaultQueryTicket = '') => {
     if (isEmptyPattern.value) return null;
     const boardHex = currentBoardHex.value || hexInput.value;
     const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
@@ -1093,12 +1093,13 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         if (
           boardHex === (currentBoardHex.value || hexInput.value)
           && fullPattern === (loadedTablebaseFullPattern.value || currentPatternDisplay.value)
-        ) queryResults(reason, actor);
+        ) queryResults(reason, actor, defaultQueryTicket);
       }, fullPattern);
       return accepted ? 'guest-access-pending' : null;
     }
     const prepared = prepareResultsRequest(boardHex, reason, lookupActor);
     if (!prepared) return null;
+    pendingResultsRequests.get(prepared.requestId).defaultQueryTicket = defaultQueryTicket;
     sendTrainerAction('TABLEBASE_QUERY', {
       page: 'trainer',
       client_local_board: true,
@@ -1106,7 +1107,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       catalog_version: prepared.version,
       full_pattern: prepared.fullPattern,
       board_hex: boardHex,
-      prefetch_rng: prepared.prefetchRng,
+      prefetch_rng: defaultQueryTicket ? null : prepared.prefetchRng,
+      default_query_ticket: defaultQueryTicket,
     }, lookupActor);
     return prepared.requestId;
   };
@@ -1335,7 +1337,9 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         && localPracticeSession.phase === 'awaiting_spawn'
         && [1, 2].includes(Number(spawnMode.value))
       ) requestSpawnForCurrentBoard();
-      else if (tablebasePath.value === 'loaded' && currentBoardHex.value) queryResults('tablebase-ready');
+      else if (tablebasePath.value === 'loaded' && currentBoardHex.value) {
+        queryResults('tablebase-ready', null, response.default_query_ticket || '');
+      }
       else invalidateResults({ clearDisplay: true });
       maybeAutoApplyDefaultTablebase();
       return;
@@ -1498,6 +1502,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
     if (data.action === 'TABLEBASE_BUSY' && data.data?.page === 'trainer') {
       const requestId = data.data?.query_id;
+      const defaultQueryTicket = pendingResultsRequests.get(requestId)?.defaultQueryTicket || '';
       if (requestId) pendingResultsRequests.delete(requestId);
       const retryBoardHex = String(data.data?.board_hex || currentBoardHex.value || '');
       const retryAfterMs = Math.max(250, Number(data.data?.retry_after_ms) || 750);
@@ -1505,7 +1510,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         if (tablebaseRetryTimer) window.clearTimeout(tablebaseRetryTimer);
         tablebaseRetryTimer = window.setTimeout(() => {
           tablebaseRetryTimer = null;
-          if (retryBoardHex === currentBoardHex.value) queryResults('auto');
+          if (retryBoardHex === currentBoardHex.value) queryResults('auto', null, defaultQueryTicket);
         }, retryAfterMs);
       } else {
         finishResultsRefresh();
@@ -1974,10 +1979,10 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
 
     const map = {
-      ArrowUp: 'up', KeyW: 'up',
-      ArrowDown: 'down', KeyS: 'down',
-      ArrowLeft: 'left', KeyA: 'left',
-      ArrowRight: 'right', KeyD: 'right',
+      ArrowUp: 'up', KeyW: 'up', KeyK: 'up',
+      ArrowDown: 'down', KeyS: 'down', KeyJ: 'down',
+      ArrowLeft: 'left', KeyA: 'left', KeyH: 'left',
+      ArrowRight: 'right', KeyD: 'right', KeyL: 'right',
     };
     if (map[event.code]) {
       event.preventDefault();

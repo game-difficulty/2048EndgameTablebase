@@ -882,7 +882,7 @@ const copyGlobalErrorDetails = async () => {
   }
 };
 
-const BOARD_HOTKEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D']);
+const BOARD_HOTKEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D', 'h', 'j', 'k', 'l', 'H', 'J', 'K', 'L']);
 
 const isTextEntryElement = (element) => {
   if (!(element instanceof HTMLElement)) {

@@ -11,6 +11,7 @@ from engine_core.BoardMover import s_move_board as r_move_board
 from engine_core.VBoardMover import decode_board, encode_board, s_move_board as v_move_board
 
 from ..actions import Action, Message
+from ..trainer_default_lookup import default_lookup_for
 from ..gamer_ranked.prng import Xoshiro128StarStar
 from ..quota.errors import InsufficientTokens
 from ..quota.config import MULTIPLIER_UNIT, table_multiplier_units
@@ -640,6 +641,7 @@ async def _finish_query(
     supporter: bool,
     prefetch_rng: _PrefetchRngContext | None = None,
     client_local_board: bool = False,
+    allow_prefetch: bool = True,
 ) -> None:
     guest_reservation = isinstance(reservation, GuestQueryReservation)
 
@@ -778,7 +780,7 @@ async def _finish_query(
                     "logs_delta": session.tester_logs[logs_since:],
                     "logs_total": len(session.tester_logs),
                 }
-    if session_matches and not guest_reservation:
+    if session_matches and not guest_reservation and allow_prefetch:
         _track_task(
             asyncio.create_task(
                 _run_prefetch(
@@ -959,8 +961,16 @@ async def handle_tablebase_query_action(
         )
         return True
 
+    is_default, free_default = (False, False)
+    if page == "trainer" and client_local_board:
+        is_default, free_default = default_lookup_for(session).consume(
+            str(payload.get("default_query_ticket") or ""),
+            context["full_pattern"], requested_board,
+        )
     try:
-        if is_guest:
+        if free_default and not is_guest:
+            reservation = None
+        elif is_guest:
             reservation = reserve_guest_query(
                 guest_id=str(session.guest_id),
                 request_id=query_id,
@@ -1021,6 +1031,7 @@ async def handle_tablebase_query_action(
                 supporter=supporter,
                 prefetch_rng=prefetch_rng,
                 client_local_board=client_local_board,
+                allow_prefetch=not is_default,
             )
         )
     )

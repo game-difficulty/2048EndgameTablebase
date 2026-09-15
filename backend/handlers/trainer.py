@@ -36,6 +36,7 @@ from ..trainer_helpers import (
     send_trainer_results,
 )
 from ..webview_api import Api
+from ..trainer_default_lookup import default_lookup_for
 
 
 def _clear_trainer_results(session: GameSession) -> None:
@@ -87,6 +88,7 @@ async def _send_trainer_tablebase_ready(
     request_id: str,
     client_revision: int | None = None,
     board_encoded: int | None = None,
+    default_switch: bool | None = None,
 ) -> None:
     data = {
         "request_id": str(request_id or "")[:160],
@@ -99,6 +101,10 @@ async def _send_trainer_tablebase_ready(
         data["client_revision"] = int(client_revision)
     if board_encoded is not None:
         data["board_hex"] = safe_hex(np_u64(board_encoded))
+        if default_switch is not None:
+            data["default_query_ticket"] = default_lookup_for(session).issue(
+                session.current_pattern, board_encoded, switched=default_switch,
+            )
     await websocket.send_json(
         {"action": Message.TRAINER_TABLEBASE_READY, "data": data}
     )
@@ -289,6 +295,7 @@ async def handle_trainer_action(
                 request_id=str(payload.get("request_id") or ""),
                 client_revision=_client_revision(payload),
                 board_encoded=client_board_seed,
+                default_switch=True if payload.get("load_default") else None,
             )
         else:
             await manager.send_state(websocket)
@@ -573,6 +580,7 @@ async def handle_trainer_action(
                 request_id=str(payload.get("request_id") or ""),
                 client_revision=_client_revision(payload),
                 board_encoded=board_seed,
+                default_switch=False,
             )
             return True
         _clear_record_replay(session)

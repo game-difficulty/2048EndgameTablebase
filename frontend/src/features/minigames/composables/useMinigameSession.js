@@ -943,6 +943,14 @@ export function useMinigameSession(activeRef) {
       A: 'left',
       S: 'down',
       D: 'right',
+      h: 'left',
+      j: 'down',
+      k: 'up',
+      l: 'right',
+      H: 'left',
+      J: 'down',
+      K: 'up',
+      L: 'right',
     };
     const direction = map[event.key];
     if (!direction) return;

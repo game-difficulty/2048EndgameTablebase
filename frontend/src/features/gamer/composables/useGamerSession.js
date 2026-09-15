@@ -1358,12 +1358,16 @@ export function useGamerSession(activeRef) {
     const map = {
       ArrowUp: 'up',
       KeyW: 'up',
+      KeyK: 'up',
       ArrowDown: 'down',
       KeyS: 'down',
+      KeyJ: 'down',
       ArrowLeft: 'left',
       KeyA: 'left',
+      KeyH: 'left',
       ArrowRight: 'right',
       KeyD: 'right',
+      KeyL: 'right',
     };
 
     if (map[event.code]) {

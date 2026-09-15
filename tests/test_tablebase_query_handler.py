@@ -40,6 +40,39 @@ class ConstantReader:
 
 
 class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_lookup_free_once_and_never_prefetches(self):
+        from backend.trainer_default_lookup import default_lookup_for
+        scheduler = TablebaseQueryScheduler(worker_count=1)
+        session = GameSession('trainer_default_test')
+        session.user_id = 1
+        session.current_pattern = 'L3_256'
+        session.pattern_settings = ['L3', '256']
+        session.book_reader = ConstantReader()
+        websocket = RecordingWebSocket()
+        try:
+            with (
+                patch.object(query_handler, 'tablebase_query_scheduler', scheduler),
+                patch.object(query_handler, 'get_catalog_version', return_value='test'),
+                patch.object(query_handler, 'reserve_operation_tokens', return_value=None) as reserve,
+                patch.object(query_handler, 'get_token_balance', return_value={}),
+                patch.object(query_handler, '_run_prefetch') as prefetch,
+            ):
+                for index, switched in enumerate((True, True, False)):
+                    ticket = default_lookup_for(session).issue('L3_256', 0x11, switched=switched)
+                    await query_handler.handle_tablebase_query_action(Action.TABLEBASE_QUERY, {
+                        'page': 'trainer', 'client_local_board': True,
+                        'full_pattern': 'L3_256', 'board_hex': '0000000000000011',
+                        'query_id': str(index), 'default_query_ticket': ticket,
+                    }, session, websocket)
+                    while query_handler._TABLEBASE_QUERY_TASKS:
+                        await asyncio.gather(*list(query_handler._TABLEBASE_QUERY_TASKS))
+                    self.assertEqual(reserve.call_count, index)
+                    prefetch.assert_not_called()
+                self.assertEqual(len(websocket.messages), 3)
+                self.assertTrue(all(m['action'] == 'TABLEBASE_QUERY_RESULT' for m in websocket.messages))
+        finally:
+            await scheduler.close()
+
     def test_prefetch_limit_uses_base_multiplier_boundary(self):
         for units, expected in ((49999, 8), (50000, 4), (500000, 4)):
             with patch.object(query_handler, 'table_multiplier_units', return_value=units):
