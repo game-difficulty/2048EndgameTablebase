@@ -1,4 +1,5 @@
 {
+  "orientation": { "rotate": "切换横屏", "unavailable": "当前浏览器无法切换横屏，可尝试使用手机的自动旋转。" },
   "tabs": {
     "home": "首页",
     "gamer": "游戏",

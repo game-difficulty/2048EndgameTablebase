@@ -10,7 +10,7 @@
       content="带连续秒表、单步用时和节点用时的 2048Verse 回放查看器"
     />
     <title>2048Verse 回放计时器</title>
-    <link rel="stylesheet" href="styles.css?v=20260823-4" />
+    <link rel="stylesheet" href="styles.css?v=20260915-1" />
     <script src="replay-core.js?v=20260906-1" defer></script>
     <script src="app.js?v=20260906-1" defer></script>
   </head>
@@ -61,16 +61,6 @@
           <div id="board" class="board" aria-label="2048 回放棋盘" hidden></div>
         </div>
 
-        <aside class="timeline-panel" aria-labelledby="timeline-title">
-          <div class="timeline-header">
-            <span id="timeline-title">节点用时</span>
-            <small>到达时的总用时</small>
-          </div>
-          <div id="node-timeline" class="node-timeline">
-            <p class="timeline-empty">载入回放后显示</p>
-          </div>
-        </aside>
-      </section>
 
       <section class="replay-control" aria-label="回放控制">
         <div class="progress-labels">
@@ -101,6 +91,16 @@
         </div>
       </section>
 
+        <aside class="timeline-panel" aria-labelledby="timeline-title">
+          <div class="timeline-header">
+            <span id="timeline-title">节点用时</span>
+            <small>到达时的总用时</small>
+          </div>
+          <div id="node-timeline" class="node-timeline">
+            <p class="timeline-empty">载入回放后显示</p>
+          </div>
+        </aside>
+      </section>
       <p id="timing-note" class="timing-note"></p>
     </main>
 

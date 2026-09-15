@@ -1,4 +1,5 @@
 <template>
+  <FitToolPage>
   <div class="page-root gamer-page-root pt-6">
     <div class="gamer-workspace">
       <main class="gamer-main w-full max-w-lg flex flex-col items-center">
@@ -115,12 +116,14 @@
       </aside>
     </div>
   </div>
+  </FitToolPage>
 </template>
 
 <script setup>
 import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import FitToolPage from '../../../components/FitToolPage.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
 import GamerLeaderboardPanel from '../components/GamerLeaderboardPanel.vue';

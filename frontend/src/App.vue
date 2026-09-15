@@ -1,4 +1,5 @@
 <template>
+  <NativeLandscapeButton />
   <div
     ref="fixedViewport"
     :class="[
@@ -477,6 +478,7 @@ import {
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
 import AccountAvatar from './features/auth/AccountAvatar.vue';
+import NativeLandscapeButton from './components/NativeLandscapeButton.vue';
 import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
 import AuthPage from './features/auth/AuthPage.vue';
 import SponsorDialog from './features/billing/SponsorDialog.vue';

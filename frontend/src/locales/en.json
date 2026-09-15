@@ -1,4 +1,5 @@
 {
+  "orientation": { "rotate": "Switch to landscape", "unavailable": "This browser cannot switch orientation. Try your phone's auto-rotate setting." },
   "tabs": {
     "home": "Home",
     "gamer": "Gamer",

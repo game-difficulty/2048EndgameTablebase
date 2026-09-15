@@ -190,11 +190,13 @@ h2 {
 .viewer-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 242px;
+  grid-template-areas: "board timeline" "controls controls";
   gap: 14px;
   align-items: stretch;
 }
 
 .board-column {
+  grid-area: board;
   min-width: 0;
 }
 
@@ -384,6 +386,7 @@ h2 {
 }
 
 .timeline-panel {
+  grid-area: timeline;
   display: flex;
   height: calc(min(96vw, 820px) - 256px);
   min-height: 0;
@@ -482,7 +485,8 @@ h2 {
 }
 
 .replay-control {
-  margin-top: 16px;
+  grid-area: controls;
+  margin-top: 2px;
 }
 
 .progress-labels {
@@ -786,6 +790,7 @@ textarea {
   }
 
   .viewer-layout {
+    grid-template-areas: "board" "controls" "timeline";
     grid-template-columns: 1fr;
   }
 

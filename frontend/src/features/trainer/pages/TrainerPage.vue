@@ -1,4 +1,5 @@
 <template>
+  <FitToolPage :disabled="dockPlacement === 'right' || dockPlacement === 'bottom'">
   <div
     :class="[
       'page-root trainer-page',
@@ -317,6 +318,7 @@
       </div>
     </div>
   </div>
+  </FitToolPage>
 </template>
 
 <script setup>
@@ -324,6 +326,7 @@ import { computed, ref, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
+import FitToolPage from '../../../components/FitToolPage.vue';
 import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
