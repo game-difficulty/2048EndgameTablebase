@@ -44,6 +44,7 @@ from backend.auth.service import authenticate_session_token, record_usage
 from backend.battle.realtime import disconnect as disconnect_battle_socket
 from backend.battle.realtime import handle_battle_action
 from backend.battle.routes import router as battle_router
+from backend.live.routes import router as live_router, hub as live_hub
 from backend.battle.service import shutdown as shutdown_battle_service
 from backend.battle.service import startup as startup_battle_service
 from backend.cloud_analysis_jobs import (
@@ -227,6 +228,7 @@ async def _minigame_validation_loop() -> None:
 async def app_lifespan(_app: FastAPI):
     SingletonConfig()
     init_auth_db()
+    await live_hub.start()
     await startup_battle_service()
     prepare_gamer_validation_queue()
     prepare_minigame_validation_queue()
@@ -243,6 +245,7 @@ async def app_lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await live_hub.stop()
         await shutdown_battle_service()
         leaderboard_refresh_task.cancel()
         gamer_validation_task.cancel()
@@ -281,6 +284,7 @@ app.include_router(profile_router)
 app.include_router(gamer_ranked_router)
 app.include_router(gamer_tablebase_router)
 app.include_router(battle_router)
+app.include_router(live_router)
 
 
 @app.middleware("http")

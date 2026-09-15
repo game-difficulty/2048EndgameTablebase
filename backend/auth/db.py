@@ -766,14 +766,19 @@ def init_auth_db() -> None:
         )
 
         now = _iso_now()
+        # Paid-balance rewards are not proof of sponsorship for legacy backfill.
         db.execute(
             """
             INSERT OR IGNORE INTO user_entitlements
             (user_id, tier, supporter_since, show_supporter_badge, can_upload_avatar, created_at, updated_at)
             SELECT
               users.id,
-              CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0 THEN 'supporter' ELSE 'free' END,
-              CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0 THEN ? ELSE NULL END,
+              CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0
+                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type='live_lucky_award')
+                THEN 'supporter' ELSE 'free' END,
+              CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0
+                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type='live_lucky_award')
+                THEN ? ELSE NULL END,
               1,
               1,
               ?,
@@ -804,6 +809,7 @@ def init_auth_db() -> None:
                 show_supporter_badge = 1,
                 updated_at = ?
             WHERE tier != 'supporter'
+              AND user_id NOT IN (SELECT user_id FROM token_ledger WHERE event_type='live_lucky_award')
               AND user_id IN (
                 SELECT user_id FROM token_accounts WHERE paid_balance_units > 0
               )

@@ -42,6 +42,8 @@ docs_and_configs/cloud_runtime/
 docs_and_configs/remote_worker.local.json
 docs_and_configs/*.error
 *.log
+data/live-runner.json
+data/live-runner.next
 
 # Native build outputs
 native_core/build/

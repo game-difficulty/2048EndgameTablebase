@@ -1,0 +1,54 @@
+# http {} scope. Dedicated limits, separate from game and table-worker sockets.
+limit_req_zone $binary_remote_addr zone=live_http:1m rate=5r/s;
+limit_conn_zone $binary_remote_addr zone=live_viewers:1m;
+
+server {
+    listen 443 ssl;
+    server_name live.2048tables.online;
+    # Provision DNS and a certificate before enabling this server block.
+    ssl_certificate /etc/letsencrypt/live/live.2048tables.online/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/live.2048tables.online/privkey.pem;
+    root /opt/2048tables/app/frontend/dist;
+    client_max_body_size 32k;
+
+    location = / { try_files /live/index.html =404; add_header Cache-Control no-cache; }
+    location /assets/ { try_files $uri =404; expires 1y; add_header Cache-Control "public, immutable"; }
+    location /live-music/ { try_files $uri =404; expires 30d; }
+    location /payments/ { try_files $uri =404; expires 1d; }
+    location = /favicon.ico { try_files $uri =404; expires 1d; }
+    location = /api/live/watch {
+        limit_conn live_viewers 8;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Sec-WebSocket-Extensions "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP "";
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
+    # Publishing is only exposed on the main domain and authenticated separately.
+    location = /api/live/publish { return 404; }
+    location /api/ {
+        limit_req zone=live_http burst=15 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP "";
+        add_header Cache-Control no-store;
+    }
+}
+
+# Add inside the EXISTING main-domain server, before any generic /api/ handling:
+# location = /api/live/publish {
+#     proxy_pass http://127.0.0.1:8000;
+#     proxy_http_version 1.1;
+#     proxy_set_header Upgrade $http_upgrade;
+#     proxy_set_header Connection "upgrade";
+#     proxy_set_header Sec-WebSocket-Extensions "";
+#     proxy_set_header Host $host;
+#     proxy_read_timeout 45s;
+#     proxy_buffering off;
+# }

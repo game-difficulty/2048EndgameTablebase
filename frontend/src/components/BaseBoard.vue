@@ -2,6 +2,7 @@
   <div
     ref="boardRef"
     class="board-stage relative aspect-square w-full max-w-[600px] mx-auto touch-none"
+    :style="{ '--board-slide-duration': `${animationDuration / 3}ms`, '--board-pop-duration': `${animationDuration * 2 / 3}ms` }"
     @pointerdown.prevent="handleBoardPointerDown"
     @pointermove="handleBoardPointerMove"
     @pointerup="handleBoardPointerUp"
@@ -69,6 +70,7 @@ import {
 const emit = defineEmits(['cell-click', 'swipe']);
 
 const props = defineProps({
+  animationDuration: { type: Number, default: 300 },
   frame: {
     type: Object,
     required: true
@@ -404,19 +406,19 @@ watch(
         if (epoch !== animationEpoch) return;
         revealMergedTiles();
         revealMergeTimeout = null;
-    }, 100);
+    }, props.animationDuration / 3);
 
     revealAppearTimeout = setTimeout(() => {
         if (epoch !== animationEpoch) return;
         revealAppearingTiles();
         revealAppearTimeout = null;
-    }, 125);
+    }, props.animationDuration * 5 / 12);
 
     animTimeout = setTimeout(() => {
         if (epoch !== animationEpoch) return;
         fastForwardAnimations(false);
         animTimeout = null;
-    }, 300);
+    }, props.animationDuration);
   },
 );
 
@@ -550,7 +552,7 @@ const getTileLabelStyle = (tile) => {
   z-index: 10;
   width: var(--tile-width);
   height: var(--tile-height);
-  transition: top 0.1s ease-in-out, left 0.1s ease-in-out;
+  transition: top var(--board-slide-duration, 100ms) ease-in-out, left var(--board-slide-duration, 100ms) ease-in-out;
 }
 
 .no-transition {
@@ -574,11 +576,11 @@ const getTileLabelStyle = (tile) => {
 }
 
 .anim-new {
-  animation: appear 0.2s ease backwards;
+  animation: appear var(--board-pop-duration, 200ms) ease backwards;
 }
 
 .anim-merged {
-  animation: pop 0.2s ease backwards;
+  animation: pop var(--board-pop-duration, 200ms) ease backwards;
 }
 
 @keyframes appear {

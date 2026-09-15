@@ -12,6 +12,7 @@ from backend.auth.db import auth_db
 from backend.auth.entitlements import DEFAULT_TIER, SUPPORTER_TIER, mark_user_supporter
 
 from .config import (
+    PricingSnapshot,
     TOKEN_UNIT,
     apply_pricing_multipliers,
     operation_cost_units,
@@ -860,6 +861,7 @@ def consume_operation_tokens_once(
     metadata: dict[str, Any] | None = None,
     idempotency_scope: str | None = None,
     db: sqlite3.Connection | None = None,
+    pricing_snapshot: PricingSnapshot | None = None,
 ) -> bool:
     """Consume tokens once for a client-generated idempotency key."""
     if user_id is None:
@@ -874,7 +876,7 @@ def consume_operation_tokens_once(
         if multiplier_override_units is not None
         else table_multiplier_units(full_pattern)
     )
-    pricing = resolve_pricing_snapshot()
+    pricing = pricing_snapshot or resolve_pricing_snapshot()
     cost_units = apply_pricing_multipliers(
         base_units,
         multiplier_units,
