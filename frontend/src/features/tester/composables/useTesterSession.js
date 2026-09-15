@@ -572,10 +572,10 @@ export function useTesterSession(activeRef) {
       if (target.closest('[data-tester-text-input="true"]')) return;
     }
     const code = event.code;
-    if (code === 'ArrowUp' || code === 'KeyW') { event.preventDefault(); move('up'); }
-    else if (code === 'ArrowDown' || code === 'KeyS') { event.preventDefault(); move('down'); }
-    else if (code === 'ArrowLeft' || code === 'KeyA') { event.preventDefault(); move('left'); }
-    else if (code === 'ArrowRight' || code === 'KeyD') { event.preventDefault(); move('right'); }
+    if (code === 'ArrowUp' || code === 'KeyW' || code === 'KeyK') { event.preventDefault(); move('up'); }
+    else if (code === 'ArrowDown' || code === 'KeyS' || code === 'KeyJ') { event.preventDefault(); move('down'); }
+    else if (code === 'ArrowLeft' || code === 'KeyA' || code === 'KeyH') { event.preventDefault(); move('left'); }
+    else if (code === 'ArrowRight' || code === 'KeyD' || code === 'KeyL') { event.preventDefault(); move('right'); }
     else if (code === 'KeyR') { event.preventDefault(); resetRandom(); }
     else if (code === 'KeyF') { event.preventDefault(); toggleInsights(); }
   };

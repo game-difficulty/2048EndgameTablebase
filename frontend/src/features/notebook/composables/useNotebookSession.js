@@ -274,16 +274,16 @@ export function useNotebookSession(activeRef) {
       patternMenuOpen.value = false;
       return;
     }
-    if (event.code === 'ArrowUp' || event.code === 'KeyW') {
+    if (event.code === 'ArrowUp' || event.code === 'KeyW' || event.code === 'KeyK') {
       event.preventDefault();
       answerDirection('Up');
-    } else if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+    } else if (event.code === 'ArrowDown' || event.code === 'KeyS' || event.code === 'KeyJ') {
       event.preventDefault();
       answerDirection('Down');
-    } else if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
+    } else if (event.code === 'ArrowLeft' || event.code === 'KeyA' || event.code === 'KeyH') {
       event.preventDefault();
       answerDirection('Left');
-    } else if (event.code === 'ArrowRight' || event.code === 'KeyD') {
+    } else if (event.code === 'ArrowRight' || event.code === 'KeyD' || event.code === 'KeyL') {
       event.preventDefault();
       answerDirection('Right');
     } else if (event.code === 'Enter') {
