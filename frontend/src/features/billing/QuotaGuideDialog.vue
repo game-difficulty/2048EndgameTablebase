@@ -57,13 +57,7 @@
           </div>
         </section>
 
-        <section class="quota-guide-section quota-earn">
-          <h3>{{ $t('billing.quotaGuide.earn.title') }}</h3>
-          <p>{{ $t('billing.quotaGuide.earn.note') }}</p>
-          <p v-for="source in ['recharge', 'lucky', 'envelope', 'weekly', 'trophy']" :key="source">
-            {{ $t(`billing.quotaGuide.earn.${source}`) }}
-          </p>
-        </section>
+        <TokenSources class="quota-guide-section quota-earn" />
 
         <section class="quota-guide-section">
           <div class="section-heading">
@@ -143,6 +137,7 @@ import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { getQuotaRules } from '../../services/quota/quotaClient';
+import TokenSources from './TokenSources.vue';
 
 const props = defineProps({
   open: Boolean,
@@ -287,7 +282,6 @@ watch(
 }
 
 .section-heading h3,
-.quota-earn h3,
 .quota-notes h3 {
   color: var(--text-main);
   font-size: var(--font-ui-md);
@@ -385,15 +379,6 @@ watch(
 .replay-cost-row strong {
   color: var(--accent);
   font-size: var(--font-ui-sm);
-}
-
-.quota-earn {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.6rem;
-  color: var(--text-secondary);
-  font-size: var(--font-ui-sm);
-  line-height: 1.6;
 }
 
 .quota-notes {

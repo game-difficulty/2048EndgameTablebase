@@ -15,6 +15,7 @@
         @focusin.capture="handleKeyboardOwnerInteraction"
         @wheel.capture="handleWorkspaceWheel"
       >
+    <AnnouncementBanner v-show="activeTab === TAB_IDS.MAIN_MENU" @navigate="handleAnnouncementNavigate" />
     <div ref="appTopBar" class="flex items-center gap-2 overflow-x-auto overflow-y-hidden bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
       <div
         v-for="tab in openTabDefinitions"
@@ -262,6 +263,9 @@
         >
           <AdminView :active="activeTab === TAB_IDS.ADMIN" />
         </div>
+        <div v-if="isTabOpen(TAB_IDS.ANNOUNCEMENTS)" v-show="activeTab === TAB_IDS.ANNOUNCEMENTS" class="absolute inset-0">
+          <AnnouncementsView :requested-id="announcementRequestedId" @open-quota="openQuotaGuideDialog" />
+        </div>
       </div>
 
       <div
@@ -477,6 +481,8 @@ import {
 } from './app/trainerDock';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
+import AnnouncementBanner from './features/announcements/AnnouncementBanner.vue';
+import { resolveAnnouncementTarget, findAnnouncement } from './features/announcements/catalog.js';
 import AccountAvatar from './features/auth/AccountAvatar.vue';
 import NativeLandscapeButton from './components/NativeLandscapeButton.vue';
 import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
@@ -496,6 +502,7 @@ const ReplayReviewView = defineAsyncComponent(() => import('./features/replay/pa
 const SettingsView = defineAsyncComponent(() => import('./features/settings/pages/SettingsPage.vue'));
 const HelpView = defineAsyncComponent(() => import('./features/help/pages/HelpPage.vue'));
 const AdminView = defineAsyncComponent(() => import('./features/admin/pages/AdminPage.vue'));
+const AnnouncementsView = defineAsyncComponent(() => import('./features/announcements/AnnouncementsPage.vue'));
 const QuotaGuideDialog = defineAsyncComponent(() => import('./features/billing/QuotaGuideDialog.vue'));
 const AvatarEditorDialog = defineAsyncComponent(() => import('./features/auth/AvatarEditorDialog.vue'));
 const DisplayNameEditorDialog = defineAsyncComponent(() => import('./features/auth/DisplayNameEditorDialog.vue'));
@@ -570,6 +577,12 @@ const {
   openTabInBackground,
 } = useTabManager();
 const draggedTabId = ref(null);
+const announcementRequestedId = ref('');
+function handleAnnouncementNavigate(target) {
+  const destination = resolveAnnouncementTarget(target);
+  announcementRequestedId.value = destination.announcementId || '';
+  openTab(destination.tab);
+}
 const dragTargetTabId = ref(null);
 const trainerDockPlacement = ref(TRAINER_DOCK_PLACEMENTS.NONE);
 const lastPrimaryTab = ref(TAB_IDS.MAIN_MENU);
@@ -1254,6 +1267,9 @@ onMounted(async () => {
   }
   startAppSettings();
   const initialParams = new URLSearchParams(window.location.search);
+  if (initialParams.get('tab') === 'announcements') {
+    handleAnnouncementNavigate({ type: 'announcement', id: findAnnouncement(initialParams.get('announcement')).id });
+  }
   if (initialParams.get('tab') === 'battle' || initialParams.has('room')) {
     openTab(TAB_IDS.BATTLE);
   }

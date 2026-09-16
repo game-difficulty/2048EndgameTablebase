@@ -10,6 +10,7 @@ export const TAB_IDS = {
   SETTINGS: 'SettingsView',
   HELP: 'HelpView',
   ADMIN: 'AdminView',
+  ANNOUNCEMENTS: 'AnnouncementsView',
 };
 
 export const MAIN_TAB_ID = TAB_IDS.MAIN_MENU;
@@ -26,9 +27,15 @@ export const TAB_ORDER = [
   TAB_IDS.SETTINGS,
   TAB_IDS.HELP,
   TAB_IDS.ADMIN,
+  TAB_IDS.ANNOUNCEMENTS,
 ];
 
 export const TAB_REGISTRY = {
+  [TAB_IDS.ANNOUNCEMENTS]: {
+    id: TAB_IDS.ANNOUNCEMENTS,
+    titleKey: 'announcements.title',
+    closable: true,
+  },
   [TAB_IDS.MAIN_MENU]: {
     id: TAB_IDS.MAIN_MENU,
     titleKey: 'tabs.home',

@@ -150,6 +150,11 @@
         </p>
       </div>
 
+      <div class="menu-utility-actions menu-utility-actions-left">
+        <button class="menu-utility-btn" @click="$emit('selectTab', 'AnnouncementsView')">
+          <Megaphone :size="18" />{{ $t('announcements.title') }}
+        </button>
+      </div>
       <div class="menu-utility-actions menu-utility-actions-right">
         <a
           class="menu-utility-btn"
@@ -175,6 +180,7 @@
 
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue';
+import { Megaphone } from '@lucide/vue';
 
 defineProps(['active']);
 defineEmits(['selectTab']);
@@ -369,11 +375,11 @@ onUnmounted(() => {
 
 .menu-utility-actions {
   position: absolute;
-  top: 50%;
+  top: 0.5rem;
   flex-direction: column;
   align-items: stretch;
   margin: 0;
-  transform: translateY(-50%);
+  transform: none;
 }
 
 .menu-utility-actions-left { left: 1rem; }

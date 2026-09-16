@@ -1,4 +1,14 @@
 {
+  "announcements": {
+    "title": "Announcements",
+    "history": "Past Announcements",
+    "dismiss": "Dismiss this announcement",
+    "liveRewards": {
+      "title": "AI livestream is here, with more ways to earn Tokens",
+      "summary": "AI livestream is here! Watch live games and join lucky bags. Weekly rankings and minigame trophies now earn permanent Tokens too. Read the announcement.",
+      "body": "The 2048 AI livestream is now open. Watch AI games in real time, revisit past games, chat, send gifts, join lucky bags and claim red envelopes. Visit:"
+    }
+  },
   "orientation": { "rotate": "Switch to landscape", "unavailable": "This browser cannot switch orientation. Try your phone's auto-rotate setting." },
   "tabs": {
     "home": "Home",
