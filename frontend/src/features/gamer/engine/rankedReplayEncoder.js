@@ -27,7 +27,7 @@ export const DIRECTION_TO_NEXT_CODE = Object.freeze({
   left: 3,
 });
 
-const encodeUleb128 = (rawValue) => {
+export const encodeUleb128 = (rawValue) => {
   let value = Math.max(0, Math.floor(Number(rawValue) || 0));
   const bytes = [];
   do {
@@ -64,13 +64,13 @@ const crcTable = (() => {
   return table;
 })();
 
-const crc32 = (bytes) => {
+export const crc32 = (bytes) => {
   let value = 0xffffffff;
   for (const byte of bytes) value = crcTable[(value ^ byte) & 0xff] ^ (value >>> 8);
   return (value ^ 0xffffffff) >>> 0;
 };
 
-const bytesToBase64 = (bytes) => {
+export const bytesToBase64 = (bytes) => {
   let binary = '';
   const chunkSize = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {

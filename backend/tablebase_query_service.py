@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import heapq
 import itertools
-import json
 import math
 import time
 import uuid
@@ -61,16 +60,14 @@ class TablebaseLookupSpec:
     book_reader: Any = field(compare=False, repr=False)
     provider_kind: str = "local"
     catalog_version: str = ""
-    gamer_route: dict | None = field(default=None, compare=False, repr=False)
 
     @property
     def query_key(self) -> QueryKey:
-        key = (
+        return (
             str(self.catalog_version or ""),
             str(self.full_pattern),
             u64(self.board_encoded),
         )
-        return key if self.gamer_route is None else key + (json.dumps(self.gamer_route, sort_keys=True),)
 
 
 @dataclass(frozen=True)
@@ -80,7 +77,6 @@ class TablebaseLookupResult:
     results: dict[str, Any]
     dtype: str
     best_move: str | None
-    route_nodes: tuple[dict[str, Any], ...] = ()
 
     @property
     def board_hex(self) -> str:
@@ -220,13 +216,6 @@ async def execute_tablebase_lookup_async(
 ) -> TablebaseLookupResult:
     if spec.provider_kind != "remote":
         return await loop.run_in_executor(executor, execute_tablebase_lookup, spec)
-    if spec.gamer_route is not None:
-        nodes = await remote_worker_registry.generate_gamer_route(
-            full_pattern=spec.full_pattern, pattern=spec.pattern, target=spec.target,
-            options=spec.gamer_route)
-        root = nodes[0]
-        return TablebaseLookupResult(int(root['lookup_board'], 16), spec.full_pattern,
-            _sanitize_results(root['results']), root['dtype'], _best_move(root['results']), tuple(nodes))
     response = await remote_worker_registry.lookup(
         full_pattern=spec.full_pattern,
         pattern=spec.pattern,
@@ -526,11 +515,6 @@ class TablebaseQueryScheduler:
                     executor=self._executor,
                 )
                 self._cache_set(job.spec.query_key, result)
-                for node in result.route_nodes:
-                    board = int(node['lookup_board'], 16)
-                    cached = TablebaseLookupResult(board, job.spec.full_pattern,
-                        _sanitize_results(node['results']), node['dtype'], _best_move(node['results']))
-                    self._cache_set((job.spec.catalog_version, job.spec.full_pattern, board), cached)
                 if not job.future.done():
                     job.future.set_result(result)
             except Exception as exc:

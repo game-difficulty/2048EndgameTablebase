@@ -18,6 +18,7 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from .config import configured_workers, worker_secret
+from .layers import normalize_layer_inventory
 from .errors import (
     RemoteTablebaseOffline,
     RemoteTablebaseProtocolError,
@@ -27,7 +28,6 @@ from .errors import (
 
 PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
-CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
 CAPABILITY_GAMER_STREAM_V1 = "gamer_stream_v1"
 CAPABILITY_GAMER_STREAM_V2 = "gamer_stream_v2"
 HEARTBEAT_TIMEOUT_SECONDS = float(
@@ -57,6 +57,7 @@ class WorkerConnection:
     connected_at: float = field(default_factory=time.monotonic)
     last_seen: float = field(default_factory=time.monotonic)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    layer_inventories: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -234,6 +235,12 @@ class RemoteWorkerRegistry:
     def is_table_online(self, full_pattern: str) -> bool:
         return str(full_pattern or "") in self.online_tables()
 
+    def layer_inventory(self, full_pattern: str):
+        try:
+            return self._worker_for_table(full_pattern).layer_inventories.get(full_pattern)
+        except RemoteTablebaseOffline:
+            return None
+
     def status(self) -> list[dict[str, Any]]:
         now = time.monotonic()
         result = []
@@ -326,6 +333,7 @@ class RemoteWorkerRegistry:
             raise RemoteTablebaseProtocolError("Worker authentication failed.")
 
         advertised: set[str] = set()
+        inventories = {}
         for item in hello.get("tables", []):
             if isinstance(item, str):
                 full_pattern = item
@@ -337,6 +345,9 @@ class RemoteWorkerRegistry:
                 continue
             if ready and full_pattern in configured[worker_id]["tables"]:
                 advertised.add(full_pattern)
+                inventory = normalize_layer_inventory(item.get('layer_inventory')) if isinstance(item, dict) else None
+                if inventory is not None:
+                    inventories[full_pattern] = inventory
 
         advertised_capabilities = frozenset(
             capability
@@ -345,7 +356,7 @@ class RemoteWorkerRegistry:
                 for item in hello.get("capabilities", [])
                 if isinstance(item, str)
             )
-            if capability in (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1, CAPABILITY_GAMER_STREAM_V2)
+            if capability in (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1, CAPABILITY_GAMER_STREAM_V2)
         )
 
         worker = WorkerConnection(
@@ -353,13 +364,15 @@ class RemoteWorkerRegistry:
             websocket,
             frozenset(advertised),
             capabilities=advertised_capabilities,
+            layer_inventories=inventories,
         )
         lock = self._ensure_lock()
         async with lock:
             previous = self._workers.get(worker_id)
             previous_tables = previous.tables if previous else frozenset()
             self._workers[worker_id] = worker
-            availability_changed = previous is None or previous_tables != worker.tables
+            availability_changed = (previous is None or previous_tables != worker.tables
+                                    or previous.layer_inventories != worker.layer_inventories)
         if availability_changed:
             self._mark_availability_changed()
         if previous is not None and previous.websocket is not websocket:
@@ -386,6 +399,7 @@ class RemoteWorkerRegistry:
                     "tables", {}
                 )
                 advertised: set[str] = set()
+                inventories = {}
                 for item in message["tables"]:
                     if isinstance(item, str):
                         full_pattern, ready = item, True
@@ -396,10 +410,14 @@ class RemoteWorkerRegistry:
                         continue
                     if ready and full_pattern in configured:
                         advertised.add(full_pattern)
+                        inventory = normalize_layer_inventory(item.get('layer_inventory')) if isinstance(item, dict) else None
+                        if inventory is not None:
+                            inventories[full_pattern] = inventory
                 next_tables = frozenset(advertised)
-                if next_tables != worker.tables:
+                if next_tables != worker.tables or inventories != worker.layer_inventories:
                     removed_tables = worker.tables - next_tables
                     worker.tables = next_tables
+                    worker.layer_inventories = inventories
                     self._mark_availability_changed()
                     for full_pattern in removed_tables:
                         self._fail_table(worker.worker_id, full_pattern)
@@ -409,7 +427,6 @@ class RemoteWorkerRegistry:
             "LOOKUP_BATCH_RESULT",
             "RANDOM_STATE_RESULT",
             "BATTLE_ROUTE_RESULT",
-            "GAMER_ROUTE_RESULT",
             "GAMER_STREAM_NODE",
             "GAMER_STREAM_END",
             "ERROR",
@@ -558,11 +575,6 @@ class RemoteWorkerRegistry:
         )
         return response
 
-    def supports_gamer_route(self, full_pattern: str) -> bool:
-        try:
-            return CAPABILITY_GAMER_ROUTE_V1 in self._worker_for_table(full_pattern).capabilities
-        except RemoteTablebaseOffline:
-            return False
 
     def supports_gamer_stream(self, full_pattern: str) -> bool:
         try:
@@ -593,30 +605,6 @@ class RemoteWorkerRegistry:
             raise
         return stream
 
-    async def generate_gamer_route(self, *, full_pattern, pattern, target, options):
-        from backend.gamer_tablebase_route import generate_route, validate_options
-        from Config import pattern_32k_tiles_map
-        validate_options(options)
-        response = await self.request('GENERATE_GAMER_ROUTE', full_pattern,
-            {'pattern': pattern, 'target': str(target), 'options': options},
-            required_capability=CAPABILITY_GAMER_ROUTE_V1)
-        items = response.get('items')
-        if not isinstance(items, list) or not 1 <= len(items) <= options['steps']:
-            raise RemoteTablebaseProtocolError('Invalid Gamer route length')
-        # Reconstruct transitions without additional reads before accepting/cacheing nodes.
-        iterator = iter(items)
-        def lookup(board):
-            item = next(iterator)
-            if item.get('lookup_board') != f'{board:016x}' or not isinstance(item.get('results'), dict):
-                raise ValueError('Invalid route board')
-            return item['results'], str(item['dtype'])
-        try:
-            expected = generate_route(options, pattern_32k_tiles_map[pattern][0], lookup)
-            if expected != items:
-                raise ValueError('Invalid route state')
-        except (KeyError, ValueError, TypeError, StopIteration) as exc:
-            raise RemoteTablebaseProtocolError('Invalid Gamer route') from exc
-        return items
 
     async def lookup_batch(
         self,

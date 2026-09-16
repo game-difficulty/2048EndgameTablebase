@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from backend.auth.db import auth_db
 from backend.auth.service import parse_iso, utcnow
-from backend.gamer_tablebase import RouteRequest, check_query_budget
+from backend.gamer_tablebase_common import RouteRequest, check_query_budget
 from backend.gamer_tablebase_route import GamerRouteCursor
 from backend.gamer_stream_window import StreamWindow, MAX_WINDOW, REMOTE_LOOKAHEAD, STREAM_IDLE_SECONDS, MAX_STREAM_STEPS, wait_stream_event
 from backend.quota.config import apply_pricing_multipliers, operation_cost_units, resolve_pricing_snapshot, table_multiplier_units, token_to_units

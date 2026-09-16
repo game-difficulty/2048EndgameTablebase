@@ -774,10 +774,10 @@ def init_auth_db() -> None:
             SELECT
               users.id,
               CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0
-                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type='live_lucky_award')
+                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund'))
                 THEN 'supporter' ELSE 'free' END,
               CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0
-                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type='live_lucky_award')
+                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund'))
                 THEN ? ELSE NULL END,
               1,
               1,
@@ -809,7 +809,7 @@ def init_auth_db() -> None:
                 show_supporter_badge = 1,
                 updated_at = ?
             WHERE tier != 'supporter'
-              AND user_id NOT IN (SELECT user_id FROM token_ledger WHERE event_type='live_lucky_award')
+              AND user_id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund'))
               AND user_id IN (
                 SELECT user_id FROM token_accounts WHERE paid_balance_units > 0
               )

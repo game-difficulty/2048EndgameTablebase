@@ -36,6 +36,58 @@ network failure), leaving history, stats, chat and links usable.
 
 ## Native runner
 
+### Weekly statistics
+
+The footer counts completed games by their finish time, Monday 00:00 through the
+following Monday 00:00 in UTC+8. Counts and score totals aggregate `live_days`;
+the exact score median uses compact `live_scores` rows, independent of the
+200-replay/100MB retention limit. An even count averages the middle two scores.
+The score ledger also keeps completion retries idempotent after replay pruning.
+
+Startup backfills scores from retained replays without counting them again.
+If older replay pruning has already removed scores, that week's median is null
+(shown as a dash), not the median of an incomplete sample. Future complete weeks
+have an exact median. Existing daily counters remain for backward compatibility.
+The maintenance loop broadcasts a summary at a week boundary even while paused.
+
+### Shared main-site login
+
+Main-site and live-site sessions share the HttpOnly, Secure, SameSite=Lax cookie
+`tb_shared_session` on the parent domain. `AUTH_SHARED_COOKIE_DOMAIN` defaults to
+`2048tables.online`; only the parent, `www`, and `live` hosts issue it. Localhost
+and other hosts keep the original host-only cookie. An empty setting disables
+sharing. All subdomains of this parent must remain trusted; do not host untrusted
+applications on that cookie domain.
+
+New logins and registrations work on a first visit to the other site. Existing
+main-site users refresh the main site once to migrate their cookie automatically;
+the session and expiry are unchanged. HTTP and WebSocket authentication prefer
+the shared session over old per-host credentials. Logout revokes that session and
+clears the shared cookie. The live page refreshes identity when its tab becomes
+visible again. There are no cross-origin redirects, iframe bridges or URL tokens.
+
+### Administrator pause / resume
+
+The main-site administrator page controls the livestream through authenticated
+`GET /api/admin/live` and `POST /api/admin/live {"enabled": false|true}`.
+The desired state and revision persist in `live_control` in the live database.
+Repeated requests are idempotent; reconnecting or restarting the server does not
+clear a pause. Starting while the local computer is offline only saves the intent.
+It cannot launch the local process remotely.
+
+The publisher advertises `control_version: 1`, receives the current control in
+the handshake and subsequent `control` messages, and replies with `control_ack`.
+Pause keeps the socket heartbeat and current run, seed and checkpoint. An ongoing
+native query may finish, but its result is discarded if the control revision has
+changed. Steps already sent before the ACK are accepted in socket order. No new
+steps or games are sent after the pause ACK, and paused time is not game time.
+The separate tablebase Worker serving interactive users is unaffected.
+
+Deploy the server and frontend, then update/restart the local livestream runner
+once to load this support. Subsequent pause/resume actions do not restart it.
+The administrator page warns about older runners instead of pretending a pause
+was applied. Viewers see a distinct paused overlay; chat and history remain usable.
+
 Run from the cloud checkout with its normal Python environment:
 
 ```powershell
@@ -109,9 +161,16 @@ outside the repository. The main runner log rotates at 512KB with one backup.
 This launcher does not install a Windows startup task.
 
 Users may watch anonymously and chat after automatic guest-session creation.
-Signing in on the live subdomain uses existing account APIs and a host-only cookie;
-V1 deliberately does not broaden main-site cookies or implement cross-domain SSO.
-Account data, avatars and supporter badges are shared via the existing database.
+Main-site and live logins share an HttpOnly, Secure, SameSite=Lax cookie on
+`2048tables.online`. Existing host-only sessions migrate when `/api/auth/me` is
+requested, without extending their lifetime. Local development retains host-only
+cookies. Account data, avatars and supporter badges use the existing database.
+
+The local live-only table allowlist is `live_ai_tables.local.json`. It excludes
+`444_1024` and `444_2048`; this does not change the public tablebase Worker catalog.
+The runner uses a 50ms minimum for search and 80ms for table decisions. It only
+acknowledges broadcast control when the server advertises that capability, so
+restarting it before a server upgrade remains safe.
 
 ## Retention, statistics and interaction
 
@@ -239,10 +298,46 @@ gift consumption is used to infer sponsorship. Balance-setting events are exclud
 Both entrance levels remain in the bounded 100-entry chat history. Reconnect history
 does not replay banners; reduced-motion/simple/off still applies to top effects.
 
+## Viewer-funded red envelopes
+
+The expanded gift drawer contains a separate red-envelope action, not a bulk gift.
+Logged-in viewers can transfer 1,000-50,000 **paid** Tokens into 5-20 shares. The
+full amount is debited once on final confirmation; the per-sender cooldown is 15
+seconds. Weekly allowances, pricing multipliers and ordinary gift budgets do not
+apply. Transfers do not grant gift contribution or sponsorship status.
+
+`backend/live/red_envelopes.py` owns the persistent global FIFO queue in the auth
+database. Only the head can be claimed. Its clock starts on activation, stays on
+screen for at least 15 seconds even if exhausted, and expires at 60 seconds.
+Unclaimed shares return to the sender automatically, including after disconnects
+or a server restart. A queued envelope gets its own full minute when activated.
+The sender cannot claim their own envelope; each other logged-in viewer with a
+fresh room heartbeat can claim once. No AI publisher connection is required.
+
+Random mode samples a uniform positive integer composition and shuffles it using
+the system CSPRNG, giving every claim position the same expectation. Allocations
+never leave the server. Equal mode floors each share; its remainder is shown
+before confirmation and is not refunded. Only unclaimed distributable shares are
+refunded on expiry.
+
+SQLite IMMEDIATE transactions couple sends, claims and refunds to their paid
+Token ledger entries (`live_red_send`, `live_red_award`, `live_red_refund`). Sender
+request IDs and claimant uniqueness prevent double debit/credit. A persisted
+outbox restores chat announcements; snapshots restore the active envelope. The
+refund task runs independently of ordinary gift delivery. The browser retains
+uncertain send requests across refresh and retries with the same immutable ID.
+
+The original `红包.gif` is retained in `design/live_gifts/references`; transparent
+static/animated WebP assets are in `frontend/public/live-gifts`. The envelope
+appears below lucky bags. Clicking its chat announcement reopens its status and
+the viewer's own award. Guests are prompted to sign in. Reduced motion uses the
+static poster.
+
 ## Verification
 
 ```text
 python -m unittest tests.test_live tests.test_live_routes tests.test_live_gifts
+python -m unittest tests.test_live_red_envelopes
 node --test tests/liveEngine.test.js tests/liveInteractions.test.js tests/liveGifts.test.js tests/boardFrame.test.js tests/verseReplayCore.test.js
 npm run build
 ```

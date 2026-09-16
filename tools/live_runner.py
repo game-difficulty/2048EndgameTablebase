@@ -68,6 +68,56 @@ def save_checkpoint(path, run):
     temporary.replace(path)
 
 
+async def wait_for_step(started, source, table_interval, search_interval):
+    interval = search_interval if source == 'AI' else table_interval
+    # Windows timers can wake early; enforce the minimum on the clock.
+    remaining = interval - (time.monotonic() - started)
+    while remaining > 0:
+        await asyncio.sleep(remaining)
+        remaining = interval - (time.monotonic() - started)
+
+
+class RunnerControl:
+    """Fence steps at the send boundary; a native search already running may finish."""
+    def __init__(self, socket, initial, checkpoint):
+        self.socket, self.checkpoint = socket, checkpoint
+        self.enabled = initial.get('enabled', True)
+        self.revision = initial.get('revision', 0)
+        self.lock = asyncio.Lock()
+        self.wake = asyncio.Event()
+        self.reader = None
+        if self.enabled:
+            self.wake.set()
+
+    async def acknowledge(self):
+        await self.socket.send(json.dumps(dict(type='control_ack', revision=self.revision)))
+
+    async def receive(self):
+        try:
+            while True:
+                data = json.loads(await self.socket.recv())
+                if data.get('type') != 'control' or data['revision'] < self.revision:
+                    continue
+                async with self.lock:
+                    self.enabled, self.revision = data['enabled'], data['revision']
+                    if self.enabled:
+                        self.wake.set()
+                    else:
+                        self.wake.clear()
+                        self.checkpoint()
+                    await self.acknowledge()
+                    LOG.info('Broadcast %s', 'resumed' if self.enabled else 'paused')
+        finally:
+            self.wake.set()
+
+    async def wait(self):
+        await self.wake.wait()
+        if self.reader and self.reader.done():
+            self.reader.result()
+            raise ConnectionError('Control channel closed')
+        return self.revision
+
+
 async def run_forever(args):
     from websockets.asyncio.client import connect
     token = os.environ.get('LIVE_PUBLISH_TOKEN', '')
@@ -83,11 +133,17 @@ async def run_forever(args):
             async with connect(args.url, additional_headers={'Authorization': 'Bearer ' + token},
                                max_size=800_000, ping_interval=10, ping_timeout=15,
                                compression=None) as socket:
-                await socket.send(json.dumps({'type': 'hello', 'run': run.checkpoint() if run else None}))
+                await socket.send(json.dumps({'type': 'hello', 'control_version': 1,
+                                              'run': run.checkpoint() if run else None}))
                 reply = json.loads(await asyncio.wait_for(socket.recv(), 20))
                 run = LiveRun.restore(reply['run']) if reply.get('run') else None
                 LOG.info('Connected')
                 retry = 1
+                control = RunnerControl(socket, reply.get('control', {}),
+                                        lambda: save_checkpoint(checkpoint, run) if run else None)
+                if 'control' in reply:
+                    await control.acknowledge()
+                control.reader = asyncio.create_task(control.receive())
 
                 async def heartbeat():
                     while True:
@@ -98,38 +154,47 @@ async def run_forever(args):
                 saved_at = time.monotonic()
                 try:
                     while True:
+                        revision = await control.wait()
                         if run is None or run.ended:
                             if run:
                                 await asyncio.sleep(max(0, (run.restart_at or 0) - time.time()))
-                            run = LiveRun()
-                            await socket.send(json.dumps({'type': 'start', 'run_id': run.id, 'seed': run.seed}))
-                            save_checkpoint(checkpoint, run)
+                            async with control.lock:
+                                if not control.enabled or revision != control.revision:
+                                    continue
+                                run = LiveRun()
+                                await socket.send(json.dumps({'type': 'start', 'run_id': run.id, 'seed': run.seed}))
+                                save_checkpoint(checkpoint, run)
                         if not legal_moves(run.board):
-                            delay = random.randint(10, 20)
-                            run.end(time.time() + delay)
-                            await socket.send(json.dumps({'type': 'end', 'delay': delay}))
-                            save_checkpoint(checkpoint, run)
+                            async with control.lock:
+                                if not control.enabled or revision != control.revision:
+                                    continue
+                                delay = random.randint(10, 20)
+                                run.end(time.time() + delay)
+                                await socket.send(json.dumps({'type': 'end', 'delay': delay}))
+                                save_checkpoint(checkpoint, run)
                             continue
                         started = time.monotonic()
                         direction, source = await asyncio.to_thread(ai.choose, run.board.copy())
-                        # Windows timers can wake early; enforce the minimum on the clock.
-                        remaining = args.interval - (time.monotonic() - started)
-                        while remaining > 0:
-                            await asyncio.sleep(remaining)
-                            remaining = args.interval - (time.monotonic() - started)
-                        if source != run.source:
-                            run.source = source
-                            await socket.send(json.dumps({'type': 'source', 'source': source}))
-                        packet = run.make_step(direction, round((time.monotonic()-started)*1000))
-                        run.apply(packet)
-                        await socket.send(packet)
+                        await wait_for_step(started, source, args.interval, args.search_interval)
+                        async with control.lock:
+                            if not control.enabled or revision != control.revision:
+                                continue
+                            if source != run.source:
+                                run.source = source
+                                await socket.send(json.dumps({'type': 'source', 'source': source}))
+                            packet = run.make_step(direction, round((time.monotonic()-started)*1000))
+                            run.apply(packet)
+                            await socket.send(packet)
                         if time.monotonic()-saved_at >= 5:
                             save_checkpoint(checkpoint, run)
                             saved_at = time.monotonic()
                 finally:
                     ping.cancel()
+                    control.reader.cancel()
                     with contextlib.suppress(Exception, asyncio.CancelledError):
                         await ping
+                    with contextlib.suppress(Exception, asyncio.CancelledError):
+                        await control.reader
         except asyncio.CancelledError:
             if run:
                 save_checkpoint(checkpoint, run)
@@ -150,16 +215,19 @@ def main():
     parser.add_argument('--tables', help='Optional JSON object: full pattern -> [[local path, dtype], ...]')
     parser.add_argument('--threads', type=int, choices=range(1, 5), default=1)
     parser.add_argument('--time-ratio', type=float, default=1.0)
-    parser.add_argument('--interval', type=float, default=0.08)
+    parser.add_argument('--interval', type=float, default=0.08, help='Minimum table step interval in seconds')
+    parser.add_argument('--search-interval', type=float, default=0.05, help='Minimum AI search step interval in seconds')
     parser.add_argument('--log-file', help='Optional bounded rotating log file')
     args = parser.parse_args()
     args.interval = max(.08, args.interval)
+    args.search_interval = max(.05, args.search_interval)
     handlers = None
     if args.log_file:
         path = Path(args.log_file).resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         handlers = [RotatingFileHandler(path, maxBytes=512_000, backupCount=1, encoding='utf-8')]
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=handlers)
+    LOG.info('Step minimums: AI search %.0fms, table %.0fms', args.search_interval * 1000, args.interval * 1000)
     asyncio.run(run_forever(args))
 
 

@@ -9,17 +9,20 @@ from backend.quota.service import grant_weekly_tokens_if_due
 
 from .dependencies import (
     auth_tokens_from_request,
+    bearer_token_from_authorization,
     client_ip,
     cookie_secure,
     current_guest_from_request,
     current_user_from_request,
     require_user,
+    shared_cookie_domain,
 )
 from .service import (
     BROWSER_COOKIE_NAME,
     EMAIL_CODE_BROWSER_COOLDOWN_SECONDS,
     EmailCodeCooldownError,
     SESSION_COOKIE_NAME,
+    SHARED_SESSION_COOKIE_NAME,
     change_password,
     deactivate_account,
     login_user,
@@ -37,7 +40,8 @@ from .principal import ActorRef
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-def _set_session_cookie(response: Response, token: str, expires_at: str) -> None:
+def _set_session_cookie(response: Response, token: str, expires_at: str, request: Request | None = None) -> None:
+    domain = shared_cookie_domain(request) if request is not None else None
     try:
         expires_dt = datetime.fromisoformat(str(expires_at)).astimezone(timezone.utc)
         max_age = max(1, int((expires_dt - datetime.now(timezone.utc)).total_seconds()))
@@ -46,7 +50,7 @@ def _set_session_cookie(response: Response, token: str, expires_at: str) -> None
         max_age = 14 * 24 * 60 * 60
         expires = None
     response.set_cookie(
-        SESSION_COOKIE_NAME,
+        SHARED_SESSION_COOKIE_NAME if domain else SESSION_COOKIE_NAME,
         token,
         httponly=True,
         secure=cookie_secure(),
@@ -54,11 +58,18 @@ def _set_session_cookie(response: Response, token: str, expires_at: str) -> None
         max_age=max_age,
         expires=expires,
         path="/",
+        domain=domain,
     )
+    if domain:
+        response.delete_cookie(SESSION_COOKIE_NAME, path='/')
 
 
-def _clear_session_cookie(response: Response) -> None:
+def _clear_session_cookie(response: Response, request: Request | None = None) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    domain = shared_cookie_domain(request) if request is not None else None
+    if domain:
+        response.delete_cookie(SHARED_SESSION_COOKIE_NAME, path='/', domain=domain,
+                               httponly=True, secure=cookie_secure(), samesite='lax')
 
 
 def _authenticated_response(result: dict) -> dict:
@@ -100,9 +111,23 @@ def _cooldown_response(exc: EmailCodeCooldownError) -> HTTPException:
 
 
 @router.get("/me")
-async def me(request: Request):
+async def me(request: Request, response: Response):
+    response.headers['Cache-Control'] = 'no-store'
     user = current_user_from_request(request)
     if user is not None:
+        token = getattr(request.state, 'auth_session_token', None)
+        session_sync = {}
+        if (shared_cookie_domain(request) and token and user.get('session_expires_at')
+                and request.cookies.get(SHARED_SESSION_COOKIE_NAME) != token):
+            # Upgrade an existing host-only/bearer session without extending its lifetime.
+            _set_session_cookie(response, token, user['session_expires_at'], request)
+        elif token and request.cookies.get(SHARED_SESSION_COOKIE_NAME) == token and shared_cookie_domain(request):
+            if request.cookies.get(SESSION_COOKIE_NAME):
+                response.delete_cookie(SESSION_COOKIE_NAME, path='/')
+            bearer = bearer_token_from_authorization(request.headers.get('authorization'))
+            if bearer and bearer != token:
+                # Keep this origin's existing device fallback aligned with the shared account.
+                session_sync = dict(device_session_token=token, expires_at=user['session_expires_at'])
         token_balance = grant_weekly_tokens_if_due(int(user["id"]))
         user = {**user, "token_balance": token_balance}
         return {
@@ -110,6 +135,7 @@ async def me(request: Request):
             "user": user,
             "guest": None,
             "actor": ActorRef.from_user(user).public_dict(),
+            **session_sync,
         }
     guest = current_guest_from_request(request)
     return {
@@ -148,7 +174,7 @@ async def register(request: Request, response: Response, payload: dict = Body(..
             user_agent=request.headers.get("user-agent", ""),
             ip_address=client_ip(request),
         )
-        _set_session_cookie(response, result["token"], result["expires_at"])
+        _set_session_cookie(response, result["token"], result["expires_at"], request)
         return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -163,7 +189,7 @@ async def login(request: Request, response: Response, payload: dict = Body(...))
             user_agent=request.headers.get("user-agent", ""),
             ip_address=client_ip(request),
         )
-        _set_session_cookie(response, result["token"], result["expires_at"])
+        _set_session_cookie(response, result["token"], result["expires_at"], request)
         return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -193,7 +219,7 @@ async def reset_password_route(request: Request, response: Response, payload: di
             user_agent=request.headers.get("user-agent", ""),
             ip_address=client_ip(request),
         )
-        _set_session_cookie(response, result["token"], result["expires_at"])
+        _set_session_cookie(response, result["token"], result["expires_at"], request)
         return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -239,7 +265,7 @@ async def deactivate(request: Request, response: Response, payload: dict = Body(
             confirm=str(payload.get("confirm") or ""),
             verification_code=str(payload.get("verification_code") or ""),
         )
-        _clear_session_cookie(response)
+        _clear_session_cookie(response, request)
         return {"authenticated": False, "user": None}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -249,5 +275,5 @@ async def deactivate(request: Request, response: Response, payload: dict = Body(
 async def logout(request: Request, response: Response):
     for token in auth_tokens_from_request(request):
         revoke_session(token)
-    _clear_session_cookie(response)
+    _clear_session_cookie(response, request)
     return {"authenticated": False, "user": None}

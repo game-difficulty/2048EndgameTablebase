@@ -32,27 +32,20 @@
     <template v-else-if="id === 'whale'">
       <GiftIcon id="whale" /><span class="spout"><i v-for="n in 3" :key="n"></i></span>
     </template>
-    <template v-else-if="id === 'chicken'">
-      <img class="chicken-a" :src="giftAsset('chicken')" width="64" height="64" alt="" />
-      <img class="chicken-b" :src="giftAsset('chicken-alt')" width="64" height="64" alt="" />
+    <ChickenGiftMotion v-else-if="id === 'chicken' || id === 'serious'" :key="id" :id="id" />
+    <template v-else-if="id === 'knowledge'">
+      <GiftIcon id="knowledge" class="knowledge-art" /><span class="knowledge-plus">+</span>
     </template>
-    <svg v-else-if="id === 'serious'" viewBox="0 0 100 100" fill="none">
-      <ellipse cx="50" cy="89" rx="43" ry="4" fill="#786443" opacity=".3" />
-      <g stroke="#d89026" stroke-width="6" stroke-linecap="round"><path class="leg-left" d="m45 69-8 15-10 2" /><path class="leg-right" d="m55 69 8 15 10 2" /></g>
-      <g class="split-body">
-        <path d="M28 51 9 35l-3-9m65 25 19-16 4-9" stroke="#e7c877" stroke-width="9" stroke-linecap="round" />
-        <ellipse cx="50" cy="56" rx="24" ry="29" fill="#f5d881" /><circle cx="50" cy="30" r="21" fill="#ffe59c" />
-        <path d="m38 16 5-9 6 6 5-8 6 10" fill="#ffe59c" />
-        <circle cx="42" cy="28" r="3" fill="#272320" /><circle cx="58" cy="28" r="3" fill="#272320" />
-        <path d="m44 37 6-5 6 5-6 5Z" fill="#d68723" /><path d="m35 23 11 3m8 0 11-3" stroke="#8e7030" stroke-width="2" />
-      </g>
-    </svg>
+    <template v-else-if="id === 'meaning'">
+      <GiftIcon id="meaning" class="meaning-art" /><span class="meaning-question">?</span>
+    </template>
   </span>
 </template>
 <script setup>
 import { Crown } from '@lucide/vue';
 import { useId } from 'vue';
 import GiftIcon from './GiftIcon.vue';
+import ChickenGiftMotion from './ChickenGiftMotion.vue';
 import { giftAsset } from './giftArtwork.js';
 defineProps({ id: String, name: String, ceremony: Boolean });
 // Remove the animated source's white matte without replacing or retiming its frames.
@@ -62,18 +55,17 @@ const matteId = `gift-matte-${useId()}`;
 .gift-motion { position:relative;display:inline-flex;align-items:center;justify-content:center;width:46px;height:46px;flex-shrink:0; }
 .gift-motion > img,.gift-motion > svg { width:100%;height:100%;object-fit:contain;border-radius:4px; }
 .motion-rip { width:110px; }
-.chicken-a,.chicken-b { position:absolute;inset:0; }
-.chicken-a { animation:pose-a .9s steps(1,end) 4; }.chicken-b { opacity:0;animation:pose-b .9s steps(1,end) 4; }
-@keyframes pose-a { 50% { opacity:0; } } @keyframes pose-b { 50% { opacity:1; } }
+.knowledge-art { animation:knowledge-bounce 1.3s ease-in-out 4; }.knowledge-plus { position:absolute;right:0;top:0;font-size:18px;font-weight:900;color:#96e4be;animation:knowledge-rise 1.3s ease-out 4; }
+.meaning-art { animation:meaning-tilt 1.6s ease-in-out 3; }.meaning-question { position:absolute;right:0;top:-4px;font-size:20px;font-weight:900;color:#ffe2a0;animation:question-pop 1.6s ease-in-out 3; }
+@keyframes knowledge-bounce { 50% { transform:translateY(-3px) scale(1.08); } }
+@keyframes knowledge-rise { 0% { opacity:0;transform:translateY(6px); } 35% { opacity:1; } 100% { opacity:0;transform:translateY(-10px); } }
+@keyframes meaning-tilt { 25% { transform:rotate(-9deg); } 75% { transform:rotate(9deg); } }
+@keyframes question-pop { 0%,100% { opacity:0;transform:scale(.7); } 40%,70% { opacity:1;transform:scale(1); } }
 .motion-whale { padding-top:8px; }.motion-whale :deep(.gift-icon) { animation:whale-bob 1s ease-in-out 3; }
 .spout { position:absolute;top:7px;left:24px; }.spout i { position:absolute;width:3px;height:6px;border-radius:50%;background:#57c9f4;animation:spout 1s ease-out 3; }
 .spout i:nth-child(2) { --dx:-8px;animation-delay:.1s; }.spout i:nth-child(3) { --dx:8px;animation-delay:.2s; }
 @keyframes spout { from { transform:translate(0,4px);opacity:0; } 35% { opacity:1; } to { transform:translate(var(--dx,0px),-15px);opacity:0; } }
 @keyframes whale-bob { 50% { transform:translateY(3px) rotate(-5deg); } }
-.leg-left,.leg-right { transform-box:view-box;transform-origin:50px 69px;animation:split-left 1.6s ease-in-out 2; }.leg-right { animation-name:split-right; }
-.split-body { animation:body-drop 1.6s ease-in-out 2; }
-@keyframes split-left { 40%,70% { transform:rotate(42deg); } } @keyframes split-right { 40%,70% { transform:rotate(-42deg); } }
-@keyframes body-drop { 40%,70% { transform:translateY(9px); } }
 .gift-ceremony { position:absolute;z-index:25;right:0;top:76px;width:280px;height:174px;border:1px solid #d2b463;background:#171c28;color:#ffe3a2;border-radius:8px;box-shadow:0 8px 25px #0004;pointer-events:none;overflow:hidden;animation:ceremony-in .3s ease-out; }
 .ceremony-art { position:relative;height:138px;display:flex;align-items:center;justify-content:center; }
 .ceremony-caption { display:block;text-align:center;font-size:14px;line-height:24px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 10px; }

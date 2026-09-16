@@ -1,4 +1,4 @@
-"""Deterministic short-route rules shared by the cloud and table worker."""
+"""Deterministic streaming-route rules shared by the cloud and table worker."""
 from __future__ import annotations
 
 import math
@@ -22,7 +22,7 @@ def validate_options(options):
             raise ValueError('Invalid route state')
     if not any(options['rng_state']):
         raise ValueError('Invalid route RNG')
-    for name, low, high in [('steps', 1, 4), ('difficulty', 0, 100)]:
+    for name, low, high in [('steps', 1, 1), ('difficulty', 0, 100)]:
         if type(options[name]) is not int or not low <= options[name] <= high:
             raise ValueError('Invalid route limit')
     if type(options['random_only']) is not bool:
@@ -55,16 +55,6 @@ def predict_next(values, direction, rng, request, *, random_only=None):
     return moved
 
 
-def generate_route(options, large_tiles, lookup):
-    cursor = GamerRouteCursor(options, large_tiles)
-    nodes = []
-    for index in range(options['steps']):
-        encoded = cursor.encoded
-        results, dtype = lookup(encoded)
-        nodes.append(cursor.node(results, dtype))
-        if not cursor.advance(results, dtype):
-            break
-    return nodes
 
 
 class GamerRouteCursor:

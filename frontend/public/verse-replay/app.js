@@ -507,6 +507,20 @@
   }
 
   async function loadRankedReplayFromUrl() {
+    const liveId = new URLSearchParams(window.location.search).get('live');
+    if (liveId) {
+      elements.fileName.textContent = '正在载入 AI 直播回放…';
+      try {
+        const response = await fetch(`/api/live/replays/${encodeURIComponent(liveId)}`);
+        if (!response.ok) throw new Error(response.status === 404 ? '回放已过期或不存在' : '暂时无法获取回放');
+        const responseText = await response.text();
+        await installReplay(() => decodeReplayText(responseText), 'AI 直播对局');
+      } catch (error) {
+        showError(`无法载入直播回放：${error?.message || '网络请求失败'}`);
+        elements.fileName.textContent = '直播回放载入失败';
+      }
+      return;
+    }
     const replayId = new URLSearchParams(window.location.search).get('ranked');
     if (!replayId) return;
     elements.fileName.textContent = '正在载入已验证对局…';

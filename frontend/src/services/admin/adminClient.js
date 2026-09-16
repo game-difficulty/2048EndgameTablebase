@@ -27,6 +27,8 @@ async function requestJson(path, { method = 'GET', body } = {}) {
 }
 
 export const adminClient = {
+  liveStatus: () => requestJson('/api/admin/live'),
+  setLiveEnabled: (enabled) => requestJson('/api/admin/live', { method: 'POST', body: { enabled } }),
   overview: ({
     q = '',
     page = 1,

@@ -154,7 +154,9 @@ def send(user, data, online):
         combo_id = previous['combo_id'] if continuing else request_id
         combo_count = (previous['combo_count'] if continuing else 0) + quantity
         event = dict(type='gift', id=request_id, combo_id=combo_id, combo_count=combo_count,
-                     gift_id=gift_id, quantity=quantity, tier=definition['tier'], at=now, actor=public_actor(user, db))
+                     gift_id=gift_id, quantity=quantity, tier=definition['tier'], at=now, actor=public_actor(user, db),
+                     bulk_effect=10000 <= definition['base_units'] <= 16000
+                     and combo_count - quantity < 100 <= combo_count)
         consumed = consume_operation_tokens_once(request_id=request_id, user_id=user_id,
             session_id=user.get('session_id'), operation_key='live_gift_' + gift_id,
             multiplier_override_units=1000, quantity=quantity, db=db, pricing_snapshot=pricing,

@@ -18,6 +18,25 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 DEFAULT_ALLOWED_IDENTITIES = ("user0", "assweeass@163.com")
 
 
+@router.get('/live')
+async def admin_live_status(request: Request):
+    _require_admin(request)
+    from backend.live.routes import hub
+    return hub.control_status()
+
+
+@router.post('/live')
+async def admin_live_control(request: Request, payload: dict = Body(...)):
+    _require_admin(request)
+    from backend.live.routes import hub, same_origin
+    same_origin(request.headers)
+    if type(payload.get('enabled')) is not bool:
+        raise HTTPException(422, 'enabled must be a boolean')
+    if hub.producer_ready and not hub.control_supported:
+        raise HTTPException(409, 'Please update the livestream runner first.')
+    return await hub.set_enabled(payload['enabled'])
+
+
 @router.get("/tablebase-workers")
 async def admin_tablebase_workers(request: Request):
     _require_admin(request)

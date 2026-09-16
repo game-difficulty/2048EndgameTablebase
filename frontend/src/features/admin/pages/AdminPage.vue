@@ -14,6 +14,8 @@
         </div>
       </header>
 
+      <AdminLiveControl :active="active" />
+
       <div v-if="error" class="rounded-2xl border border-red-400/35 bg-red-500/10 p-4 ui-body font-bold text-red-500">
         {{ error }}
       </div>
@@ -390,6 +392,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { adminClient } from '../../../services/admin/adminClient';
+import AdminLiveControl from '../components/AdminLiveControl.vue';
 
 const props = defineProps({
   active: Boolean,

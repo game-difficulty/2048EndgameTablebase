@@ -11,17 +11,24 @@ from .guest_service import (
     authenticate_guest_token,
 )
 from .principal import ActorRef
-from .service import SESSION_COOKIE_NAME, authenticate_session_token
+from .service import SESSION_COOKIE_NAME, SHARED_SESSION_COOKIE_NAME, authenticate_session_token
 
 
 def cookie_secure() -> bool:
     return os.getenv("AUTH_COOKIE_SECURE", "1") != "0"
 
 
+def shared_cookie_domain(request: Request | WebSocket) -> str | None:
+    domain = os.getenv('AUTH_SHARED_COOKIE_DOMAIN', '2048tables.online').strip().lower().lstrip('.')
+    host = (request.url.hostname or '').lower()
+    return domain if domain and host in {domain, f'www.{domain}', f'live.{domain}'} else None
+
+
 def current_user_from_request(request: Request) -> dict[str, Any] | None:
     for token in auth_tokens_from_request(request):
         user = authenticate_session_token(token)
         if user is not None:
+            request.state.auth_session_token = token
             return user
     return None
 
@@ -39,7 +46,8 @@ def auth_tokens_from_request(request: Request) -> list[str]:
     tokens: list[str] = []
     cookie_token = str(request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
     bearer_token = bearer_token_from_authorization(request.headers.get("authorization"))
-    for token in (cookie_token, bearer_token):
+    shared_token = request.cookies.get(SHARED_SESSION_COOKIE_NAME) if shared_cookie_domain(request) else None
+    for token in (shared_token, cookie_token, bearer_token):
         if token and token not in tokens:
             tokens.append(token)
     return tokens
@@ -89,6 +97,10 @@ def require_actor(request: Request) -> ActorRef:
 
 
 def current_user_from_websocket(websocket: WebSocket) -> dict[str, Any] | None:
+    if shared_cookie_domain(websocket):
+        user = authenticate_session_token(websocket.cookies.get(SHARED_SESSION_COOKIE_NAME))
+        if user is not None:
+            return user
     return authenticate_session_token(websocket.cookies.get(SESSION_COOKIE_NAME))
 
 

@@ -11,7 +11,8 @@ export function giftAnimation(event) {
   if (ceremonyGifts.has(event.gift_id)) return 'ceremony';
   return supporterMotion.has(event.gift_id) && liveSupporterLevel(event.actor) > 0 ? 'supporter' : null;
 }
-export const giftAsset = name => `/live-gifts/${name}.webp`;
+export const giftAsset = name => ['chicken', 'serious'].includes(name)
+  ? `/live-gifts/${name}-reference.jpg` : `/live-gifts/${name}.webp`;
 
 export function giftChat(event) {
   return { ...event, ...event.actor, id: `gift:${event.combo_id || event.id}` };

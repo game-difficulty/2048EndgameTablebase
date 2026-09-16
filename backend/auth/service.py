@@ -17,6 +17,7 @@ from backend.quota.service import get_token_balance, grant_weekly_tokens_if_due
 
 
 SESSION_COOKIE_NAME = "tb_session"
+SHARED_SESSION_COOKIE_NAME = "tb_shared_session"
 BROWSER_COOKIE_NAME = "tb_browser"
 DEFAULT_SESSION_DAYS = 14
 EMAIL_CODE_MINUTES = 10
@@ -790,6 +791,7 @@ def authenticate_session_token(token: str | None) -> dict[str, Any] | None:
             return None
         user = public_user(row, db=db)
         user["session_id"] = int(row["session_id"])
+        user["session_expires_at"] = row["expires_at"]
         return user
 
 

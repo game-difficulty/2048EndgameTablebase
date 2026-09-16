@@ -1,7 +1,7 @@
 <template>
   <section ref="panel" class="gift-panel">
     <div class="gift-bar">
-      <slot name="leading" />
+      <div class="gift-leading"><slot name="leading" /></div>
       <div class="common-gifts">
         <GiftChoice v-for="gift in commonGifts" :key="gift.id" :gift="gift" :lang="lang" :disabled="sendDisabled" @send="prepareGiftSend" />
       </div>
@@ -13,7 +13,7 @@
     </div>
     <section v-if="expanded" class="gift-drawer" :aria-label="t('全部礼物','All gifts')" @keydown.esc="expanded=false">
       <header><Gift :size="18" /><h2>{{ t('全部礼物','All gifts') }}</h2><button @click="expanded=false" :aria-label="t('关闭','Close')"><X :size="17" /></button></header>
-      <div class="gift-grid"><GiftChoice v-for="gift in catalog.gifts" :key="gift.id" :gift="gift" :lang="lang" :disabled="sendDisabled" @send="prepareGiftSend" /></div>
+      <div class="gift-grid"><button class="red-gift-choice" @click="expanded=false;emit('red-envelope')"><img src="/live-gifts/red-envelope.webp" alt="" /><b>{{ t('红包','Red envelope') }}</b></button><GiftChoice v-for="gift in catalog.gifts" :key="gift.id" :gift="gift" :lang="lang" :disabled="sendDisabled" @send="prepareGiftSend" /></div>
     </section>
     <section v-if="helpOpen" class="gift-drawer contribution-drawer" :aria-label="t('贡献度说明','How contribution works')">
       <header><CircleHelp :size="18" /><h2>{{ t('贡献度说明','How contribution works') }}</h2><button ref="helpClose" @click="helpOpen=false" :aria-label="t('关闭','Close')"><X :size="17" /></button></header>
@@ -56,7 +56,7 @@ import SponsorDialog from '../features/billing/SponsorDialog.vue';
 import QuotaGuideDialog from '../features/billing/QuotaGuideDialog.vue';
 import { giftApi, sendGift } from './giftApi.js';
 const props = defineProps({ user: Object, online: Boolean, lang: String });
-const emit = defineEmits(['login', 'catalog']);
+const emit = defineEmits(['login', 'catalog', 'red-envelope']);
 const t = (zh,en) => props.lang === 'zh' ? zh : en;
 const expanded=ref(false);
 const helpOpen=ref(false), helpClose=ref(null);
@@ -169,11 +169,12 @@ defineExpose({ refreshBalance: () => loadAccount().catch(() => {}), showContribu
 .gift-panel { position:relative;border-top:1px solid var(--border-main);margin-top:14px;padding-top:6px;z-index:45; }
 header { display:flex;align-items:center;gap:8px;margin-bottom:12px; }h2 { font-size:15px;margin:0; }header > button { margin-left:auto; }
 button { display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--bg-card);color:var(--text-main);border:1px solid var(--border-main);border-radius:5px;padding:7px 10px;min-height:30px;cursor:pointer; }button:disabled { opacity:.5;cursor:default; }
-.gift-bar { display:flex;gap:8px;align-items:stretch; }.common-gifts { flex:1;min-width:0;display:grid;grid-template-columns:repeat(8,minmax(70px,1fr));overflow-x:auto; }
+.gift-bar { display:flex;gap:8px;align-items:stretch; }.gift-leading { flex:0 0 78px;width:78px; }.common-gifts { flex:1;min-width:0;display:flex;justify-content:flex-end;gap:8px;overflow-x:auto; }.common-gifts :deep(.gift-choice) { flex:0 0 70px; }
 .gift-bar-tools { width:100px;flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:5px;align-content:center; }.gift-bar-tools > span { width:100%;text-align:center;font-size:11px;overflow-wrap:anywhere; }.gift-bar-tools small { color:var(--text-secondary);font-size:10px; }.expand-gifts { height:42px; }.rotated { transform:rotate(180deg); }
 .gift-drawer { position:absolute;bottom:calc(100% + 6px);right:0;width:370px;max-width:100%;background:var(--bg-main);border:1px solid var(--border-main);border-radius:8px;box-shadow:0 8px 30px #0005;padding:12px; }
 .contribution-drawer { padding:16px; }.contribution-drawer p { font-size:12px;line-height:1.6;color:var(--text-secondary);margin:12px 0; }.contribution-drawer dl { margin:0; }.contribution-drawer dl>div { display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--border-main);font-size:12px; }.contribution-drawer dt { font-weight:700; }.contribution-drawer dd { margin:0;text-align:right; }.contribution-drawer .contribution-note { margin-bottom:0;font-size:11px; }
 .gift-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;max-height:min(540px,60vh);overflow:auto;overscroll-behavior:contain; }
+.gift-grid .red-gift-choice { flex-direction:column;min-height:95px;background:transparent;border:1px solid transparent;font-size:12px; }.red-gift-choice img { width:54px;height:54px;object-fit:contain; }.gift-grid .red-gift-choice:hover { border-color:#d96851;box-shadow:0 3px 12px #0004; }
 .send-gift { background:var(--accent);color:var(--text-on-accent,#10202f);font-weight:700; }
 .quick-row { display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px; }.quick-row label,.check-label { display:flex;gap:6px;align-items:center; }
 .gift-note { margin:4px 0;font-size:11px;line-height:20px;color:var(--text-secondary);max-width:100%;overflow-wrap:anywhere; }

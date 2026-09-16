@@ -42,12 +42,44 @@ class LiveGiftTests(unittest.TestCase):
         catalog, _ = gifts.catalogue()
         item = next(item for item in catalog['gifts'] if item['id'] == gift)
         return dict(request_id=str(uuid4()), gift_id=gift, quantity=quantity,
-                    expected_cost_units=item['totals'][quantity - 1], quote_version=catalog['version'])
+                    expected_cost_units=gifts.apply_pricing_multipliers(item['base_units'] * quantity, 1000, item['global_multiplier_units']),
+                    quote_version=catalog['version'])
 
     def payment(self, amount, event_type='admin_topup', delta=100000):
         with auth_db() as db:
             db.execute('''INSERT INTO token_ledger(user_id,event_type,operation_key,paid_delta_units,metadata_json,created_at)
                 VALUES(1,?,'add_paid',?,?,'now')''', (event_type, delta, json.dumps({'payment_amount_cny': amount})))
+
+    def test_bulk_effect_crosses_100_once_per_combo_without_supporter_requirement(self):
+        user = {**self.user, 'role': 'user'}
+        gifts.send(user, self.request('rip', 99), True)
+        request = self.request('rip', 1)
+        first = gifts.send(user, request, True)
+        self.assertEqual(first, gifts.send(user, request, True))
+        gifts.send(user, self.request('rip', 1), True)
+        events = [item['event'] for item in gifts.pending_events()]
+        self.assertEqual([event['combo_count'] for event in events], [99, 100, 101])
+        self.assertEqual([event['bulk_effect'] for event in events], [False, True, False])
+        self.assertTrue(all(event['actor']['supporter_level'] == 0 for event in events))
+        with auth_db() as db:
+            db.execute('UPDATE live_gift_orders SET created_at=created_at-6')
+        later = gifts.send(user, self.request('rip', 100), True)
+        self.assertNotEqual(first['combo_id'], later['combo_id'])
+        self.assertTrue(gifts.pending_events()[-1]['event']['bulk_effect'])
+
+    def test_bulk_effect_uses_single_gift_base_price_and_cannot_be_client_requested(self):
+        for gift in ['knowledge', 'button', 'whale', 'moai', 'meaning', 'rip', 'tea', 'chicken', 'serious']:
+            gifts.send(self.user, self.request(gift, 100), True)
+            self.assertTrue(gifts.pending_events()[-1]['event']['bulk_effect'], gift)
+        for gift in ['two', 'four', 'heart', 'flowers', 'dealer', '666']:
+            request = {**self.request(gift, 100), 'bulk_effect': True}
+            gifts.send(self.user, request, True)
+            self.assertFalse(gifts.pending_events()[-1]['event']['bulk_effect'], gift)
+
+    def test_bulk_gift_discount_does_not_change_visual_identity(self):
+        with patch.dict(os.environ, {'CLOUD_TOKEN_GLOBAL_MULTIPLIER': '0.5'}):
+            gifts.send(self.user, self.request('rip', 1000), True)
+            self.assertTrue(gifts.pending_events()[-1]['event']['bulk_effect'])
 
     def test_supporter_levels_use_confirmed_cumulative_payments(self):
         regular = {**self.user, 'role': 'user'}
@@ -314,6 +346,7 @@ class LiveGiftTests(unittest.TestCase):
         app.include_router(routes.router)
         local_hub = routes.LiveHub()
         local_hub.producer = object()
+        local_hub.producer_ready = True
         local_hub.last_seen = time.monotonic()
         with TestClient(app) as client, patch.object(routes, 'hub', local_hub), patch.object(routes, 'require_user', return_value=self.user):
             request = self.request()

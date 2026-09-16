@@ -9,7 +9,8 @@
       </article>
     </div>
     <template v-if="animations">
-      <GiftAnimation v-for="event in events.active.filter(item => giftAnimation(item) === 'ceremony')" :key="event.key" :id="event.gift_id" :name="giftName(event.gift_id)" ceremony />
+      <GiftSpotlight v-if="spotlights.active" :key="spotlights.active.key" :event="spotlights.active" :name="giftName(spotlights.active.gift_id)" />
+      <template v-else><GiftAnimation v-for="event in events.active.filter(item => giftAnimation(item) === 'ceremony')" :key="event.key" :id="event.gift_id" :name="giftName(event.gift_id)" ceremony /></template>
     </template>
   </section>
 </template>
@@ -20,24 +21,31 @@ import LiveIdentity from './LiveIdentity.vue';
 import { liveSupporterLevel } from './supporterIdentity.js';
 import GiftIcon from './GiftIcon.vue';
 import GiftAnimation from './GiftAnimation.vue';
+import GiftSpotlight from './GiftSpotlight.vue';
+import { GiftSpotlights } from './giftSpotlights.js';
 import { giftAnimation } from './giftArtwork.js';
 import { GiftEvents } from './giftEvents.js';
 const props = defineProps({ lang: String, catalog: { type: Array, default: () => [] } });
 const t = (zh,en) => props.lang === 'zh' ? zh : en;
 const mode = defineModel('mode', { default: 'full' }), events = reactive(new GiftEvents());
+const spotlights = reactive(new GiftSpotlights());
 const reduced = ref(false);
 const animations = computed(() => mode.value === 'full' && !reduced.value);
 const giftName = id => props.catalog.find(item => item.id === id)?.[props.lang] || id;
 let timer, motion;
 function updateMotion() { reduced.value = motion.matches; }
-function receive(event) { if (mode.value !== 'off') events.receive(event, Date.now(), 2); }
+function receive(event) {
+  if (mode.value !== 'off') events.receive(event, Date.now(), 2);
+  if (animations.value) spotlights.receive(event);
+}
 defineExpose({ receive });
 watch(mode, value => { events.clear(); try { localStorage.setItem('live:effects', value); } catch {} });
+watch(animations, () => spotlights.clear());
 onMounted(() => {
   motion = matchMedia('(prefers-reduced-motion: reduce)');
   updateMotion(); motion.addEventListener('change', updateMotion);
   try { const saved = localStorage.getItem('live:effects'); if (['full','simple','off'].includes(saved)) mode.value = saved; else if (matchMedia('(prefers-reduced-motion: reduce)').matches) mode.value = 'simple'; } catch {}
-  timer = setInterval(() => events.tick(Date.now(), 2), 200);
+  timer = setInterval(() => { events.tick(Date.now(), 2); spotlights.tick(); }, 100);
 });
 onUnmounted(() => { clearInterval(timer); motion?.removeEventListener('change', updateMotion); });
 </script>

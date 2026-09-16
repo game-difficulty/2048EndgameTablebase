@@ -91,7 +91,6 @@ from backend.handlers.tablebase_query import (
     handle_tablebase_query_action,
 )
 from backend.gamer_ranked.routes import router as gamer_ranked_router
-from backend.gamer_tablebase import router as gamer_tablebase_router
 from backend.gamer_tablebase_stream import gamer_stream_service
 from backend.gamer_ranked.service import (
     cleanup_stale_ranked_runs,
@@ -282,7 +281,6 @@ app.include_router(leaderboard_router)
 app.include_router(minigame_rankings_router)
 app.include_router(profile_router)
 app.include_router(gamer_ranked_router)
-app.include_router(gamer_tablebase_router)
 app.include_router(battle_router)
 app.include_router(live_router)
 

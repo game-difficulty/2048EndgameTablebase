@@ -13,6 +13,8 @@ import { getEvilCore } from '../../../services/wasm/aiCoreClient';
 import { fetchTablebaseCatalog } from '../../../services/tablebases/catalogClient.js';
 import { emitAuthRequired } from '../../../services/auth/authEvents.js';
 import { TableDispatcher } from '../engine/tableDispatcher.js';
+import { aiCompatibleTable, normalizeTableSelection } from '../engine/tableSelection.js';
+import { GamerReplay } from '../engine/gamerReplay.js';
 import { simulateMove } from '../engine/classicMove.js';
 import { createOrdinaryRng, planGamerSpawn } from '../engine/gamerSpawn.js';
 import { createTableAiStreamClient } from '../services/tableAiClient.js';
@@ -203,7 +205,7 @@ function historyEntry(values, currentScore, specialTiles) {
   };
 }
 
-export function useGamerSession(activeRef) {
+export function useGamerSession(activeRef, inputBlocked = ref(false)) {
   const { config: appConfig } = useAppSettingsStore();
   const { ready: authReady, user: authUser } = useAuthState();
   const board = ref(new Array(16).fill(0));
@@ -215,6 +217,13 @@ export function useGamerSession(activeRef) {
   const aiSpeed = ref(100);
   const rankedParticipationEnabled = ref(true);
   const aiTableEnabled = ref(false);
+  const aiTableSelection = ref(null);
+  const aiAvailableTables = ref([]);
+  const aiTablesLoading = ref(false);
+  const aiTablesError = ref(false);
+  let replay = new GamerReplay(Array(16).fill(0));
+  const gameStatistics = ref(replay.statistics());
+  const syncReplayStatistics = () => { gameStatistics.value = replay.statistics(); };
   const hexInput = ref('');
   const currentHex = ref('0000000000000000');
   const specialTiles = ref([]);
@@ -244,7 +253,12 @@ export function useGamerSession(activeRef) {
   const tableAiCache = new TableAiCache({ transport: createTableAiStreamClient() });
   const tableDispatcher = new TableDispatcher();
   let aiCatalogVersion = '';
-  const aiCatalog = new TableAiCatalog({ load: fetchTablebaseCatalog });
+  let aiSelectionVersion = '';
+  const aiCatalog = new TableAiCatalog({ load: async (options) => {
+    const tables = await fetchTablebaseCatalog(options);
+    aiAvailableTables.value = tables.filter(aiCompatibleTable);
+    return tables;
+  } });
   let aiCatalogRate = null;
   let aiTableRetryAfter = 0;
   let decisionGeneration = 0;
@@ -274,6 +288,7 @@ export function useGamerSession(activeRef) {
       aiSpeed: aiSpeed.value,
       rankedParticipationEnabled: rankedParticipationEnabled.value,
       aiTableEnabled: aiTableEnabled.value,
+      aiTableSelection: aiTableSelection.value,
       bestScore: Number(score.value.best) || 0,
     });
     gamerSessionStore.write({
@@ -284,6 +299,7 @@ export function useGamerSession(activeRef) {
       specialTiles: specialTiles.value,
       randomAfterUndo,
       ordinaryRngState: ordinaryRng.exportState(),
+      replay: replay.snapshot(),
       ranked: {
         ...ranked.value,
         rngState: rankedRng?.exportState?.() || ranked.value.rngState || null,
@@ -664,15 +680,17 @@ export function useGamerSession(activeRef) {
   };
 
   const chooseAiMove = async (isCurrent) => {
-    if (aiTableEnabled.value && authUser.value?.id && Date.now() >= aiTableRetryAfter) {
+    if (aiTableEnabled.value && aiTableSelection.value?.length !== 0 && authUser.value?.id && Date.now() >= aiTableRetryAfter) {
       try {
         const rate = ranked.value.eligible ? Number(ranked.value.spawnRate4) : configuredSpawnRate4();
         const tables = await aiCatalog.get();
         if (!isCurrent()) return null;
-        if (tables.catalogVersion !== aiCatalogVersion || rate !== aiCatalogRate) {
+        const selectionVersion = JSON.stringify(aiTableSelection.value);
+        if (tables.catalogVersion !== aiCatalogVersion || rate !== aiCatalogRate || aiSelectionVersion !== selectionVersion) {
           tableAiCache.clear();
-          tableDispatcher.setTables(tables, rate);
+          tableDispatcher.setTables(tables, rate, aiTableSelection.value);
         }
+        aiSelectionVersion = selectionVersion;
         aiCatalogVersion = tables.catalogVersion;
         aiCatalogRate = rate;
         tableDispatcher.reset(board.value);
@@ -854,6 +872,8 @@ export function useGamerSession(activeRef) {
         : null,
     }, nextScore);
     pushHistory();
+    replay.append(direction, spawn);
+    syncReplayStatistics();
     if (ranked.value.runId && ranked.value.eligible && spawn) {
       appendRankedMove({ direction, spawn, source });
     }
@@ -897,6 +917,8 @@ export function useGamerSession(activeRef) {
       best: Number(score.value.best) || 0,
     };
     syncDerivedState();
+    replay = new GamerReplay(nextBoard);
+    syncReplayStatistics();
     history.length = 0;
     pushHistory();
     persistState({ immediate: true });
@@ -997,6 +1019,8 @@ export function useGamerSession(activeRef) {
     gameGeneration += 1;
     stopAI();
     history.pop();
+    replay.undo();
+    syncReplayStatistics();
     leaveRankedRunAfterUndo();
     ordinaryRng = createOrdinaryRng();
     randomAfterUndo = true;
@@ -1027,6 +1051,8 @@ export function useGamerSession(activeRef) {
     randomAfterUndo = false;
     specialTiles.value = [];
     applyBoardSnapshot(boardFromHex(normalized));
+    replay = new GamerReplay(board.value);
+    syncReplayStatistics();
     score.value = {
       current: 0,
       best: Number(score.value.best) || 0,
@@ -1133,6 +1159,26 @@ export function useGamerSession(activeRef) {
     persistState({ immediate: true });
   };
 
+  const setAiTableSelection = (selection) => {
+    const next = normalizeTableSelection(selection);
+    if (JSON.stringify(next) === JSON.stringify(aiTableSelection.value)) return;
+    stopAI();
+    tableAiCache.clear();
+    aiTableSelection.value = next;
+    aiTableRetryAfter = 0;
+    persistState({ immediate: true });
+  };
+
+  const loadAiTables = async () => {
+    aiTablesLoading.value = true;
+    aiTablesError.value = false;
+    try { await aiCatalog.get(); }
+    catch { aiTablesError.value = true; }
+    finally { aiTablesLoading.value = false; }
+  };
+
+  const exportReplay = () => ({ text: replay.encode(), filename: `2048-${score.value.current}-${gameStatistics.value.moves}.vrs` });
+
   const openBrowserAi = () => false;
 
   const loadSavedState = async () => {
@@ -1150,6 +1196,7 @@ export function useGamerSession(activeRef) {
     legacyGamerStore.remove();
     rankedParticipationEnabled.value = preferences?.rankedParticipationEnabled !== false;
     aiTableEnabled.value = Boolean(preferences?.aiTableEnabled);
+    aiTableSelection.value = normalizeTableSelection(preferences?.aiTableSelection);
     difficulty.value = Math.max(0, Math.min(100, Number(preferences?.difficulty) || 0));
     aiSpeed.value = Math.max(0, Math.min(200, Number(preferences?.aiSpeed) || 100));
 
@@ -1168,6 +1215,8 @@ export function useGamerSession(activeRef) {
       best: Math.max(Number(saved.score?.best) || 0, Number(preferences?.bestScore) || 0),
     };
     syncDerivedState();
+    replay = GamerReplay.restore(saved.replay, board.value, saved.ranked);
+    syncReplayStatistics();
     history.length = 0;
     pushHistory();
 
@@ -1259,7 +1308,7 @@ export function useGamerSession(activeRef) {
   };
 
   const handleKeydown = (event) => {
-    if (!activeRef?.value || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)) return;
+    if (!activeRef?.value || inputBlocked.value || !keyboardInputAllowed(KEYBOARD_OWNERS.PRIMARY)) return;
     const target = event.target;
     if (
       target instanceof HTMLElement &&
@@ -1403,6 +1452,14 @@ export function useGamerSession(activeRef) {
     aiWorkerReady,
     rankedParticipationEnabled,
     aiTableEnabled,
+    aiTableSelection,
+    aiAvailableTables,
+    aiTablesLoading,
+    aiTablesError,
+    setAiTableSelection,
+    loadAiTables,
+    gameStatistics,
+    exportReplay,
     setAiTableEnabled,
     rankedStatus,
     rankedMode,

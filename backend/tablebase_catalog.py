@@ -141,6 +141,10 @@ def ai_table_metadata(entry: dict[str, Any]) -> dict[str, Any]:
                 "large_tiles": int(parameters[0]) if parameters else 0,
                 "free_tiles": int(parameters[1]) if parameters else 0}
     spec = pattern_catalog.get(pattern)
+    if compatible and spec is not None and entry.get('_provider') == 'remote':
+        inventory = remote_worker_registry.layer_inventory(entry.get('_full_pattern') or _full_pattern(entry))
+        if inventory is not None:
+            metadata['layers'] = {**inventory, 'nums_adjust': int(spec.get('nums_adjust', 0))}
     if compatible and spec is not None:
         # ReaderRuntime::operation_sequence tries all eight symmetries for Classic,
         # including LL. gen_all_mirror's rotation-only LL rule is for random starts.

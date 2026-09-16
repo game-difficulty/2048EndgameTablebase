@@ -106,9 +106,19 @@
           :ranked-status="rankedStatus"
           @navigate-tab="forwardNavigateTab"
         />
-        <GamerMatchOptionsPanel
+        <GamerToolsPanel
+          :active="active"
           :options="matchOptions"
           :table-enabled="aiTableEnabled"
+          :tables="aiAvailableTables"
+          :selection="aiTableSelection"
+          :loading="aiTablesLoading"
+          :error="aiTablesError"
+          :statistics="gameStatistics"
+          :get-replay="exportReplay"
+          @load-tables="loadAiTables"
+          @table-selection="setAiTableSelection"
+          @dialog-open="toolDialogOpen = $event"
           @table-mode="setAiTableEnabled"
           @change="handleMatchOptionChange"
         />
@@ -127,7 +137,7 @@ import FitToolPage from '../../../components/FitToolPage.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
 import GamerLeaderboardPanel from '../components/GamerLeaderboardPanel.vue';
-import GamerMatchOptionsPanel from '../components/GamerMatchOptionsPanel.vue';
+import GamerToolsPanel from '../components/GamerToolsPanel.vue';
 import { useGamerSession } from '../composables/useGamerSession';
 
 const props = defineProps({
@@ -137,6 +147,7 @@ const props = defineProps({
 const emit = defineEmits(['navigate-tab']);
 
 const boardHotkeyTarget = ref(null);
+const toolDialogOpen = ref(false);
 
 const {
   board,
@@ -152,6 +163,14 @@ const {
   rankedParticipationEnabled,
   aiTableEnabled,
   setAiTableEnabled,
+  aiTableSelection,
+  aiAvailableTables,
+  aiTablesLoading,
+  aiTablesError,
+  setAiTableSelection,
+  loadAiTables,
+  gameStatistics,
+  exportReplay,
   rankedStatus,
   ranked,
   triggerAction,
@@ -161,7 +180,7 @@ const {
   writeCurrentBoardToHex,
   setRankedParticipationEnabled,
   retryRankedSubmission,
-} = useGamerSession(toRef(props, 'active'));
+} = useGamerSession(toRef(props, 'active'), toolDialogOpen);
 
 const visibleRankedStatuses = new Set([
   'starting',

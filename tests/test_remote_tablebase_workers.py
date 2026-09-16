@@ -31,6 +31,36 @@ class FakeWebSocket:
 
 
 class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_layer_inventory_updates_catalog_and_preserves_old_workers(self):
+        from backend.tablebase_catalog import ai_table_metadata, get_catalog_version
+        table = {'full_pattern': 'free11_512', 'ready': True,
+                 'layer_inventory': {'version': 1, 'ranges': [[0, 100], [105, 200]]}}
+        _, worker = await self._connect(tables=[table])
+        self.assertEqual(self.registry.layer_inventory('free11_512'), table['layer_inventory'])
+        with patch('backend.tablebase_catalog.remote_worker_registry', self.registry):
+            entry = {'pattern': 'free11', '_full_pattern': 'free11_512', '_provider': 'remote'}
+            metadata = ai_table_metadata(entry)
+            self.assertEqual(metadata['layers']['ranges'], [[0, 100], [105, 200]])
+            self.assertIsInstance(metadata['layers']['nums_adjust'], int)
+            version = get_catalog_version()
+            epoch = self.registry.availability_epoch
+            await self.registry._handle_message(worker, {'type': 'HEARTBEAT', 'tables': [table]})
+            self.assertEqual(self.registry.availability_epoch, epoch)
+            table['layer_inventory'] = {'version': 1, 'ranges': [[0, 200]]}
+            await self.registry._handle_message(worker, {'type': 'HEARTBEAT', 'tables': [table]})
+            self.assertEqual(self.registry.availability_epoch, epoch + 1)
+            self.assertNotEqual(get_catalog_version(), version)
+            _, worker = await self._connect(tables=[{'full_pattern': 'free11_512', 'ready': True}])
+            self.assertNotIn('layers', ai_table_metadata(entry))
+            self.assertIsNone(self.registry.layer_inventory('free11_512'))
+
+    async def test_invalid_or_unconfigured_layer_inventory_is_ignored(self):
+        _, worker = await self._connect(tables=[
+            {'full_pattern': 'free11_512', 'ready': True, 'layer_inventory': {'version': 1, 'ranges': [[5, 0]]}},
+            {'full_pattern': 'not-configured_1024', 'ready': True, 'layer_inventory': {'version': 1, 'ranges': []}},
+        ])
+        self.assertEqual(worker.layer_inventories, {})
+
     async def test_stream_window_negotiation_and_unpaid_queue_bound(self):
         options=dict(board_codes=[1]+[0]*15,rng_state=[1,2,3,4],steps=1,
                      difficulty=0,spawn_rate4=.1,random_only=False)
@@ -75,22 +105,7 @@ class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
         await remote.close()
         self.assertNotIn(remote.request_id,self.registry._pending)
 
-    async def test_gamer_route_capability_and_single_round_trip(self):
-        from backend.gamer_tablebase_route import generate_route
-        from Config import pattern_32k_tiles_map
-        websocket, worker = await self._connect(capabilities=['gamer_route_v1'])
-        self.assertTrue(self.registry.supports_gamer_route('free11_512'))
-        options = dict(board_codes=[1,0,2,0,3,0,4,0,5,0,6,0,7,0,8,0],
-            rng_state=[1,2,3,4], steps=4, difficulty=0, spawn_rate4=.1, random_only=False)
-        task = asyncio.create_task(self.registry.generate_gamer_route(full_pattern='free11_512',
-            pattern='free11', target='512', options=options))
-        await asyncio.sleep(0)
-        request = websocket.sent[-1]
-        self.assertEqual(request['type'], 'GENERATE_GAMER_ROUTE')
-        nodes = generate_route(options, pattern_32k_tiles_map['free11'][0], lambda board: ({'left':.9}, 'float64'))
-        await self.registry._handle_message(worker, dict(type='GAMER_ROUTE_RESULT',
-            request_id=request['request_id'], items=nodes))
-        self.assertEqual(await task, nodes)
+
 
     async def test_stream_rejects_unordered_nodes_and_disconnect_releases_waiter(self):
         websocket, worker = await self._connect(capabilities=['gamer_stream_v1'])
@@ -111,10 +126,6 @@ class RemoteWorkerRegistryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RemoteTablebaseOffline):
             await waiter
         await remote.close()
-
-    async def test_old_worker_has_no_gamer_route_capability(self):
-        await self._connect()
-        self.assertFalse(self.registry.supports_gamer_route('free11_512'))
 
     async def asyncSetUp(self) -> None:
         load_remote_manifest.cache_clear()

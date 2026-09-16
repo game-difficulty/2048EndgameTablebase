@@ -702,10 +702,11 @@
     const flags = bytes[5];
     if (flags !== 0) throw new ReplayFormatError('排位回放含有不支持的头标志。');
     const initialCount = bytes[6];
-    if (initialCount !== 2) throw new ReplayFormatError('排位回放必须包含两个初始棋块。');
+    if (initialCount > 16) throw new ReplayFormatError('回放初始棋块数量无效。');
     const state = { offset: 7 };
     let board = new Uint8Array(16);
     for (let index = 0; index < initialCount; index += 1) {
+      if (state.offset >= payloadEnd) throw new ReplayFormatError('回放初始棋块数据不完整。');
       const packed = bytes[state.offset];
       state.offset += 1;
       const cell = packed & 0x0f;
@@ -715,6 +716,7 @@
     }
 
     const rawMoves = [];
+    let hasCheckpoint = false;
     let ended = false;
     while (state.offset < payloadEnd) {
       const type = bytes[state.offset];
@@ -727,6 +729,19 @@
           spawnExponent: ((type >>> 6) & 1) + 1,
           deltaMs: decodeUleb128(bytes, state, payloadEnd),
         });
+      } else if (type === 130) {
+        if (rawMoves.length || hasCheckpoint || initialCount !== 0 || state.offset + 10 > payloadEnd) {
+          throw new ReplayFormatError('回放起始局面记录无效。');
+        }
+        board = new Uint8Array(16);
+        for (let index = 0; index < 16; index += 1) {
+          for (let bit = 0; bit < 5; bit += 1) {
+            const position = index * 5 + bit;
+            board[index] |= ((bytes[state.offset + Math.floor(position / 8)] >>> (position % 8)) & 1) << bit;
+          }
+        }
+        state.offset += 10;
+        hasCheckpoint = true;
       } else if (type === 131) {
         decodeUleb128(bytes, state, payloadEnd);
         const length = decodeUleb128(bytes, state, payloadEnd);
@@ -738,7 +753,7 @@
         throw new ReplayFormatError(`排位回放含有不支持的记录 ${type}。`);
       }
     }
-    if (!ended || !rawMoves.length) throw new ReplayFormatError('排位回放没有完整自然终局。');
+    if (!ended || (!initialCount && !hasCheckpoint)) throw new ReplayFormatError('回放缺少起始局面或结束标记。');
 
     const moveCount = rawMoves.length;
     const snapshots = new Uint8Array((moveCount + 1) * 16);

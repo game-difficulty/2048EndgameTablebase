@@ -2,9 +2,19 @@ import { onMounted, onUnmounted } from 'vue';
 
 export const livePageScale = (width, height = Infinity) => Math.min(.85, Math.max(1, width) / 1500, Math.max(1, height) / 1080);
 
+// Keep the existing layout at ordinary ratios; letterbox only extremely wide windows.
+export function livePageWidth(width, height) {
+  const scale = livePageScale(width, height);
+  return Math.max(1500, Math.min(width, Math.max(1, height) * 2) / scale);
+}
+
 export function useLiveLayoutScale() {
   let observer;
-  const update = () => document.body.style.setProperty('--live-scale', String(livePageScale(document.documentElement.clientWidth, window.innerHeight)));
+  const update = () => {
+    const width = document.documentElement.clientWidth, height = window.innerHeight;
+    document.body.style.setProperty('--live-scale', String(livePageScale(width, height)));
+    document.body.style.setProperty('--live-page-width', `${livePageWidth(width, height)}px`);
+  };
   update();
   onMounted(() => {
     observer = new ResizeObserver(update);
@@ -15,6 +25,7 @@ export function useLiveLayoutScale() {
     observer?.disconnect();
     window.removeEventListener('resize', update);
     document.body.style.removeProperty('--live-scale');
+    document.body.style.removeProperty('--live-page-width');
   });
 }
 
@@ -34,7 +45,7 @@ export function useLiveStageFit(stageRef) {
     const gridHeight = grid.getBoundingClientRect().height;
     const outsideGrid = rect.height - gridHeight;
     const outsideBoard = column.getBoundingClientRect().height - board.getBoundingClientRect().height;
-    const available = Math.max(0, (window.innerHeight - rect.top - 12 - outsideGrid) / scale);
+    const available = Math.max(0, (window.innerHeight - rect.top - Math.min(12, 14 * scale) - outsideGrid) / scale);
     stage.style.setProperty('--live-grid-limit', `${Math.floor(available)}px`);
     stage.style.setProperty('--live-board-limit', `${Math.max(160, Math.floor(available - outsideBoard / scale))}px`);
   };

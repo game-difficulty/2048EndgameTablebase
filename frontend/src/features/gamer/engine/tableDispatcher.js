@@ -1,7 +1,9 @@
 // Decision policy ported from engine_core/AIPlayer.py:DispatcherCommon.
 import { compileTableStructure, matchTableStructure } from './tableStructure.js';
+import { compileTableLayers, tableLayerAvailable } from './tableLayers.js';
+import { aiCompatibleTable, tableAllowed } from './tableSelection.js';
 
-export const TABLE_POLICY_VERSION = 1;
+export { TABLE_POLICY_VERSION } from './tableSelection.js';
 
 export function maskLargeTiles(board, count) {
   const masked = board.slice();
@@ -24,13 +26,12 @@ export class TableDispatcher {
     this.setTables(tables, spawnRate4);
   }
 
-  setTables(tables, spawnRate4) {
-    this.tables = tables.filter((table) => table.ai?.compatible
-      && table.ai.policy_version === TABLE_POLICY_VERSION
-      && Math.abs(table.spawnRate - spawnRate4) < 0.01
-      && !table.pattern.includes('_'))
+  setTables(tables, spawnRate4, selection = null) {
+    this.tables = tables.filter((table) => aiCompatibleTable(table) && tableAllowed(table, selection)
+      && Math.abs(table.spawnRate - spawnRate4) < 0.01)
       .map((table) => ({ ...table, n: table.ai.large_tiles, free: table.ai.free_tiles,
         structureRules: compileTableStructure(table.ai.structure),
+        layerCoverage: compileTableLayers(table.ai.layers),
         targetExp: Math.log2(Number(table.target)),
         level: table.ai.large_tiles + Math.log2(Number(table.target)) }));
     this.cooldowns.clear();
@@ -123,6 +124,7 @@ export class TableDispatcher {
       if (candidate.table.pattern === 'free10'
         && masked.reduce((sum, value) => sum + (value === 32768 ? 0 : value), 0) < 32) continue;
       if (matchTableStructure(this.board, masked, candidate.table.n, candidate.table.structureRules) === 'mismatch') continue;
+      if (!tableLayerAvailable(masked, candidate.table.layerCoverage)) continue;
       const payload = await lookup(candidate, packedLookupBoard(masked));
       if (!isCurrent()) return null;
       const result = this.accept(candidate, payload);

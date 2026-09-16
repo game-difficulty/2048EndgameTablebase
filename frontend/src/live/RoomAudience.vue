@@ -34,9 +34,9 @@ onUnmounted(()=>{clearTimeout(closeTimer);clearInterval(timer);controller?.abort
 </script>
 <style scoped>
 .room-audience { position:relative;flex-shrink:0;z-index:40; }
-.audience-toggle { width:100%;min-height:46px;display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:0;border-bottom:1px solid var(--border-main);color:var(--text-main);cursor:pointer; }
+.audience-toggle { width:100%;min-height:46px;display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:0;border-bottom:1px solid var(--border-main);color:var(--text-main);cursor:pointer;font-size:16px; }
 .up { transform:rotate(180deg); }.audience-list { position:absolute;top:100%;left:0;right:0;background:var(--bg-main);border:1px solid var(--border-main);border-radius:0 0 6px 6px;box-shadow:0 10px 24px #0005;padding:10px; }
-header { display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:12px; }.audience-list small { display:flex;gap:4px;align-items:center;font-size:10px;color:var(--text-secondary); }
+header { display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:16px; }.audience-list small { display:flex;gap:4px;align-items:center;font-size:14px;color:var(--text-secondary); }
 .contribution-help { display:grid;place-items:center;width:24px;height:24px;padding:0;background:transparent;border:0;color:var(--text-secondary);cursor:pointer; }.contribution-help:hover { color:var(--accent); }
-ol { list-style:none;padding:0;margin:10px 0 0;max-height:370px;overflow:auto; }li { display:flex;align-items:center;gap:7px;min-height:46px;border-bottom:1px solid var(--border-main); }li .live-identity { flex:1;min-width:0;font-size:11px; }li b { font-size:11px;font-variant-numeric:tabular-nums; }.rank { width:20px;flex-shrink:0;font-size:11px;color:var(--text-secondary); }.gold { background:color-mix(in srgb,#d6b461 8%,transparent); }.gold .rank { color:#d6b461; }p { font-size:12px;color:var(--text-secondary); }
+ol { list-style:none;padding:0;margin:10px 0 0;max-height:370px;overflow:auto; }li { display:flex;align-items:center;gap:7px;min-height:46px;border-bottom:1px solid var(--border-main); }li .live-identity { flex:1;min-width:0;font-size:15px; }li b { font-size:15px;font-variant-numeric:tabular-nums; }.rank { width:20px;flex-shrink:0;font-size:14px;color:var(--text-secondary); }.gold { background:color-mix(in srgb,#d6b461 8%,transparent); }.gold .rank { color:#d6b461; }p { font-size:15px;color:var(--text-secondary); }
 </style>

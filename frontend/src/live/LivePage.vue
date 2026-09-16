@@ -18,6 +18,7 @@
         <button v-if="!user" @click="loginOpen = true">
           {{ t("登录", "Sign in") }}</button
         ><button v-else @click="logout">{{ user.display_name }}</button>
+        <NativeLandscapeButton inline class="live-landscape" />
       </nav>
     </header>
     <main>
@@ -63,6 +64,10 @@
                 <LoaderCircle :size="30" class="loading-spinner" />
                 <h2>{{ streamState === 'loading' ? t('正在加载直播', 'Loading the stream') : t('正在恢复连接', 'Reconnecting') }}</h2>
                 <p>{{ streamState === 'loading' ? t('正在连接直播间，请稍候', 'Connecting to the stream. Please wait.') : t('连接恢复后，画面将继续播放', 'Playback will resume when reconnected.') }}</p>
+              </div>
+              <div v-else-if="streamState === 'paused'" class="board-overlay" role="status">
+                <h2>{{ t('直播已暂停', 'Stream paused') }}</h2>
+                <p>{{ t('等待主播恢复直播', 'Waiting for the stream to resume') }}</p>
               </div>
               <div v-else-if="streamState === 'offline'" class="board-overlay">
                 <WifiOff :size="30" />
@@ -146,30 +151,35 @@
       </section>
       <LuckyBags :state="luckyState" :user="user" :connected="connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
         <template #default="{ bag, open, caption }">
-          <GiftPanel ref="giftPanel" :user="user" :online="online && connected" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event">
+          <GiftPanel ref="giftPanel" :user="user" :online="online && connected" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
             <template #leading><button v-if="bag" class="lucky-strip-entry" @click="open(bag)" :title="t('福袋','Lucky bags')"><LuckyBagIcon /><b>{{ t('福袋','Lucky bags') }}</b><small>{{ caption }}</small></button></template>
           </GiftPanel>
         </template>
       </LuckyBags>
+      <RedEnvelopes ref="redEnvelopes" :state="redState" :user="user" :connected="connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()" />
       </div>
-      <section class="daily-strip">
+      <section class="weekly-strip">
         <div>
-          <small>{{ t("今日完成", "TODAY’S RUNS") }}</small
-          ><strong>{{ format(today.games) }}</strong>
+          <small>{{ t("本周完成", "THIS WEEK’S RUNS") }}</small
+          ><strong>{{ format(week.games) }}</strong>
         </div>
         <div>
           <small>{{ t("达到 32K", "32K RUNS") }}</small
-          ><strong>{{ format(today.tile32) }}</strong>
+          ><strong>{{ format(week.tile32) }}</strong>
         </div>
         <div>
           <small>{{ t("达到 65k", "65k RUNS") }}</small
-          ><strong>{{ format(today.tile64) }}</strong>
+          ><strong>{{ format(week.tile64) }}</strong>
         </div>
         <div>
-          <small>{{ t("今日平均分", "AVERAGE SCORE") }}</small
+          <small>{{ t("本周平均分", "WEEKLY AVERAGE") }}</small
           ><strong>{{
-            format(today.games ? Math.round(today.score_sum / today.games) : 0)
+            format(week.games ? Math.round(week.score_sum / week.games) : 0)
           }}</strong>
+        </div>
+        <div>
+          <small>{{ t('得分中位数', 'MEDIAN SCORE') }}</small>
+          <strong>{{ week.median_score == null ? '—' : format(week.median_score) }}</strong>
         </div>
       </section>
         <div class="chat-panel">
@@ -205,6 +215,7 @@
                 </header>
                 <p v-if="message.type === 'entrance'">{{ t('来到直播间，欢迎！', 'joined the stream. Welcome!') }}</p>
                 <p v-else-if="message.type === 'gift'" class="chat-gift-content"><span>{{ t('送出', 'sent') }} {{ giftCatalog.find(item => item.id === message.gift_id)?.[lang] || message.gift_id }}</span><GiftIcon :id="message.gift_id" /><b>×{{ message.combo_count }}</b></p>
+                <button v-else-if="message.type === 'red_envelope'" class="chat-red" @click="redEnvelopes?.open(message.envelope_id)"><span>{{ t('发了一个红包','sent a red envelope') }} · {{ message.amount.toLocaleString() }} Token</span><img src="/live-gifts/red-envelope.webp" alt="" /></button>
                 <p v-else>{{ message.text }}</p>
               </div>
             </div>
@@ -299,6 +310,7 @@ import {
   X,
 } from "@lucide/vue";
 import BaseBoard from "../components/BaseBoard.vue";
+import NativeLandscapeButton from '../components/NativeLandscapeButton.vue';
 import LiveIdentity from './LiveIdentity.vue';
 import { liveSupporterLevel, entranceChat } from './supporterIdentity.js';
 import { createSnapshotBoardFrame } from "../components/boardFrame.js";
@@ -310,6 +322,7 @@ import LikeReaction from './LikeReaction.vue';
 import GiftPanel from './GiftPanel.vue';
 import RoomAudience from './RoomAudience.vue';
 import LuckyBags from './LuckyBags.vue';
+import RedEnvelopes from './RedEnvelopes.vue';
 import LuckyBagIcon from './LuckyBagIcon.vue';
 import GiftEffects from './GiftEffects.vue';
 import GiftIcon from './GiftIcon.vue';
@@ -329,6 +342,7 @@ const giftEffects = ref(null), giftCatalog = ref([]);
 const effectsMode = ref('full');
 const timingCollapsed = ref(false), historyCollapsed = ref(false);
 const giftPanel = ref(null), luckyState = ref(null);
+const redEnvelopes = ref(null), redState = ref(null);
 const t = (zh, en) => (lang.value === "zh" ? zh : en);
 const run = ref(null),
   frame = ref(createSnapshotBoardFrame("empty", Array(16).fill(0)));
@@ -337,9 +351,9 @@ const online = ref(false),
   viewers = ref(0),
   best = ref(0),
   history = ref([]),
-  today = ref({});
-const synchronized = ref(false), seenSnapshot = ref(false);
-const streamState = computed(() => liveConnectionState({ connected:connected.value, synchronized:synchronized.value, seenSnapshot:seenSnapshot.value, online:online.value }));
+  week = ref({});
+const synchronized = ref(false), seenSnapshot = ref(false), paused = ref(false);
+const streamState = computed(() => liveConnectionState({ connected:connected.value, synchronized:synchronized.value, seenSnapshot:seenSnapshot.value, online:online.value, paused:paused.value }));
 const likes = reactive(new LikeFeedback()), likeReaction = ref(null);
 let likeFlushTimer, likeNoticeAt = 0, actorPromise;
 const messages = ref([]),
@@ -425,7 +439,7 @@ async function refreshSummary() {
     best.value = data.best;
     likes.update(data.likes);
     history.value = data.history;
-    today.value = data.today;
+    week.value = data.week || {};
     messages.value = mergeLiveChat(messages.value, [...(data.chat || []), ...(data.gifts || [])]);
     if (!musicUrl.value) musicUrl.value = data.music_url || "";
     return data;
@@ -436,8 +450,10 @@ async function refreshSummary() {
   }
 }
 function installSnapshot(data) {
+  if (data.red_envelopes) redState.value = { ...data.red_envelopes, server_time: data.server_time };
   if (data.lucky_bags) luckyState.value = { bags: data.lucky_bags, server_time: data.server_time };
   online.value = data.online;
+  paused.value = Boolean(data.paused);
   viewers.value = data.viewers;
   run.value = data.run;
   frame.value = createSnapshotBoardFrame(
@@ -465,6 +481,8 @@ async function receive(event) {
     seenSnapshot.value = true;
   }
   else if (data.type === 'lucky_bags') luckyState.value = data;
+  else if (data.type === 'red_envelopes') redState.value = data;
+  else if (data.type === 'red_envelope') await appendChat(data);
   else if (data.type === 'gift' || data.type === 'entrance') {
     giftEffects.value?.receive(data);
     if (data.type === 'gift') await appendChat(data);
@@ -473,10 +491,11 @@ async function receive(event) {
   else if (data.type === "source" && run.value) run.value.source = data.source;
   else if (data.type === "presence") {
     online.value = data.online;
+    paused.value = Boolean(data.paused);
     viewers.value = data.viewers;
   } else if (data.type === "summary") {
     history.value = data.history;
-    today.value = data.today;
+    week.value = data.week || {};
     best.value = data.best;
     likes.update(data.likes);
   } else if (data.type === "likes") likes.update(data.count);
@@ -622,10 +641,18 @@ async function copyHex() {
     showNotice(t("请选择盘面编码复制", "Select the board code to copy it"));
   }
 }
-function visibility() {
+async function refreshIdentity() {
+  try {
+    user.value = (await api('/api/auth/me')).user;
+    actorPromise = null;
+  } catch {}
+}
+async function visibility() {
   clearTimeout(retry);
   if (document.hidden) socket?.close();
   else {
+    await refreshIdentity();
+    await ensureActor().catch(() => {});
     connect();
     refreshSummary();
   }
@@ -638,9 +665,7 @@ onMounted(async () => {
   if (data) {
     installSnapshot(data);
   }
-  try {
-    user.value = (await api("/api/auth/me")).user;
-  } catch {}
+  await refreshIdentity();
   await ensureActor().catch(() => {});
   connect();
 });
@@ -660,6 +685,8 @@ onUnmounted(() => {
 :global(body.live-document) { --live-scale:1;overflow:auto;zoom:var(--live-scale);background:var(--bg-main); }
 .live-page {
   min-width:1500px;
+  width:var(--live-page-width,100%);
+  margin-inline:auto;
   background: var(--bg-main);
   color: var(--text-main);
   font-size: 14px;
@@ -721,6 +748,7 @@ button:disabled {
 .live-header nav {
   gap: 8px;
 }
+.live-landscape { zoom:calc(1 / var(--live-scale)); }
 .live-status {
   color: var(--text-secondary);
   font-size: 12px;
@@ -813,7 +841,7 @@ small {
   color: var(--text-secondary);
 }
 .score-strip small,
-.daily-strip small {
+.weekly-strip small {
   display: block;
   margin-bottom: 6px;
 }
@@ -952,16 +980,16 @@ small {
   padding: 28px 0;
   font-size: 13px;
 }
-.daily-strip {
+.weekly-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-top: 1px solid var(--border-main);
   border-bottom: 1px solid var(--border-main);
   padding: 24px 0;
   margin: 28px 0;
   gap: 20px;
 }
-.daily-strip strong {
+.weekly-strip strong {
   font-size: 23px;
 }
 .live-layout { display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,22%,520px);gap:20px;align-items:start; }
@@ -971,8 +999,10 @@ small {
 .stage-column :deep(.gift-effects) { height:0;border:0;margin:0;z-index:25;pointer-events:none; }
 .stage-column :deep(.effect-lanes) { position:absolute;top:0;left:0;right:0; }
 .stage-column :deep(.gift-ceremony) { top:68px; }
-.chat-panel { grid-column:2;grid-row:1;align-self:stretch;min-height:0;contain:size;position:relative;display:flex;flex-direction:column;border-left:1px solid var(--border-main);padding-left:12px; }
-.daily-strip { grid-column:1 / -1;grid-row:2;margin:8px 0; }
+.chat-panel { grid-column:2;grid-row:1;align-self:stretch;min-height:0;contain:size;position:relative;display:flex;flex-direction:column;border-left:1px solid var(--border-main);padding-left:12px;font-size:16px; }
+.chat-panel small { font-size:13px; }
+.chat-panel .empty,.chat-panel .notice { font-size:15px; }
+.weekly-strip { grid-column:1 / -1;grid-row:2;margin:8px 0; }
 .music-footer { grid-column:1 / -1;grid-row:3; }
 .chat-list {
   height:0;
@@ -986,14 +1016,14 @@ small {
   display: flex;
   gap: 6px;
   padding: 5px 6px;
-  font-size:12px;
+  font-size:16px;
 }
 .chat-row { border-left:2px solid transparent; }
 .chat-entrance { border-left-color:#54ac94;background:color-mix(in srgb,#54ac94 6%,transparent); }
 .chat-gold { border-left-color:#bb9645;background:color-mix(in srgb,#d6b461 8%,transparent); }
 .chat-row header > .live-identity { flex:0 1 auto;min-width:0; }
-.chat-row :deep(.live-identity) { gap:5px;font-size:11px; }
-.chat-row :deep(.account-avatar-shell) { width:20px;height:20px;flex:0 0 20px;font-size:8px; }
+.chat-row :deep(.live-identity) { gap:5px;font-size:15px; }
+.chat-row :deep(.account-avatar-shell) { width:24px;height:24px;flex:0 0 24px;font-size:10px; }
 .chat-row :deep(.account-supporter-mark) { width:7px;height:7px;border-width:1px;right:-1px;bottom:-1px; }
 .chat-row > div {
   min-width: 0;
@@ -1006,13 +1036,13 @@ small {
 }
 .chat-row p {
   margin: 1px 0 0;
-  padding-left:25px;
-  line-height:18px;
+  padding-left:29px;
+  line-height:22px;
   overflow-wrap: anywhere;
 }
 .chat-tools { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;padding:6px 0;border-top:1px solid var(--border-main); }
 .effect-controls { display:flex;align-items:center;gap:5px;color:var(--text-secondary); }
-.effect-controls select { background:var(--bg-card);color:var(--text-main);border:1px solid var(--border-main);border-radius:4px;font-size:11px;padding:5px; }
+.effect-controls select { background:var(--bg-card);color:var(--text-main);border:1px solid var(--border-main);border-radius:4px;font-size:14px;padding:5px; }
 .effect-controls option { background:var(--bg-main);color:var(--text-main); }
 .chat-tools .like-button { min-height:30px;padding:4px 8px; }
 .chat-form {
@@ -1024,6 +1054,7 @@ small {
 .chat-form input {
   flex: 1;
   min-width:0;
+  font-size:16px;
 }
 .chat-form button {
   color: var(--accent);
@@ -1035,13 +1066,14 @@ small {
 .chat-gift { border-left-color:var(--accent); }
 .chat-gift-content { display:flex;align-items:center;gap:5px; }
 .chat-gift-content > span { min-width:0;overflow-wrap:anywhere; }
-.chat-gift-content > b { white-space:nowrap;font-size:12px;color:var(--text-main); }
-.chat-gift-content :deep(.gift-icon) { width:20px;height:20px; }
+.chat-gift-content > b { white-space:nowrap;font-size:15px;color:var(--text-main); }
+.chat-gift-content :deep(.gift-icon) { width:24px;height:24px; }
+.chat-red { display:flex;align-items:center;gap:4px;width:100%;text-align:left;color:var(--text-main);background:transparent;border:0;padding:0;font-size:14px;cursor:pointer; }.chat-red span { min-width:0;overflow-wrap:anywhere; }.chat-red img { width:35px;height:35px;flex-shrink:0; }.chat-red:hover { color:#ef997c; }
 .about {
   flex-shrink:0;
   padding:14px 8px 12px;
 }
-.about h2 { font-size:13px; }.about p { font-size:12px;margin:8px 0; }
+.about h2 { font-size:17px; }.about p { font-size:15px;margin:8px 0; }
 .about p {
   color: var(--text-secondary);
 }
@@ -1056,8 +1088,8 @@ small {
   font-weight: 700;
   margin-bottom: 0;
 }
-.visit-label { display: inline-flex; align-items: center; gap: 6px;font-size:12px; }
-.visit-url { font-size: 12px; font-weight: 400; overflow-wrap: anywhere; user-select: text; }
+.visit-label { display: inline-flex; align-items: center; gap: 6px;font-size:15px; }
+.visit-url { font-size: 15px; font-weight: 400; overflow-wrap: anywhere; user-select: text; }
 .live-login {
   position: fixed;
   inset: 50% auto auto 50%;
