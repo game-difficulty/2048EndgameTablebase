@@ -686,7 +686,7 @@ int32_t AIPlayer::search0(uint64_t b) {
   return best;
 }
 
-int32_t AIPlayer::process_score(uint32_t score) {
+int32_t AIPlayer::process_score(uint32_t score, int32_t depth) {
   int32_t s = static_cast<int32_t>(score);
   if (s < 200)
     return std::max(0, (s >> 2) - 10);
@@ -694,9 +694,11 @@ int32_t AIPlayer::process_score(uint32_t score) {
     return (s >> 1) - 12;
   if (s < 1000)
     return (s >> 1) + 144;
-  if (s < 2000)
-    return (s + 600);
-  return 3000;
+  int32_t reward = s < 2000 ? s + 800 : 4000;
+  if (s > 1000 && merge_urgency > 0)
+    reward += static_cast<int32_t>(merge_urgency * reward * 2.0 /
+                                  (4.0 + std::max(0, max_d - depth)) + 0.5);
+  return reward;
 }
 
 int32_t AIPlayer::search_branch(uint64_t t, int32_t depth,
@@ -794,7 +796,7 @@ int32_t AIPlayer::search_ai_player(uint64_t b, int32_t depth,
     for (int i = 0; i < 4; ++i) {
       if (moves[i].is_valid) {
         uint64_t t = moves[i].board;
-        int32_t processed_score = process_score(moves[i].score);
+        int32_t processed_score = process_score(moves[i].score, depth);
 
 // 将分支封装为 Task 丢进全局任务池
 #pragma omp task shared(scores, task_nodes)                                    \
@@ -844,7 +846,7 @@ int32_t AIPlayer::search_ai_player(uint64_t b, int32_t depth,
         uint64_t branch_nodes = 0;
         int32_t temp =
             search_branch(t, current_depth, sum_increment, branch_nodes) +
-            process_score(moves[i].score);
+            process_score(moves[i].score, depth);
         out_nodes += branch_nodes;
 
         if (temp > best)

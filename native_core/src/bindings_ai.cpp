@@ -28,6 +28,7 @@ NB_MODULE(ai_core, m) {
              nb::call_guard<nb::gil_scoped_release>())
         
         .def_rw("max_d", &AIPlayer::max_d)
+        .def_rw("merge_urgency", &AIPlayer::merge_urgency)
         .def_rw("best_operation", &AIPlayer::best_operation)
         .def_rw("board", &AIPlayer::board)
         .def_rw("max_threads", &AIPlayer::max_threads)
