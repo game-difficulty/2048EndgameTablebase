@@ -1,5 +1,5 @@
 #include <emscripten/bind.h>
-#include "AIPlayer.h"
+#include "AIPlayer - wasm.h"
 #include "CommonMover.h"
 #include "BoardMover.h"
 #include <thread>
@@ -69,6 +69,7 @@ EMSCRIPTEN_BINDINGS(ai_core) {
         .function("start_search", &start_search_with_timeout)
         
         .property("max_d", &AIPlayer::max_d)
+        .property("merge_urgency", &AIPlayer::merge_urgency)
         .property("best_operation", &AIPlayer::best_operation)
         .property("board", &AIPlayer::board)
         .property("max_threads", &AIPlayer::max_threads)

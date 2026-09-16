@@ -29,6 +29,7 @@ class NativeAI:
         # overwrite the desktop's configuration, including during initialization.
         SingletonConfig.save_config = classmethod(lambda cls, *args, **kwargs: None)
         from engine_core.AIPlayer import Dispatcher, CoreAILogic
+        from engine_core.ai_merge_policy import merge_urgency_for_readers
         from native_core import ai_core
         config = SingletonConfig().config
         config['4_spawn_rate'] = 0.1
@@ -43,6 +44,8 @@ class NativeAI:
         self.player = ai_core.AIPlayer(0)
         self.player.max_threads = threads
         self.dispatcher = Dispatcher(np.zeros((4, 4), dtype=np.int32), 0)
+        self.player.merge_urgency = merge_urgency_for_readers(self.dispatcher.ad_readers)
+        LOG.info('Search merge urgency: %.1f', self.player.merge_urgency)
 
     def choose(self, values):
         board = self.np.array(values, dtype=self.np.int64).reshape((4, 4))

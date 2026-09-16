@@ -77,6 +77,7 @@ public:
   std::chrono::steady_clock::time_point deadline;
   int32_t max_d;
   int32_t max_layer;
+  double merge_urgency = 0.0;
   uint8_t best_operation;
   uint64_t board;
   uint32_t board_sum;
@@ -107,7 +108,7 @@ public:
 
   // 内部搜索函数
   int32_t search0(uint64_t b);
-  int32_t process_score(uint32_t score);
+  int32_t process_score(uint32_t score, int32_t depth = 0);
   int32_t check_corner(uint64_t board) const;
   int32_t search_branch(uint64_t t, int32_t depth, int32_t sum_increment,
                         uint64_t &out_nodes);
