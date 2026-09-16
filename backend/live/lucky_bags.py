@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from backend.auth.db import auth_db
 
-RULES = {32768: (10_000, 800, 2_000), 65536: (100_000, 8_000, 20_000)}
+RULES = {32768: (5_000, 300, 1_000), 65536: (20_000, 1_000, 3_000)}
 DRAW_SECONDS = 180
 RESULT_SECONDS = 180
 MAX_WINNERS = 10
@@ -83,11 +83,13 @@ def join(bag_id, user_id, now=None):
 
 
 def amounts(count, pool, minimum, maximum):
-    """Spend the available pool without violating any winner's bounds."""
-    remaining = min(pool, count * maximum)
+    """Reserve minimums, then shuffle so every winner has equal expectation."""
+    if count < 0 or minimum < 1 or maximum < minimum or pool < count * minimum:
+        raise ValueError("Invalid lucky-bag bounds")
+    remaining = pool
     result = []
     for left in range(count - 1, -1, -1):
-        low = max(minimum, remaining - left * maximum)
+        low = minimum
         high = min(maximum, remaining - left * minimum)
         value = low + secrets.randbelow(high - low + 1)
         result.append(value)

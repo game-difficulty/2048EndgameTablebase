@@ -408,10 +408,11 @@ def submit_ranked_run(
     if record_size > MAX_RECORD_BYTES:
         raise ValueError("record_too_large")
 
-    now = _utc_now()
-    cutoff = _iso(now - timedelta(days=1))
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        # Timestamp acceptance under the same lock as weekly settlement.
+        now = _utc_now()
+        cutoff = _iso(now - timedelta(days=1))
         row = db.execute(
             "SELECT * FROM gamer_ranked_runs WHERE run_id = ?", (run_id,)
         ).fetchone()
@@ -592,7 +593,9 @@ def prune_ranked_replays(
             changed_boards.add(board_key)
 
         removed += db.execute(
-            "DELETE FROM gamer_weekly_high_scores WHERE week_start < ?",
+            """DELETE FROM gamer_weekly_high_scores WHERE week_start < ?
+              AND (week_start < (SELECT value FROM token_reward_state WHERE key='weekly_start')
+                   OR week_start IN (SELECT week_start FROM token_weekly_settlements))""",
             (previous_week,),
         ).rowcount
         periods = db.execute(

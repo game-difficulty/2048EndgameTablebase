@@ -8,18 +8,18 @@
       <header><h2 id="red-title">{{ composing ? t('发红包', 'Send a red envelope') : t('直播间红包', 'Room red envelope') }}</h2><button :aria-label="t('关闭','Close')" @click="close"><X :size="20" /></button></header>
       <form v-if="composing" @submit.prevent="send">
         <img class="red-art" :src="art(false)" alt="" />
-        <label>{{ t('总额（充值 Token）', 'Total (paid Tokens)') }}<input v-model.number="amount" type="number" min="1000" max="50000" step="1" required :disabled="busy || !!pending" /></label>
+        <label>{{ t('总额（常驻 Token）', 'Total (permanent Tokens)') }}<input v-model.number="amount" type="number" min="1000" max="50000" step="1" required :disabled="busy || !!pending" /></label>
         <label>{{ t('红包个数', 'Number of shares') }}<input v-model.number="count" type="number" min="5" max="20" step="1" required :disabled="busy || !!pending" /></label>
         <fieldset :disabled="busy || !!pending"><legend>{{ t('分配方式', 'Split') }}</legend><label><input v-model="mode" type="radio" value="random" />{{ t('拼手气', 'Random') }}</label><label><input v-model="mode" type="radio" value="equal" />{{ t('等额', 'Equal') }}</label></fieldset>
-        <p class="red-note">{{ t('5–20 个，合计 1,000–50,000 Token。仅使用充值额度，展示 60 秒后未领取部分自动退回。', '5–20 shares, 1,000–50,000 paid Tokens. Unclaimed shares return after 60 seconds on display.') }}</p>
+        <p class="red-note">{{ t('5–20 个，合计 1,000–50,000 Token。仅使用常驻额度，展示 60 秒后未领取部分自动退回。', '5–20 shares, 1,000–50,000 permanent Tokens. Unclaimed shares return after 60 seconds on display.') }}</p>
         <p v-if="mode === 'equal'" class="red-note">{{ t('每份', 'Each') }} {{ Math.floor(amount / count) || 0 }} Token<span v-if="amount % count"> · {{ t('余数', 'Remainder') }} {{ amount % count }} Token {{ t('不退还', 'is not returned') }}</span></p>
-        <p v-if="paid != null" class="red-note">{{ t('充值余额', 'Paid balance') }}: {{ format(paid) }} Token</p>
+        <p v-if="paid != null" class="red-note">{{ t('常驻余额', 'Permanent balance') }}: {{ format(paid) }} Token</p>
         <button class="red-primary" type="submit" :disabled="busy || !connected">{{ busy ? t('正在确认…', 'Confirming…') : pending ? t('核对并重试（不会重复扣费）', 'Check and retry (no duplicate charge)') : t('发放红包', 'Send envelope') }}</button>
       </form>
       <div v-else-if="selected" class="red-result">
         <p class="red-sender">{{ selected.actor.name }} {{ t('的红包', 'sent an envelope') }}</p>
         <img :key="selected.id + ':' + (selected.award || 0)" class="red-art" :src="art(!reduced && !selected.award && selected.status === 'active')" alt="" />
-        <template v-if="selected.award > 0"><strong>{{ format(selected.award) }} <small>Token</small></strong><p>{{ t('已加入你的充值额度', 'Added to your paid balance') }}</p></template>
+        <template v-if="selected.award > 0"><strong>{{ format(selected.award) }} <small>Token</small></strong><p>{{ t('已加入你的常驻额度', 'Added to your permanent balance') }}</p></template>
         <template v-else>
           <strong>{{ format(selected.amount) }} <small>Token</small></strong>
           <p>{{ selected.count }} {{ t('个红包', 'shares') }} · {{ selected.mode === 'equal' ? t('等额', 'Equal') : t('拼手气', 'Random') }}</p>
@@ -69,7 +69,7 @@ async function api(path='', body) {
   } finally { clearTimeout(timeout); }
 }
 function fail(e) {
-  const messages={red_paid_balance:['充值额度不足，周度额度不能用于红包。','Not enough paid Tokens. Weekly allowances cannot fund envelopes.'],red_cooldown:['每 15 秒可发一个红包，请稍后再发。','You can send one envelope every 15 seconds. Try again shortly.'],red_not_present:['直播间正在连接，请稍后再试。','The room is reconnecting. Please try again.'],red_invalid:['请检查总额和红包个数。','Check the amount and number of shares.'],red_own:['不能领取自己发出的红包。','You cannot claim your own envelope.'],red_not_found:['这个红包已无法查看。','This envelope is no longer available.']};
+  const messages={red_paid_balance:['常驻额度不足，周度额度不能用于红包。','Not enough permanent Tokens. Weekly allowances cannot fund envelopes.'],red_cooldown:['每 15 秒可发一个红包，请稍后再发。','You can send one envelope every 15 seconds. Try again shortly.'],red_not_present:['直播间正在连接，请稍后再试。','The room is reconnecting. Please try again.'],red_invalid:['请检查总额和红包个数。','Check the amount and number of shares.'],red_own:['不能领取自己发出的红包。','You cannot claim your own envelope.'],red_not_found:['这个红包已无法查看。','This envelope is no longer available.']};
   error.value=e.status===401 ? t('请重新登录。','Please sign in again.') : t(...(messages[e.detail] || ['暂未确认，请重试；不会重复扣费或领取。','Not yet confirmed. Retry safely without duplicate charges or claims.']));
 }
 function place() {

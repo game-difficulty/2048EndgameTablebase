@@ -38,7 +38,7 @@ class LuckyBagTests(unittest.TestCase):
     def test_milestones_are_independent_and_idempotent(self):
         self.assertEqual(bags.create('run-one', 32768, now=150), self.bag)
         large = bags.create('run-one', 65536, now=150)
-        self.assertEqual((large['pool'], large['minimum'], large['maximum'], large['draw_at']), (100000, 8000, 20000, 330))
+        self.assertEqual((large['pool'], large['minimum'], large['maximum'], large['draw_at']), (20000, 1000, 3000, 330))
         self.assertEqual(len(bags.listing(now=200)), 2)
         self.assertNotEqual(bags.create('run-two', 32768, now=200)['id'], self.bag['id'])
 
@@ -48,7 +48,7 @@ class LuckyBagTests(unittest.TestCase):
                 for _ in range(50):
                     result = bags.amounts(count, pool, low, high)
                     self.assertEqual(len(result), count)
-                    self.assertEqual(sum(result), min(pool, count * high))
+                    self.assertLessEqual(sum(result), pool)
                     self.assertTrue(all(low <= value <= high for value in result))
 
     def test_ten_unique_online_winners_credited_without_claim(self):
@@ -57,13 +57,14 @@ class LuckyBagTests(unittest.TestCase):
             db.execute("INSERT INTO token_accounts(user_id,bonus_balance_units,paid_balance_units,created_at,updated_at) VALUES(1,1234,789,'now','now')")
         self.assertTrue(bags.draw(self.bag['id'], set(range(1, 16)), now=280))
         result = bags.listing(1, now=281)[0]
-        self.assertEqual((result['participants'], result['winners'], result['distributed']), (15, 10, 10000))
+        self.assertEqual((result['participants'], result['winners']), (15, 10))
+        self.assertTrue(3000 <= result['distributed'] <= 5000)
         with auth_db() as db:
             ledger = list(db.execute("SELECT * FROM token_ledger WHERE event_type='live_lucky_award'"))
             self.assertEqual(len(ledger), 10)
             for row in ledger:
                 self.assertEqual(row['balance_after_units']-row['balance_before_units'], row['paid_delta_units'])
-                self.assertTrue(800000 <= row['paid_delta_units'] <= 2000000)
+                self.assertTrue(300000 <= row['paid_delta_units'] <= 1000000)
             account = db.execute('SELECT * FROM token_accounts WHERE user_id=1').fetchone()
             self.assertEqual(account['bonus_balance_units'], 1234)
             self.assertEqual(account['paid_balance_units'], 789+result['award']*1000)
@@ -71,10 +72,24 @@ class LuckyBagTests(unittest.TestCase):
 
     def test_absent_users_excluded_and_small_pools_not_fully_distributed(self):
         self.enter(3)
-        self.assertTrue(bags.draw(self.bag['id'], {1}, now=280))
-        self.assertEqual(bags.listing(1, now=281)[0]['award'], 2000)
+        with patch.object(bags.secrets, 'randbelow', return_value=123):
+            self.assertTrue(bags.draw(self.bag['id'], {1}, now=280))
+        self.assertEqual(bags.listing(1, now=281)[0]['award'], 423)
         result = bags.listing(2, now=281)[0]
-        self.assertEqual((result['joined'], result['present'], result['award'], result['distributed']), (True, False, 0, 2000))
+        self.assertEqual((result['joined'], result['present'], result['award'], result['distributed']), (True, False, 0, 423))
+
+    def test_single_winner_can_receive_either_endpoint(self):
+        for pool, low, high in bags.RULES.values():
+            with patch.object(bags.secrets, 'randbelow', return_value=0):
+                self.assertEqual(bags.amounts(1, pool, low, high), [low])
+            with patch.object(bags.secrets, 'randbelow', side_effect=lambda n: n - 1):
+                self.assertEqual(bags.amounts(1, pool, low, high), [high])
+
+    def test_amounts_are_shuffled_before_assignment(self):
+        with patch.object(bags.secrets, 'randbelow', side_effect=[0, 100, 200]), \
+             patch.object(bags.secrets.SystemRandom, 'shuffle', side_effect=lambda values: values.reverse()) as shuffle:
+            self.assertEqual(bags.amounts(3, 5000, 300, 1000), [500, 400, 300])
+            shuffle.assert_called_once()
 
     def test_no_participants_or_no_present_users(self):
         self.assertTrue(bags.draw(self.bag['id'], {1}, now=280))

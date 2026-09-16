@@ -146,7 +146,7 @@ class MinigameRankingTests(unittest.TestCase):
         self._submit(alice, "ice-age", 100, 1, difficulty=0)
         self._submit(alice, "ice-age", 200, 2, difficulty=1)
         self._submit(bob, "ice-age", 300, 3)
-        request = Request({"type": "http", "headers": []})
+        request = Request({"type": "http", "headers": [], "path": "/api/minigames/records"})
         with self.assertRaises(HTTPException) as error:
             minigame_routes.get_personal_records(request, Response())
         self.assertEqual(error.exception.status_code, 401)

@@ -765,6 +765,9 @@ def init_auth_db() -> None:
             """
         )
 
+        from backend.token_rewards import init_schema as init_reward_schema
+        init_reward_schema(db)
+
         now = _iso_now()
         # Paid-balance rewards are not proof of sponsorship for legacy backfill.
         db.execute(
@@ -774,10 +777,10 @@ def init_auth_db() -> None:
             SELECT
               users.id,
               CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0
-                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund'))
+                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund','minigame_trophy_award','weekly_rank_award'))
                 THEN 'supporter' ELSE 'free' END,
               CASE WHEN COALESCE(token_accounts.paid_balance_units, 0) > 0
-                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund'))
+                AND users.id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund','minigame_trophy_award','weekly_rank_award'))
                 THEN ? ELSE NULL END,
               1,
               1,
@@ -809,7 +812,7 @@ def init_auth_db() -> None:
                 show_supporter_badge = 1,
                 updated_at = ?
             WHERE tier != 'supporter'
-              AND user_id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund'))
+              AND user_id NOT IN (SELECT user_id FROM token_ledger WHERE event_type IN ('live_lucky_award','live_red_award','live_red_refund','minigame_trophy_award','weekly_rank_award'))
               AND user_id IN (
                 SELECT user_id FROM token_accounts WHERE paid_balance_units > 0
               )

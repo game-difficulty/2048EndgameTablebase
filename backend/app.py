@@ -203,6 +203,16 @@ async def _leaderboard_refresh_loop() -> None:
         await asyncio.sleep(3600)
 
 
+async def _token_reward_loop() -> None:
+    from backend.token_rewards import run_maintenance
+    while True:
+        try:
+            await asyncio.to_thread(run_maintenance)
+        except Exception as exc:
+            _rate_limited_log("token-rewards", f"Token rewards failed: {type(exc).__name__}: {exc}")
+        await asyncio.sleep(60)
+
+
 async def _gamer_validation_loop() -> None:
     next_cleanup = 0.0
     while True:
@@ -241,6 +251,7 @@ async def app_lifespan(_app: FastAPI):
     leaderboard_refresh_task = asyncio.create_task(_leaderboard_refresh_loop())
     gamer_validation_task = asyncio.create_task(_gamer_validation_loop())
     minigame_validation_task = asyncio.create_task(_minigame_validation_loop())
+    token_reward_task = asyncio.create_task(_token_reward_loop())
     try:
         yield
     finally:
@@ -249,6 +260,7 @@ async def app_lifespan(_app: FastAPI):
         leaderboard_refresh_task.cancel()
         gamer_validation_task.cancel()
         minigame_validation_task.cancel()
+        token_reward_task.cancel()
         try:
             await leaderboard_refresh_task
         except asyncio.CancelledError:
@@ -262,6 +274,10 @@ async def app_lifespan(_app: FastAPI):
         except asyncio.CancelledError:
             pass
         await asyncio.to_thread(close_minigame_verifier)
+        try:
+            await token_reward_task
+        except asyncio.CancelledError:
+            pass
         remote_worker_registry.remove_availability_listener(
             _broadcast_tablebase_catalog_update
         )

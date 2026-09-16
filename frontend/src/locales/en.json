@@ -76,7 +76,7 @@
     "account": {
       "title": "Account",
       "bonusTokens": "Bonus tokens",
-      "paidTokens": "Paid tokens",
+      "paidTokens": "Permanent balance",
       "totalTokens": "Total",
       "supporter": "Supporter",
       "changePassword": "Change Password",
@@ -600,8 +600,8 @@
     "quotaGuide": {
       "open": "Token Guide",
       "kicker": "Token Rules",
-      "title": "Free Allowance and Usage",
-      "subtitle": "See your weekly allowance and the Token cost of each feature.",
+      "title": "Token Sources and Usage",
+      "subtitle": "See how to get Tokens and the cost of each feature.",
       "loading": "Loading token rules...",
       "loadFailed": "Token rules are temporarily unavailable. Please try again.",
       "weekly": {
@@ -621,6 +621,15 @@
             "detail": "Sponsorship confirmed by the administrator"
           }
         }
+      },
+      "earn": {
+        "title": "Permanent Balance Sources",
+        "note": "These Tokens do not reset weekly. Reward Tokens do not count as sponsorship payments.",
+        "recharge": "Recharge: CNY 9.9 for 100,000; CNY 99 for 2,000,000. Credited after admin confirmation.",
+        "lucky": "Live lucky bags: 32K has a 5,000 pool, with 300–1,000 per winner; 65K has a 20,000 pool, with 1,000–3,000 per winner. Up to 10 winners per bag; stay in the room for the draw. Pools need not be fully distributed.",
+        "envelope": "Live red envelopes: claim gifts from viewers. Each envelope contains 1,000–50,000 split into 5–20 shares; your reward depends on your claim.",
+        "weekly": "Weekly Gamer rankings: high-score places 1–5 earn 10,000 / 8,000 / 5,000 / 3,000 / 2,000; adversarial places earn 5,000 / 4,000 / 3,000 / 2,000 / 1,000. Settled each Monday (UTC+8) after score verification. You can earn from both boards.",
+        "trophy": "Minigame trophies: Bronze / Silver / Gold / Grand earn 2,000 / 3,000 / 5,000 / 10,000, once per game, difficulty and tier. Higher tiers include unclaimed lower tiers: a direct Grand earns 20,000. Verified results only; existing verified trophies receive a one-time credit too."
       },
       "costs": {
         "title": "Tablebase and Feature Costs",
@@ -647,7 +656,7 @@
       },
       "rules": {
         "title": "Charging Notes",
-        "balanceOrder": "Bonus tokens are spent before paid tokens.",
+        "balanceOrder": "Weekly free Tokens are spent before your permanent balance.",
         "analysisCharge": "Analysis is charged per selected file, whether or not a report is generated.",
         "battleCharge": "The route fee is charged when you create a room. Generation failures receive a full refund; unplayed rooms receive 80% when closed or expired. One room can be created every 30 seconds.",
         "replayCharge": "Replay loading is charged after authorization; parsing failures are not refunded.",
@@ -699,14 +708,14 @@
     },
     "tokens": {
       "adjust": "Adjust tokens",
-      "kicker": "Paid balance",
-      "title": "Adjust paid tokens",
-      "balanceDetail": "Bonus {bonus} / Paid {paid}",
+      "kicker": "Permanent balance",
+      "title": "Adjust permanent balance",
+      "balanceDetail": "Weekly free {bonus} / Permanent {paid}",
       "presetSmall": "+100,000 (¥9.9)",
       "presetLarge": "+2,000,000 (¥99)",
       "mode": "Mode",
-      "modeAdd": "Add paid tokens",
-      "modeSet": "Set paid token balance",
+      "modeAdd": "Add permanent Tokens",
+      "modeSet": "Set permanent balance",
       "amount": "Token amount",
       "paymentAmount": "Payment amount (CNY)",
       "paymentChannel": "Payment channel",

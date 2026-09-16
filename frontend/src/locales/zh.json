@@ -69,7 +69,7 @@
     "account": {
       "title": "账号",
       "bonusTokens": "赠送 token",
-      "paidTokens": "充值 token",
+      "paidTokens": "常驻额度",
       "totalTokens": "总余额",
       "supporter": "赞助者",
       "changePassword": "修改密码",
@@ -589,7 +589,7 @@
     "open": "赞助充值",
     "kicker": "赞助",
     "title": "赞助 / 充值",
-    "subtitle": "扫码付款后由站长人工确认到账，充值额度会进入充值 token 余额。",
+    "subtitle": "扫码付款后由站长人工确认到账，充值 Token 将计入常驻额度。",
     "qrAlt": "微信收款码",
     "wechatQr": "微信收款码",
     "sponsorAmount": "赞助金额",
@@ -600,8 +600,8 @@
     "quotaGuide": {
       "open": "额度说明",
       "kicker": "额度规则",
-      "title": "免费额度与用量",
-      "subtitle": "查看每周免费额度和各项功能的 Token 消耗。",
+      "title": "额度获取与用量",
+      "subtitle": "查看额度获取方式和各项功能的 Token 消耗。",
       "loading": "正在读取额度规则...",
       "loadFailed": "额度规则暂时无法读取，请稍后重试。",
       "weekly": {
@@ -621,6 +621,15 @@
             "detail": "完成赞助并由站长确认"
           }
         }
+      },
+      "earn": {
+        "title": "常驻额度获取方式",
+        "note": "以下奖励均为 Token，不随周度刷新清空；奖励不计入赞助金额。",
+        "recharge": "赞助充值：¥9.9 获得 100,000；¥99 获得 2,000,000，付款后由站长确认。",
+        "lucky": "直播福袋：32K 奖池 5,000，每人随机 300–1,000；65K 奖池 20,000，每人随机 1,000–3,000。每袋最多 10 人中奖，开奖时需仍在直播间，奖池不一定分完。",
+        "envelope": "直播红包：领取观众发放的红包。每包总额 1,000–50,000，分 5–20 份，实际所得以领取结果为准。",
+        "weekly": "游戏周榜：高分榜前五名依次获 10,000 / 8,000 / 5,000 / 3,000 / 2,000；对抗榜获 5,000 / 4,000 / 3,000 / 2,000 / 1,000。每周一按北京时间结算上周，待成绩验证完成后到账，可同时领取两榜奖励。",
+        "trophy": "小游戏奖杯：铜 / 银 / 金 / Grand 分别奖励 2,000 / 3,000 / 5,000 / 10,000。每款游戏、每个难度、每级仅领一次；跳级补齐低级奖励，直达 Grand 共获 20,000。仅限已验证成绩，现有已验证奖杯也会补发。"
       },
       "costs": {
         "title": "定式与功能消耗",
@@ -647,7 +656,7 @@
       },
       "rules": {
         "title": "计费说明",
-        "balanceOrder": "消费时先使用赠送 token，再使用充值 token。",
+        "balanceOrder": "消费时先使用每周免费额度，再使用常驻额度。",
         "analysisCharge": "分析按所选文件数计费，无论是否生成报告。",
         "battleCharge": "创建房间时先扣除路线费用。生成失败全额退回；未开局便关闭或过期时退回 80%。每 30 秒可创建一个房间。",
         "replayCharge": "回放在载入授权后计费，文件解析失败不退还。",
@@ -693,14 +702,14 @@
     },
     "tokens": {
       "adjust": "调整 token",
-      "kicker": "充值余额",
-      "title": "调整充值 token",
-      "balanceDetail": "赠送 {bonus} / 充值 {paid}",
+      "kicker": "常驻额度",
+      "title": "调整常驻额度",
+      "balanceDetail": "每周免费 {bonus} / 常驻 {paid}",
       "presetSmall": "+100,000（¥9.9）",
       "presetLarge": "+2,000,000（¥99）",
       "mode": "模式",
-      "modeAdd": "增加充值 token",
-      "modeSet": "设置充值 token 余额",
+      "modeAdd": "增加常驻额度",
+      "modeSet": "设置常驻额度余额",
       "amount": "Token 数量",
       "paymentAmount": "支付金额（CNY）",
       "paymentChannel": "支付渠道",

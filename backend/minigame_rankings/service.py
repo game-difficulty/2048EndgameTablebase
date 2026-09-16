@@ -1432,6 +1432,9 @@ def _apply_verified_result(
         WHERE user_id = ? AND game_id = ? AND difficulty = ? AND best_tile_exp <> ?
     """, (best_tile_exp, verified_at, int(run["user_id"]), str(run["game_id"]),
           int(run["difficulty"]), best_tile_exp))
+    from backend.token_rewards import award_trophies
+    award_trophies(db, user_id=int(run["user_id"]), game_id=str(run["game_id"]),
+                   difficulty=int(run["difficulty"]), tier=verified["trophy_tier"], stamp=verified_at)
     return bool(score_updated), bool(trophy_updated)
 
 

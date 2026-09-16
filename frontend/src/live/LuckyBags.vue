@@ -20,7 +20,7 @@
         <template v-if="selected.drawn_at != null">
           <div class="lucky-result" role="status">
             <template v-if="user && !selected.resultKnown">{{ t('正在查询开奖结果…','Checking your result…') }}<button @click="refresh">{{ t('刷新','Refresh') }}</button></template>
-            <template v-else-if="selected.award > 0"><b>{{ t('恭喜！获得','You won') }} {{ format(selected.award) }} Token</b><p>{{ t('已加入你的充值额度','Added to your paid Token balance') }}</p></template>
+            <template v-else-if="selected.award > 0"><b>{{ t('恭喜！获得','You won') }} {{ format(selected.award) }} Token</b><p>{{ t('已加入你的常驻额度','Added to your permanent balance') }}</p></template>
             <template v-else-if="selected.joined && !selected.present">{{ t('开奖时你已离开直播间，未参与本次抽奖','You were away from the room at the draw.') }}</template>
             <template v-else-if="selected.joined">{{ t('这次未中奖，下个福袋再见！','Not this time. See you at the next lucky bag!') }}</template>
             <template v-else>{{ t('本次福袋已开奖','This lucky bag has been drawn') }}</template>
