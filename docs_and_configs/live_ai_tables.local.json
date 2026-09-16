@@ -5,7 +5,6 @@
   "free11_1024": [["D:/free11-1k", "uint32"]],
   "4431_1024": [["C:/2048_tables/4431-1k", "uint32"]],
   "LL_1024": [["C:/2048_tables/LL-1k", "uint32"]],
-  "free10_128": [["C:/2048_tables/free10-128", "uint32"]],
   "free10_512": [["C:/2048_tables/free10-512", "uint32"]],
   "free10_256": [["C:/2048_tables/free10-256", "uint32"]],
   "free11_512": [["C:/2048_tables/free11-512", "uint32"]]

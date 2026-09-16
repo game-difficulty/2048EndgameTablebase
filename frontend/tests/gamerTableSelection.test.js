@@ -4,6 +4,20 @@ import { TableDispatcher } from '../src/features/gamer/engine/tableDispatcher.js
 import { normalizeTableSelection, tableAllowed } from '../src/features/gamer/engine/tableSelection.js';
 const table=name=>({pattern:name,fullPattern:name+'_256',target:'256',spawnRate:.1,ai:{compatible:true,policy_version:1,large_tiles:7,free_tiles:3}});
 
+test('defaults exclude only three named tables, while explicit choices can opt back in',()=>{
+  const excluded=['free10_128','444_1024','444_2048'];
+  for(const name of excluded){
+    const entry={...table(name.split('_')[0]),fullPattern:name};
+    assert.equal(tableAllowed(entry,null),false);
+    assert.equal(tableAllowed(entry,[name]),true);
+    const dispatcher=new TableDispatcher([entry]);
+    assert.equal(dispatcher.tables.length,0);
+    dispatcher.setTables([entry],.1,[name]);
+    assert.equal(dispatcher.tables.length,1);
+  }
+  for(const name of ['free10_256','free10_512','4442f_1024']) assert.equal(tableAllowed({fullPattern:name},null),true);
+});
+
 test('default allows newly available tables while explicit empty selection allows none',()=>{
   assert.equal(normalizeTableSelection(undefined),null);
   assert.deepEqual(normalizeTableSelection(['L3_256',null,'L3_256','442_512']),['442_512','L3_256']);

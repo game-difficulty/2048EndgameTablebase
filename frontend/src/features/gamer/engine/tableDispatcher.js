@@ -79,7 +79,8 @@ export class TableDispatcher {
             && ((table.free > 4 && currentLarge > 4) || afterCount > 4) ? 2 : 0;
           route(table, group);
         }
-        if (c[exp - 1] < 2) {
+        // Match the native handoff: no higher-target candidates during cooldown.
+        if (c[exp - 1] < 2 && this.cooldowns.size === 0) {
           for (const table of readers(level + 1, largeCount)) route(table, afterCount < 5 ? 1 : 2);
           if (level > 12) {
             for (const table of readers(level + 2, largeCount)) if (table.free <= 4) route(table, 2);

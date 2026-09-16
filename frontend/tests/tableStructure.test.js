@@ -31,7 +31,9 @@ test('reference board skips only structurally impossible candidates before looku
 test('unknown, old or malformed metadata queries candidates in the original order', async () => {
   for (const structure of [undefined, { ...metadata([]), version: 2 }, metadata(['xyz']),
     { ...metadata([]), transforms: 'rotations4' }, metadata([123])]) {
-    const dispatcher = new TableDispatcher(tables.map((table) => ({ ...table, ai: { ...table.ai, structure } })));
+    const available = tables.map((table) => ({ ...table, ai: { ...table.ai, structure } }));
+    const dispatcher = new TableDispatcher();
+    dispatcher.setTables(available, .1, available.map(table => table.fullPattern));
     dispatcher.reset(initial);
     const calls = [];
     const direction = await dispatcher.choose(async ({ table }) => {

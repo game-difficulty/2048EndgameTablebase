@@ -7,7 +7,7 @@
       <header><h2>{{ tools.find(tool => tool.id === view)?.label }}</h2><button type="button" :title="t('关闭','Close')" :aria-label="t('关闭','Close')" @click="close"><X :size="20" /></button></header>
       <section v-if="view === 'settings'" class="gamer-tool-body">
         <GamerMatchOptionsPanel :options="options" :table-enabled="tableEnabled" @table-mode="emit('table-mode',$event)" @change="(key,value) => emit('change',key,value)" />
-        <div class="table-heading"><h3>{{ t('可用定式','Allowed tables') }}</h3><span>{{ selectedCount }}/{{ tables.length }}</span><button @click="emit('table-selection',null)">{{ t('全选','All') }}</button><button @click="emit('table-selection',[])">{{ t('全不选','None') }}</button></div>
+        <div class="table-heading"><h3>{{ t('可用定式','Allowed tables') }}</h3><span>{{ selectedCount }}/{{ tables.length }}</span><button @click="emit('table-selection',tables.map(table => table.fullPattern))">{{ t('全选','All') }}</button><button @click="emit('table-selection',[])">{{ t('全不选','None') }}</button></div>
         <input v-model="filter" class="table-filter" type="search" :placeholder="t('筛选定式','Filter tables')" :aria-label="t('筛选定式','Filter tables')" />
         <p v-if="loading" class="tool-note">{{ t('正在读取定式…','Loading tables…') }}</p>
         <p v-else-if="error" class="tool-note">{{ t('暂时无法读取定式','Could not load tables') }}<button @click="emit('load-tables')"><RefreshCw :size="14" />{{ t('重试','Retry') }}</button></p>
@@ -37,6 +37,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Settings2, Clapperboard, ChartNoAxesColumnIncreasing, X, Copy, Download, ExternalLink, RefreshCw } from '@lucide/vue';
+import { tableAllowed } from '../engine/tableSelection.js';
 import GamerMatchOptionsPanel from './GamerMatchOptionsPanel.vue';
 import { downloadText } from '../../../services/files/browserFiles.js';
 const props = defineProps({active:Boolean,options:Array,tableEnabled:Boolean,tables:Array,selection:Array,loading:Boolean,error:Boolean,statistics:Object,getReplay:Function});
@@ -46,10 +47,10 @@ const t=(zh,en)=>locale.value.startsWith('zh')?zh:en;
 const tools=computed(()=>[{id:'settings',icon:Settings2,label:t('设置','Settings')},{id:'replay',icon:Clapperboard,label:t('回放','Replay')},{id:'stats',icon:ChartNoAxesColumnIncreasing,label:t('统计','Stats')}]);
 const partialNote=computed(()=>t('旧存档缺少此前的记录，回放与统计从恢复后的局面起算。','Earlier moves are missing from this save. Replay and statistics start at the restored board.'));
 const dialog=ref(null),view=ref(''),filter=ref(''),status=ref(''),fallbackText=ref(''),fallback=ref(null);
-const selected=name=>props.selection==null || props.selection.includes(name);
+const selected=name=>tableAllowed({fullPattern:name},props.selection);
 const selectedCount=computed(()=>props.tables.filter(table=>selected(table.fullPattern)).length);
 const filteredTables=computed(()=>props.tables.filter(table=>table.fullPattern.toLowerCase().includes(filter.value.trim().toLowerCase())).slice().sort((a,b)=>a.fullPattern.localeCompare(b.fullPattern,undefined,{numeric:true})));
-function select(name,enabled){const names=new Set(props.selection ?? props.tables.map(table=>table.fullPattern));if(enabled)names.add(name);else names.delete(name);emit('table-selection',[...names]);}
+function select(name,enabled){const names=new Set(props.selection ?? props.tables.filter(table=>selected(table.fullPattern)).map(table=>table.fullPattern));if(enabled)names.add(name);else names.delete(name);emit('table-selection',[...names]);}
 function open(id){view.value=id;status.value='';fallbackText.value='';emit('dialog-open',true);dialog.value.showModal();if(id==='settings')emit('load-tables');}
 function closed(){emit('dialog-open',false);}
 function close(){dialog.value?.close();closed();}

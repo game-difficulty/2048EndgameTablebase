@@ -287,7 +287,8 @@ class DispatcherCommon(BaseDispatcher):
                 else:
                     for reader in self.ad_readers.get((lvl, large_tile_count), []):
                         route(reader, endgame_lvls1)
-                if self.counts[target_tile - 1] < 2:
+                # While yielding a merge to search, do not switch to a higher target.
+                if self.counts[target_tile - 1] < 2 and not self._table_cooldowns:
                     current_endgame_lvl = (
                         endgame_lvls2 if ntiler_after_endgame < 5 else endgame_lvls3
                     )

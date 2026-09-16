@@ -167,7 +167,9 @@ requested, without extending their lifetime. Local development retains host-only
 cookies. Account data, avatars and supporter badges use the existing database.
 
 The local live-only table allowlist is `live_ai_tables.local.json`. It excludes
-`444_1024` and `444_2048`; this does not change the public tablebase Worker catalog.
+`free10_128`, `444_1024` and `444_2048`; this does not change the public tablebase
+Worker catalog. Gamer excludes these three tables by default too; explicit user
+selections, including Select All, can enable them again.
 The runner uses a 50ms minimum for search and 80ms for table decisions. It only
 acknowledges broadcast control when the server advertises that capability, so
 restarting it before a server upgrade remains safe.
