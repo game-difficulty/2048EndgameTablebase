@@ -10,9 +10,9 @@
       content="带连续秒表、单步用时和节点用时的 2048Verse 回放查看器"
     />
     <title>2048Verse 回放计时器</title>
-    <link rel="stylesheet" href="styles.css?v=20260915-1" />
+    <link rel="stylesheet" href="styles.css?v=20260916-download-1" />
     <script src="replay-core.js?v=20260906-1" defer></script>
-    <script src="app.js?v=20260915-live-1" defer></script>
+    <script src="app.js?v=20260916-download-1" defer></script>
   </head>
   <body>
     <main id="app" class="app-shell">
@@ -26,6 +26,7 @@
       <section class="toolbar" aria-label="载入与步速设置">
         <button id="input-button" class="primary-button" type="button">输入回放代码</button>
         <button id="upload-button" class="primary-button" type="button">上传回放文件</button>
+        <button id="download-button" class="primary-button" type="button" disabled>下载回放</button>
         <button id="speed-button" class="primary-button" type="button">原始步速 · 1×</button>
         <input id="file-input" type="file" accept=".vrs" hidden />
       </section>

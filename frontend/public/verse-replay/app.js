@@ -29,6 +29,7 @@
     inputDialog: document.querySelector('#input-dialog'),
     inputLoad: document.querySelector('#input-load'),
     uploadButton: document.querySelector('#upload-button'),
+    downloadButton: document.querySelector('#download-button'),
     speedButton: document.querySelector('#speed-button'),
     speedCancel: document.querySelector('#speed-cancel'),
     speedDialog: document.querySelector('#speed-dialog'),
@@ -56,6 +57,7 @@
 
   const state = {
     replay: null,
+    download: null,
     progress: 0,
     playing: false,
     playbackMode: 'original',
@@ -448,7 +450,9 @@
     elements.fixedSpeedFields.hidden = selected !== 'constant';
   }
 
-  async function installReplay(loader, sourceName) {
+  async function installReplay(loader, sourceName, originalContent) {
+    state.download = null;
+    elements.downloadButton.disabled = true;
     pause(false);
     clearBoardAnimation();
     showError('');
@@ -469,6 +473,10 @@
       createBoard();
       createTimeline();
       renderAll();
+      // Keep the original encoding, including binary VRS timing and metadata.
+      const name = sourceName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\.vrs$/i, '').slice(0, 120).replace(/[. ]+$/g, '') || 'replay';
+      state.download = { blob: new Blob([originalContent], { type: 'application/octet-stream' }), name: `${name}.vrs` };
+      elements.downloadButton.disabled = false;
     } catch (error) {
       state.replay = null;
       state.progress = 0;
@@ -500,7 +508,7 @@
     }
     const buffer = await file.arrayBuffer();
     try {
-      await installReplay(() => decodeReplayBytes(buffer), file.name);
+      await installReplay(() => decodeReplayBytes(buffer), file.name, buffer);
     } catch (_) {
       // The inline error already contains the actionable format detail.
     }
@@ -514,7 +522,7 @@
         const response = await fetch(`/api/live/replays/${encodeURIComponent(liveId)}`);
         if (!response.ok) throw new Error(response.status === 404 ? '回放已过期或不存在' : '暂时无法获取回放');
         const responseText = await response.text();
-        await installReplay(() => decodeReplayText(responseText), 'AI 直播对局');
+        await installReplay(() => decodeReplayText(responseText), 'AI 直播对局', responseText);
       } catch (error) {
         showError(`无法载入直播回放：${error?.message || '网络请求失败'}`);
         elements.fileName.textContent = '直播回放载入失败';
@@ -533,7 +541,7 @@
         throw new Error(payload?.detail || `HTTP ${response.status}`);
       }
       const source = `${payload.display_name || '排行榜对局'} · ${Number(payload.score || 0).toLocaleString('zh-CN')} 分`;
-      await installReplay(() => decodeReplayText(payload.record_encoding), source);
+      await installReplay(() => decodeReplayText(payload.record_encoding), source, payload.record_encoding);
     } catch (error) {
       showError(`无法载入排行榜对局：${error?.message || '网络请求失败'}`);
       elements.fileName.textContent = '排行榜对局载入失败';
@@ -561,10 +569,22 @@
     if (!text.trim()) return;
     closeDialog(elements.inputDialog);
     try {
-      await installReplay(() => decodeReplayText(text), '粘贴的回放代码');
+      await installReplay(() => decodeReplayText(text), '粘贴的回放代码', text);
     } catch (_) {
       // The inline error already contains the actionable format detail.
     }
+  });
+
+  elements.downloadButton.addEventListener('click', () => {
+    if (!state.download) return;
+    const url = URL.createObjectURL(state.download.blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = state.download.name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
   });
 
   elements.uploadButton.addEventListener('click', () => {

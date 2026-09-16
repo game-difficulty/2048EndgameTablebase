@@ -1267,6 +1267,12 @@ onMounted(async () => {
   }
   startAppSettings();
   const initialParams = new URLSearchParams(window.location.search);
+  if (initialParams.get('auth') === 'register') {
+    openAuthDialog('register');
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('auth');
+    window.history.replaceState(window.history.state, '', cleanUrl);
+  }
   if (initialParams.get('tab') === 'announcements') {
     handleAnnouncementNavigate({ type: 'announcement', id: findAnnouncement(initialParams.get('announcement')).id });
   }

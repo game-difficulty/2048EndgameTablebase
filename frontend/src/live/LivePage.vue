@@ -18,6 +18,7 @@
         <button v-if="!user" @click="loginOpen = true">
           {{ t("登录", "Sign in") }}</button
         ><button v-else @click="logout">{{ user.display_name }}</button>
+        <a v-if="!user" class="register-link" href="https://2048tables.online/?auth=register" target="_blank" rel="noopener">{{ t('注册', 'Register') }}</a>
         <NativeLandscapeButton inline class="live-landscape" />
       </nav>
     </header>
@@ -279,6 +280,7 @@
         />
         <p v-if="loginError" role="alert">{{ loginError }}</p>
         <button type="submit">{{ t("登录", "Sign in") }}</button>
+        <a class="register-link" href="https://2048tables.online/?auth=register" target="_blank" rel="noopener">{{ t('没有账号？前往主站注册', 'No account? Register on the main site') }}</a>
       </form>
     </dialog>
   </div>
@@ -375,6 +377,8 @@ const musicUrl = ref(""),
   now = ref(Date.now());
 const milestones = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
 let socket,
+  backgroundTimer,
+  backgroundDeadline = 0,
   retry,
   ping,
   tick,
@@ -462,11 +466,15 @@ function installSnapshot(data) {
   );
 }
 async function receive(event) {
+  if (document.hidden && backgroundDeadline && Date.now() >= backgroundDeadline) {
+    socket?.close();
+    return;
+  }
   if (event.data instanceof ArrayBuffer) {
     try {
       const next = applyLiveStep(run.value, event.data);
       run.value = next.run;
-      frame.value = next.frame;
+      if (!document.hidden) frame.value = next.frame;
     } catch {
       socket?.close();
     }
@@ -484,7 +492,7 @@ async function receive(event) {
   else if (data.type === 'red_envelopes') redState.value = data;
   else if (data.type === 'red_envelope') await appendChat(data);
   else if (data.type === 'gift' || data.type === 'entrance') {
-    giftEffects.value?.receive(data);
+    if (!document.hidden) giftEffects.value?.receive(data);
     if (data.type === 'gift') await appendChat(data);
     else await appendChat(entranceChat(data));
   }
@@ -507,7 +515,7 @@ async function appendChat(data) {
     const el = chatList.value,
       nearBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 50;
     messages.value = mergeLiveChat(messages.value, [data]);
-    if (nearBottom) {
+    if (nearBottom && !document.hidden) {
       await nextTick();
       if (el) el.scrollTop = el.scrollHeight;
     }
@@ -528,6 +536,10 @@ function connect() {
     connected.value = true;
     failures = 0;
     ping = setInterval(() => {
+      if (document.hidden && backgroundDeadline && Date.now() >= backgroundDeadline) {
+        ws.close();
+        return;
+      }
       if (ws.readyState === 1) ws.send("ping");
     }, 10000);
     refreshSummary();
@@ -649,10 +661,29 @@ async function refreshIdentity() {
 }
 async function visibility() {
   clearTimeout(retry);
-  if (document.hidden) socket?.close();
+  clearTimeout(backgroundTimer);
+  if (document.hidden) {
+    backgroundDeadline = Date.now() + 180000;
+    backgroundTimer = setTimeout(() => {
+      if (document.hidden) socket?.close();
+    }, 180000);
+  }
   else {
+    const expired = backgroundDeadline && Date.now() >= backgroundDeadline;
+    backgroundDeadline = 0;
+    frame.value = createSnapshotBoardFrame(
+      `${run.value?.run_id}:${run.value?.seq}:resume`,
+      run.value?.board || Array(16).fill(0),
+    );
+    const previousUserId = user.value?.id;
+    if (expired) socket?.close();
+    else if (socket?.readyState === 1) socket.send('ping');
+    connect();
     await refreshIdentity();
+    if (stopped || document.hidden) return;
     await ensureActor().catch(() => {});
+    if (stopped || document.hidden) return;
+    if (previousUserId !== user.value?.id) socket?.close();
     connect();
     refreshSummary();
   }
@@ -671,6 +702,7 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   stopped = true;
+  clearTimeout(backgroundTimer);
   clearTimeout(retry);
   clearTimeout(noticeTimer);
   clearTimeout(likeFlushTimer);
@@ -729,6 +761,21 @@ button:disabled {
   gap: 12px;
   padding: 16px 28px;
   border-bottom: 1px solid var(--border-main);
+}
+.register-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px;
+  border: 1px solid var(--border-main);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--text-main);
+  text-decoration: none;
+}
+.register-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .brand,
 .live-header nav,

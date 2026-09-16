@@ -537,7 +537,7 @@ async def watch(ws: WebSocket):
     task = asyncio.create_task(send())
     try:
         while not task.done():
-            incoming = await asyncio.wait_for(ws.receive_text(), 35)
+            incoming = await asyncio.wait_for(ws.receive_text(), 90)
             if incoming != 'ping':
                 break
             if ws in hub.viewer_times:

@@ -68,8 +68,20 @@ def save_checkpoint(path, run):
     temporary.replace(path)
 
 
-async def wait_for_step(started, source, table_interval, search_interval):
-    interval = search_interval if source == 'AI' else table_interval
+def step_interval(board, source, table_interval, search_interval):
+    if board is not None:
+        if sum(value >= 1024 for value in board) <= 2:
+            return 0
+        large_tiles = sum(value >= 512 for value in board)
+        if large_tiles >= 7:
+            return .18
+        if large_tiles >= 6:
+            return .12
+    return search_interval if source == 'AI' else table_interval
+
+
+async def wait_for_step(started, source, table_interval, search_interval, board=None):
+    interval = step_interval(board, source, table_interval, search_interval)
     # Windows timers can wake early; enforce the minimum on the clock.
     remaining = interval - (time.monotonic() - started)
     while remaining > 0:
@@ -175,7 +187,7 @@ async def run_forever(args):
                             continue
                         started = time.monotonic()
                         direction, source = await asyncio.to_thread(ai.choose, run.board.copy())
-                        await wait_for_step(started, source, args.interval, args.search_interval)
+                        await wait_for_step(started, source, args.interval, args.search_interval, run.board)
                         async with control.lock:
                             if not control.enabled or revision != control.revision:
                                 continue
@@ -228,6 +240,7 @@ def main():
         handlers = [RotatingFileHandler(path, maxBytes=512_000, backupCount=1, encoding='utf-8')]
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=handlers)
     LOG.info('Step minimums: AI search %.0fms, table %.0fms', args.search_interval * 1000, args.interval * 1000)
+    LOG.info('Stage overrides: <=2 tiles >=1024: unlimited; >=7 tiles >=512: 180ms; >=6: 120ms')
     asyncio.run(run_forever(args))
 
 

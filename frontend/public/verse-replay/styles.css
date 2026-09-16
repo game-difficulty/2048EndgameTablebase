@@ -114,7 +114,7 @@ h2 {
 
 .toolbar {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 13px;
 }
@@ -133,6 +133,13 @@ h2 {
 .primary-button:hover {
   filter: brightness(1.06);
   transform: translateY(-1px);
+}
+
+.primary-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
 }
 
 .error-message {
