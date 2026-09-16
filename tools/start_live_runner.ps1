@@ -23,12 +23,12 @@ try {
         '-u', ('"' + (Join-Path $PSScriptRoot 'live_runner.py') + '"'),
         '--engine-root', ('"' + $EngineRoot + '"'),
         '--tables', ('"' + $Tables + '"'),
-        '--interval', '0.08', '--search-interval', '0.05', '--threads', '1',
+        '--interval', '0.08', '--search-interval', '0.05', '--threads', '1', '--time-ratio', '1.6',
         '--log-file', ('"' + (Join-Path $data 'live-runner.log') + '"')
     )
     $process = Start-Process -FilePath $Python -ArgumentList $arguments -WorkingDirectory $root -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $data 'live-runner.stdout.log') `
         -RedirectStandardError (Join-Path $data 'live-runner.stderr.log')
     $process.PriorityClass = 'BelowNormal'
-    Write-Output "Live runner started: PID $($process.Id), AI search >=50ms, table >=80ms, one thread, BelowNormal priority."
+    Write-Output "Live runner started: PID $($process.Id), search time ratio 1.6, AI search >=50ms, table >=80ms, one thread, BelowNormal priority."
 } finally { $env:LIVE_PUBLISH_TOKEN = $previous }

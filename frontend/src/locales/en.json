@@ -634,12 +634,12 @@
       },
       "earn": {
         "title": "Permanent Balance Sources",
-        "note": "These Tokens do not reset weekly. Reward Tokens do not count as sponsorship payments.",
-        "recharge": "Recharge: CNY 9.9 for 100,000; CNY 99 for 2,000,000. Credited after admin confirmation.",
-        "lucky": "Live lucky bags: 32K has a 5,000 pool, with 300–1,000 per winner; 65K has a 20,000 pool, with 1,000–3,000 per winner. Up to 10 winners per bag; stay in the room for the draw. Pools need not be fully distributed.",
-        "envelope": "Live red envelopes: claim gifts from viewers. Each envelope contains 1,000–50,000 split into 5–20 shares; your reward depends on your claim.",
-        "weekly": "Weekly Gamer rankings: high-score places 1–5 earn 10,000 / 8,000 / 5,000 / 3,000 / 2,000; adversarial places earn 5,000 / 4,000 / 3,000 / 2,000 / 1,000. Settled each Monday (UTC+8) after score verification. You can earn from both boards.",
-        "trophy": "Minigame trophies: Bronze / Silver / Gold / Grand earn 2,000 / 3,000 / 5,000 / 10,000, once per game, difficulty and tier. Higher tiers include unclaimed lower tiers: a direct Grand earns 20,000. Verified results only; existing verified trophies receive a one-time credit too."
+        "note": "These Tokens **do not reset weekly**. Reward Tokens do not count as sponsorship payments.",
+        "recharge": "**Recharge**: CNY 9.9 for **100,000**; CNY 99 for **2,000,000**. Credited after admin confirmation.",
+        "lucky": "**Live lucky bags**: 32K has a 5,000 pool, with **300–1,000** per winner; 65K has a 20,000 pool, with **1,000–3,000** per winner. Up to 10 winners per bag; **stay in the room for the draw**. Pools need not be fully distributed.",
+        "envelope": "**Live red envelopes**: claim gifts from viewers. Each envelope contains **1,000–50,000** split into **5–20 shares**; your reward depends on your claim.",
+        "weekly": "**Weekly Gamer rankings**: **high-score places 1–5** earn **10,000 / 8,000 / 5,000 / 3,000 / 2,000**; **adversarial** places earn **5,000 / 4,000 / 3,000 / 2,000 / 1,000**. Settled each Monday (UTC+8) after score verification. **You can earn from both boards**.",
+        "trophy": "**Minigame trophies**: Bronze / Silver / Gold / Grand earn **2,000 / 3,000 / 5,000 / 10,000**, **once per game, difficulty and tier**. **Higher tiers include unclaimed lower tiers**: a direct Grand earns **20,000**. Verified results only; existing verified trophies receive a one-time credit too."
       },
       "costs": {
         "title": "Tablebase and Feature Costs",
