@@ -2,7 +2,7 @@ let aiCorePromise = null;
 let evilCorePromise = null;
 
 const runtimeImport = (url) => Function('specifier', 'return import(specifier)')(url);
-const AI_CORE_VERSION = 'merge-urgency-20260916';
+const AI_CORE_VERSION = 'prune-relaxation-20260917';
 const EVIL_CORE_VERSION = 'evil-20260706';
 
 export async function getAiCore() {

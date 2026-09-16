@@ -29,7 +29,7 @@ class NativeAI:
         # overwrite the desktop's configuration, including during initialization.
         SingletonConfig.save_config = classmethod(lambda cls, *args, **kwargs: None)
         from engine_core.AIPlayer import Dispatcher, CoreAILogic
-        from engine_core.ai_merge_policy import merge_urgency_for_readers
+        from engine_core.ai_merge_policy import allows_five_tiler_relaxation, merge_urgency_for_readers
         from native_core import ai_core
         config = SingletonConfig().config
         config['4_spawn_rate'] = 0.1
@@ -45,6 +45,8 @@ class NativeAI:
         self.player.max_threads = threads
         self.dispatcher = Dispatcher(np.zeros((4, 4), dtype=np.int32), 0)
         self.player.merge_urgency = merge_urgency_for_readers(self.dispatcher.ad_readers)
+        self.logic.allow_five_tiler_relaxation = allows_five_tiler_relaxation(self.dispatcher.ad_readers)
+        LOG.info('Five-tiler pruning relaxation: %s', self.logic.allow_five_tiler_relaxation)
         LOG.info('Search merge urgency: %.1f', self.player.merge_urgency)
 
     def choose(self, values):
@@ -74,7 +76,7 @@ def save_checkpoint(path, run):
 def step_interval(board, source, table_interval, search_interval):
     if board is not None:
         if sum(value >= 1024 for value in board) <= 2:
-            return 0
+            return .015
         large_tiles = sum(value >= 512 for value in board)
         if large_tiles >= 7:
             return .18
@@ -243,7 +245,7 @@ def main():
         handlers = [RotatingFileHandler(path, maxBytes=512_000, backupCount=1, encoding='utf-8')]
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s', handlers=handlers)
     LOG.info('Step minimums: AI search %.0fms, table %.0fms', args.search_interval * 1000, args.interval * 1000)
-    LOG.info('Stage overrides: <=2 tiles >=1024: unlimited; >=7 tiles >=512: 180ms; >=6: 120ms')
+    LOG.info('Stage overrides: <=2 tiles >=1024: 15ms; >=7 tiles >=512: 180ms; >=6: 120ms')
     asyncio.run(run_forever(args))
 
 

@@ -49,8 +49,8 @@ class LiveRunnerTimingTests(unittest.IsolatedAsyncioTestCase):
     async def test_stage_thresholds_and_priority(self):
         for source in ['AI', 'free12_2048']:
             for tiles, minimum in [
-                ([2, 4], 0),
-                ([1024] * 2 + [512] * 6, 0),
+                ([2, 4], .015),
+                ([1024] * 2 + [512] * 6, .015),
                 ([1024] * 3 + [512] * 2, .05 if source == 'AI' else .08),
                 ([1024] * 3 + [512] * 3, .12),
                 ([1024] * 3 + [512] * 4, .18),
@@ -59,8 +59,12 @@ class LiveRunnerTimingTests(unittest.IsolatedAsyncioTestCase):
                 board = tiles + [0] * (16 - len(tiles))
                 now, waits = await self.wait_step(source, .01, board=board)
                 self.assertAlmostEqual(now, max(.01, minimum))
-                if minimum == 0:
-                    self.assertEqual(waits, [])
+                self.assertAlmostEqual(sum(waits), minimum - .01)
+
+    async def test_early_stage_slow_computation_adds_no_wait(self):
+        now, waits = await self.wait_step('AI', .02, board=[2, 4] + [0] * 14)
+        self.assertEqual(now, .02)
+        self.assertEqual(waits, [])
 
     async def test_stage_wait_includes_computation_and_handles_early_wake(self):
         board = [1024] * 7 + [0] * 9

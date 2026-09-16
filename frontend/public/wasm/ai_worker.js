@@ -1,12 +1,12 @@
 ﻿// worker.js
-import createAICore from './ai_core.js?v=merge-urgency-20260916';
+import createAICore from './ai_core.js?v=prune-relaxation-20260917';
 
 let ai_core = null;
 let ai_player = null;
 let pendingTask = null; // 鐢ㄤ簬鏆傚瓨鍒濆鍖栧畬鎴愬墠鐨勮绠楄姹?
 
 // 2. 鍒濆鍖?WASM 妯″潡
-createAICore({ locateFile: (path) => './' + path + '?v=merge-urgency-20260916' }).then((instance) => {
+createAICore({ locateFile: (path) => './' + path + '?v=prune-relaxation-20260917' }).then((instance) => {
     console.log("WASM core loaded.");
     ai_core = instance;
 

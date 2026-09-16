@@ -59,7 +59,7 @@ const MIN_RANKED_SPAWN_RATE4 = 0.1;
 const MAX_RANKED_SPAWN_RATE4 = 0.8;
 const GAMER_TOP_TILE = 32768;
 const MAX_HISTORY_LENGTH = 1000;
-const AI_WORKER_VERSION = 'merge-urgency-20260916';
+const AI_WORKER_VERSION = 'prune-relaxation-20260917';
 
 const legacyGamerStore = createLocalStorageStore({
   key: 'gamer',
