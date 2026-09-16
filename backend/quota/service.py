@@ -201,7 +201,7 @@ def adjust_paid_tokens_for_admin(
             event_type = "admin_set_paid_balance"
 
         if new_paid_units < 0:
-            raise ValueError("Paid token balance must not be negative.")
+            raise ValueError("Permanent balance must not be negative.")
         paid_delta_units = new_paid_units - before_paid_units
         db.execute(
             """

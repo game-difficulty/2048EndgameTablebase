@@ -8,12 +8,12 @@
       <header><h2 id="red-title">{{ composing ? t('发红包', 'Send a red envelope') : t('直播间红包', 'Room red envelope') }}</h2><button :aria-label="t('关闭','Close')" @click="close"><X :size="20" /></button></header>
       <form v-if="composing" @submit.prevent="send">
         <img class="red-art" :src="art(false)" alt="" />
-        <label>{{ t('总额（常驻 Token）', 'Total (permanent Tokens)') }}<input v-model.number="amount" type="number" min="1000" max="50000" step="1" required :disabled="busy || !!pending" /></label>
+        <label>{{ t('总额（常驻额度）', 'Total (permanent balance)') }}<input v-model.number="amount" type="number" min="1000" max="50000" step="1" required :disabled="busy || !!pending" /></label>
         <label>{{ t('红包个数', 'Number of shares') }}<input v-model.number="count" type="number" min="5" max="20" step="1" required :disabled="busy || !!pending" /></label>
         <fieldset :disabled="busy || !!pending"><legend>{{ t('分配方式', 'Split') }}</legend><label><input v-model="mode" type="radio" value="random" />{{ t('拼手气', 'Random') }}</label><label><input v-model="mode" type="radio" value="equal" />{{ t('等额', 'Equal') }}</label></fieldset>
         <p class="red-note">{{ t('5–20 个，合计 1,000–50,000 Token。仅使用常驻额度，展示 60 秒后未领取部分自动退回。', '5–20 shares, 1,000–50,000 permanent Tokens. Unclaimed shares return after 60 seconds on display.') }}</p>
         <p v-if="mode === 'equal'" class="red-note">{{ t('每份', 'Each') }} {{ Math.floor(amount / count) || 0 }} Token<span v-if="amount % count"> · {{ t('余数', 'Remainder') }} {{ amount % count }} Token {{ t('不退还', 'is not returned') }}</span></p>
-        <p v-if="paid != null" class="red-note">{{ t('常驻余额', 'Permanent balance') }}: {{ format(paid) }} Token</p>
+        <p v-if="paid != null" class="red-note">{{ t('常驻额度', 'Permanent balance') }}: {{ format(paid) }} Token</p>
         <button class="red-primary" type="submit" :disabled="busy || !connected">{{ busy ? t('正在确认…', 'Confirming…') : pending ? t('核对并重试（不会重复扣费）', 'Check and retry (no duplicate charge)') : t('发放红包', 'Send envelope') }}</button>
       </form>
       <div v-else-if="selected" class="red-result">

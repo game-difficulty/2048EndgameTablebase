@@ -599,7 +599,7 @@
     "open": "赞助充值",
     "kicker": "赞助",
     "title": "赞助 / 充值",
-    "subtitle": "扫码付款后由站长人工确认到账，充值 Token 将计入常驻额度。",
+    "subtitle": "扫码付款后由站长人工确认到账，所得 Token 将计入常驻额度。",
     "qrAlt": "微信收款码",
     "wechatQr": "微信收款码",
     "sponsorAmount": "赞助金额",
