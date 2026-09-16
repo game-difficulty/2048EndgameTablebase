@@ -16,6 +16,7 @@ import { TableDispatcher } from '../engine/tableDispatcher.js';
 import { aiCompatibleTable, normalizeTableSelection } from '../engine/tableSelection.js';
 import { GamerReplay } from '../engine/gamerReplay.js';
 import { simulateMove } from '../engine/classicMove.js';
+import { canResolveLargePair } from '../engine/aiSearchBoard.js';
 import { createOrdinaryRng, planGamerSpawn } from '../engine/gamerSpawn.js';
 import { createTableAiStreamClient } from '../services/tableAiClient.js';
 import { TableAiCache } from '../services/tableAiCache.js';
@@ -59,7 +60,7 @@ const MIN_RANKED_SPAWN_RATE4 = 0.1;
 const MAX_RANKED_SPAWN_RATE4 = 0.8;
 const GAMER_TOP_TILE = 32768;
 const MAX_HISTORY_LENGTH = 1000;
-const AI_WORKER_VERSION = 'prune-relaxation-20260917';
+const AI_WORKER_VERSION = 'equal-large-pair-20260917';
 
 const legacyGamerStore = createLocalStorageStore({
   key: 'gamer',
@@ -661,6 +662,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     worker.postMessage({
       type: 'calculate',
       board_encoded: boardToHex(board.value),
+      resolve_large_pair: canResolveLargePair(board.value),
     });
   });
 

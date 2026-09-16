@@ -745,6 +745,9 @@ self.onmessage = function (e) {
 function handleCalculate(data) {
     const hexStr = data.board_encoded;
     const boardBigInt = BigInt('0x' + hexStr);
+    const searchBoard = data.resolve_large_pair === true
+        ? ai_core.resolve_32768_doubles(boardBigInt)
+        : boardBigInt;
 
     let boardArray = new Array(16).fill(0);
     let counts = new Array(16).fill(0);
@@ -756,13 +759,13 @@ function handleCalculate(data) {
     }
 
     if (!ai_player) {
-        ai_player = new ai_core.AIPlayer(boardBigInt);
+        ai_player = new ai_core.AIPlayer(searchBoard);
     } else {
         // 閲嶇疆鍐呴儴鎼滅储鏍戠姸鎬侊紝闃叉涔嬪墠鐩橀潰鐨勬缂撳瓨璁?AI 璇垽锛?
         if (typeof ai_player.reset_board === 'function') {
-            ai_player.reset_board(boardBigInt);
+            ai_player.reset_board(searchBoard);
         } else {
-            ai_player.board = boardBigInt;
+            ai_player.board = searchBoard;
         }
     }
 

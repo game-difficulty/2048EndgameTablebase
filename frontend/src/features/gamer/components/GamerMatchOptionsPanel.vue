@@ -7,7 +7,14 @@
       </button>
     </div>
     <div v-for="option in options" :key="option.key" class="gamer-match-option">
-      <span>{{ $t(option.labelKey) }}</span>
+      <span class="gamer-option-label">
+        {{ $t(option.labelKey) }}
+        <button v-if="option.key === 'rankedParticipation'" type="button" class="ranked-help-button"
+          :title="$t('gamer.matchOptions.rankedHelpTitle')" :aria-label="$t('gamer.matchOptions.rankedHelpTitle')"
+          :aria-expanded="rankedHelpOpen" :aria-controls="helpId" @click="rankedHelpOpen = !rankedHelpOpen">
+          <CircleHelp :size="16" aria-hidden="true" />
+        </button>
+      </span>
       <button
         type="button"
         class="gamer-match-option-toggle"
@@ -19,10 +26,16 @@
         <span aria-hidden="true" />
       </button>
     </div>
+    <p v-if="rankedHelpOpen" :id="helpId" class="ranked-help" role="note">{{ $t('gamer.matchOptions.rankedHelp') }}</p>
   </section>
 </template>
 
 <script setup>
+import { ref, useId } from 'vue';
+import { CircleHelp } from '@lucide/vue';
+
+const rankedHelpOpen = ref(false);
+const helpId = useId();
 defineProps({
   options: { type: Array, default: () => [] },
   tableEnabled: { type: Boolean, default: false },
@@ -32,6 +45,11 @@ defineEmits(['change', 'table-mode']);
 </script>
 
 <style scoped>
+.gamer-option-label { display: inline-flex; align-items: center; gap: 6px; }
+.ranked-help-button { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; flex-shrink: 0; }
+.ranked-help-button:hover, .ranked-help-button[aria-expanded="true"] { color: var(--accent); }
+.ranked-help-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ranked-help { margin: 0; padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--bg-input); color: var(--text-secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .gamer-ai-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
 .gamer-ai-mode button { min-height: 2rem; padding: 4px 8px; border-radius: 4px;
   color: var(--text-main); font-size: var(--font-ui-xs); font-weight: 850; }

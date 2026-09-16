@@ -320,7 +320,9 @@
       "useTables": "开启查表",
       "searchOnly": "仅搜索",
       "title": "对局选项",
-      "rankedParticipation": "参加排行榜"
+      "rankedParticipation": "参加排行榜",
+      "rankedHelpTitle": "入榜条件",
+      "rankedHelp": "撤回或设置局面后，本局不再计入排行榜，需开启新游戏。入榜需登录并在开局前开启此选项，出 4 率须为 10%–80%。切换账号或在其他页面接管同一局，也会使本页失去入榜资格。"
     }
   },
   "notebook": {

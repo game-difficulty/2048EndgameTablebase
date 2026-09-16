@@ -320,7 +320,9 @@
       "useTables": "Use tables",
       "searchOnly": "Search only",
       "title": "Game options",
-      "rankedParticipation": "Join leaderboard"
+      "rankedParticipation": "Join leaderboard",
+      "rankedHelpTitle": "Leaderboard eligibility",
+      "rankedHelp": "Undoing a move or setting a board makes this game unranked; start a new game to rank again. Sign in and enable this option before starting, with a 4-spawn rate of 10%–80%. Switching accounts or taking over the same game on another page also ends ranked participation here."
     }
   },
   "notebook": {
