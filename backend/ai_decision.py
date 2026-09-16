@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
-from engine_core.ai_merge_policy import merge_urgency_for_readers
+from engine_core.ai_merge_policy import allows_five_tiler_relaxation, merge_urgency_for_readers
 
 
 AI_MOVE_MAP = {1: "left", 2: "right", 3: "up", 4: "down"}
@@ -52,6 +52,7 @@ def choose_full_ai_move(
         float(time_limit_ratio),
     )
     player.merge_urgency = merge_urgency_for_readers(getattr(dispatcher, 'ad_readers', {}))
+    logic.allow_five_tiler_relaxation = allows_five_tiler_relaxation(getattr(dispatcher, 'ad_readers', {}))
     move_code = logic.calculate_step(player, board, dispatcher.counts)
     direction = AI_MOVE_MAP.get(int(move_code))
     source = str(getattr(logic, "last_table", "") or "AI")

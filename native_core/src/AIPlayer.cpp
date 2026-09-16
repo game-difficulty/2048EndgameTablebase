@@ -963,9 +963,9 @@ uint64_t AIPlayer::apply_dynamic_mask() {
   // 3. 根据游戏阶段调整 dead_score
   int32_t large_tiles = large_tile_count(8, counts);
   if (large_tiles > 4)
-    threshold = (prune == 0) ? 5600 : 2400;
+    threshold = (prune == 0) ? 5600 : 3200;
   if (large_tiles <= 4)
-    threshold = (prune == 0) ? 8400 : 3200;
+    threshold = (prune == 0) ? 8400 : 4000;
 
   if (count_gt_128 <= 4) {
     dead_score = 262144;

@@ -629,6 +629,7 @@ class CoreAILogic:
         self.last_table = ""
         self.time_ratio = 4.0
         self.time_limit_ratio = 1.0
+        self.allow_five_tiler_relaxation = False
 
     @staticmethod
     def is_mess(board):
@@ -811,7 +812,7 @@ class CoreAILogic:
             or is_evil
             or self.tiles_all_set(counts)
             or (max(counts[6:]) == 1 and np.sum(counts[6:]) >= 9)
-        ) and not is_5tiler:
+        ) and (not is_5tiler or self.allow_five_tiler_relaxation):
             ai_player.prune = np.uint8(0)
         if self.danbianhuichuan_patch(board, board_sum):
             ai_player.prune = np.uint8(1)
