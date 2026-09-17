@@ -27,6 +27,16 @@
   },
   "tables": [
     {
+      "table_id": "4442ff_1024",
+      "pattern": "4442ff",
+      "target": "1024",
+      "paths": ["D:/4442ff-1k", "G:/4442ff-1k"],
+      "dtype": "uint32",
+      "spawn_rate": 0.1,
+      "resource_group": "disk-d",
+      "concurrency": 1
+    },
+    {
       "table_id": "free12_2048",
       "pattern": "free12",
       "target": "2048",

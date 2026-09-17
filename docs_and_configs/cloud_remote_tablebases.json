@@ -4,6 +4,14 @@
       "worker_id": "home-main",
       "tables": [
         {
+          "pattern": "4442ff",
+          "target": "1024",
+          "full_pattern": "4442ff_1024",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-d"
+        },
+        {
           "pattern": "free12",
           "target": "2048",
           "full_pattern": "free12_2048",
