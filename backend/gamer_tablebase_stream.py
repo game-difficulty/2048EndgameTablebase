@@ -101,7 +101,7 @@ class RouteSubscription:
             supporter=self.supporter, lane='foreground' if seq == 0 else 'prefetch', supersede=False)
         try:
             result = await handle.wait()
-            return cursor.node(result.results, result.dtype)
+            return cursor.node(result.results, result.dtype, result.legal_moves_mask)
         finally:
             handle.cancel()
 
@@ -153,12 +153,12 @@ class RouteSubscription:
                     item = await self.remote.receive()
                     if item is None:
                         break
-                    expected = cursor.node(item.get('results', {}), str(item.get('dtype', '')))
+                    expected = cursor.node(item.get('results', {}), str(item.get('dtype', '')), item.get('legal_moves_mask'))
                     if item != expected:
                         raise ValueError('Invalid remote route state')
                     tablebase_query_scheduler.cache_stream_result(catalog_version=request.catalog_version,
                         full_pattern=request.full_pattern, board_encoded=cursor.encoded,
-                        results=item['results'], dtype=item['dtype'])
+                        results=item['results'], dtype=item['dtype'], legal_moves_mask=item.get('legal_moves_mask'))
                 else:
                     item = await self.lookup(cursor, seq)
                 # A reconnect replays these paid frames, not a second lookup/charge.

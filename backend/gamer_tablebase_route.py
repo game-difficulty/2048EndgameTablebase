@@ -36,9 +36,6 @@ def validate_options(options):
 def masked_board(values, count):
     board = np.asarray(values, dtype=np.int64).copy()
     board[np.argpartition(board, -count)[-count:]] = 32768
-    if int(board.sum()) - count * 32768 < 24:
-        board = np.array([32768,32768,32768,32768,0,32768,32768,0,
-                          0,32768,32768,0,32768,32768,32768,32768])
     return int(encode_board(board.reshape(4, 4)))
 
 
@@ -70,8 +67,11 @@ class GamerRouteCursor:
     def encoded(self):
         return masked_board(self.values, self.large_tiles)
 
-    def node(self, results, dtype):
-        return {'board_codes': [0 if v == 0 else v.bit_length()-1 for v in self.values],
+    def node(self, results, dtype, legal_moves_mask=None):
+        if legal_moves_mask is None:
+            legal_moves_mask = getattr(results, "legal_moves_mask", None)
+        metadata = {} if legal_moves_mask is None else {"legal_moves_mask": legal_moves_mask}
+        return {**metadata,'board_codes': [0 if v == 0 else v.bit_length()-1 for v in self.values],
                 'rng_state': self.rng.state.copy(), 'lookup_board': f'{self.encoded:016x}',
                 'random_only': self.request.random_only and self.index == 0,
                 'results': results, 'dtype': dtype}

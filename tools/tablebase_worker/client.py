@@ -247,6 +247,8 @@ class WorkerClient:
                     "LOOKUP_RESULT",
                     request_id=request.request_id,
                     results=sanitize_results(raw_results),
+                    **({"legal_moves_mask": raw_results.legal_moves_mask}
+                       if getattr(raw_results, "legal_moves_mask", None) is not None else {}),
                     dtype=str(dtype or "?"),
                     board=f"{request.boards[0]:016x}",
                 )
@@ -261,6 +263,8 @@ class WorkerClient:
                     {
                         "board": f"{board:016x}",
                         "results": sanitize_results(results),
+                        **({"legal_moves_mask": results.legal_moves_mask}
+                           if getattr(results, "legal_moves_mask", None) is not None else {}),
                         "dtype": str(dtype or "?"),
                     }
                     for board, (results, dtype) in zip(request.boards, raw_items)

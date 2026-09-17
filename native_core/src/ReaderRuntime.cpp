@@ -80,6 +80,7 @@ struct SearchValue {
     ReaderValueKind kind = ReaderValueKind::NoneValue;
     double number = 0.0;
     std::string text;
+    bool legal = false;
 };
 
 struct ClassicLookupContext {
@@ -264,7 +265,7 @@ std::vector<OrderedReaderEntry> sort_adjusted_entries(
     std::vector<OrderedReaderEntry> numeric_entries;
     std::vector<OrderedReaderEntry> other_entries;
     for (const auto &item : adjusted_entries) {
-        OrderedReaderEntry entry{item.first, item.second.kind, item.second.number, item.second.text};
+        OrderedReaderEntry entry{item.first, item.second.kind, item.second.number, item.second.text, item.second.legal};
         if (entry.kind == ReaderValueKind::Numeric) {
             numeric_entries.push_back(entry);
         } else {
@@ -2321,10 +2322,11 @@ ReaderMoveResult evaluate_classic_result_candidates(
                 if (moved_board == encoded || !is_pattern(moved_board, reader.spec_.pattern_masks)) {
                     continue;
                 }
-                const SearchValue value = find_classic_value_with_context(
+                SearchValue value = find_classic_value_with_context(
                     lookup,
                     canonical_by_mode(moved_board, reader.spec_.symm_mode)
                 );
+                value.legal = true;
                 if (index == 0U) {
                     result_values[2] = value;
                 } else if (index == 1U) {
@@ -2410,7 +2412,7 @@ ReaderMoveResult evaluate_advanced_result_candidates(
                 if (moved_board == encoded || !is_pattern(moved_board, reader.spec_.pattern_masks)) {
                     continue;
                 }
-                const SearchValue value = find_advanced_value(
+                SearchValue value = find_advanced_value(
                     reader.spec_,
                     reader.masker_,
                     path_entry.first,
@@ -2418,6 +2420,7 @@ ReaderMoveResult evaluate_advanced_result_candidates(
                     moved_board,
                     path_entry.second
                 );
+                value.legal = true;
                 if (index == 0U) {
                     result_values[2] = value;
                 } else if (index == 1U) {
@@ -2511,7 +2514,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
                 if (moved_board == encoded || !is_pattern(physical_moved, reader.spec_.pattern_masks)) {
                     continue;
                 }
-                const SearchValue value = find_exad_value(
+                SearchValue value = find_exad_value(
                     reader.spec_,
                     reader.masker_,
                     path_entry.first,
@@ -2521,6 +2524,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
                     physical_moved,
                     path_entry.second
                 );
+                value.legal = true;
                 if (index == 0U) {
                     result_values[2] = value;
                 } else if (index == 1U) {
@@ -2613,7 +2617,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
                 if (moved_board == encoded || !is_pattern(physical_moved, reader.spec_.pattern_masks)) {
                     continue;
                 }
-                const SearchValue value = find_ex_value(
+                SearchValue value = find_ex_value(
                     path_entry.first,
                     filename,
                     *zlut_path,
@@ -2621,6 +2625,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
                     canonical_by_mode(physical_moved, reader.spec_.symm_mode),
                     path_entry.second
                 );
+                value.legal = true;
                 if (index == 0U) {
                     result_values[2] = value;
                 } else if (index == 1U) {
@@ -2701,12 +2706,13 @@ ReaderMoveResult evaluate_bc_result_candidates(
                 continue;
             }
             const uint64_t canonical_board = canonical_by_mode(physical_moved, reader.spec_.symm_mode);
-            const BCSearchResult value = find_bc_value(
+            BCSearchResult value = find_bc_value(
                 reader,
                 path_list,
                 pattern_full,
                 canonical_board,
                 nums_adjust);
+            value.value.legal = true;
             if (value.found) {
                 dtype_name = value.dtype;
             }

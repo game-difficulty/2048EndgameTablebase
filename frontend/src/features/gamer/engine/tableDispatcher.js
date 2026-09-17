@@ -9,11 +9,18 @@ export function maskLargeTiles(board, count) {
   const masked = board.slice();
   const indices = board.map((_, index) => index).sort((a, b) => board[a] - board[b] || a - b);
   for (const index of indices.slice(count ? -count : 0)) masked[index] = 32768;
-  if (masked.reduce((sum, value) => sum + value, 0) - count * 32768 < 24) {
-    return [32768, 32768, 32768, 32768, 0, 32768, 32768, 0,
-      0, 32768, 32768, 0, 32768, 32768, 32768, 32768];
-  }
   return masked;
+}
+
+export function completePositiveMoves(payload) {
+  const mask = payload.legal_moves_mask;
+  if (!Number.isInteger(mask) || mask <= 0 || mask >= 16) return false;
+  const offset = String(payload.dtype).startsWith('1-') ? 1 : 0;
+  return ['left', 'right', 'up', 'down'].every((direction, index) => {
+    if (!(mask & (1 << index))) return true;
+    const value = payload.results?.[direction];
+    return typeof value === 'number' && Number.isFinite(value) && value + offset > 0;
+  });
 }
 
 export function packedLookupBoard(board) {
@@ -98,6 +105,11 @@ export class TableDispatcher {
   }
 
   accept({ table, type }, payload) {
+    const masked = maskLargeTiles(this.board, table.n);
+    const smallSum = masked.reduce((sum, value) => sum + value, 0) - table.n * 32768;
+    const requireComplete = smallSum < (table.pattern === 'free10' ? 32 : 28);
+    const lowSumComplete = requireComplete && completePositiveMoves(payload);
+    if (requireComplete && !lowSumComplete) return null;
     const [move, raw] = Object.entries(payload.results || {})[0] || [];
     if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
     const success = raw + (String(payload.dtype).startsWith('1-') ? 1 : 0);
@@ -108,9 +120,9 @@ export class TableDispatcher {
     const halves = this.board.filter((value) => value === target / 2).length;
     const quarters = this.board.filter((value) => value === target / 4).length;
     const certain = success > 0.9999999;
-    if ((type === 1 && certain && remainder < 24)
+    if ((type === 1 && certain && remainder < 24 && !lowSumComplete)
       || (type === 2 && (remainder < 32 || halves > 1))
-      || (type === 3 && certain && (remainder > target - 4 || remainder < 24))
+      || (type === 3 && certain && (remainder > target - 4 || (remainder < 24 && !lowSumComplete)))
       || (certain && (halves >= 2 || (halves >= 1 && quarters >= 2)))) {
       this.cooldowns.set(table.fullPattern, 20);
       return 'AI';
@@ -121,9 +133,6 @@ export class TableDispatcher {
   async choose(lookup, isCurrent = () => true) {
     for (const candidate of this.candidates()) {
       const masked = maskLargeTiles(this.board, candidate.table.n);
-      // Early free10 layers may not cover all move successors (AIPlayer.py).
-      if (candidate.table.pattern === 'free10'
-        && masked.reduce((sum, value) => sum + (value === 32768 ? 0 : value), 0) < 32) continue;
       if (matchTableStructure(this.board, masked, candidate.table.n, candidate.table.structureRules) === 'mismatch') continue;
       if (!tableLayerAvailable(masked, candidate.table.layerCoverage)) continue;
       const payload = await lookup(candidate, packedLookupBoard(masked));

@@ -77,6 +77,7 @@ class TablebaseLookupResult:
     results: dict[str, Any]
     dtype: str
     best_move: str | None
+    legal_moves_mask: int | None = None
 
     @property
     def board_hex(self) -> str:
@@ -205,6 +206,7 @@ def execute_tablebase_lookup(spec: TablebaseLookupSpec) -> TablebaseLookupResult
         results=results,
         dtype=str(dtype or "?"),
         best_move=_best_move(results),
+        legal_moves_mask=getattr(raw_results, 'legal_moves_mask', None),
     )
 
 
@@ -230,6 +232,7 @@ async def execute_tablebase_lookup_async(
         results=results,
         dtype=str(response.get("dtype") or "?"),
         best_move=_best_move(results),
+        legal_moves_mask=response.get('legal_moves_mask'),
     )
 
 
@@ -306,9 +309,9 @@ class TablebaseQueryScheduler:
     def clear_cache(self) -> None:
         self._result_cache.clear()
 
-    def cache_stream_result(self, *, catalog_version, full_pattern, board_encoded, results, dtype):
+    def cache_stream_result(self, *, catalog_version, full_pattern, board_encoded, results, dtype, legal_moves_mask=None):
         sanitized = _sanitize_results(results)
-        result = TablebaseLookupResult(board_encoded, full_pattern, sanitized, str(dtype), _best_move(sanitized))
+        result = TablebaseLookupResult(board_encoded, full_pattern, sanitized, str(dtype), _best_move(sanitized), legal_moves_mask)
         self._cache_set((catalog_version, full_pattern, u64(board_encoded)), result)
         return result
 

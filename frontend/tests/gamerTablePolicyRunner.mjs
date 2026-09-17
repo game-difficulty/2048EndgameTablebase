@@ -6,6 +6,7 @@ for await (const chunk of process.stdin) input += chunk;
 const payload = JSON.parse(input);
 const results = payload.cases.map(({ board, probes }) => {
   const dispatcher = new TableDispatcher(payload.tables, 0.1);
+  dispatcher.setTables(payload.tables, 0.1, payload.tables.map(table => table.fullPattern));
   dispatcher.reset(board);
   const candidates = dispatcher.candidates();
   return {
@@ -13,7 +14,8 @@ const results = payload.cases.map(({ board, probes }) => {
     masks: candidates.map(({ table }) => packedLookupBoard(maskLargeTiles(board, table.n))),
     decisions: probes.map(({ table, type, value, dtype }) => {
       dispatcher.cooldowns.clear();
-      return dispatcher.accept({ table, type }, { results: { left: value }, dtype });
+      const descriptor = dispatcher.tables.find(item => item.fullPattern === table.fullPattern);
+      return dispatcher.accept({ table: descriptor, type }, { results: { left: value }, dtype });
     }),
   };
 });

@@ -319,7 +319,8 @@ def validate_request(
 def sanitize_results(raw_results: Any) -> dict[str, str | float | int | None]:
     if not isinstance(raw_results, dict):
         return {}
-    results: dict[str, str | float | int | None] = {}
+    from engine_core.reader_results import ReaderResults
+    results = ReaderResults(legal_moves_mask=getattr(raw_results, "legal_moves_mask", None))
     for raw_key, raw_value in raw_results.items():
         key = str(raw_key)
         if len(key) > 32:

@@ -23,7 +23,7 @@ class Cursor:
     def encoded(self):
         return self.index + 1
 
-    def node(self, results, dtype):
+    def node(self, results, dtype, legal_moves_mask=None):
         return dict(board_codes=[self.index] + [0]*15, rng_state=[self.index+1,2,3,4],
             random_only=False, lookup_board=f'{self.encoded:016x}', results=results, dtype=dtype)
 
