@@ -8,6 +8,7 @@ export const ceremonyGifts = new Set(['final', '2048', 'crown', 'legend']);
 const supporterMotion = new Set(['button', 'whale', 'moai', 'tea', 'chicken', 'serious', 'rip']);
 export function giftAnimation(event) {
   if (event?.type !== 'gift') return null;
+  if (event.gift_id === 'iii') return 'inline';
   if (ceremonyGifts.has(event.gift_id)) return 'ceremony';
   return supporterMotion.has(event.gift_id) && liveSupporterLevel(event.actor) > 0 ? 'supporter' : null;
 }

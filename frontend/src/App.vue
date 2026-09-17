@@ -78,82 +78,10 @@
       </div>
     </div>
 
-    <div
-      v-if="accountMenuOpen && authUser"
-      class="fixed right-3 top-[3.75rem] z-[300] w-[18rem] rounded-2xl border border-border-main bg-bg-card/98 p-4 text-text-main shadow-[0_20px_70px_rgba(15,23,42,0.35)]"
-      data-account-menu
-    >
-      <div class="account-menu-head">
-        <AccountAvatar
-          :user="authUser"
-          :supporter="hasSupporterPresentation"
-          size="large"
-          editable
-          @edit="openAvatarEditor"
-        />
-        <div class="min-w-0">
-          <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('auth.account.title') }}</div>
-          <button
-            type="button"
-            class="account-name-button mt-1"
-            :title="$t('profile.displayName.change')"
-            @click="openDisplayNameEditor"
-          >
-            <span class="truncate">{{ accountDisplayName }}</span>
-            <span class="account-name-edit" aria-hidden="true">✎</span>
-          </button>
-          <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
-        </div>
-      </div>
-      <div class="mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
-        <div class="flex items-center justify-between gap-3">
-          <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.bonusTokens') }}</span>
-          <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.bonus) }}</span>
-        </div>
-        <div class="flex items-center justify-between gap-3">
-          <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.paidTokens') }}</span>
-          <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.paid) }}</span>
-        </div>
-        <div class="flex items-center justify-between gap-3 border-t border-border-main pt-2">
-          <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.totalTokens') }}</span>
-          <span class="ui-body font-black text-accent">{{ formatTokens(authUser.token_balance?.total) }}</span>
-        </div>
-      </div>
-      <button
-        type="button"
-        class="action-btn-small mt-4 w-full justify-center"
-        @click="openQuotaGuideDialog"
-      >
-        {{ $t('billing.quotaGuide.open') }}
-      </button>
-      <button
-        type="button"
-        class="action-btn-small mt-2 w-full justify-center"
-        @click="openSponsorDialog"
-      >
-        {{ $t('billing.open') }}
-      </button>
-      <button
-        v-if="canOpenAdmin"
-        type="button"
-        class="action-btn-small mt-2 w-full justify-center"
-        @click="openAdminPage"
-      >
-        {{ $t('admin.open') }}
-      </button>
-      <div class="mt-2 grid grid-cols-2 gap-2">
-        <button type="button" class="action-btn-small justify-center" @click="openAccountSecurity('changePassword')">
-          {{ $t('auth.account.changePassword') }}
-        </button>
-        <button type="button" class="action-btn-small justify-center !border-red-400/40 !text-red-500" @click="openAccountSecurity('deactivate')">
-          {{ $t('auth.account.deactivateAccount') }}
-        </button>
-      </div>
-      <button type="button" class="action-btn-small mt-2 w-full justify-center" @click="handleLogout">
-        {{ $t('auth.actions.logout') }}
-      </button>
-    </div>
-
+    <AccountPopover :open="accountMenuOpen" :auth-user="authUser"
+      :has-supporter-presentation="hasSupporterPresentation" :account-display-name="accountDisplayName" :can-open-admin="canOpenAdmin"
+      @avatar="openAvatarEditor" @name="openDisplayNameEditor" @quota="openQuotaGuideDialog"
+      @sponsor="openSponsorDialog" @admin="openAdminPage" @security="openAccountSecurity" @logout="handleLogout" />
     <div
       :class="['app-workspace', trainerWorkspaceClass]"
       :data-keyboard-owner="trainerDockActive ? keyboardOwner : undefined"
@@ -484,6 +412,7 @@ import MainMenuView from './components/MainMenuView.vue';
 import AnnouncementBanner from './features/announcements/AnnouncementBanner.vue';
 import { resolveAnnouncementTarget, findAnnouncement } from './features/announcements/catalog.js';
 import AccountAvatar from './features/auth/AccountAvatar.vue';
+import AccountPopover from './features/auth/AccountPopover.vue';
 import NativeLandscapeButton from './components/NativeLandscapeButton.vue';
 import AccountSecurityDialog from './features/auth/AccountSecurityDialog.vue';
 import AuthPage from './features/auth/AuthPage.vue';
@@ -691,14 +620,6 @@ const canOpenAdmin = computed(() => {
 const hasSupporterPresentation = computed(() => (
   authUser.value?.entitlements?.tier === 'supporter' || canOpenAdmin.value
 ));
-const formatTokens = (value) => {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number)) return '0';
-  return number.toLocaleString(undefined, {
-    minimumFractionDigits: number % 1 === 0 ? 0 : 1,
-    maximumFractionDigits: 3,
-  });
-};
 
 const claimTrainerKeyboardForBoardJump = () => {
   setKeyboardOwner(KEYBOARD_OWNERS.TRAINER);
@@ -1472,39 +1393,4 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-.account-menu-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-}
-
-.account-menu-head > div {
-  flex: 1 1 auto;
-}
-
-.account-name-button {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--text-main);
-  font-size: 0.9rem;
-  font-weight: 900;
-  line-height: 1.2;
-  text-align: left;
-}
-
-.account-name-button:hover,
-.account-name-button:focus-visible {
-  color: var(--accent);
-  outline: none;
-}
-
-.account-name-edit {
-  flex: 0 0 auto;
-  color: var(--text-secondary);
-  font-size: 0.72rem;
-  opacity: 0.7;
-}
 </style>

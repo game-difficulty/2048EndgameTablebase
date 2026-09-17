@@ -1,6 +1,7 @@
 <template>
   <span :class="['gift-icon', `gift-${id}`]" aria-hidden="true">
-    <img v-if="referenceArtwork[id]" :src="giftAsset(referenceArtwork[id])" alt="" loading="lazy" decoding="async" width="64" height="64" />
+    <IiiGiftArtwork v-if="id === 'iii'" />
+    <img v-else-if="referenceArtwork[id]" :src="giftAsset(referenceArtwork[id])" alt="" loading="lazy" decoding="async" width="64" height="64" />
     <component v-else-if="legacy[id]" :is="legacy[id]" :size="size" :stroke-width="1.8" />
     <svg v-else viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g v-if="id === 'heart'">
@@ -88,6 +89,7 @@
 </template>
 <script setup>
 import { computed } from 'vue';
+import IiiGiftArtwork from './IiiGiftArtwork.vue';
 import { Coffee, PartyPopper, Sparkles, Combine } from '@lucide/vue';
 import { referenceArtwork, giftAsset } from './giftArtwork.js';
 const props = defineProps({ id: String, size: { type: Number, default: 28 } });

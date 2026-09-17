@@ -17,7 +17,7 @@
         </button>
         <button v-if="!user" @click="loginOpen = true">
           {{ t("登录", "Sign in") }}</button
-        ><button v-else @click="logout">{{ user.display_name }}</button>
+        ><LiveAccountMenu v-else :user="user" @saved="user = $event" @refresh="refreshIdentity" @logout="logout" />
         <a v-if="!user" class="register-link" href="https://2048tables.online/?auth=register" target="_blank" rel="noopener">{{ t('注册', 'Register') }}</a>
         <NativeLandscapeButton inline class="live-landscape" />
       </nav>
@@ -314,6 +314,7 @@ import {
 import BaseBoard from "../components/BaseBoard.vue";
 import NativeLandscapeButton from '../components/NativeLandscapeButton.vue';
 import LiveIdentity from './LiveIdentity.vue';
+import LiveAccountMenu from './LiveAccountMenu.vue';
 import { liveSupporterLevel, entranceChat } from './supporterIdentity.js';
 import { createSnapshotBoardFrame } from "../components/boardFrame.js";
 import { applyLiveStep } from "./liveEngine.js";
@@ -437,6 +438,7 @@ async function api(path, body) {
   return await response.json();
   } finally { clearTimeout(timeout); }
 }
+let chatHistoryLoaded = false;
 async function refreshSummary() {
   try {
     const data = await api("/api/live/state");
@@ -444,7 +446,17 @@ async function refreshSummary() {
     likes.update(data.likes);
     history.value = data.history;
     week.value = data.week || {};
+    const firstLoad = !chatHistoryLoaded;
+    const el = chatList.value;
+    const followLatest = !chatHistoryLoaded || !el || el.scrollHeight - el.scrollTop - el.clientHeight < 50;
     messages.value = mergeLiveChat(messages.value, [...(data.chat || []), ...(data.gifts || [])]);
+    chatHistoryLoaded = true;
+    if (followLatest) {
+      await nextTick();
+      if (firstLoad && document.fonts) await document.fonts.ready;
+      if (firstLoad) await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (chatList.value) chatList.value.scrollTop = chatList.value.scrollHeight;
+    }
     if (!musicUrl.value) musicUrl.value = data.music_url || "";
     return data;
   } catch {
@@ -655,8 +667,10 @@ async function copyHex() {
 }
 async function refreshIdentity() {
   try {
+    const previousUserId = user.value?.id;
     user.value = (await api('/api/auth/me')).user;
     actorPromise = null;
+    if (previousUserId !== user.value?.id) socket?.close();
   } catch {}
 }
 async function visibility() {

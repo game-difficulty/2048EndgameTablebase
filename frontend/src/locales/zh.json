@@ -661,6 +661,7 @@
         "threshold": "阈值",
         "mode": "模式",
         "notRecorded": "未记录",
+        "layers": "可用 layer 范围",
         "modes": {
           "absolute": "绝对成功率",
           "relative": "相对层最大值"

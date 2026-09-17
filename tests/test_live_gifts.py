@@ -50,6 +50,16 @@ class LiveGiftTests(unittest.TestCase):
             db.execute('''INSERT INTO token_ledger(user_id,event_type,operation_key,paid_delta_units,metadata_json,created_at)
                 VALUES(1,?,'add_paid',?,?,'now')''', (event_type, delta, json.dumps({'payment_amount_cny': amount})))
 
+    def test_iii_cost_and_idempotent_delivery(self):
+        request = self.request('iii')
+        self.assertEqual(request['expected_cost_units'], 111000)
+        result = gifts.send(self.user, request, True)
+        self.assertEqual(result, gifts.send(self.user, request, True))
+        event = gifts.pending_events()[-1]['event']
+        self.assertEqual(event['gift_id'], 'iii')
+        self.assertEqual(event['combo_count'], 1)
+        self.assertFalse(event['bulk_effect'])
+
     def test_bulk_effect_crosses_100_once_per_combo_without_supporter_requirement(self):
         user = {**self.user, 'role': 'user'}
         gifts.send(user, self.request('rip', 99), True)
@@ -156,7 +166,7 @@ class LiveGiftTests(unittest.TestCase):
                         crown=32768, final=1024, legend=65536, knowledge=16, button=16,
                         whale=16, moai=10, meaning=16, rip=16, tea=16, chicken=16,
                         serious=16)
-        expected.update({'666': 66, '2048': 2048})
+        expected.update({'666': 66, '2048': 2048, 'iii': 111})
         self.assertEqual({item['id']: item['totals'][0] // 1000 for item in gifts.catalogue()[0]['gifts']}, expected)
         gifts.send(self.user, self.request('dealer', 4), True)
         self.assertEqual(get_token_balance(1)['bonus'], 0)

@@ -7,7 +7,6 @@
       </div>
       <div class="gift-bar-tools">
         <button class="expand-gifts" :aria-expanded="expanded" :title="t('全部礼物','All gifts')" @click="helpOpen=false;expanded=!expanded"><ChevronUp :size="20" :class="{ rotated:expanded }" /></button>
-        <span v-if="account">{{ tokens(account.token_balance.total * 1000) }}<small> Token</small></span>
         <button :title="t('我的礼物与设置','My gifts and settings')" @click="openSettings"><Settings2 :size="17" /></button>
       </div>
     </div>
@@ -66,7 +65,7 @@ function dismiss(event){
   if(event.type==='keydown'){if(event.key==='Escape'){expanded.value=false;helpOpen.value=false;}return;}
   if(!panel.value?.contains(event.target) && !event.target.closest('.live-gift-popover')){expanded.value=false;helpOpen.value=false;}
 }
-const commonIds=['two','four','heart','flowers','moai','button','tea','whale'];
+const commonIds=['two','four','heart','flowers','moai','button','tea','whale','rip'];
 const commonGifts=computed(()=>commonIds.map(id=>catalog.value.gifts.find(g=>g.id===id)).filter(Boolean));
 const sendDisabled=computed(()=>queue.value.length>=5 || uncertain.value);
 const catalog = ref({ gifts: [] }), account = ref(null), selectedId = ref('two'), quantity = ref(1);

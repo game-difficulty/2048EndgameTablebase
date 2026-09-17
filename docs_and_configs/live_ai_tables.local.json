@@ -1,11 +1,8 @@
 {
-  "4442ff_1024": [["D:/4442ff-1k", "uint32"], ["G:/4442ff-1k", "uint32"]],
   "4442f_1024": [["G:/4442f-1k", "1-float32"]],
   "free11_2048": [["G:/free11-2k", "uint32"]],
   "free12_2048": [["D:/free12", "uint32"], ["F:/free12", "uint32"]],
   "free11_1024": [["D:/free11-1k", "uint32"]],
-  "4431_1024": [["C:/2048_tables/4431-1k", "uint32"]],
-  "LL_1024": [["C:/2048_tables/LL-1k", "uint32"]],
   "free10_512": [["C:/2048_tables/free10-512", "uint32"]],
   "free10_256": [["C:/2048_tables/free10-256", "uint32"]],
   "free11_512": [["C:/2048_tables/free11-512", "uint32"]]

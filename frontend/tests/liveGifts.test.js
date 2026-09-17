@@ -16,6 +16,13 @@ test('bulk and custom gift totals match half-even token rounding', () => {
 });
 
 const gift = (id, other = {}) => ({ id, combo_id: id, type: 'gift', tier: 1, at: 1, combo_count: 1, ...other });
+
+test('iii has inline motion for all senders without a ceremony', () => {
+  for (const supporter_level of [0,1,2]) {
+    assert.equal(giftAnimation(gift('iii-test', {gift_id:'iii', actor:{supporter_level}})), 'inline');
+  }
+  assert.equal(giftPrice({base_units:111000,global_multiplier_units:1000},1),111000);
+});
 test('only designated gifts animate, with supporter checks independent of rarity', () => {
   for (const gift_id of ['button','tea','whale','moai','chicken','serious','rip']) {
     assert.equal(giftAnimation(gift('a', { gift_id })), null);

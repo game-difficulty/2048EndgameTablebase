@@ -65,6 +65,7 @@ def public_quota_rules() -> dict[str, Any]:
         tablebase_thresholds.append(
             {
                 "full_pattern": str(full_pattern),
+                "available_layers": threshold_config.get("available_layers", {}).get(full_pattern),
                 "threshold": None if threshold is None else float(threshold),
                 "mode": str(mode) if mode in {"absolute", "relative"} else None,
             }

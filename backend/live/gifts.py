@@ -16,6 +16,7 @@ GIFTS = [
     ('heart', '小心意', 'Little Heart', 0), ('flowers', '鲜花', 'Flowers', 0),
     ('two', '来个 2', 'A Little Two', 0), ('four', '好 4', 'Nice Four', 0),
     ('dealer', '发牌员NB', 'Ace Dealer', 1), ('666', '666', '666', 1),
+    ('iii', 'iii', 'iii', 1),
     ('bug', 'BUG', 'BUG', 0), ('klbm', '卡老播吗', 'KLBM', 1),
     ('2048', '2048！', '2048!', 3), ('crown', '32K 太简单了', '32K? Too Easy', 3),
     ('final', 'final 1k', 'final 1k', 2), ('legend', '65K 传奇', '65K Legend', 4),

@@ -106,6 +106,7 @@
                   <th>{{ $t('billing.quotaGuide.thresholds.tablebase') }}</th>
                   <th>{{ $t('billing.quotaGuide.thresholds.threshold') }}</th>
                   <th>{{ $t('billing.quotaGuide.thresholds.mode') }}</th>
+                  <th>{{ $t('billing.quotaGuide.thresholds.layers') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -113,6 +114,7 @@
                   <td class="patterns">{{ row.full_pattern }}</td>
                   <td>{{ formatThreshold(row.threshold) }}</td>
                   <td>{{ formatThresholdMode(row.mode) }}</td>
+                  <td>{{ row.available_layers?.map(([start, end]) => start === end ? String(start) : `${start}–${end}`).join(', ') || $t('billing.quotaGuide.thresholds.notRecorded') }}</td>
                 </tr>
               </tbody>
             </table>

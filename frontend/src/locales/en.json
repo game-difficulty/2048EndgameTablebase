@@ -661,6 +661,7 @@
         "threshold": "Threshold",
         "mode": "Mode",
         "notRecorded": "Not recorded",
+        "layers": "Available layers",
         "modes": {
           "absolute": "Absolute success rate",
           "relative": "Relative to layer maximum"

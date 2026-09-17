@@ -3,7 +3,7 @@
     <div class="effect-lanes">
       <article v-for="event in mode === 'off' ? [] : events.active" :key="event.key" :class="['effect-banner', `tier-${event.tier || 0}`, { 'gold-supporter': liveSupporterLevel(event.actor) === 2, 'entrance-banner': event.type === 'entrance' }]">
         <div class="effect-copy"><LiveIdentity :actor="event.actor" :lang="lang" /><span v-if="event.type === 'entrance'">{{ t('欢迎荣耀赞助者来到直播间', 'Welcome to the stream, Gold Supporter') }}</span><span v-else>{{ t('送出', 'sent') }} {{ giftName(event.gift_id) }}</span></div>
-        <GiftAnimation v-if="animations && giftAnimation(event) === 'supporter'" :id="event.gift_id" />
+        <GiftAnimation v-if="animations && ['supporter', 'inline'].includes(giftAnimation(event))" :id="event.gift_id" />
         <GiftIcon v-else-if="event.type === 'gift'" :id="event.gift_id" /><b v-if="event.type === 'gift'" class="combo">×{{ event.combo_count }}</b>
         <Crown v-else :size="22" class="entrance-crown" />
       </article>
