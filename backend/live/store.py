@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from statistics import median
+from .statistics import VERSION, replay_stages
 
 
 def week_bounds(now=None):
@@ -34,6 +35,9 @@ class LiveStore:
                 CREATE TABLE IF NOT EXISTS live_scores (id TEXT PRIMARY KEY, day TEXT NOT NULL, score INTEGER NOT NULL);
                 CREATE INDEX IF NOT EXISTS live_scores_day ON live_scores(day, score);
                 INSERT OR IGNORE INTO live_scores SELECT id, day, score FROM live_runs;
+                CREATE TABLE IF NOT EXISTS live_run_stages (
+                    run_id TEXT PRIMARY KEY, version INTEGER NOT NULL,
+                    passed INTEGER, failed INTEGER);
             ''')
 
     @contextmanager
@@ -77,6 +81,24 @@ class LiveStore:
                     tile32=tile32+excluded.tile32, tile64=tile64+excluded.tile64''',
                     (day, run.score, int(maximum >= 32768), int(maximum >= 65536)))
                 db.execute('UPDATE live_totals SET best=max(best,?) WHERE id=1', (run.score,))
+        self.backfill_stats(run_id=run.id)
+
+    def backfill_stats(self, run_id=None, limit=1000000):
+        with self.connect() as db:
+            rows = db.execute('''SELECT r.id,r.replay FROM live_runs r
+                LEFT JOIN live_run_stages s ON s.run_id=r.id
+                WHERE (s.run_id IS NULL OR s.version<>?) AND (? IS NULL OR r.id=?)
+                LIMIT ?''', (VERSION, run_id, run_id, limit)).fetchall()
+        for run_id, replay in rows:
+            try:
+                passed, failed = replay_stages(replay)
+            except (ValueError, TypeError, IndexError):
+                # Retain unknown coverage as NULL, never invent a failed attempt.
+                passed = failed = None
+            with self.connect() as db:
+                db.execute('INSERT OR REPLACE INTO live_run_stages VALUES (?,?,?,?)',
+                           (run_id, VERSION, passed, failed))
+        return len(rows)
 
     def history(self, page=1):
         with self.connect() as db:
@@ -104,9 +126,24 @@ class LiveStore:
                 coalesce(sum(score_sum),0) AS score_sum, coalesce(sum(tile32),0) AS tile32,
                 coalesce(sum(tile64),0) AS tile64 FROM live_days WHERE day>=? AND day<?''', (start,end)).fetchone())
             scores = [row[0] for row in db.execute('SELECT score FROM live_scores WHERE day>=? AND day<?', (start,end))]
+            all_scores = [row[0] for row in db.execute('SELECT score FROM live_runs')]
+            all_time = dict(db.execute('''SELECT count(*) AS games,
+                coalesce(sum(score),0) AS score_sum,
+                coalesce(sum(max_tile>=32768),0) AS tile32,
+                coalesce(sum(max_tile>=65536),0) AS tile64 FROM live_runs''').fetchone())
+            coverage = dict(db.execute('''SELECT coalesce(sum(s.passed),0) AS passed,
+                coalesce(sum(s.failed),0) AS failed, count(s.passed) AS analyzed_runs,
+                count(*) AS processed_runs
+                FROM live_runs r JOIN live_run_stages s ON s.run_id=r.id
+                WHERE s.version=?''', (VERSION,)).fetchone())
+        attempts = coverage['passed'] + coverage['failed']
+        pending = all_time['games'] - coverage.pop('processed_runs')
+        all_time.update(median_score=median(all_scores) if all_scores else None,
+                        stage32=coverage, stage32_pending=pending,
+                        stage32_rate=coverage['passed'] / attempts if attempts and not pending else None)
         weekly.update(start=start, end=end, median_score=median(scores) if scores and len(scores)==weekly['games'] else None)
         return dict(history=history, history_total=history_total, best=best, likes=likes,
-                    week=weekly,
+                    week=weekly, all_time=all_time,
                     today=dict(daily) if daily else dict(day=day, games=0, score_sum=0, tile32=0, tile64=0))
 
     def replay(self, run_id):

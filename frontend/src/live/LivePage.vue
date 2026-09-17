@@ -167,28 +167,32 @@
       </LuckyBags>
       <RedEnvelopes ref="redEnvelopes" :state="redState" :user="user" :connected="connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()" />
       </div>
-      <section class="weekly-strip">
+      <section class="history-stats-strip">
         <div>
-          <small>{{ t("本周完成", "THIS WEEK’S RUNS") }}</small
-          ><strong>{{ format(week.games) }}</strong>
+          <small>{{ t("历史完成", "ALL-TIME RUNS") }}</small
+          ><strong>{{ format(allTime.games) }}</strong>
         </div>
         <div>
           <small>{{ t("达到 32K", "32K RUNS") }}</small
-          ><strong>{{ format(week.tile32) }}</strong>
+          ><strong>{{ format(allTime.tile32) }}</strong>
         </div>
         <div>
           <small>{{ t("达到 65k", "65k RUNS") }}</small
-          ><strong>{{ format(week.tile64) }}</strong>
+          ><strong>{{ format(allTime.tile64) }}</strong>
         </div>
         <div>
-          <small>{{ t("本周平均分", "WEEKLY AVERAGE") }}</small
+          <small>{{ t("历史平均分", "ALL-TIME AVERAGE") }}</small
           ><strong>{{
-            format(week.games ? Math.round(week.score_sum / week.games) : 0)
+            format(allTime.games ? Math.round(allTime.score_sum / allTime.games) : 0)
           }}</strong>
         </div>
         <div>
           <small>{{ t('得分中位数', 'MEDIAN SCORE') }}</small>
-          <strong>{{ week.median_score == null ? '—' : format(week.median_score) }}</strong>
+          <strong>{{ allTime.median_score == null ? '—' : format(allTime.median_score) }}</strong>
+        </div>
+        <div :title="t('通过次数 /（通过次数 + 死亡失败次数）', 'Passed stages / (passed stages + stages lost on death)')">
+          <small>{{ t('32k 综率', '32k STAGE WIN RATE') }}</small>
+          <strong>{{ allTime.stage32_rate == null ? '—' : `${(allTime.stage32_rate * 100).toFixed(2)}%` }}</strong>
         </div>
       </section>
         <div class="chat-panel">
@@ -362,7 +366,7 @@ const online = ref(false),
   viewers = ref(0),
   best = ref(0),
   history = ref([]),
-  week = ref({});
+  allTime = ref({});
 const synchronized = ref(false), seenSnapshot = ref(false), paused = ref(false);
 const streamState = computed(() => liveConnectionState({ connected:connected.value, synchronized:synchronized.value, seenSnapshot:seenSnapshot.value, online:online.value, paused:paused.value }));
 const likes = reactive(new LikeFeedback()), likeReaction = ref(null);
@@ -480,7 +484,7 @@ async function refreshSummary() {
     best.value = data.best;
     likes.update(data.likes);
     updateHistorySummary(data);
-    week.value = data.week || {};
+    allTime.value = data.all_time || {};
     const firstLoad = !chatHistoryLoaded;
     const el = chatList.value;
     const followLatest = !chatHistoryLoaded || !el || el.scrollHeight - el.scrollTop - el.clientHeight < 50;
@@ -550,7 +554,7 @@ async function receive(event) {
     viewers.value = data.viewers;
   } else if (data.type === "summary") {
     updateHistorySummary(data);
-    week.value = data.week || {};
+    allTime.value = data.all_time || {};
     best.value = data.best;
     likes.update(data.likes);
   } else if (data.type === "likes") likes.update(data.count);
@@ -937,7 +941,7 @@ small {
   color: var(--text-secondary);
 }
 .score-strip small,
-.weekly-strip small {
+.history-stats-strip small {
   display: block;
   margin-bottom: 6px;
 }
@@ -1079,16 +1083,16 @@ small {
   padding: 28px 0;
   font-size: 13px;
 }
-.weekly-strip {
+.history-stats-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   border-top: 1px solid var(--border-main);
   border-bottom: 1px solid var(--border-main);
   padding: 24px 0;
   margin: 28px 0;
   gap: 20px;
 }
-.weekly-strip strong {
+.history-stats-strip strong {
   font-size: 23px;
 }
 .live-layout { display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,22%,520px);gap:20px;align-items:start; }
@@ -1101,7 +1105,7 @@ small {
 .chat-panel { grid-column:2;grid-row:1;align-self:stretch;min-height:0;contain:size;position:relative;display:flex;flex-direction:column;border-left:1px solid var(--border-main);padding-left:12px;font-size:16px; }
 .chat-panel small { font-size:13px; }
 .chat-panel .empty,.chat-panel .notice { font-size:15px; }
-.weekly-strip { grid-column:1 / -1;grid-row:2;margin:8px 0; }
+.history-stats-strip { grid-column:1 / -1;grid-row:2;margin:8px 0; }
 .music-footer { grid-column:1 / -1;grid-row:3; }
 .chat-list {
   height:0;

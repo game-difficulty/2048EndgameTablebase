@@ -53,6 +53,7 @@ class LiveHub:
         self.red_lock = asyncio.Lock()
         self.red_state = dict(active=None, queued=0)
         self.red_task = None
+        self.stats_task = None
 
     async def start(self):
         await asyncio.to_thread(gifts.init_schema)
@@ -77,8 +78,22 @@ class LiveHub:
         self.gift_task = asyncio.create_task(self.gift_maintenance())
         self.lucky_task = asyncio.create_task(self.lucky_maintenance())
         self.red_task = asyncio.create_task(self.red_maintenance())
+        self.stats_task = asyncio.create_task(self.backfill_stats())
+
+    async def backfill_stats(self):
+        changed = False
+        while await asyncio.to_thread(self.store.backfill_stats, limit=1):
+            changed = True
+            await asyncio.sleep(0)
+        if changed:
+            summary = await asyncio.to_thread(self.store.summary)
+            await self.broadcast(dict(type='summary', **summary))
 
     async def stop(self):
+        if self.stats_task:
+            self.stats_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.stats_task
         if self.red_task:
             self.red_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
