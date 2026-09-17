@@ -102,11 +102,16 @@ class GoodnessBattleMode(BattleMode):
         return await self.runtime.ensure_permanent_room(definition)
 
     async def normalize_lobby_settings_patch(self, room, payload):
-        del room
         timeout = int(payload.get("step_timeout_seconds") or 0)
         if timeout not in VALID_STEP_TIMEOUTS:
             raise ValueError("invalid_step_timeout")
-        return {"step_timeout_seconds": timeout}
+        settings = {"step_timeout_seconds": timeout}
+        if room.get("lifecycle_kind") == "permanent" and "initial_board" in payload:
+            board = _normalize_board(payload["initial_board"])
+            if board is None:
+                raise ValueError("invalid_board")
+            settings["initial_board"] = f"{board:016x}"
+        return settings
 
     def artifact_payload(self, room_code: str, round_id: str, *, actor_key: str):
         return self.runtime.artifact_payload_for_mode(

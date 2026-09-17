@@ -8,7 +8,7 @@
     @click="editable && $emit('edit')"
   >
     <span class="account-avatar-media">
-      <img v-if="avatarUrl && !imageFailed" :src="avatarUrl" alt="" @error="imageFailed = true" />
+      <img v-if="avatarUrl && !imageFailed" :src="imageUrl" alt="" @error="handleImageError" />
       <span v-else>{{ initials }}</span>
     </span>
     <span v-if="supporter" class="account-supporter-mark" aria-hidden="true" />
@@ -29,7 +29,18 @@ const props = defineProps({
 defineEmits(['edit']);
 
 const imageFailed = ref(false);
+const retried = ref(false);
 const avatarUrl = computed(() => String(props.user?.profile?.avatar_url || ''));
+const imageUrl = computed(() => {
+  if (!retried.value || !avatarUrl.value.startsWith('/media/avatars/')) return avatarUrl.value;
+  const url = new URL(avatarUrl.value, window.location.origin);
+  url.searchParams.set('avatar_retry', '20260917');
+  return url.pathname + url.search;
+});
+function handleImageError() {
+  if (!retried.value && avatarUrl.value.startsWith('/media/avatars/')) retried.value = true;
+  else imageFailed.value = true;
+}
 const initials = computed(() => {
   const value = String(props.user?.display_name || props.user?.email || '?').trim();
   const parts = value.split(/\s+/).filter(Boolean);
@@ -41,6 +52,7 @@ const initials = computed(() => {
 
 watch(avatarUrl, () => {
   imageFailed.value = false;
+  retried.value = false;
 });
 </script>
 
@@ -156,4 +168,3 @@ watch(avatarUrl, () => {
   opacity: 1;
 }
 </style>
-

@@ -123,7 +123,7 @@
           <div class="panel-heading">
             <History :size="17" />
             <h2>{{ t("最近对局", "RECENT RUNS") }}</h2>
-            <button @click="refreshSummary" :title="t('刷新', 'Refresh')">
+            <button @click="refreshSummary(); loadHistory(historyPage)" :title="t('刷新', 'Refresh')">
               <RefreshCw :size="16" />
             </button>
             <button class="collapse-panel" @click="historyCollapsed = true" :title="t('收起最近对局', 'Collapse recent runs')" :aria-label="t('收起最近对局', 'Collapse recent runs')" aria-expanded="true" aria-controls="live-history-content"><PanelRightClose :size="18" /></button>
@@ -147,6 +147,14 @@
               ><small>{{ game.max_tile === 65536 ? '65k' : game.max_tile >= 1024 ? `${game.max_tile / 1024}K` : game.max_tile }}</small></span>
             <time>{{ dateTime(game.ended) }} <ExternalLink :size="12" /></time
           ></a>
+          <nav class="history-pagination" :aria-label="t('历史对局分页', 'Run history pages')" :aria-busy="historyLoading">
+            <button :disabled="historyPage === 1 || historyLoading" @click="loadHistory(historyPage - 1)" :title="t('上一页', 'Previous page')">‹</button>
+            <template v-for="(page, index) in historyButtons" :key="index">
+              <span v-if="page === null">…</span>
+              <button v-else :aria-current="page === historyPage ? 'page' : undefined" :disabled="historyLoading" @click="loadHistory(page)">{{ page }}</button>
+            </template>
+            <button :disabled="historyPage === historyPages || historyLoading" @click="loadHistory(historyPage + 1)" :title="t('下一页', 'Next page')">›</button>
+          </nav>
           </div>
         </aside>
       </section>
@@ -439,12 +447,39 @@ async function api(path, body) {
   } finally { clearTimeout(timeout); }
 }
 let chatHistoryLoaded = false;
+const historyPage = ref(1), historyTotal = ref(0), historyLoading = ref(false);
+const historyPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / 10)));
+const historyButtons = computed(() => {
+  const pages = [...new Set([1, historyPages.value, historyPage.value - 1, historyPage.value, historyPage.value + 1])]
+    .filter(page => page > 0 && page <= historyPages.value).sort((a,b) => a-b);
+  return pages.flatMap((page,index) => index && page - pages[index-1] > 1 ? [null,page] : [page]);
+});
+let historyRequest = 0;
+function updateHistorySummary(data) {
+  historyTotal.value = data.history_total ?? data.history?.length ?? 0;
+  if (historyPage.value === 1 && !historyLoading.value) history.value = data.history || [];
+}
+async function loadHistory(page) {
+  const request = ++historyRequest;
+  historyLoading.value = true;
+  try {
+    const data = await api(`/api/live/history?page=${page}`);
+    if (request !== historyRequest) return;
+    history.value = data.history;
+    historyPage.value = data.page;
+    historyTotal.value = data.total;
+  } catch {
+    if (request === historyRequest) showNotice(t('历史对局加载失败，请重试。', 'Could not load run history. Please retry.'));
+  } finally {
+    if (request === historyRequest) historyLoading.value = false;
+  }
+}
 async function refreshSummary() {
   try {
     const data = await api("/api/live/state");
     best.value = data.best;
     likes.update(data.likes);
-    history.value = data.history;
+    updateHistorySummary(data);
     week.value = data.week || {};
     const firstLoad = !chatHistoryLoaded;
     const el = chatList.value;
@@ -514,7 +549,7 @@ async function receive(event) {
     paused.value = Boolean(data.paused);
     viewers.value = data.viewers;
   } else if (data.type === "summary") {
-    history.value = data.history;
+    updateHistorySummary(data);
     week.value = data.week || {};
     best.value = data.best;
     likes.update(data.likes);
@@ -1007,6 +1042,9 @@ small {
   max-height: min(690px, var(--live-grid-limit, 690px));
   overflow: auto;
 }
+.history-pagination { display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:5px;padding:12px 0; }
+.history-pagination button { min-width:28px;min-height:28px;padding:3px 7px; }
+.history-pagination [aria-current=page] { background:var(--accent);color:var(--bg-main); }
 .history-row {
   display: flex;
   align-items: center;

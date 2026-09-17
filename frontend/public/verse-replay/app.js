@@ -1,6 +1,9 @@
 (function initialiseReplayViewer() {
   'use strict';
 
+  const t = window.ReplayI18n.translate;
+  window.ReplayI18n.translatePage();
+
   const {
     ReplayFormatError,
     UNKNOWN_TIMING_FALLBACK_MS,
@@ -97,7 +100,7 @@
 
   function formatStepTime(step) {
     if (!step) return '—';
-    if (step.deltaMs === null) return `未知 · ${UNKNOWN_TIMING_FALLBACK_MS} ms`;
+    if (step.deltaMs === null) return t(`未知 · ${UNKNOWN_TIMING_FALLBACK_MS} ms`);
     if (step.deltaMs < 1000) return `${step.deltaMs} ms`;
     return `${(step.deltaMs / 1000).toFixed(3)} s`;
   }
@@ -160,7 +163,7 @@
       const badge = document.createElement('div');
       badge.className = `node-badge ${tileClass(Number(milestone.label))}`;
       badge.textContent = milestone.label;
-      badge.title = `${milestone.key} 节点`;
+      badge.title = t(`${milestone.key} 节点`);
       const time = document.createElement('div');
       time.className = 'node-time';
       time.textContent = '';
@@ -271,8 +274,8 @@
       control.disabled = !loaded;
     }
     elements.playPause.textContent = state.playing ? '❚❚' : '▶';
-    elements.playPause.setAttribute('aria-label', state.playing ? '暂停' : '播放');
-    elements.playPause.title = state.playing ? '暂停（空格）' : '播放（空格）';
+    elements.playPause.setAttribute('aria-label', state.playing ? t('暂停') : t('播放'));
+    elements.playPause.title = state.playing ? t('暂停（空格）') : t('播放（空格）');
   }
 
   function renderElapsedTime(replayTimeMs = state.clockMs) {
@@ -440,8 +443,8 @@
 
   function renderSpeedButton() {
     elements.speedButton.textContent = state.playbackMode === 'original'
-      ? `原始步速 · ${state.originalRate}×`
-      : `恒定步速 · ${state.constantMs} ms`;
+      ? t(`原始步速 · ${state.originalRate}×`)
+      : t(`恒定步速 · ${state.constantMs} ms`);
   }
 
   function updateSpeedFieldVisibility() {
@@ -456,7 +459,7 @@
     pause(false);
     clearBoardAnimation();
     showError('');
-    elements.fileName.textContent = '正在解析回放…';
+    elements.fileName.textContent = t('正在解析回放…');
     await new Promise((resolve) => window.requestAnimationFrame(resolve));
 
     try {
@@ -466,10 +469,10 @@
       state.clockMs = 0;
       elements.progress.min = '0';
       elements.progress.max = String(replay.moveCount);
-      elements.fileName.textContent = `${sourceName} · ${replay.width}×${replay.height} · ${replay.moveCount.toLocaleString('zh-CN')} 步`;
+      elements.fileName.textContent = t(`${sourceName} · ${replay.width}×${replay.height} · ${replay.moveCount.toLocaleString('zh-CN')} 步`);
       elements.timingNote.textContent = replay.unknownTimings
-        ? `含 ${replay.unknownTimings} 个未知间隔；统一按 ${UNKNOWN_TIMING_FALLBACK_MS} ms 计入回放用时。秒表采用绝对时间基准，不累计页面渲染延迟。`
-        : '秒表采用绝对时间基准连续计时，不累计页面渲染延迟。';
+        ? t(`含 ${replay.unknownTimings} 个未知间隔；统一按 ${UNKNOWN_TIMING_FALLBACK_MS} ms 计入回放用时。秒表采用绝对时间基准，不累计页面渲染延迟。`)
+        : t('秒表采用绝对时间基准连续计时，不累计页面渲染延迟。');
       createBoard();
       createTimeline();
       renderAll();
@@ -484,16 +487,16 @@
       state.tileElements = [];
       state.motionLayer = null;
       state.milestoneTimeElements = [];
-      elements.fileName.textContent = '尚未载入回放';
+      elements.fileName.textContent = t('尚未载入回放');
       elements.board.hidden = true;
       elements.boardPlaceholder.hidden = false;
-      elements.timeline.innerHTML = '<p class="timeline-empty">载入回放后显示</p>';
+      elements.timeline.innerHTML = `<p class="timeline-empty">${t('载入回放后显示')}</p>`;
       elements.timingNote.textContent = '';
       elements.progress.min = '0';
       elements.progress.max = '0';
       elements.progress.value = '0';
-      const prefix = error instanceof ReplayFormatError ? '回放格式错误' : '无法读取回放';
-      showError(`${prefix}：${error.message}`);
+      const prefix = error instanceof ReplayFormatError ? t('回放格式错误') : t('无法读取回放');
+      showError(`${prefix}${window.ReplayI18n.english ? ': ' : '：'}${t(error.message)}`);
       renderStats();
       renderControls();
       throw error;
@@ -503,7 +506,7 @@
   async function loadFile(file) {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.vrs')) {
-      showError('请选择扩展名为 .vrs 的回放文件。');
+      showError(t('请选择扩展名为 .vrs 的回放文件。'));
       return;
     }
     const buffer = await file.arrayBuffer();
@@ -517,21 +520,21 @@
   async function loadRankedReplayFromUrl() {
     const liveId = new URLSearchParams(window.location.search).get('live');
     if (liveId) {
-      elements.fileName.textContent = '正在载入 AI 直播回放…';
+      elements.fileName.textContent = t('正在载入 AI 直播回放…');
       try {
         const response = await fetch(`/api/live/replays/${encodeURIComponent(liveId)}`);
-        if (!response.ok) throw new Error(response.status === 404 ? '回放已过期或不存在' : '暂时无法获取回放');
+        if (!response.ok) throw new Error(response.status === 404 ? t('回放已过期或不存在') : t('暂时无法获取回放'));
         const responseText = await response.text();
-        await installReplay(() => decodeReplayText(responseText), 'AI 直播对局', responseText);
+        await installReplay(() => decodeReplayText(responseText), t('AI 直播对局'), responseText);
       } catch (error) {
-        showError(`无法载入直播回放：${error?.message || '网络请求失败'}`);
-        elements.fileName.textContent = '直播回放载入失败';
+        showError(t(`无法载入直播回放：${error?.message || '网络请求失败'}`));
+        elements.fileName.textContent = t('直播回放载入失败');
       }
       return;
     }
     const replayId = new URLSearchParams(window.location.search).get('ranked');
     if (!replayId) return;
-    elements.fileName.textContent = '正在载入已验证对局…';
+    elements.fileName.textContent = t('正在载入已验证对局…');
     try {
       const response = await fetch(`/api/gamer/replays/${encodeURIComponent(replayId)}`, {
         headers: { Accept: 'application/json' },
@@ -540,11 +543,11 @@
       if (!response.ok || !payload?.record_encoding) {
         throw new Error(payload?.detail || `HTTP ${response.status}`);
       }
-      const source = `${payload.display_name || '排行榜对局'} · ${Number(payload.score || 0).toLocaleString('zh-CN')} 分`;
+      const source = t(`${payload.display_name || '排行榜对局'} · ${Number(payload.score || 0).toLocaleString('zh-CN')} 分`);
       await installReplay(() => decodeReplayText(payload.record_encoding), source, payload.record_encoding);
     } catch (error) {
-      showError(`无法载入排行榜对局：${error?.message || '网络请求失败'}`);
-      elements.fileName.textContent = '排行榜对局载入失败';
+      showError(t(`无法载入排行榜对局：${error?.message || '网络请求失败'}`));
+      elements.fileName.textContent = t('排行榜对局载入失败');
     }
   }
 
@@ -569,7 +572,7 @@
     if (!text.trim()) return;
     closeDialog(elements.inputDialog);
     try {
-      await installReplay(() => decodeReplayText(text), '粘贴的回放代码', text);
+      await installReplay(() => decodeReplayText(text), t('粘贴的回放代码'), text);
     } catch (_) {
       // The inline error already contains the actionable format detail.
     }

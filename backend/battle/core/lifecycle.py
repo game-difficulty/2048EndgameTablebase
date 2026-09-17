@@ -345,6 +345,8 @@ async def update_room_settings(
     except (TypeError, ValueError) as exc:
         raise BattleServiceError("REVISION_REQUIRED", "Room revision is required.", 409) from exc
     mode = get_battle_mode(str(room.get("mode_key") or "goodness"))
+    if room.get("lifecycle_kind") == "permanent" and room.get("mode_key") == "goodness" and room.get("status") != "waiting":
+        raise BattleServiceError("ROOM_ALREADY_STARTED", "Settings cannot change during route generation.", 409)
     try:
         normalized = await mode.normalize_lobby_settings_patch(room, payload)
     except ValueError as exc:
@@ -354,6 +356,8 @@ async def update_room_settings(
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         current = repository._find_room(db, room_code)
+        if current["lifecycle_kind"] == "permanent" and current["mode_key"] == "goodness" and current["status"] != "waiting":
+            raise BattleServiceError("ROOM_ALREADY_STARTED", "Settings cannot change during route generation.", 409)
         current_host = str(current["host_actor_key"] or f"u:{current['host_user_id']}")
         if current_host != identity.actor_key:
             raise BattleServiceError("HOST_REQUIRED", "Only the current host can edit settings.", 403)

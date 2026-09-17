@@ -141,6 +141,7 @@ def _insert_round(
     seed_hex: str,
     reservation: TokenReservation | None,
     auto_start_after_generation: bool = False,
+    expected_host_actor_key: str | None = None,
 ) -> str:
     round_id = str(uuid.uuid4())
     now = iso()
@@ -148,13 +149,21 @@ def _insert_round(
         db.execute("BEGIN IMMEDIATE")
         if auto_start_after_generation:
             room = repository._find_room(db, room_id)
+            if expected_host_actor_key is not None and str(room["host_actor_key"] or f"u:{room['host_user_id']}") != expected_host_actor_key:
+                raise BattleServiceError("HOST_REQUIRED", "Only the host can start.", 403)
             previous_round = db.execute(
                 "SELECT status FROM battle_rounds WHERE room_id = ? ORDER BY round_number DESC LIMIT 1",
                 (room_id,),
             ).fetchone()
-            if room["status"] != "waiting" or previous_round is None or previous_round["status"] != "completed":
+            permanent = str(room["lifecycle_kind"]) == "permanent"
+            previous_ok = (
+                previous_round is None or previous_round["status"] in {"completed", "failed", "cancelled", "ready"}
+            ) if permanent else (previous_round is not None and previous_round["status"] == "completed")
+            if room["status"] != "waiting" or not previous_ok:
                 raise BattleServiceError("ROOM_NOT_READY", "The previous round is not complete.", 409)
             _ready_players_for_start(db, room, now_text=now)
+            if permanent:
+                db.execute("UPDATE battle_rounds SET status='cancelled', updated_at=? WHERE room_id=? AND status='ready'", (now, room_id))
         db.execute(
             """
             INSERT INTO battle_rounds
@@ -666,7 +675,7 @@ async def start_room_for_mode(
     if str(room.get("host_actor_key") or f"u:{room.get('host_user_id')}") != str(actor_key):
         raise BattleServiceError("HOST_REQUIRED", "Only the host can start.", 403)
     current_round = room.get("round") or {}
-    if current_round.get("status") in {"completed", "failed", "cancelled"}:
+    if room.get("lifecycle_kind") == "permanent" or current_round.get("status") in {"completed", "failed", "cancelled"}:
         reservation = None
         if str(room.get("billing_policy") or "user") != "platform":
             if user_id is None:
@@ -687,6 +696,7 @@ async def start_room_for_mode(
                 seed_hex=secrets.token_hex(16),
                 reservation=reservation,
                 auto_start_after_generation=True,
+                expected_host_actor_key=actor_key,
             )
         except Exception:
             if reservation is not None:
@@ -727,19 +737,17 @@ async def ensure_permanent_room(definition) -> dict[str, Any]:
         step_timeout_seconds=int(settings["step_timeout_seconds"]),
         max_players=int(settings["max_players"]),
         settings=public_settings,
-        status="preparing",
+        status="waiting",
     )
     current = room.get("round") or {}
-    if not current or current.get("status") in {"failed", "cancelled"}:
-        round_id = _insert_round(
-            room_id=str(room["room_id"]),
-            round_number=int(room.get("current_round_number") or 0) + 1,
-            seed_hex=secrets.token_hex(16),
-            reservation=None,
-        )
-        _schedule_route(round_id, reservation=None, auto_start=False)
-    elif current.get("status") == "preparing":
-        _schedule_route(str(current["round_id"]), reservation=None, auto_start=False)
+    if current.get("status") == "preparing" and current.get("auto_start_after_generation"):
+        _schedule_route(str(current["round_id"]), reservation=None, auto_start=True)
+    elif room.get("status") in {"preparing", "waiting"}:
+        # Discard legacy idle pre-generation; only an explicit start may generate a route.
+        with auth_db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE battle_rounds SET status='cancelled', updated_at=? WHERE room_id=? AND status IN ('preparing','ready') AND auto_start_after_generation=0", (iso(), room["room_id"]))
+            db.execute("UPDATE battle_rooms SET status='waiting', generation_error=NULL WHERE room_id=? AND status='preparing' AND NOT EXISTS (SELECT 1 FROM battle_rounds WHERE room_id=? AND status='preparing' AND auto_start_after_generation=1)", (room["room_id"],room["room_id"]))
     return repository.get_room(str(room["room_id"]))
 
 

@@ -39,6 +39,17 @@ class WeeklyStatsTests(unittest.TestCase):
         self.assertEqual(weekly['median_score'],300)
         self.assertEqual((weekly['games'],weekly['score_sum']),(4,1500))
 
+    def test_history_pages_are_stable_bounded_and_exclude_replay_payloads(self):
+        self.assertEqual(self.store.history(), dict(history=[], total=0, page=1, pages=1))
+        for key in range(23):
+            self.store.finish(self.run_result(f'{key:03}', key))
+        pages = [self.store.history(page) for page in range(1, 4)]
+        self.assertEqual([len(page['history']) for page in pages], [10, 10, 3])
+        self.assertEqual([row['id'] for page in pages for row in page['history']], [f'{key:03}' for key in reversed(range(23))])
+        self.assertEqual(self.store.history(999), pages[-1])
+        self.assertTrue(all('replay' not in row for page in pages for row in page['history']))
+        self.assertEqual(self.store.summary()['history_total'], 23)
+
     def test_week_totals_exclude_previous_and_next_week(self):
         for key,day,maximum in [('a','2026-09-13',65536),('b','2026-09-14',32768),
                                 ('c','2026-09-20',65536),('d','2026-09-21',65536)]:
@@ -53,14 +64,14 @@ class WeeklyStatsTests(unittest.TestCase):
             run=self.run_result(key,key*4)
             run.ended += key
             self.store.finish(run)
-        self.assertIsNone(self.store.replay('0'))
+        self.assertEqual(self.store.replay('0'), 'small-replay')
         weekly=self.store.summary()['week']
         self.assertEqual(weekly['median_score'],408)
         self.assertEqual(weekly['games'],205)
         self.store.finish(first)
         self.assertEqual(self.store.summary()['week'],weekly)
         with self.store.connect() as db:
-            self.assertEqual(db.execute('SELECT count(*) FROM live_runs').fetchone()[0],200)
+            self.assertEqual(db.execute('SELECT count(*) FROM live_runs').fetchone()[0],205)
             self.assertEqual(db.execute('SELECT count(*) FROM live_scores').fetchone()[0],205)
 
     def test_legacy_backfill_and_missing_scores_are_not_an_invented_median(self):

@@ -9,7 +9,7 @@ import unicodedata
 from collections import deque
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from backend.auth.dependencies import require_actor, require_user, current_user_from_request, current_user_from_websocket, client_ip, websocket_client_ip
 from backend.quota.errors import InsufficientTokens
@@ -304,6 +304,13 @@ async def room_audience(request: Request, response: Response):
     hub.limit(('audience-ip', client_ip(request)), 120)
     response.headers['Cache-Control'] = 'no-store'
     return await asyncio.to_thread(audience.ranking, hub.audience.identities())
+
+
+@router.get('/history')
+async def run_history(request: Request, response: Response, page: int = Query(1, ge=1)):
+    hub.limit(('history-ip', client_ip(request)), 120)
+    response.headers['Cache-Control'] = 'no-store'
+    return await asyncio.to_thread(hub.store.history, page)
 
 
 @router.get('/lucky-bags')

@@ -264,6 +264,47 @@ class PermanentBattleRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(row["reservation_ledger_id"])
         self.assertEqual(row["token_cost_units"], 0)
 
+    @patch.object(goodness_runtime, 'resolve_tablebase', return_value={'pattern': 'L3', 'target': 256})
+    async def test_goodness_permanent_generates_only_on_start_with_updated_board(self, _resolve):
+        with patch.object(goodness_runtime, '_schedule_route') as schedule:
+            idle = await goodness_runtime.ensure_permanent_room(self.definition)
+            self.assertEqual(idle['status'], 'waiting')
+            self.assertFalse(idle.get('round'))
+            schedule.assert_not_called()
+            lifecycle.join_room(self.room['room_code'], user_id=self.user_id, role='player')
+            before = repository.get_room(self.room['room_code'])
+            board = '011112222fff3fff'
+            updated = await lifecycle.update_room_settings(self.room['room_code'], actor=f'u:{self.user_id}', payload={
+                'expected_revision': before['settings_revision'], 'step_timeout_seconds': 90, 'initial_board': board})
+            self.assertEqual(updated['initial_board'], board)
+            schedule.assert_not_called()
+            lifecycle.set_ready(self.room['room_code'], user_id=self.user_id, ready=True)
+            await goodness_runtime.start_room_for_mode(self.room['room_code'], user_id=self.user_id)
+            schedule.assert_called_once()
+            round_id = schedule.call_args.args[0]
+            self.assertTrue(schedule.call_args.kwargs['auto_start'])
+            with self.assertRaises(BattleServiceError):
+                await goodness_runtime.start_room_for_mode(self.room['room_code'], user_id=self.user_id)
+            with self.assertRaises(BattleServiceError):
+                await lifecycle.update_room_settings(self.room['room_code'], actor=f'u:{self.user_id}', payload={
+                    'expected_revision': updated['settings_revision'], 'step_timeout_seconds': 90, 'initial_board': self.definition.initial_board})
+        with patch.object(goodness_runtime, 'generate_battle_route', new=AsyncMock(side_effect=RuntimeError('test failure'))) as generate:
+            await goodness_runtime._prepare_route(round_id, reservation=None, auto_start=True)
+            self.assertEqual(generate.call_args.kwargs['initial_board'], int(board,16))
+        self.assertEqual(repository.get_room(self.room['room_code'])['status'], 'waiting')
+        with patch.object(goodness_runtime, '_schedule_route') as schedule:
+            await goodness_runtime.start_room_for_mode(self.room['room_code'], user_id=self.user_id)
+            schedule.assert_called_once()
+
+    @patch.object(goodness_runtime, 'resolve_tablebase', return_value={'pattern': 'L3', 'target': 256})
+    async def test_goodness_permanent_drops_legacy_idle_route_generation(self, _resolve):
+        round_id = goodness_runtime._insert_round(room_id=self.room['room_id'], round_number=1, seed_hex='11'*16, reservation=None)
+        with patch.object(goodness_runtime, '_schedule_route') as schedule:
+            room = await goodness_runtime.ensure_permanent_room(self.definition)
+            schedule.assert_not_called()
+        self.assertEqual(room['status'], 'waiting')
+        self.assertEqual(room['round']['status'], 'cancelled')
+
     def test_solo_round_blocks_restart_and_handoffs_until_cooldown_resumes(self) -> None:
         lifecycle.join_room(self.room["room_code"], user_id=self.user_id, role="player")
         actor_key = f"u:{self.user_id}"

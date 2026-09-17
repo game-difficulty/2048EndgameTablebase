@@ -87,11 +87,11 @@
               <span>{{ $t('battle.form.stepTimeout') }}</span>
               <BattleNumberInput v-model="settingsDraft.step_timeout_seconds" :min="5" :max="600" :step="5" />
             </label>
-            <template v-if="freeGoodnessRoom">
-              <label class="battle-settings-field battle-settings-wide">
+              <label v-if="editableInitialBoard" class="battle-settings-field battle-settings-wide">
                 <span>{{ $t('battle.form.initialBoard') }}</span>
                 <input v-model.trim="settingsDraft.initial_board" maxlength="16" class="battle-settings-input font-mono" autocomplete="off" spellcheck="false" />
               </label>
+            <template v-if="freeGoodnessRoom">
               <label class="battle-settings-field">
                 <span>{{ $t('battle.form.scoredSteps') }}</span>
                 <BattleNumberInput v-model="settingsDraft.score_step_limit" :min="1" :max="targetStepCap" :step="1" />
@@ -145,6 +145,7 @@ import {
 } from '../core/battleActor.js';
 import {
   battleRoomSettingsDraft,
+  canEditBattleInitialBoard,
   buildBattleRoomSettingsPayload,
   isPermanentBattleRoom,
   validateBattleRoomSettings,
@@ -181,8 +182,10 @@ const canChangeRole = computed(() => ['preparing', 'waiting'].includes(props.roo
 const seatsFull = computed(() => players.value.length >= Number(props.room.max_players));
 const permanentRoom = computed(() => isPermanentBattleRoom(props.room));
 const freeGoodnessRoom = computed(() => String(props.room.mode_key || '') === 'free_goodness');
+const editableInitialBoard = computed(() => canEditBattleInitialBoard(props.room));
 const canEditSettings = computed(() => (
   isHost.value && ['preparing', 'waiting'].includes(String(props.room.status || ''))
+  && !(permanentRoom.value && !freeGoodnessRoom.value && props.room.status === 'preparing')
 ));
 const canStart = computed(() => (
   isHost.value

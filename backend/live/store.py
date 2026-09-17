@@ -25,6 +25,7 @@ class LiveStore:
                     ended REAL, day TEXT, replay TEXT);
                 CREATE TABLE IF NOT EXISTS live_days (
                     day TEXT PRIMARY KEY, games INTEGER, score_sum INTEGER, tile32 INTEGER, tile64 INTEGER);
+                CREATE INDEX IF NOT EXISTS live_runs_ended ON live_runs(ended DESC, id DESC);
                 CREATE TABLE IF NOT EXISTS live_totals (id INTEGER PRIMARY KEY, best INTEGER, likes INTEGER);
                 INSERT OR IGNORE INTO live_totals VALUES (1, 0, 0);
                 CREATE TABLE IF NOT EXISTS live_control (
@@ -76,10 +77,18 @@ class LiveStore:
                     tile32=tile32+excluded.tile32, tile64=tile64+excluded.tile64''',
                     (day, run.score, int(maximum >= 32768), int(maximum >= 65536)))
                 db.execute('UPDATE live_totals SET best=max(best,?) WHERE id=1', (run.score,))
-            # At most 200 compact replays; counters remain in the small aggregate tables.
-            db.execute('DELETE FROM live_runs WHERE id NOT IN (SELECT id FROM live_runs ORDER BY ended DESC LIMIT 200)')
-            while db.execute('SELECT coalesce(sum(length(replay)),0) FROM live_runs').fetchone()[0] > 100 * 1024 * 1024:
-                db.execute('DELETE FROM live_runs WHERE id=(SELECT id FROM live_runs ORDER BY ended LIMIT 1)')
+
+    def history(self, page=1):
+        with self.connect() as db:
+            db.row_factory = sqlite3.Row
+            db.execute('BEGIN')
+            total = db.execute('SELECT count(*) FROM live_runs').fetchone()[0]
+            pages = max(1, (total + 9) // 10)
+            page = min(max(1, page), pages)
+            rows = [dict(row) for row in db.execute(
+                'SELECT id,score,max_tile,elapsed,ended FROM live_runs ORDER BY ended DESC,id DESC LIMIT 10 OFFSET ?',
+                ((page - 1) * 10,))]
+        return dict(history=rows, total=total, page=page, pages=pages)
 
     def summary(self):
         day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
@@ -87,7 +96,8 @@ class LiveStore:
         with self.connect() as db:
             db.row_factory = sqlite3.Row
             db.execute('BEGIN')
-            history = [dict(row) for row in db.execute('SELECT id,score,max_tile,elapsed,ended FROM live_runs ORDER BY ended DESC LIMIT 20')]
+            history = [dict(row) for row in db.execute('SELECT id,score,max_tile,elapsed,ended FROM live_runs ORDER BY ended DESC,id DESC LIMIT 10')]
+            history_total = db.execute('SELECT count(*) FROM live_runs').fetchone()[0]
             daily = db.execute('SELECT * FROM live_days WHERE day=?', (day,)).fetchone()
             best, likes = db.execute('SELECT best,likes FROM live_totals WHERE id=1').fetchone()
             weekly = dict(db.execute('''SELECT coalesce(sum(games),0) AS games,
@@ -95,7 +105,7 @@ class LiveStore:
                 coalesce(sum(tile64),0) AS tile64 FROM live_days WHERE day>=? AND day<?''', (start,end)).fetchone())
             scores = [row[0] for row in db.execute('SELECT score FROM live_scores WHERE day>=? AND day<?', (start,end))]
         weekly.update(start=start, end=end, median_score=median(scores) if scores and len(scores)==weekly['games'] else None)
-        return dict(history=history, best=best, likes=likes,
+        return dict(history=history, history_total=history_total, best=best, likes=likes,
                     week=weekly,
                     today=dict(daily) if daily else dict(day=day, games=0, score_sum=0, tile32=0, tile64=0))
 

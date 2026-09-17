@@ -81,3 +81,12 @@ test('settings payload includes revision and only mode-owned fields', () => {
     ranking_min_steps: 100,
   });
 });
+
+test('only permanent goodness rooms can edit their initial board without free-mode step settings', () => {
+  const room = {mode_key:'goodness', lifecycle_kind:'permanent', target:256};
+  const draft = {step_timeout_seconds:90, initial_board:'011112221FFF3FFF'};
+  assert.deepEqual(validateBattleRoomSettings(room,draft),{ok:true});
+  assert.equal(validateBattleRoomSettings(room,{...draft,initial_board:'x'}).code,'initialBoard');
+  assert.deepEqual(buildBattleRoomSettingsPayload(room,draft,2),{expected_revision:2,step_timeout_seconds:90,initial_board:'011112221fff3fff'});
+  assert.deepEqual(buildBattleRoomSettingsPayload({...room,lifecycle_kind:'normal'},draft,2),{expected_revision:2,step_timeout_seconds:90});
+});
