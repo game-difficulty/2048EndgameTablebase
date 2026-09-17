@@ -258,7 +258,17 @@ nb::tuple reader_result_to_python(const ReaderMoveResult &result) {
             entries[nb::str(entry.key.c_str())] = nb::none();
         }
     }
-    return nb::make_tuple(entries, result.success_rate_dtype);
+    unsigned legal_mask = 0;
+    for (const auto &entry : result.entries) {
+        if (!entry.legal) continue;
+        if (entry.key == "left") legal_mask |= 1;
+        else if (entry.key == "right") legal_mask |= 2;
+        else if (entry.key == "up") legal_mask |= 4;
+        else if (entry.key == "down") legal_mask |= 8;
+    }
+    nb::object values = nb::module_::import_("engine_core.reader_results")
+        .attr("ReaderResults")(entries, legal_mask);
+    return nb::make_tuple(values, result.success_rate_dtype);
 }
 
 nb::dict ex_compress_stats_to_python(const EXCompressedResult::CompressStats &stats) {

@@ -22,6 +22,7 @@ struct OrderedReaderEntry {
     ReaderValueKind kind = ReaderValueKind::NoneValue;
     double number = 0.0;
     std::string text;
+    bool legal = false;
 };
 
 struct ReaderMoveResult {

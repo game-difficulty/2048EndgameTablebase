@@ -7,6 +7,7 @@ from typing import Tuple, List
 import numpy as np
 
 from engine_core.BookReader import BookReaderDispatcher
+from engine_core.reader_results import complete_positive_moves
 from engine_core.Calculator import (
     ReverseLR,
     ReverseUD,
@@ -60,17 +61,6 @@ class BaseDispatcher:
         max_indices = np.argpartition(flat_arr, -n)[-n:]
         flat_arr[max_indices] = 32768
         masked_board = flat_arr.reshape(4, 4)
-        if masked_board.sum() - n * 32768 < 24:
-            # 小数字和太小让AI玩(返回一个任何定式都查不到的局面)
-            masked_board = np.array(
-                [
-                    [32768, 32768, 32768, 32768],
-                    [0, 32768, 32768, 0],
-                    [0, 32768, 32768, 0],
-                    [32768, 32768, 32768, 32768],
-                ],
-                dtype=np.int32,
-            )  # 其他数字太小让AI玩
         return masked_board
 
     def dispatcher(self):
@@ -183,14 +173,16 @@ class DispatcherCommon(BaseDispatcher):
             return None
 
         masked_board = self.mask(_32k)
-        # Early free10 layers may not cover all move successors.
-        if pattern == "free10" and masked_board[masked_board != 32768].sum() < 32:
-            return None
+        small_sum = int(masked_board.sum()) - _32k * 32768
+        require_complete = small_sum < (32 if pattern == "free10" else 28)
 
         r1, success_rate_dtype = self.book_reader.move_on_dic(
             masked_board, pattern, target_str, table
         )
         _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG["uint32"])
+        low_sum_complete = require_complete and complete_positive_moves(r1, zero_val)
+        if require_complete and not low_sum_complete:
+            return None
         r1 = {
             key: (
                 value - zero_val
@@ -220,7 +212,7 @@ class DispatcherCommon(BaseDispatcher):
                 )
             )
             if (
-                (table_type == 1 and success_rate > 0.9999999 and remainder < 24)
+                (table_type == 1 and success_rate > 0.9999999 and remainder < 24 and not low_sum_complete)
                 or (
                     table_type == 2
                     and (remainder < 32 or (self.board == target_val // 2).sum() > 1)
@@ -228,7 +220,7 @@ class DispatcherCommon(BaseDispatcher):
                 or (
                     table_type == 3
                     and success_rate > 0.9999999
-                    and (remainder > ((1 << target) - 4) or remainder < 24)
+                    and (remainder > ((1 << target) - 4) or (remainder < 24 and not low_sum_complete))
                 )
                 or (success_rate > 0.9999999 and has_target_parts)
             ):
