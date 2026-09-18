@@ -3,8 +3,8 @@
   const requested = new URLSearchParams(root.location.search).get('lang');
   const english = requested === 'en' || (requested !== 'zh' && !root.navigator.language.toLowerCase().startsWith('zh'));
   const messages = {
-    '2048Verse 回放计时器': '2048Verse Replay Viewer',
-    '带连续秒表、单步用时和节点用时的 2048Verse 回放查看器': 'Watch 2048 replays with recorded move timings, elapsed time, and tile milestones.',
+    '2048 回放播放器': '2048 Replay Player',
+    '带连续秒表、单步用时和节点用时的 2048 回放播放器': 'Watch 2048 replays with recorded move timings, elapsed time, and tile milestones.',
     '尚未载入回放': 'No replay loaded', '载入与步速设置': 'Replay files and playback speed',
     '输入回放代码': 'Paste replay code', '上传回放文件': 'Open replay file', '下载回放': 'Download replay',
     '回放数据': 'Replay statistics', '分数': 'Score', '单步用时': 'Move time', '用时': 'Elapsed time', '进度': 'Progress',

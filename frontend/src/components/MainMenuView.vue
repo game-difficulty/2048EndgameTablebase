@@ -150,20 +150,8 @@
         </p>
       </div>
 
-      <div class="menu-utility-actions menu-utility-actions-left">
-        <button class="menu-utility-btn" @click="$emit('selectTab', 'AnnouncementsView')">
-          <Megaphone :size="18" />{{ $t('announcements.title') }}
-        </button>
-      </div>
-      <div class="menu-utility-actions menu-utility-actions-right">
-        <a
-          class="menu-utility-btn"
-          href="/verse-replay/"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {{ $t('menu.openVerseReplay') }}
-        </a>
+      <div class="menu-utility-actions menu-utility-directory">
+        <AuxiliaryEntry v-for="entry in HOME_AUXILIARY_ENTRIES" :key="entry.id" :entry="entry" @navigate="$emit('navigate', $event)" />
         <button
           v-if="showBrowserModeButton"
           type="button"
@@ -180,10 +168,11 @@
 
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue';
-import { Megaphone } from '@lucide/vue';
+import AuxiliaryEntry from './AuxiliaryEntry.vue';
+import { HOME_AUXILIARY_ENTRIES } from '../app/auxiliaryEntries.js';
 
 defineProps(['active']);
-defineEmits(['selectTab']);
+defineEmits(['selectTab', 'navigate']);
 
 const showBrowserModeButton = ref(false);
 
@@ -367,18 +356,23 @@ onUnmounted(() => {
 
 .menu-bottom-row {
   min-height: 7.5rem;
+  display:flex;
+  flex-direction:column;
+  margin-top:1rem;
 }
 
+.menu-utility-directory { order:-1; }
+.menu-footer { margin-top:12px; }
+
 .menu-bottom-row-with-tools {
-  padding-inline: 13rem;
+  padding-inline: 1rem;
 }
 
 .menu-utility-actions {
-  position: absolute;
-  top: 0.5rem;
-  flex-direction: column;
-  align-items: stretch;
-  margin: 0;
+  position: static;
+  flex-direction: row;
+  align-items: center;
+  margin: 8px auto 0;
   transform: none;
 }
 

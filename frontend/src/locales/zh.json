@@ -756,7 +756,11 @@
     "settings": "设置",
     "help": "攻略教程",
     "openBrowserMode": "在浏览器中打开",
-    "openVerseReplay": "Verse 回放播放器",
+    "openVerseReplay": "回放播放器",
+    "live": "直播",
+    "more": "更多功能",
+    "watchAndReplay": "观看与回放",
+    "siteInformation": "网站信息",
     "openLeaderboards": "排行榜",
     "descriptions": {
       "play": "当前最强的 2048 AI 以及困难模式",

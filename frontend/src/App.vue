@@ -17,9 +17,8 @@
       >
     <AnnouncementBanner v-show="activeTab === TAB_IDS.MAIN_MENU" @navigate="handleAnnouncementNavigate" />
     <div ref="appTopBar" class="flex items-center gap-2 overflow-x-auto overflow-y-hidden bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
+      <template v-for="tab in openTabDefinitions" :key="tab.id">
       <div
-        v-for="tab in openTabDefinitions"
-        :key="tab.id"
         :class="[
           'flex items-center rounded-lg border transition-all duration-300',
           tab.id !== TAB_IDS.MAIN_MENU ? 'cursor-grab active:cursor-grabbing' : '',
@@ -55,6 +54,8 @@
           ×
         </button>
       </div>
+      <AuxiliaryEntry v-if="tab.id === TAB_IDS.MAIN_MENU" :entry="AUXILIARY_ENTRIES.live" class="top-live-entry" />
+      </template>
       <div class="relative ml-auto flex items-center gap-2 whitespace-nowrap pl-3" data-account-menu>
         <template v-if="authUser">
           <button
@@ -95,7 +96,7 @@
           class="absolute inset-0"
           v-show="activeTab === TAB_IDS.MAIN_MENU"
         >
-          <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="openTab" />
+          <MainMenuView :active="activeTab === TAB_IDS.MAIN_MENU" @selectTab="openTab" @navigate="navigateAuxiliary" />
         </div>
         <div
           v-if="isTabOpen(TAB_IDS.GAMER)"
@@ -193,6 +194,9 @@
         </div>
         <div v-if="isTabOpen(TAB_IDS.ANNOUNCEMENTS)" v-show="activeTab === TAB_IDS.ANNOUNCEMENTS" class="absolute inset-0">
           <AnnouncementsView :requested-id="announcementRequestedId" @open-quota="openQuotaGuideDialog" />
+        </div>
+        <div v-if="isTabOpen(TAB_IDS.MORE)" v-show="activeTab === TAB_IDS.MORE" class="absolute inset-0">
+          <MoreView @navigate="navigateAuxiliary" />
         </div>
       </div>
 
@@ -409,6 +413,8 @@ import {
 } from './app/trainerDock';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
+import AuxiliaryEntry from './components/AuxiliaryEntry.vue';
+import { AUXILIARY_ENTRIES } from './app/auxiliaryEntries.js';
 import AnnouncementBanner from './features/announcements/AnnouncementBanner.vue';
 import { resolveAnnouncementTarget, findAnnouncement } from './features/announcements/catalog.js';
 import AccountAvatar from './features/auth/AccountAvatar.vue';
@@ -432,6 +438,11 @@ const SettingsView = defineAsyncComponent(() => import('./features/settings/page
 const HelpView = defineAsyncComponent(() => import('./features/help/pages/HelpPage.vue'));
 const AdminView = defineAsyncComponent(() => import('./features/admin/pages/AdminPage.vue'));
 const AnnouncementsView = defineAsyncComponent(() => import('./features/announcements/AnnouncementsPage.vue'));
+const MoreView = defineAsyncComponent(() => import('./features/more/MorePage.vue'));
+function navigateAuxiliary(entry) {
+  if (entry.dialog === 'quota') openQuotaGuideDialog();
+  else if (entry.tab) openTab(entry.tab);
+}
 const QuotaGuideDialog = defineAsyncComponent(() => import('./features/billing/QuotaGuideDialog.vue'));
 const AvatarEditorDialog = defineAsyncComponent(() => import('./features/auth/AvatarEditorDialog.vue'));
 const DisplayNameEditorDialog = defineAsyncComponent(() => import('./features/auth/DisplayNameEditorDialog.vue'));

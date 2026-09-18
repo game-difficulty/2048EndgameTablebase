@@ -756,7 +756,11 @@
     "settings": "Settings",
     "help": "Help & About",
     "openBrowserMode": "Open In Browser",
-    "openVerseReplay": "Verse Replay Viewer",
+    "openVerseReplay": "Replay Player",
+    "live": "Live",
+    "more": "More Features",
+    "watchAndReplay": "Watch & Replay",
+    "siteInformation": "Site Information",
     "openLeaderboards": "Leaderboards",
     "descriptions": {
       "play": "The Strongest 2048 AI & Evil Mode.",
