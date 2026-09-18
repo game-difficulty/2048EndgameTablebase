@@ -18,25 +18,37 @@ const video = ref(null), active = ref(false), busy = ref(false), error = ref('')
 let canvas, ctx, stream, timer, startTimer, disposed = false, attempt = 0;
 let previousTick = 0, previousSeq = null, previousRun = null;
 let stats = {};
+let canvasWidth = 320, canvasHeight = 320, boardSize = 320, boardOffsetX = 0, boardOffsetY = 0;
+
+function configureCanvas() {
+  const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+  canvasWidth = mobile ? 480 : 320;
+  canvasHeight = mobile ? 270 : 320;
+  boardSize = canvasHeight;
+  boardOffsetX = (canvasWidth - boardSize) / 2;
+  boardOffsetY = 0;
+}
 
 function draw() {
   if (!ctx || !stream) return;
   const values = props.run?.board || Array(16).fill(0);
-  ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, 480, 480);
+  const unit = boardSize / 480;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  ctx.fillStyle = '#1e293b'; ctx.fillRect(boardOffsetX, boardOffsetY, boardSize, boardSize);
   for (let i = 0; i < 16; i++) {
-    const value = values[i], x = 12 + (i % 4) * 117, y = 12 + Math.floor(i / 4) * 117;
+    const value = values[i], x = boardOffsetX + (12 + (i % 4) * 117) * unit, y = boardOffsetY + (12 + Math.floor(i / 4) * 117) * unit;
     const colors = liveTileColors(value);
-    ctx.fillStyle = value ? colors.background : '#182333'; ctx.fillRect(x, y, 105, 105);
+    ctx.fillStyle = value ? colors.background : '#182333'; ctx.fillRect(x, y, 105 * unit, 105 * unit);
     if (!value) continue;
     ctx.fillStyle = colors.color;
-    ctx.font = `bold ${value >= 10000 ? 24 : value >= 1000 ? 32 : 40}px sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(value), x + 52.5, y + 54);
+    ctx.font = `bold ${(value >= 10000 ? 24 : value >= 1000 ? 32 : 40) * unit}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(value), x + 52.5 * unit, y + 54 * unit);
   }
   if (props.state !== 'live' || props.run?.ended_at) {
-    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(0, 180, 480, 120);
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 24px sans-serif';
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(boardOffsetX, boardOffsetY + 180 * unit, boardSize, 120 * unit);
+    ctx.fillStyle = '#fff'; ctx.font = `bold ${24 * unit}px sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(props.run?.ended_at ? 'Game over' : props.state || 'Connecting', 240, 240);
+    ctx.fillText(props.run?.ended_at ? 'Game over' : props.state || 'Connecting', canvasWidth / 2, boardSize / 2);
   }
   stream.getVideoTracks()[0]?.requestFrame?.();
   stats.draws++;
@@ -88,7 +100,8 @@ async function toggle() {
   try {
     stats = { userAgent: navigator.userAgent, started: new Date().toISOString(), draws: 0, updates: 0, hiddenUpdates: 0, maxHiddenTickGapMs: 0 };
     previousSeq = previousRun = null; previousTick = 0;
-    canvas = document.createElement('canvas'); canvas.width = canvas.height = 480;
+    configureCanvas();
+    canvas = document.createElement('canvas'); canvas.width = canvasWidth; canvas.height = canvasHeight;
     ctx = canvas.getContext('2d');
     if (!ctx) throw Error('Canvas 2D unavailable');
     stream = canvas.captureStream(10);
