@@ -481,14 +481,14 @@ const getTileInnerStyle = (tile) => {
 
 const getTileLabelStyle = (tile) => {
   const len = String(tile.value).length;
-  let fontSize = '2.5rem';
+  let fontSize = 'var(--tile-label-small, 2.5rem)';
   let textOffset = '0.015em';
 
   if (len > 4) {
-    fontSize = '1.5rem';
+    fontSize = 'var(--tile-label-large, 1.5rem)';
     textOffset = '0.05em';
   } else if (len > 3) {
-    fontSize = '2rem';
+    fontSize = 'var(--tile-label-medium, 2rem)';
     textOffset = '0.04em';
   } else if (len === 3) {
     textOffset = '0.03em';

@@ -343,12 +343,11 @@ import GiftEffects from './GiftEffects.vue';
 import GiftIcon from './GiftIcon.vue';
 import { mergeLiveChat } from './giftArtwork.js';
 import { useI18n } from 'vue-i18n';
-import { useLiveLayoutScale, useLiveStageFit } from './liveLayout.js';
+import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
 
 useLiveLayoutScale();
 const stageColumn = ref(null);
-useLiveStageFit(stageColumn);
 
 const lang = ref(navigator.language.startsWith("zh") ? "zh" : "en");
 const { locale } = useI18n();
@@ -768,7 +767,11 @@ onUnmounted(() => {
 
 <style scoped>
 :global(body.live-document) { --live-scale:1;overflow:auto;zoom:var(--live-scale);background:var(--bg-main); }
+:global(body.live-document) { -webkit-text-size-adjust:100%;text-size-adjust:100%; }
 .live-page {
+  -webkit-text-size-adjust:100%;
+  text-size-adjust:100%;
+  --live-board-size:480px;
   min-width:1500px;
   width:var(--live-page-width,100%);
   margin-inline:auto;
@@ -903,7 +906,7 @@ p {
 .like-control { position:relative;flex:0 0 auto; }
 .broadcast-grid {
   display: grid;
-  grid-template-columns: var(--timing-track, clamp(200px, 16%, 240px)) minmax(360px, 1fr) var(--history-track, clamp(280px, 22%, 340px));
+  grid-template-columns: var(--timing-track, 200px) minmax(480px, 1fr) var(--history-track, 280px);
   grid-template-areas: "timing board history";
   gap: 26px;
   align-items: start;
@@ -911,11 +914,13 @@ p {
 .board-column {
   grid-area:board;
   min-width: 0;
-  width:100%;
-  max-width:min(720px, var(--live-board-limit, 480px));
+  width:var(--live-board-size);
+  --tile-label-small:calc(var(--live-board-size) / 12);
+  --tile-label-medium:calc(var(--live-board-size) / 15);
+  --tile-label-large:calc(var(--live-board-size) / 20);
   justify-self:center;
 }
-.timing-column { grid-area:timing;max-height:var(--live-grid-limit,690px);overflow:auto; }
+.timing-column { grid-area:timing;max-height:660px;overflow:auto; }
 .history-column { grid-area:history; }
 .timing-collapsed { --timing-track:38px; }
 .history-collapsed { --history-track:38px; }
@@ -924,6 +929,7 @@ p {
 .history-column .panel-heading .collapse-panel { margin-left:0; }
 .timing-column.side-collapsed,.history-column.side-collapsed { padding:0;border:0;overflow:visible; }
 .board-column :deep(.board-stage) { max-width:100%; }
+.board-column :deep(.board-stage) { height:var(--live-board-size); }
 .score-strip {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1043,7 +1049,7 @@ small {
   font-variant-numeric: tabular-nums;
 }
 .history-column {
-  max-height: min(690px, var(--live-grid-limit, 690px));
+  max-height: 660px;
   overflow: auto;
 }
 .history-pagination { display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:5px;padding:12px 0; }
