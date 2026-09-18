@@ -7,8 +7,9 @@ export const AUXILIARY_ENTRIES = {
   quota: { id: 'quota', title: 'billing.quotaGuide.open', icon: 'Coins', group: 'info', dialog: 'quota' },
   help: { id: 'help', title: 'tabs.help', icon: 'CircleHelp', group: 'info', tab: TAB_IDS.HELP },
   more: { id: 'more', title: 'menu.more', icon: 'Ellipsis', tab: TAB_IDS.MORE },
+  github: { id: 'github', title: 'menu.githubNote', icon: 'Github', iconOnly: true, href: 'https://github.com/game-difficulty/2048EndgameTablebase' },
 };
-export const HOME_AUXILIARY_ENTRIES = ['announcements', 'replay', 'more'].map(id => AUXILIARY_ENTRIES[id]);
+export const HOME_AUXILIARY_ENTRIES = ['announcements', 'replay', 'more', 'github'].map(id => AUXILIARY_ENTRIES[id]);
 export const AUXILIARY_GROUPS = [
   { id: 'watch', title: 'menu.watchAndReplay' },
   { id: 'info', title: 'menu.siteInformation' },

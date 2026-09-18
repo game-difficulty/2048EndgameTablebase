@@ -11,7 +11,7 @@ test('external entries stay outside the internal tab lifecycle', () => {
   assert.equal(AUXILIARY_ENTRIES.replay.tab, undefined);
 });
 test('homepage and directory share the same entry definitions', () => {
-  assert.deepEqual(HOME_AUXILIARY_ENTRIES.map(e => e.id), ['announcements', 'replay', 'more']);
+  assert.deepEqual(HOME_AUXILIARY_ENTRIES.map(e => e.id), ['announcements', 'replay', 'more', 'github']);
   assert.deepEqual(AUXILIARY_GROUPS.flatMap(g => g.entries.map(e => e.id)), ['live', 'replay', 'announcements', 'quota', 'help']);
   for (const entry of Object.values(AUXILIARY_ENTRIES)) {
     assert.equal([entry.href, entry.tab, entry.dialog].filter(Boolean).length, 1);
