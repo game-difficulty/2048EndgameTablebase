@@ -95,6 +95,7 @@
             /><button @click="copyHex" :title="t('复制盘面', 'Copy board')">
               <Copy :size="17" />
             </button>
+            <LivePipProbe v-if="pipExperiment" :run="run" :state="streamState" :lang="lang" @active="setPipActive" />
           </div>
         </div>
         <aside class="timing-column" :class="{ 'side-collapsed': timingCollapsed }">
@@ -345,6 +346,10 @@ import { mergeLiveChat } from './giftArtwork.js';
 import { useI18n } from 'vue-i18n';
 import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
+import LivePipProbe from './LivePipProbe.vue';
+import { canConnectLive, backgroundExpired } from './pipPolicy.js';
+const pipExperiment = new URLSearchParams(location.search).get('pip') === '1';
+const pipActive = ref(false);
 
 useLiveLayoutScale();
 const stageColumn = ref(null);
@@ -516,7 +521,7 @@ function installSnapshot(data) {
   );
 }
 async function receive(event) {
-  if (document.hidden && backgroundDeadline && Date.now() >= backgroundDeadline) {
+  if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) {
     socket?.close();
     return;
   }
@@ -571,7 +576,7 @@ async function appendChat(data) {
     }
 }
 function connect() {
-  if (stopped || document.hidden) return;
+  if (stopped || !canConnectLive(document.hidden, pipActive.value)) return;
   if (socket && socket.readyState < 2) return;
   clearTimeout(retry);
   clearInterval(ping);
@@ -586,7 +591,7 @@ function connect() {
     connected.value = true;
     failures = 0;
     ping = setInterval(() => {
-      if (document.hidden && backgroundDeadline && Date.now() >= backgroundDeadline) {
+      if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) {
         ws.close();
         return;
       }
@@ -601,7 +606,7 @@ function connect() {
     connected.value = false;
     synchronized.value = false;
     clearInterval(ping);
-    if (!stopped && !document.hidden)
+    if (!stopped && canConnectLive(document.hidden, pipActive.value))
       retry = setTimeout(
         connect,
         Math.min(15000, 1000 * 2 ** failures++) + Math.random() * 300,
@@ -711,13 +716,21 @@ async function refreshIdentity() {
     if (previousUserId !== user.value?.id) socket?.close();
   } catch {}
 }
+function setPipActive(value) {
+  if (stopped) return;
+  pipActive.value = value;
+  clearTimeout(backgroundTimer);
+  if (value) { backgroundDeadline = 0; connect(); }
+  else if (document.hidden) visibility();
+}
 async function visibility() {
   clearTimeout(retry);
   clearTimeout(backgroundTimer);
   if (document.hidden) {
+    if (pipActive.value) { backgroundDeadline = 0; connect(); return; }
     backgroundDeadline = Date.now() + 180000;
     backgroundTimer = setTimeout(() => {
-      if (document.hidden) socket?.close();
+      if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) socket?.close();
     }, 180000);
   }
   else {
