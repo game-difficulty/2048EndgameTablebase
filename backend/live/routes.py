@@ -76,6 +76,7 @@ class LiveHub:
         self.chat = deque(sorted(history, key=lambda item: item['at'])[-100:], maxlen=100)
         self.store = LiveStore()
         self.control = await asyncio.to_thread(self.store.control)
+        await asyncio.to_thread(self.store.refresh_stats_snapshots)
         summary = await asyncio.to_thread(self.store.summary)
         self.like_total = summary['likes']
         self.summary_week = summary['week']['start']
