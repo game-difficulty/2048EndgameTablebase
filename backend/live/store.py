@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
@@ -18,6 +19,9 @@ def week_bounds(now=None):
 class LiveStore:
     def __init__(self, path=None):
         self.path = Path(path or os.environ.get('LIVE_DB_PATH', 'data/live.sqlite3'))
+        self._summary_cache = {}
+        self._summary_cache_revision = 0
+        self._summary_cache_lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript('''
@@ -67,6 +71,11 @@ class LiveStore:
         with self.connect() as db:
             db.execute('INSERT OR REPLACE INTO live_state VALUES (1, ?)', (json.dumps(run.checkpoint()),))
 
+    def _invalidate_summary_cache(self):
+        with self._summary_cache_lock:
+            self._summary_cache_revision += 1
+            self._summary_cache.clear()
+
     def finish(self, run):
         day = datetime.fromtimestamp(run.ended, timezone(timedelta(hours=8))).date().isoformat()
         maximum = max(run.board)
@@ -99,6 +108,8 @@ class LiveStore:
             with self.connect() as db:
                 db.execute('INSERT OR REPLACE INTO live_run_stages VALUES (?,?,?,?)',
                            (run_id, VERSION, passed, failed))
+        if rows:
+            self._invalidate_summary_cache()
         return len(rows)
 
     def history(self, page=1):
@@ -116,6 +127,21 @@ class LiveStore:
     def summary(self, stats_range='all'):
         if stats_range not in {'all', '24h', 'recent100'}:
             stats_range = 'all'
+        now = time.monotonic()
+        ttl = 3.0 if stats_range == '24h' else 15.0
+        with self._summary_cache_lock:
+            revision = self._summary_cache_revision
+            cached = self._summary_cache.get(stats_range)
+            if (cached and cached[0] == revision
+                    and now - cached[1] < ttl):
+                return cached[2]
+        result = self._summary_uncached(stats_range)
+        with self._summary_cache_lock:
+            if revision == self._summary_cache_revision:
+                self._summary_cache[stats_range] = (revision, now, result)
+        return result
+
+    def _summary_uncached(self, stats_range):
         day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
         start, end = week_bounds()
         with self.connect() as db:

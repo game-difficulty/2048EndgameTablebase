@@ -98,7 +98,18 @@ class AllTimeStoreTests(unittest.TestCase):
         self.assertEqual(stats['stage32_rate'], .9)
         with self.store.connect() as db:
             db.execute("DELETE FROM live_runs WHERE id='a'")
+        self.store._invalidate_summary_cache()
         self.assertEqual(self.store.summary()['all_time']['stage32_rate'],1)
+
+    def test_summary_cache_reuses_unchanged_range(self):
+        with patch.object(self.store, '_summary_uncached', wraps=self.store._summary_uncached) as uncached:
+            first = self.store.summary('all')
+            second = self.store.summary('all')
+            self.assertIs(first, second)
+            self.assertEqual(uncached.call_count, 1)
+            self.store._invalidate_summary_cache()
+            self.store.summary('all')
+            self.assertEqual(uncached.call_count, 2)
 
     def test_invalid_replay_is_unknown_and_non_dead_end_has_no_failure(self):
         self.assertEqual(replay_stages(LiveRun().replay()), (0,0))
