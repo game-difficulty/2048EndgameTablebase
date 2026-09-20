@@ -94,6 +94,7 @@ class LiveHub:
             changed = True
             await asyncio.sleep(0)
         if changed:
+            await asyncio.to_thread(self.store.refresh_stats_snapshots)
             summary = await asyncio.to_thread(self.store.summary)
             await self.broadcast(dict(type='summary', **summary))
 
@@ -290,9 +291,14 @@ class LiveHub:
             recent.extend([now] * cost)
 
     async def maintenance(self):
+        last_stats_refresh = 0
         while True:
             await asyncio.sleep(5)
+            if time.monotonic() - last_stats_refresh >= 60:
+                await asyncio.to_thread(self.store.refresh_stats_snapshots, ('24h',))
+                last_stats_refresh = time.monotonic()
             if week_bounds()[0] != self.summary_week:
+                await asyncio.to_thread(self.store.refresh_stats_snapshots, ('24h', 'recent100', 'all'))
                 summary = await asyncio.to_thread(self.store.summary)
                 self.summary_week = summary['week']['start']
                 self.broadcast({**summary, 'type':'summary', 'likes':self.like_total})

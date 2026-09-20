@@ -1,7 +1,6 @@
 import json
 import os
 import sqlite3
-import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
@@ -19,9 +18,6 @@ def week_bounds(now=None):
 class LiveStore:
     def __init__(self, path=None):
         self.path = Path(path or os.environ.get('LIVE_DB_PATH', 'data/live.sqlite3'))
-        self._summary_cache = {}
-        self._summary_cache_revision = 0
-        self._summary_cache_lock = threading.RLock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript('''
@@ -43,6 +39,9 @@ class LiveStore:
                 CREATE TABLE IF NOT EXISTS live_run_stages (
                     run_id TEXT PRIMARY KEY, version INTEGER NOT NULL,
                     passed INTEGER, failed INTEGER);
+                CREATE TABLE IF NOT EXISTS live_stats_snapshots (
+                    stats_range TEXT PRIMARY KEY, version INTEGER NOT NULL,
+                    generated_at REAL NOT NULL, payload TEXT NOT NULL);
             ''')
 
     @contextmanager
@@ -71,11 +70,6 @@ class LiveStore:
         with self.connect() as db:
             db.execute('INSERT OR REPLACE INTO live_state VALUES (1, ?)', (json.dumps(run.checkpoint()),))
 
-    def _invalidate_summary_cache(self):
-        with self._summary_cache_lock:
-            self._summary_cache_revision += 1
-            self._summary_cache.clear()
-
     def finish(self, run):
         day = datetime.fromtimestamp(run.ended, timezone(timedelta(hours=8))).date().isoformat()
         maximum = max(run.board)
@@ -92,6 +86,7 @@ class LiveStore:
                     (day, run.score, int(maximum >= 32768), int(maximum >= 65536)))
                 db.execute('UPDATE live_totals SET best=max(best,?) WHERE id=1', (run.score,))
         self.backfill_stats(run_id=run.id)
+        self.refresh_stats_snapshots()
 
     def backfill_stats(self, run_id=None, limit=1000000):
         with self.connect() as db:
@@ -108,9 +103,24 @@ class LiveStore:
             with self.connect() as db:
                 db.execute('INSERT OR REPLACE INTO live_run_stages VALUES (?,?,?,?)',
                            (run_id, VERSION, passed, failed))
-        if rows:
-            self._invalidate_summary_cache()
         return len(rows)
+
+    def refresh_stats_snapshots(self, stats_ranges=('24h', 'recent100', 'all')):
+        """Materialize all public statistic ranges outside request handling."""
+        snapshots = [
+            (stats_range, time.time(), json.dumps(self._summary_uncached(stats_range),
+                                                   separators=(',', ':')))
+            for stats_range in stats_ranges
+        ]
+        with self.connect() as db:
+            db.executemany('''INSERT INTO live_stats_snapshots
+                (stats_range,version,generated_at,payload) VALUES (?,?,?,?)
+                ON CONFLICT(stats_range) DO UPDATE SET
+                  version=excluded.version, generated_at=excluded.generated_at,
+                  payload=excluded.payload''',
+                [(stats_range, VERSION, generated_at, payload)
+                 for stats_range, generated_at, payload in snapshots])
+        return len(snapshots)
 
     def history(self, page=1):
         with self.connect() as db:
@@ -127,19 +137,29 @@ class LiveStore:
     def summary(self, stats_range='all'):
         if stats_range not in {'all', '24h', 'recent100'}:
             stats_range = 'all'
-        now = time.monotonic()
-        ttl = 3.0 if stats_range == '24h' else 15.0
-        with self._summary_cache_lock:
-            revision = self._summary_cache_revision
-            cached = self._summary_cache.get(stats_range)
-            if (cached and cached[0] == revision
-                    and now - cached[1] < ttl):
-                return cached[2]
+        with self.connect() as db:
+            row = db.execute('''SELECT payload FROM live_stats_snapshots
+                WHERE stats_range=? AND version=?''', (stats_range, VERSION)).fetchone()
+        if row:
+            try:
+                return json.loads(row[0])
+            except (TypeError, ValueError):
+                pass
+        # Initialization and recovery happen outside request handling in normal
+        # operation; retain this fallback for a new or damaged database.
         result = self._summary_uncached(stats_range)
-        with self._summary_cache_lock:
-            if revision == self._summary_cache_revision:
-                self._summary_cache[stats_range] = (revision, now, result)
+        self._write_stats_snapshot(stats_range, result)
         return result
+
+    def _write_stats_snapshot(self, stats_range, result):
+        with self.connect() as db:
+            db.execute('''INSERT INTO live_stats_snapshots
+                (stats_range,version,generated_at,payload) VALUES (?,?,?,?)
+                ON CONFLICT(stats_range) DO UPDATE SET
+                  version=excluded.version, generated_at=excluded.generated_at,
+                  payload=excluded.payload''',
+                (stats_range, VERSION, time.time(),
+                 json.dumps(result, separators=(',', ':'))))
 
     def _summary_uncached(self, stats_range):
         day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
