@@ -169,7 +169,18 @@
       <RedEnvelopes ref="redEnvelopes" :state="redState" :user="user" :connected="connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()" />
       </div>
       <section class="history-stats-strip">
-        <label class="stats-range"><span>{{ t('统计范围', 'STATISTICS') }}</span><select v-model="statsRange" @change="refreshSummary"><option value="24h">{{ t('24小时内', 'Last 24 hours') }}</option><option value="recent100">{{ t('最近100局', 'Last 100 runs') }}</option><option value="all">{{ t('历史以来', 'All time') }}</option></select></label>
+        <label class="stats-range">
+          <span>{{ t('统计范围', 'STATISTICS') }}</span>
+          <UiSelect
+            v-model="statsRange"
+            :options="statsRangeOptions"
+            :aria-label="t('选择统计范围', 'Choose statistics range')"
+            trigger-class="stats-range-select"
+            menu-class="stats-range-menu"
+            option-class="stats-range-option"
+            @change="refreshSummary"
+          />
+        </label>
         <div>
           <small>{{ t("历史完成", "ALL-TIME RUNS") }}</small
           ><strong>{{ format(allTime.games) }}</strong>
@@ -326,6 +337,7 @@ import {
   X,
 } from "@lucide/vue";
 import BaseBoard from "../components/BaseBoard.vue";
+import UiSelect from "../components/UiSelect.vue";
 import NativeLandscapeButton from '../components/NativeLandscapeButton.vue';
 import LiveIdentity from './LiveIdentity.vue';
 import LiveAccountMenu from './LiveAccountMenu.vue';
@@ -374,6 +386,11 @@ const online = ref(false),
   allTime = ref({});
 const synchronized = ref(false), seenSnapshot = ref(false), paused = ref(false);
 const statsRange = ref('all');
+const statsRangeOptions = computed(() => [
+  { value: '24h', label: t('24小时内', 'Last 24 hours') },
+  { value: 'recent100', label: t('最近100局', 'Last 100 runs') },
+  { value: 'all', label: t('历史以来', 'All time') },
+]);
 const streamState = computed(() => liveConnectionState({ connected:connected.value, synchronized:synchronized.value, seenSnapshot:seenSnapshot.value, online:online.value, paused:paused.value }));
 const likes = reactive(new LikeFeedback()), likeReaction = ref(null);
 let likeFlushTimer, likeNoticeAt = 0, actorPromise;
@@ -967,8 +984,12 @@ small {
   display: block;
   margin-bottom: 6px;
 }
-.stats-range { grid-column:1 / -1;display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:2px;color:var(--text-secondary);font-size:12px; }
-.stats-range select { min-height:30px;padding:4px 8px;border:1px solid var(--border-main);border-radius:5px;background:var(--bg-input);color:var(--text-main); }
+.stats-range { grid-column:1 / -1;display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-bottom:2px;color:var(--text-secondary);font-size:15px;font-weight:600;line-height:1.3; }
+.stats-range > :deep(.ui-popover-select) { min-width:142px; }
+.stats-range :deep(.stats-range-select) { min-height:38px;padding:7px 10px;border:1px solid var(--border-main);border-radius:8px;background:var(--bg-input);color:var(--text-main);font-size:15px;font-weight:600; }
+.stats-range :deep(.stats-range-select:hover) { border-color:color-mix(in srgb,var(--accent) 55%,var(--border-main)); }
+.stats-range :deep(.stats-range-menu) { border-radius:10px; }
+.stats-range :deep(.stats-range-option) { min-height:36px;border-radius:7px;font-size:15px; }
 .score-strip strong {
   font-size: 28px;
   font-variant-numeric: tabular-nums;
