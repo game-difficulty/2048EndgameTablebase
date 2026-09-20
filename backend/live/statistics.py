@@ -6,8 +6,10 @@ from backend.replay_2048next import (
     decode_2048next_replay, MoveRecord, EndRecord, ExtensionRecord,
 )
 
-VERSION = 1
-TARGETS = (32768, 16384, 8192, 4096, 2048, 1024)
+# A 32k stage ends when the remaining tail reaches final 2k.  The same
+# five-merge sequence is reused after entering the 65k phase.
+VERSION = 2
+TARGETS = (32768, 16384, 8192, 4096, 2048)
 
 
 class StageCounter:

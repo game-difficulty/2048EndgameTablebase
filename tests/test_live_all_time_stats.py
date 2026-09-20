@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from backend.gamer_ranked.rules import legal_moves
 from backend.live.protocol import LiveRun
-from backend.live.statistics import StageCounter, TARGETS, replay_stages
+from backend.live.statistics import VERSION, StageCounter, TARGETS, replay_stages
 from backend.live.store import LiveStore
 
 
@@ -25,11 +25,11 @@ class StageCounterTests(unittest.TestCase):
         c = StageCounter()
         for target in TARGETS:
             self.merge(c, target)
-        self.assertEqual(c.result(True), (6, 0))
+        self.assertEqual(c.result(True), (5, 0))
         self.merge(c, 65536)
-        self.assertEqual(c.result(True), (6, 1))
+        self.assertEqual(c.result(True), (5, 1))
         self.merge(c, 32768, held=(65536,))
-        self.assertEqual(c.result(True), (7, 1))
+        self.assertEqual(c.result(True), (6, 1))
 
     def test_early_large_merge_cancels_old_stage_and_larger_cycles_work(self):
         c = StageCounter()
@@ -89,7 +89,7 @@ class AllTimeStoreTests(unittest.TestCase):
         with self.store.connect() as db:
             for key,score,maximum,passed,failed in [('a',100,32768,3,1),('b',300,65536,6,0)]:
                 db.execute('INSERT INTO live_runs VALUES (?,?,?,?,?,?,?)', (key,score,maximum,0,1,'2000-01-01','invalid'))
-                db.execute('INSERT INTO live_run_stages VALUES (?,1,?,?)', (key,passed,failed))
+                db.execute('INSERT INTO live_run_stages VALUES (?,?,?,?)', (key,VERSION,passed,failed))
             db.execute("INSERT INTO live_days VALUES ('1999-01-01',99,999999,99,99)")
             db.execute("INSERT INTO live_scores VALUES ('deleted','1999-01-01',999999)")
         stats = self.store.summary()['all_time']
