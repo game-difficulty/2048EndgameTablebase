@@ -437,7 +437,7 @@ class PermanentBattleRoomTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reset["max_steps"], 128)
         self.assertEqual(reset["step_timeout_seconds"], 90)
         self.assertEqual(reset["settings"]["score_step_limit"], 128)
-        self.assertEqual(reset["settings"]["ranking_min_steps"], 128)
+        self.assertEqual(reset["settings"]["ranking_min_steps"], 96)
         with auth_db() as db:
             latest = db.execute(
                 "SELECT * FROM battle_rounds WHERE round_id = ?", (round_id,)
@@ -445,7 +445,7 @@ class PermanentBattleRoomTests(unittest.IsolatedAsyncioTestCase):
         mode_state = json.loads(latest["mode_state_json"])
         self.assertEqual(mode_state["initial_board"], definition.initial_board)
         self.assertEqual(mode_state["score_step_limit"], 128)
-        self.assertEqual(mode_state["ranking_min_steps"], 128)
+        self.assertEqual(mode_state["ranking_min_steps"], 96)
         self.assertNotEqual(latest["route_seed"], "11" * 32)
 
 

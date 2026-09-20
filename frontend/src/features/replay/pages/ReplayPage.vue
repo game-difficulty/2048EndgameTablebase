@@ -53,7 +53,7 @@
       </section>
 
       <section class="tool-page-side-column flex min-w-0 flex-col gap-4">
-        <div class="tool-action-grid-3 grid grid-cols-3 gap-2">
+        <div class="replay-transport-controls tool-action-grid-3 grid grid-cols-3 gap-2">
           <button class="action-btn" :disabled="!loaded" @click="toggleDemo">{{ demoActive ? $t('replay.actions.stop') : $t('replay.actions.autoDemo') }}</button>
           <button class="action-btn" :disabled="!loaded" @click="stepReplay(1)">{{ $t('replay.actions.step') }}</button>
           <button class="action-btn" :disabled="currentStep <= 0" @click="stepReplay(-1)">{{ $t('replay.actions.undo') }}</button>
@@ -309,5 +309,19 @@ const {
 .replay-board-shell {
   width: 100%;
   max-width: none;
+}
+
+@media (max-width: 700px) and (orientation: portrait) {
+  .replay-transport-controls {
+    gap: 10px;
+  }
+
+  .replay-transport-controls .action-btn {
+    min-height: 52px;
+    padding: 12px 8px;
+    font-size: var(--font-ui-sm);
+    line-height: 1.25;
+    touch-action: manipulation;
+  }
 }
 </style>

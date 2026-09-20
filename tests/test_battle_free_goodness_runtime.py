@@ -123,7 +123,7 @@ class FreeGoodnessRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "move_risk_min_absolute_increase": 0.002,
                 },
             })
-            self.assertEqual(defaults["ranking_min_steps"], 64)
+            self.assertEqual(defaults["ranking_min_steps"], 38)
             self.assertEqual(selected["ranking_min_steps"], 32)
             self.assertNotIn("move_risk_min_absolute_increase", defaults)
             self.assertNotIn("move_risk_min_absolute_increase", public)

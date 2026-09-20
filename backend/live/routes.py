@@ -64,6 +64,14 @@ class LiveHub:
         self.gift_history.extend(await asyncio.to_thread(gifts.recent_events))
         for event in self.gift_history:
             self.append_gift_chat(event)
+        entrances = {}
+        for item in self.chat:
+            if item.get('type') == 'entrance':
+                entrances[item.get('name')] = item
+        self.chat = deque(
+            [item for item in self.chat if item.get('type') != 'entrance'] + list(entrances.values()),
+            maxlen=100,
+        )
         history = [*self.chat, *await asyncio.to_thread(red_envelopes.events)]
         self.chat = deque(sorted(history, key=lambda item: item['at'])[-100:], maxlen=100)
         self.store = LiveStore()
@@ -125,6 +133,16 @@ class LiveHub:
                     self.chat[index] = message
                 return
         self.chat.append(message)
+
+    def append_entrance_chat(self, event):
+        """Keep only the newest entrance notice for each displayed account."""
+        actor_name = event.get('name')
+        self.chat = deque(
+            (item for item in self.chat
+             if not (item.get('type') == 'entrance' and item.get('name') == actor_name)),
+            maxlen=100,
+        )
+        self.chat.append(event)
 
     async def drain_gifts(self):
         async with self.gift_lock:
@@ -309,8 +327,8 @@ def same_origin(headers):
 
 
 @router.get('/state')
-async def state():
-    return {**hub.snapshot(), **await asyncio.to_thread(hub.store.summary), 'likes': hub.like_total, 'chat': list(hub.chat),
+async def state(stats_range: str = Query('all')):
+    return {**hub.snapshot(), **await asyncio.to_thread(hub.store.summary, stats_range), 'likes': hub.like_total, 'chat': list(hub.chat),
             'music_url': os.environ.get('LIVE_MUSIC_URL', ''), 'gifts': list(hub.gift_history)}
 
 
@@ -533,7 +551,7 @@ async def watch(ws: WebSocket):
             with contextlib.suppress(Exception):
                 event = await asyncio.to_thread(gifts.entrance, user)
                 if event:
-                    hub.chat.append(dict(type='entrance', id=event['id'], at=event['at'], **event['actor']))
+                    hub.append_entrance_chat(dict(type='entrance', id=event['id'], at=event['at'], **event['actor']))
                     hub.broadcast(event)
     actor = ActorRef.from_user(user) if user else None
     if not actor:

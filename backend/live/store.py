@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -112,7 +113,9 @@ class LiveStore:
                 ((page - 1) * 10,))]
         return dict(history=rows, total=total, page=page, pages=pages)
 
-    def summary(self):
+    def summary(self, stats_range='all'):
+        if stats_range not in {'all', '24h', 'recent100'}:
+            stats_range = 'all'
         day = datetime.now(timezone(timedelta(hours=8))).date().isoformat()
         start, end = week_bounds()
         with self.connect() as db:
@@ -126,16 +129,23 @@ class LiveStore:
                 coalesce(sum(score_sum),0) AS score_sum, coalesce(sum(tile32),0) AS tile32,
                 coalesce(sum(tile64),0) AS tile64 FROM live_days WHERE day>=? AND day<?''', (start,end)).fetchone())
             scores = [row[0] for row in db.execute('SELECT score FROM live_scores WHERE day>=? AND day<?', (start,end))]
-            all_scores = [row[0] for row in db.execute('SELECT score FROM live_runs')]
-            all_time = dict(db.execute('''SELECT count(*) AS games,
+            if stats_range == '24h':
+                run_filter, run_args = 'r.ended >= ?', (time.time() - 86400,)
+            elif stats_range == 'recent100':
+                run_filter, run_args = 'r.id IN (SELECT id FROM live_runs ORDER BY ended DESC,id DESC LIMIT 100)', ()
+            else:
+                run_filter, run_args = '1=1', ()
+            all_scores = [row[0] for row in db.execute(
+                f'SELECT r.score FROM live_runs r WHERE {run_filter}', run_args)]
+            all_time = dict(db.execute(f'''SELECT count(*) AS games,
                 coalesce(sum(score),0) AS score_sum,
-                coalesce(sum(max_tile>=32768),0) AS tile32,
-                coalesce(sum(max_tile>=65536),0) AS tile64 FROM live_runs''').fetchone())
-            coverage = dict(db.execute('''SELECT coalesce(sum(s.passed),0) AS passed,
+                coalesce(sum(r.max_tile>=32768),0) AS tile32,
+                coalesce(sum(r.max_tile>=65536),0) AS tile64 FROM live_runs r WHERE {run_filter}''', run_args).fetchone())
+            coverage = dict(db.execute(f'''SELECT coalesce(sum(s.passed),0) AS passed,
                 coalesce(sum(s.failed),0) AS failed, count(s.passed) AS analyzed_runs,
                 count(*) AS processed_runs
                 FROM live_runs r JOIN live_run_stages s ON s.run_id=r.id
-                WHERE s.version=?''', (VERSION,)).fetchone())
+                WHERE s.version=? AND {run_filter}''', (VERSION, *run_args)).fetchone())
         attempts = coverage['passed'] + coverage['failed']
         pending = all_time['games'] - coverage.pop('processed_runs')
         all_time.update(median_score=median(all_scores) if all_scores else None,
@@ -144,6 +154,7 @@ class LiveStore:
         weekly.update(start=start, end=end, median_score=median(scores) if scores and len(scores)==weekly['games'] else None)
         return dict(history=history, history_total=history_total, best=best, likes=likes,
                     week=weekly, all_time=all_time,
+                    stats_range=stats_range,
                     today=dict(daily) if daily else dict(day=day, games=0, score_sum=0, tile32=0, tile64=0))
 
     def replay(self, run_id):

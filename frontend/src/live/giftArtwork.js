@@ -24,6 +24,11 @@ export function mergeLiveChat(history, incoming) {
   const messages = new Map(history.map(item => [item.id, item]));
   for (const event of incoming) {
     const item = event.type === 'gift' ? giftChat(event) : event;
+    if (item.type === 'entrance') {
+      for (const [key, previous] of messages) {
+        if (previous.type === 'entrance' && previous.name === item.name) messages.delete(key);
+      }
+    }
     const previous = messages.get(item.id);
     if (previous && item.type === 'gift') {
       if (item.combo_count > previous.combo_count) messages.set(item.id, { ...item, at: previous.at });

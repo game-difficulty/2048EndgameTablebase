@@ -169,6 +169,7 @@
       <RedEnvelopes ref="redEnvelopes" :state="redState" :user="user" :connected="connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()" />
       </div>
       <section class="history-stats-strip">
+        <label class="stats-range"><span>{{ t('统计范围', 'STATISTICS') }}</span><select v-model="statsRange" @change="refreshSummary"><option value="24h">{{ t('24小时内', 'Last 24 hours') }}</option><option value="recent100">{{ t('最近100局', 'Last 100 runs') }}</option><option value="all">{{ t('历史以来', 'All time') }}</option></select></label>
         <div>
           <small>{{ t("历史完成", "ALL-TIME RUNS") }}</small
           ><strong>{{ format(allTime.games) }}</strong>
@@ -372,6 +373,7 @@ const online = ref(false),
   history = ref([]),
   allTime = ref({});
 const synchronized = ref(false), seenSnapshot = ref(false), paused = ref(false);
+const statsRange = ref('all');
 const streamState = computed(() => liveConnectionState({ connected:connected.value, synchronized:synchronized.value, seenSnapshot:seenSnapshot.value, online:online.value, paused:paused.value }));
 const likes = reactive(new LikeFeedback()), likeReaction = ref(null);
 let likeFlushTimer, likeNoticeAt = 0, actorPromise;
@@ -484,11 +486,12 @@ async function loadHistory(page) {
 }
 async function refreshSummary() {
   try {
-    const data = await api("/api/live/state");
+    const data = await api(`/api/live/state?stats_range=${encodeURIComponent(statsRange.value)}`);
     best.value = data.best;
     likes.update(data.likes);
     updateHistorySummary(data);
     allTime.value = data.all_time || {};
+    statsRange.value = data.stats_range || statsRange.value;
     const firstLoad = !chatHistoryLoaded;
     const el = chatList.value;
     const followLatest = !chatHistoryLoaded || !el || el.scrollHeight - el.scrollTop - el.clientHeight < 50;
@@ -964,6 +967,8 @@ small {
   display: block;
   margin-bottom: 6px;
 }
+.stats-range { grid-column:1 / -1;display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:2px;color:var(--text-secondary);font-size:12px; }
+.stats-range select { min-height:30px;padding:4px 8px;border:1px solid var(--border-main);border-radius:5px;background:var(--bg-input);color:var(--text-main); }
 .score-strip strong {
   font-size: 28px;
   font-variant-numeric: tabular-nums;

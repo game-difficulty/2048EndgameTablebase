@@ -5,6 +5,7 @@ import { createLocalStorageStore } from '../services/storage/localStorageStore';
 import { createWsClient } from '../services/ws/createWsClient';
 import { normalizeBCFamilyModulus } from '../utils/bcFamilyModulus';
 import { applyTileColors } from '../utils/tileColors';
+import { writeSharedTilePalette } from '../utils/sharedTilePalette';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
 const INITIAL_DARK_MODE = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -207,6 +208,7 @@ const applyGlobalConfig = () => {
   const palette = getResolvedPalette();
   if (palette.length > 0) {
     applyTileColors(palette);
+    writeSharedTilePalette(palette);
   }
 
   const fontScale = Number(config.value.font_size_factor) || DEFAULT_CONFIG.font_size_factor;

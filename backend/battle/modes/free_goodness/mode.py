@@ -14,6 +14,11 @@ from .rules import (
 )
 
 
+def default_ranking_min_steps(target: int) -> int:
+    """Leave headroom for random 4-spawns before ranking is enabled."""
+    return max(1, int(int(target) // 2.2) - 20)
+
+
 class FreeGoodnessBattleMode(BattleMode):
     key = "free_goodness"
     version = 2
@@ -43,7 +48,7 @@ class FreeGoodnessBattleMode(BattleMode):
         score_step_limit = target // 2
         raw_ranking_min_steps = payload.get("ranking_min_steps")
         if raw_ranking_min_steps in (None, ""):
-            ranking_min_steps = score_step_limit
+            ranking_min_steps = default_ranking_min_steps(target)
         else:
             if isinstance(raw_ranking_min_steps, bool):
                 raise ValueError("invalid_ranking_min_steps")

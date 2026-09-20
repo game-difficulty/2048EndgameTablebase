@@ -207,7 +207,7 @@ def entrance(user):
             return None
         db.execute('INSERT OR IGNORE INTO live_gift_preferences(user_id) VALUES(?)', (user['id'],))
         row = db.execute('SELECT entrance_enabled,last_entrance_at FROM live_gift_preferences WHERE user_id=?', (user['id'],)).fetchone()
-        if not row['entrance_enabled'] or now-row['last_entrance_at'] < 1800:
+        if not row['entrance_enabled'] or now-row['last_entrance_at'] < 3600:
             return None
         db.execute('UPDATE live_gift_preferences SET last_entrance_at=? WHERE user_id=?', (now,user['id']))
     return dict(type='entrance', id=str(uuid.uuid4()), at=now, actor=actor)

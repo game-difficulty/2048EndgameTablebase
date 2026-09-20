@@ -15,6 +15,7 @@ from ..core.errors import BattleServiceError
 from ..core.hosting import is_permanent_room, is_room_host
 from ..core.registry import get_battle_mode
 from .definitions import HostPolicy, PermanentRoomDefinition, load_definitions
+from ..modes.free_goodness.mode import default_ranking_min_steps
 
 
 logger = logging.getLogger(__name__)
@@ -114,11 +115,11 @@ def register_definition(
         }
     )
     if str(definition.mode_key) == "free_goodness":
-        default_steps = max(1, int(room.get("target") or 0) // 2)
+        score_step_limit = max(1, int(room.get("target") or 0) // 2)
         settings.update(
             {
-                "score_step_limit": default_steps,
-                "ranking_min_steps": default_steps,
+                "score_step_limit": score_step_limit,
+                "ranking_min_steps": default_ranking_min_steps(int(room.get("target") or 0)),
             }
         )
     defaults = {
