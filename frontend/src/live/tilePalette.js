@@ -7,23 +7,20 @@ const backgrounds = {
 };
 
 let userPalette = null;
-const luminance = color => {
-  const hex = String(color || '').replace('#', '');
-  if (hex.length !== 6) return 0;
-  const rgb = [0, 2, 4].map(offset => parseInt(hex.slice(offset, offset + 2), 16));
-  return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
-};
 
 export function setLiveTilePalette(colors) {
-  userPalette = Array.isArray(colors) && colors.length > 0 ? colors.slice(0, 36) : null;
+  userPalette = Array.isArray(colors) && colors.length > 0 ? colors.slice(0, 36).map(item =>
+    typeof item === 'string' ? { background: item, color: null } : item
+  ) : null;
 }
 
 export function liveTileColors(value) {
   const index = Math.log2(value) - 1;
-  const background = userPalette?.[index] || backgrounds[value] || '#000000';
+  const custom = userPalette?.[index];
+  const background = custom?.background || backgrounds[value] || '#000000';
   return {
     background,
-    color: luminance(background) > 180 ? '#776e65' : '#f9f6f2',
+    color: custom?.color || (value <= 4 ? '#776e65' : '#f9f6f2'),
   };
 }
 

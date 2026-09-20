@@ -4,7 +4,7 @@ import i18n from './i18n';
 import { createLocalStorageStore } from '../services/storage/localStorageStore';
 import { createWsClient } from '../services/ws/createWsClient';
 import { normalizeBCFamilyModulus } from '../utils/bcFamilyModulus';
-import { applyTileColors } from '../utils/tileColors';
+import { applyTileColors, resolveTileColors } from '../utils/tileColors';
 import { writeSharedTilePalette } from '../utils/sharedTilePalette';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
@@ -208,7 +208,7 @@ const applyGlobalConfig = () => {
   const palette = getResolvedPalette();
   if (palette.length > 0) {
     applyTileColors(palette);
-    writeSharedTilePalette(palette);
+    writeSharedTilePalette(resolveTileColors(palette));
   }
 
   const fontScale = Number(config.value.font_size_factor) || DEFAULT_CONFIG.font_size_factor;

@@ -27,16 +27,19 @@ const fillMidFalses = (flags) => {
   return result;
 };
 
-export const applyTileColors = (colors) => {
-  if (!Array.isArray(colors) || colors.length === 0) return;
-
+export const resolveTileColors = (colors) => {
+  if (!Array.isArray(colors) || colors.length === 0) return [];
   const fontFlags = fillMidFalses(colors.map(color => isDarkerThan(color)));
-  colors.forEach((color, index) => {
+  return colors.map((color, index) => ({
+    background: color,
+    color: fontFlags[index] ? DARK_TEXT_COLOR : LIGHT_TEXT_COLOR,
+  }));
+};
+
+export const applyTileColors = (colors) => {
+  resolveTileColors(colors).forEach(({ background, color }, index) => {
     const tileValue = 2 ** (index + 1);
-    document.documentElement.style.setProperty(`--color-tile-${tileValue}`, color);
-    document.documentElement.style.setProperty(
-      `--color-text-${tileValue}`,
-      fontFlags[index] ? DARK_TEXT_COLOR : LIGHT_TEXT_COLOR
-    );
+    document.documentElement.style.setProperty(`--color-tile-${tileValue}`, background);
+    document.documentElement.style.setProperty(`--color-text-${tileValue}`, color);
   });
 };
