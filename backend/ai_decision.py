@@ -53,7 +53,12 @@ def choose_full_ai_move(
     )
     player.merge_urgency = merge_urgency_for_readers(getattr(dispatcher, 'ad_readers', {}))
     logic.allow_five_tiler_relaxation = allows_five_tiler_relaxation(getattr(dispatcher, 'ad_readers', {}))
-    move_code = logic.calculate_step(player, board, dispatcher.counts)
+    move_code = logic.calculate_step(
+        player,
+        board,
+        dispatcher.counts,
+        preferred_moves=getattr(dispatcher, 'ai_search_moves', None),
+    )
     direction = AI_MOVE_MAP.get(int(move_code))
     source = str(getattr(logic, "last_table", "") or "AI")
     return AIDecision(direction=direction, source=source)
