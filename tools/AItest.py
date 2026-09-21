@@ -26,9 +26,14 @@ class AItest:
         self.ai_logic.time_limit_ratio = TIME_RATIO
         self.initial_sum = np.sum(self.board)
 
-    def ai_step(self, counts):
+    def ai_step(self, counts, preferred_moves=None):
         # 将计算完全委托给 ai_logic
-        best_move = self.ai_logic.calculate_step(self.ai_player, self.board, counts)
+        best_move = self.ai_logic.calculate_step(
+            self.ai_player,
+            self.board,
+            counts,
+            preferred_moves=preferred_moves,
+        )
         return {1: 'Left', 2: 'Right', 3: 'Up', 4: 'Down'}.get(best_move, '')
 
     @staticmethod
@@ -47,7 +52,10 @@ class AItest:
         if best_move == 'AI':
             board_encoded = ai_core.resolve_32768_doubles(self.board_encoded) if not self.has_65k else self.board_encoded
             self.ai_player.board = board_encoded
-            ai_move = self.ai_step(self.ai_dispatcher.counts)
+            ai_move = self.ai_step(
+                self.ai_dispatcher.counts,
+                preferred_moves=getattr(self.ai_dispatcher, 'ai_search_moves', None),
+            )
             if ai_move:
                 self.do_move(ai_move.capitalize())
             else:

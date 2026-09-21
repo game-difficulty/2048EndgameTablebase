@@ -645,7 +645,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     return aiWorker;
   };
 
-  const requestWorkerAiMove = () => new Promise((resolve, reject) => {
+  const requestWorkerAiMove = (preferredMoves = null) => new Promise((resolve, reject) => {
     const worker = ensureAiWorker();
     if (pendingAiMove) {
       pendingAiMove.reject(new Error('AI worker request superseded.'));
@@ -663,17 +663,18 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
       type: 'calculate',
       board_encoded: boardToHex(board.value),
       resolve_large_pair: canResolveLargePair(board.value),
+      preferred_moves: Array.isArray(preferredMoves) ? preferredMoves : [],
     });
   });
 
-  const chooseSearchMove = async () => {
+  const chooseSearchMove = async (preferredMoves = null) => {
     const moves = legalMoves(board.value);
     if (!moves.length) {
       return null;
     }
 
     try {
-      const candidate = DIRECTION_BY_CODE[await requestWorkerAiMove()];
+      const candidate = DIRECTION_BY_CODE[await requestWorkerAiMove(preferredMoves)];
       return moves.includes(candidate) ? candidate : moves[0];
     } catch (error) {
       console.error('AI worker step failed; using first legal move.', error);
@@ -704,7 +705,9 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
         }), isCurrent);
         if (!isCurrent()) return null;
         if (direction && direction !== 'AI' && legalMoves(board.value).includes(direction)) return direction;
+        const preferredMoves = direction === 'AI' ? tableDispatcher.aiSearchMoves : null;
         tableAiCache.cancelPrefetch();
+        return isCurrent() ? chooseSearchMove(preferredMoves) : null;
       } catch (error) {
         if (!isCurrent()) return null;
         tableAiCache.clear();

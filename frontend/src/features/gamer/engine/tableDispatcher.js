@@ -2,6 +2,7 @@
 import { compileTableStructure, matchTableStructure } from './tableStructure.js';
 import { compileTableLayers, tableLayerAvailable } from './tableLayers.js';
 import { aiCompatibleTable, tableAllowed } from './tableSelection.js';
+import { simulateMove } from './classicMove.js';
 
 export { TABLE_POLICY_VERSION } from './tableSelection.js';
 
@@ -27,9 +28,26 @@ export function packedLookupBoard(board) {
   return board.map((value) => value ? Math.min(15, Math.round(Math.log2(value))).toString(16) : '0').join('');
 }
 
+function certainLegalMoves(board, payload) {
+  const offset = String(payload.dtype).startsWith('1-') ? 1 : 0;
+  const mask = payload.legal_moves_mask;
+  return ['left', 'right', 'up', 'down'].reduce((moves, direction, index) => {
+    const isLegal = Number.isInteger(mask) && mask > 0 && mask < 16
+      ? Boolean(mask & (1 << index))
+      : simulateMove(board, direction).board.some((value, tileIndex) => value !== board[tileIndex]);
+    const raw = payload.results?.[direction];
+    if (isLegal && typeof raw === 'number' && Number.isFinite(raw)
+      && raw + offset > 0.9999999) {
+      moves.push(index + 1);
+    }
+    return moves;
+  }, []);
+}
+
 export class TableDispatcher {
   constructor(tables = [], spawnRate4 = 0.1) {
     this.cooldowns = new Map();
+    this.aiSearchMoves = null;
     this.setTables(tables, spawnRate4);
   }
 
@@ -46,6 +64,7 @@ export class TableDispatcher {
 
   reset(board) {
     this.board = board.slice();
+    this.aiSearchMoves = null;
     this.counts = new Array(16).fill(0);
     for (const value of board) this.counts[value ? Math.min(15, Math.round(Math.log2(value))) : 0] += 1;
     for (const [key, remaining] of this.cooldowns) {
@@ -110,6 +129,11 @@ export class TableDispatcher {
     const requireComplete = smallSum < (table.pattern === 'free10' ? 32 : 28);
     const lowSumComplete = requireComplete && completePositiveMoves(payload);
     if (requireComplete && !lowSumComplete) return null;
+    const certainMoves = certainLegalMoves(this.board, payload);
+    if (certainMoves.length >= 2) {
+      this.aiSearchMoves = certainMoves;
+      return 'AI';
+    }
     const [move, raw] = Object.entries(payload.results || {})[0] || [];
     if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
     const success = raw + (String(payload.dtype).startsWith('1-') ? 1 : 0);

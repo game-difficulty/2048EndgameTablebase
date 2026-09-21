@@ -409,14 +409,16 @@ class CoreAILogic {
         }
     }
 
-    calculate_step(ai_player, boardArray, counts) {
+    calculate_step(ai_player, boardArray, counts, preferredMoves = []) {
         let empty_slots = counts[0];
         let board_sum = arraySum(boardArray.map(v => v === 0 ? 0 : Math.pow(2, v)));
         let big_nums = arraySum(counts.slice(8));
+        const allowedMoves = new Set((Array.isArray(preferredMoves) ? preferredMoves : [])
+            .map(value => Number(value)).filter(value => value >= 1 && value <= 4));
 
         let [move, is_evil, table_type, win_rates, threshold] = this.manager.probe(ai_player.board, counts, board_sum);
 
-        if (move) {
+        if (move && !allowedMoves.size) {
             console.log(`[EGTB] Candidate Move: ${move}, Rates: [${win_rates.map(r => r.toFixed(4))}], Table: ${table_type}`);
             if (this.validate_egtb_move(boardArray, ai_player, move, table_type, win_rates, board_sum, threshold)) {
                 console.log(`%c[EGTB Hit] Decision: ${move}`, "color: #4CAF50; font-weight: bold;");
@@ -514,6 +516,15 @@ class CoreAILogic {
         this.last_depth = final_depth;
         this.last_prune = ai_player.prune;
         this.last_move = 'search';
+
+        if (allowedMoves.size && scores && typeof scores.length === 'number') {
+            const candidates = [...allowedMoves].filter(value => value <= scores.length);
+            if (candidates.length) {
+                best_op = candidates.reduce((best, value) => (
+                    scores[value - 1] > scores[best - 1] ? value : best
+                ), candidates[0]);
+            }
+        }
 
         return best_op;
     }
@@ -769,12 +780,12 @@ function handleCalculate(data) {
         }
     }
 
-    runAI(boardArray, counts, hexStr);
+    runAI(boardArray, counts, hexStr, data.preferred_moves);
 }
 
 let core_ai_logic = null;
 
-function runAI(boardArray, counts, hexStr) {
+function runAI(boardArray, counts, hexStr, preferredMoves = []) {
     if (!core_ai_logic) {
         core_ai_logic = new CoreAILogic();
     }
@@ -783,7 +794,7 @@ function runAI(boardArray, counts, hexStr) {
     console.log(`%c--- AI Thinking (Board: ${hexStr}) ---`, "background: #222; color: #bada55; font-size: 14px;");
     console.log(printBoard(boardArray));
 
-    const bestMove = core_ai_logic.calculate_step(ai_player, boardArray, counts);
+    const bestMove = core_ai_logic.calculate_step(ai_player, boardArray, counts, preferredMoves);
     console.log(`%c>>> Decision: ${bestMove} <<<`, "background: #222; color: #ffeb3b; font-weight: bold; font-size: 16px;");
 
     postMessage({ type: 'move_result', best_move: bestMove });

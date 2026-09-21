@@ -7,7 +7,7 @@ from typing import Tuple, List
 import numpy as np
 
 from engine_core.BookReader import BookReaderDispatcher
-from engine_core.reader_results import complete_positive_moves
+from engine_core.reader_results import complete_positive_moves, certain_legal_moves
 from engine_core.Calculator import (
     ReverseLR,
     ReverseUD,
@@ -72,6 +72,7 @@ class DispatcherCommon(BaseDispatcher):
         super().__init__(board, board_encoded)
         self.ad_readers = dict()
         self._table_cooldowns = {}  # {table_name: remaining_steps}
+        self.ai_search_moves = None
         self.init_bookreader()
 
     def _reader_state(self):
@@ -100,6 +101,7 @@ class DispatcherCommon(BaseDispatcher):
 
     def reset(self, board, board_encoded):
         super().reset(board, board_encoded)
+        self.ai_search_moves = None
         expired = [t for t, c in self._table_cooldowns.items() if c <= 1]
         for t in expired:
             del self._table_cooldowns[t]
@@ -183,6 +185,12 @@ class DispatcherCommon(BaseDispatcher):
         low_sum_complete = require_complete and complete_positive_moves(r1, zero_val)
         if require_complete and not low_sum_complete:
             return None
+        certain_moves = certain_legal_moves(r1, zero_val)
+        if len(certain_moves) >= 2:
+            self.ai_search_moves = certain_moves
+            self.last_operator = 0
+            self.current_table = "AI"
+            return "AI"
         r1 = {
             key: (
                 value + zero_val
@@ -736,7 +744,7 @@ class CoreAILogic:
                     return False
             return True
 
-    def calculate_step(self, ai_player, board, counts) -> int:
+    def calculate_step(self, ai_player, board, counts, preferred_moves=None) -> int:
         """执行 AI 核心深度计算并返回最佳操作的数字代号"""
         empty_slots = counts[0]
         board_sum = np.sum(board)
@@ -745,7 +753,9 @@ class CoreAILogic:
         move, is_evil, table_type, win_rates, threshold = self.manager.probe(
             ai_player.board, counts, board_sum
         )
-        if move:
+        preferred_moves = tuple(int(value) for value in (preferred_moves or ()) if 1 <= int(value) <= 4)
+        preferred_set = set(preferred_moves)
+        if move and not preferred_set:
             # 查到了，进行二次安全校验
             if self.validate_egtb_move(
                 board, ai_player, move, table_type, win_rates, board_sum, threshold
@@ -870,6 +880,11 @@ class CoreAILogic:
         self.last_prune = ai_player.prune
         self.last_move = "search"
         # print(scores)
+
+        if preferred_set:
+            scored_moves = [move for move in preferred_moves if move <= len(scores)]
+            if scored_moves:
+                best_op = max(scored_moves, key=lambda move: scores[move - 1])
 
         return best_op
 

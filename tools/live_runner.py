@@ -56,13 +56,22 @@ class NativeAI:
         move = self.dispatcher.dispatcher()
         source = str(self.dispatcher.current_table)
         if move == 'AI':
-            self.player.board = self.core.resolve_32768_doubles(encoded)
-            code = self.logic.calculate_step(self.player, board, self.dispatcher.counts)
+            large_tiles = [value for value in values if value >= 32768]
+            # Packed 0xf cannot distinguish 32k from 65k and higher tiles.
+            equal_pair = len(large_tiles) == 2 and large_tiles[0] == large_tiles[1]
+            self.player.board = self.core.resolve_32768_doubles(encoded) if equal_pair else encoded
+            code = self.logic.calculate_step(
+                self.player,
+                board,
+                self.dispatcher.counts,
+                preferred_moves=getattr(self.dispatcher, 'ai_search_moves', None),
+            )
             move = {1: 'left', 2: 'right', 3: 'up', 4: 'down'}.get(code)
             source = 'AI'
         direction = str(move).lower()
         if direction not in legal_moves(values):
-            raise RuntimeError('AI returned an invalid move; livestream paused')
+            raise RuntimeError(f'Invalid AI move {direction!r}; source={source}; '
+                               f'board={encoded:016x}; values={values}')
         return direction, source
 
 
@@ -219,7 +228,7 @@ async def run_forever(args):
         except Exception as error:
             if run:
                 save_checkpoint(checkpoint, run)
-            LOG.warning('Paused: %s; reconnect in %ss', type(error).__name__, retry)
+            LOG.warning('Paused: %s: %s; reconnect in %ss', type(error).__name__, error, retry)
             await asyncio.sleep(retry)
             retry = min(60, retry * 2)
 

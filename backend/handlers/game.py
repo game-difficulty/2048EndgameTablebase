@@ -313,7 +313,10 @@ async def handle_game_action(
                 getattr(ai_dispatcher, "time_limit_ratio", 1.0),
             )
             best_move_code = logic.calculate_step(
-                player, board_2d, ai_dispatcher.counts
+                player,
+                board_2d,
+                ai_dispatcher.counts,
+                preferred_moves=getattr(ai_dispatcher, "ai_search_moves", None),
             )
             # logger.warning(
             #     f"{player.do_check} {player.masked_count} {player.max_d} {player.prune}"

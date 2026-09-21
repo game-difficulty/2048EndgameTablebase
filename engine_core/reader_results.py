@@ -23,3 +23,19 @@ def complete_positive_moves(results, zero_value=0):
                 return False
     return True
 
+
+def certain_legal_moves(results, zero_value=0, threshold=0.9999999):
+    """Return legal move codes whose table result is effectively certain."""
+    mask = getattr(results, "legal_moves_mask", None)
+    if not isinstance(mask, int) or isinstance(mask, bool) or not 0 < mask < 16:
+        return ()
+    moves = []
+    for index, direction in enumerate(DIRECTIONS):
+        if not (mask & (1 << index)):
+            continue
+        value = results.get(direction)
+        if (isinstance(value, bool) or not isinstance(value, numbers.Real)
+                or not math.isfinite(value) or value - zero_value <= threshold):
+            continue
+        moves.append(index + 1)
+    return tuple(moves)
