@@ -163,7 +163,7 @@
       <section class="admin-panel">
         <div class="admin-panel-head">
           <h2>{{ $t('admin.users.title') }}</h2>
-          <div class="flex w-auto min-w-[28rem] flex-row items-center gap-2">
+          <div class="admin-users-toolbar">
             <div class="admin-segmented" role="group" :aria-label="$t('admin.users.tierFilter')">
               <button
                 v-for="option in tierFilterOptions"
@@ -1025,7 +1025,8 @@ watch(() => props.active, (active) => {
 
 .admin-segmented {
   display: inline-grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(4.5rem, 1fr));
+  flex: 0 0 auto;
   overflow: hidden;
   border: 1px solid var(--border-main);
   border-radius: 0.85rem;
@@ -1034,13 +1035,33 @@ watch(() => props.active, (active) => {
 
 .admin-segment-btn {
   min-height: 2.35rem;
+  min-width: 4.5rem;
   border: 0;
   border-right: 1px solid var(--border-main);
   color: var(--text-secondary);
   font-size: var(--font-ui-xs);
   font-weight: 950;
+  line-height: 1.2;
   padding: 0.45rem 0.7rem;
+  white-space: nowrap;
+  word-break: keep-all;
+  writing-mode: horizontal-tb;
   transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.admin-users-toolbar {
+  display: flex;
+  flex: 1 1 36rem;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.admin-users-toolbar .admin-search {
+  min-width: 12rem;
+  flex: 1 1 14rem;
 }
 
 .admin-segment-btn:last-child {
