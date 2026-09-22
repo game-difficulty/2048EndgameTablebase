@@ -29,7 +29,19 @@
   window.__RENDER_COMPAT__ = { mode: reasons.length ? 'compat' : 'modern', reasons: reasons };
   if (!reasons.length) return;
 
-  // A parser-inserted stylesheet blocks the following app scripts until loaded.
-  // Keep this bootstrap ES5 and independent of the Vue/module runtime.
-  document.write('<link id="render-compat-css" rel="stylesheet" href="/compat/render-compat.css?v=1" onload="document.documentElement.setAttribute(\'data-css-compat\',\'ready\')" onerror="document.documentElement.setAttribute(\'data-css-compat\',\'failed\')">');
+  // The built main page supplies a fingerprinted full stylesheet. Dev and live
+  // keep using the smaller hand-maintained fallback.
+  window.__loadRenderCompatFallback = function () {
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/compat/render-compat.css?v=2';
+    link.onload = function () { root.setAttribute('data-css-compat', 'ready'); };
+    link.onerror = function () { root.setAttribute('data-css-compat', 'failed'); };
+    document.head.appendChild(link);
+  };
+  if (!window.__RENDER_COMPAT_CSS_URL__) {
+    document.write('<link id="render-compat-css" rel="stylesheet" href="/compat/render-compat.css?v=2" onload="document.documentElement.setAttribute(\'data-css-compat\',\'ready\')" onerror="document.documentElement.setAttribute(\'data-css-compat\',\'failed\')">');
+    return;
+  }
+  document.write('<link id="render-compat-css" rel="stylesheet" href="' + window.__RENDER_COMPAT_CSS_URL__ + '" onload="document.documentElement.setAttribute(\'data-css-compat\',\'ready\')" onerror="window.__loadRenderCompatFallback()">');
 }());
