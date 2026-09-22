@@ -5,6 +5,7 @@ import {
   trophyLevelName,
 } from '../baseEngine.js';
 import { generateEvilSpawn } from '../evilGenAdapter.js';
+import { MINIGAME_TROPHY_THRESHOLDS } from '../../model/minigameRules.js';
 import {
   boardsEqual,
   cloneBoard,
@@ -563,7 +564,7 @@ export class MysteryMergeEngine extends BaseMinigameEngine {
 export class IceAgeEngine extends BaseMinigameEngine {
   constructor(definition, difficulty, snapshot = null, runtime = null) {
     super(definition, difficulty, snapshot, { deferSetup: true, runtime });
-    this.frozenStep = 80 + this.difficulty * 20;
+    this.frozenStep = 100 - this.difficulty * 20;
     this.countDown = createBoard(4, 4, 0);
     this.movementTrack = createBoard(4, 4, false);
     this.initialize(snapshot);
@@ -651,9 +652,9 @@ export class IceAgeEngine extends BaseMinigameEngine {
   spriteForThreshold(previous, current) {
     const thresholds = [
       [20, 'crystal1.png'],
-      [36 + this.difficulty * 4, 'crystal3.png'],
-      [50 + this.difficulty * 10, 'crystal2.png'],
-      [64 + this.difficulty * 16, 'ice_overlay.png'],
+      [40 - this.difficulty * 4, 'crystal3.png'],
+      [60 - this.difficulty * 10, 'crystal2.png'],
+      [80 - this.difficulty * 16, 'ice_overlay.png'],
       [this.frozenStep - 5, 'icetrap0.png'],
       [this.frozenStep, 'icetrap.png'],
     ];
@@ -717,9 +718,9 @@ export class IceAgeEngine extends BaseMinigameEngine {
         if (countDown === 0 && value !== -1) continue;
         const sprites = [];
         if (countDown >= 20 || value === -1) sprites.push('crystal1.png');
-        if (countDown >= 36 + this.difficulty * 4 || value === -1) sprites.push('crystal3.png');
-        if (countDown >= 50 + this.difficulty * 10 || value === -1) sprites.push('crystal2.png');
-        if (countDown >= 64 + this.difficulty * 16 || value === -1) sprites.push('ice_overlay.png');
+        if (countDown >= 40 - this.difficulty * 4 || value === -1) sprites.push('crystal3.png');
+        if (countDown >= 60 - this.difficulty * 10 || value === -1) sprites.push('crystal2.png');
+        if (countDown >= 80 - this.difficulty * 16 || value === -1) sprites.push('ice_overlay.png');
         if (countDown >= this.frozenStep - 5 || value === -1) sprites.push('icetrap0.png');
         if (countDown >= this.frozenStep || value === -1) sprites.push('icetrap.png');
         if (sprites.length) coverSprites[String(index)] = sprites;
@@ -1083,9 +1084,10 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
     this.hasJustExploded = false;
     this.pendingResolutionKind = null;
     this.pendingResolutionPositions = [];
-    this.levels = this.variant === 'hybrid'
-      ? [[150000, 4], [100000, 3], [50000, 2], [20000, 1]]
-      : [[300000, 4], [200000, 3], [100000, 2], [40000, 1]];
+    const trophyThresholds = this.variant === 'hybrid'
+      ? MINIGAME_TROPHY_THRESHOLDS.hybrid
+      : MINIGAME_TROPHY_THRESHOLDS.endless;
+    this.levels = trophyThresholds.map((threshold, index) => [threshold, index + 1]).reverse();
     this.bombGenRate = this.variant === 'hybrid' ? 0.05 : 0.03;
     this.initialize(snapshot);
   }
@@ -1140,9 +1142,11 @@ export class EndlessFamilyEngine extends BaseMinigameEngine {
   }
 
   queueScoreTrophy() {
+    // Grandfather trophies earned under earlier thresholds; only announce an upgrade.
+    const previousLevel = Math.max(Number(this.currentLevel) || 0, Number(this.isPassed) || 0);
     let earnedLevel = 0;
     for (const [threshold, level] of this.levels) {
-      if (this.score >= threshold && this.currentLevel < level) {
+      if (this.score >= threshold && previousLevel < level) {
         this.isPassed = Math.max(this.isPassed, level);
         this.currentLevel = level;
         earnedLevel = level;

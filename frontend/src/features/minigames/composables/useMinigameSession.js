@@ -13,6 +13,7 @@ import { MinigameController } from '../engine/controller';
 import { MinigameRankedRecorder } from '../engine/rankedRecorder';
 import { createMinigameRuntime, restoreMinigameRuntime } from '../engine/runtime';
 import { MGO1_END_REASON } from '../protocol';
+import { formatMinigameRules } from '../model/minigameRules';
 import { createEmptyMinigameMenu, createEmptyMinigameState } from '../model/minigameViewState';
 import {
   abandonMinigameRankedRun,
@@ -84,7 +85,7 @@ const rankedRunIsTerminal = (error) => [404, 410].includes(Number(error?.status)
   || (Number(error?.status) === 409 && String(error?.code || '') === 'run_not_active');
 
 export function useMinigameSession(activeRef) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { user: authUser } = useAuthState();
 
   const bufferedStore = createBufferedMinigameStore(minigameStore);
@@ -645,7 +646,7 @@ export function useMinigameSession(activeRef) {
       openOverlay({
         type: 'info',
         title: t('minigames.overlay.infoTitle'),
-        message: String(messages.infoDialog),
+        message: formatMinigameRules(nextState.gameId, nextState.difficulty, locale.value),
       });
     } else if (messages.trophy) {
       if (messages.gameOver || enteredGameOver) {
