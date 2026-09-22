@@ -1333,19 +1333,18 @@ public:
     )
         : lut_(bc_legal_tiles_for_rank(target_rank)),
           position_path_(std::move(position_path)),
-          success_path_(std::move(success_path)),
-          position_file_(std::make_unique<BC::BCBufferedFileReader>(position_path_)),
-          success_file_(std::make_unique<BC::BCBufferedFileReader>(success_path_)) {
-        position_header_ = bc_read_exact_position_header(*position_file_);
+          success_path_(std::move(success_path)) {
+        BC::BCBufferedFileReader position_file(position_path_);
+        BC::BCBufferedFileReader success_file(success_path_);
+        position_header_ = bc_read_exact_position_header(position_file);
         uint64_t position_bytes_read = BC::kBCPositionHeaderBytes;
-        axis_ = bc_read_exact_position_axis(*position_file_, position_header_, &position_bytes_read);
-        descriptors_ = bc_read_exact_position_descriptors(*position_file_, position_header_, nullptr);
-        success_header_ = bc_read_exact_success_header(*success_file_);
+        axis_ = bc_read_exact_position_axis(position_file, position_header_, &position_bytes_read);
+        descriptors_ = bc_read_exact_position_descriptors(position_file, position_header_, nullptr);
+        success_header_ = bc_read_exact_success_header(success_file);
         validate_success_header();
     }
 
     BCCompressedResult::ColdLookupResult lookup(uint64_t board, uint32_t lane) const {
-        std::lock_guard<std::mutex> lock(io_mutex_);
         BCCompressedResult::ColdLookupResult result;
         result.dtype = success_header_.dtype;
         result.row_width = success_header_.row_width;
@@ -1365,9 +1364,10 @@ public:
             result.bucket_block_raw_bytes = position_bytes_read;
             return result;
         }
+        BC::BCBufferedFileReader position_file(position_path_);
         BC::BCBucketEntry bucket;
         if (!bc_exact_find_bucket_entry(
-                *position_file_,
+                position_file,
                 position_header_,
                 desc,
                 encoded.key,
@@ -1377,7 +1377,7 @@ public:
             return result;
         }
         const BC::BCLookupResult row = bc_exact_lookup_bucket_rank_precise(
-            *position_file_,
+            position_file,
             lut_,
             position_header_,
             desc,
@@ -1392,9 +1392,10 @@ public:
             throw std::runtime_error("BC exact point lookup local success row exceeds descriptor");
         }
 
+        BC::BCBufferedFileReader success_file(success_path_);
         uint64_t value_index = 0U;
         const uint64_t raw_bits = bc_exact_read_success_raw_bits_precise(
-            *success_file_,
+            success_file,
             success_header_,
             encoded.cid,
             row.local_success_row,
@@ -1416,7 +1417,6 @@ public:
     }
 
     uint64_t sample_board() const {
-        std::lock_guard<std::mutex> lock(io_mutex_);
         uint64_t live_rows = 0U;
         for (const BC::BCPositionCellDescriptor &desc : descriptors_) {
             live_rows += desc.success_rows;
@@ -1425,6 +1425,7 @@ public:
             return 0ULL;
         }
 
+        BC::BCBufferedFileReader position_file(position_path_);
         static thread_local std::mt19937 rng(std::random_device{}());
         std::uniform_int_distribution<uint64_t> row_pick(0U, live_rows - 1U);
         constexpr uint32_t kSampleAttempts = 128U;
@@ -1448,7 +1449,7 @@ public:
             BC::BCBucketEntry bucket;
             uint32_t bucket_row_count = 0U;
             if (!bc_exact_find_bucket_by_success_row(
-                    *position_file_,
+                    position_file,
                     position_header_,
                     *desc,
                     local_row,
@@ -1459,7 +1460,7 @@ public:
             }
             BC::BucketRank rank = 0U;
             if (!bc_exact_select_rank_for_bucket_ordinal_precise(
-                    *position_file_,
+                    position_file,
                     lut_,
                     position_header_,
                     *desc,
@@ -1491,13 +1492,11 @@ private:
     BC::BCLut lut_;
     fs::path position_path_;
     fs::path success_path_;
-    std::unique_ptr<BC::BCBufferedFileReader> position_file_;
-    std::unique_ptr<BC::BCBufferedFileReader> success_file_;
+    // Cached readers retain immutable metadata, never open file handles.
     BC::BCPositionHeader position_header_{};
     BC::BCSuccessHeader success_header_{};
     BC::BCFamilyTable axis_{0U, 1U, std::vector<BC::FamilyCoord>{0U}};
     std::vector<BC::BCPositionCellDescriptor> descriptors_;
-    mutable std::mutex io_mutex_;
 };
 
 struct BCExactReaderEntry {
