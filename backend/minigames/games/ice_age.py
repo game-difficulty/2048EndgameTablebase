@@ -7,9 +7,16 @@ import numpy as np
 from ..engine.base import BaseMinigameEngine
 
 
+ICE_FREEZE_STEPS = (100, 80)
+ICE_VISUAL_STAGE_STEPS = (
+    (20, 40, 60, 80),
+    (20, 36, 50, 64),
+)
+
+
 class IceAgeEngine(BaseMinigameEngine):
     def __init__(self, definition, difficulty: int) -> None:
-        self.frozen_step = 80 + int(difficulty) * 20
+        self.frozen_step = ICE_FREEZE_STEPS[int(difficulty)]
         self.count_down = np.zeros((4, 4), dtype=np.int32)
         self.movement_track = np.zeros((4, 4), dtype=bool)
         super().__init__(definition, difficulty)
@@ -74,11 +81,12 @@ class IceAgeEngine(BaseMinigameEngine):
         }
 
     def _sprite_for_threshold(self, previous_count: int, current_count: int) -> str | None:
+        crystal1, crystal3, crystal2, ice_overlay = ICE_VISUAL_STAGE_STEPS[self.difficulty]
         thresholds = [
-            (20, "crystal1.png"),
-            (36 + self.difficulty * 4, "crystal3.png"),
-            (50 + self.difficulty * 10, "crystal2.png"),
-            (64 + self.difficulty * 16, "ice_overlay.png"),
+            (crystal1, "crystal1.png"),
+            (crystal3, "crystal3.png"),
+            (crystal2, "crystal2.png"),
+            (ice_overlay, "ice_overlay.png"),
             (self.frozen_step - 5, "icetrap0.png"),
             (self.frozen_step, "icetrap.png"),
         ]
@@ -155,6 +163,7 @@ class IceAgeEngine(BaseMinigameEngine):
         tile_style_variant: dict[str, Any] = {}
         cover_sprites: dict[str, list[str]] = {}
 
+        crystal1, crystal3, crystal2, ice_overlay = ICE_VISUAL_STAGE_STEPS[self.difficulty]
         for row in range(self.rows):
             for col in range(self.cols):
                 index = row * self.cols + col
@@ -164,13 +173,13 @@ class IceAgeEngine(BaseMinigameEngine):
                     continue
 
                 sprites: list[str] = []
-                if count_down >= 20 or value == -1:
+                if count_down >= crystal1 or value == -1:
                     sprites.append("crystal1.png")
-                if count_down >= 36 + self.difficulty * 4 or value == -1:
+                if count_down >= crystal3 or value == -1:
                     sprites.append("crystal3.png")
-                if count_down >= 50 + self.difficulty * 10 or value == -1:
+                if count_down >= crystal2 or value == -1:
                     sprites.append("crystal2.png")
-                if count_down >= 64 + self.difficulty * 16 or value == -1:
+                if count_down >= ice_overlay or value == -1:
                     sprites.append("ice_overlay.png")
                 if count_down >= self.frozen_step - 5 or value == -1:
                     sprites.append("icetrap0.png")

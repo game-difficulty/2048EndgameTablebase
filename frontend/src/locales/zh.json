@@ -288,13 +288,13 @@
     "play": {
       "backToMenu": "返回菜单",
       "keyboardHint": "使用方向键或 WASD 操作",
-      "info": "信息",
+      "info": "规则",
       "powerUps": "道具",
       "cancel": "取消"
     },
     "overlay": {
       "continue": "继续",
-      "infoTitle": "游戏说明",
+      "infoTitle": "小游戏规则",
       "trophyTitle": "达成成就",
       "gameOverTitle": "游戏结束",
       "gameOverMessage": "已没有可用移动。"

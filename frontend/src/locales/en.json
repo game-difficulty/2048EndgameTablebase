@@ -288,13 +288,13 @@
     "play": {
       "backToMenu": "Back To Menu",
       "keyboardHint": "Use arrows or WASD to play",
-      "info": "Info",
+      "info": "Rules",
       "powerUps": "Power-Ups",
       "cancel": "Cancel"
     },
     "overlay": {
       "continue": "Continue",
-      "infoTitle": "Game Info",
+      "infoTitle": "Minigame Rules",
       "trophyTitle": "Challenge Clear",
       "gameOverTitle": "Game Over",
       "gameOverMessage": "No more moves remain."

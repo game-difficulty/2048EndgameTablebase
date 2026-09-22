@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n';
 
 import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { createWsClient } from '../../../services/ws/createWsClient';
+import { formatMinigameRules } from '../model/minigameRules';
 import { createEmptyMinigameMenu, createEmptyMinigameState } from '../model/minigameViewState';
 
 const isTextEntryElement = (element) => {
@@ -28,7 +29,7 @@ const normalizeHudPanels = (hud, receivedAt = Date.now()) => {
 };
 
 export function useMinigameSession(activeRef) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
 
   const wsStatus = ref('disconnected');
   const menuData = ref(createEmptyMinigameMenu());
@@ -184,7 +185,7 @@ export function useMinigameSession(activeRef) {
       openOverlay({
         type: 'info',
         title: t('minigames.overlay.infoTitle'),
-        message: String(messages.infoDialog),
+        message: formatMinigameRules(nextState.gameId, nextState.difficulty, locale.value),
       });
     } else if (messages.trophy) {
       if (messages.gameOver || enteredGameOver) {

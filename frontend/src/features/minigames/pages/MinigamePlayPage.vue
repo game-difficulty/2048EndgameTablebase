@@ -47,6 +47,10 @@
         </div>
       </div>
 
+      <div class="w-full mb-4">
+        <MinigameRulesPanel :game-id="state.gameId" :difficulty="state.difficulty" />
+      </div>
+
       <div v-if="hasHudPanels" class="w-full mb-4">
         <MinigameHud :hud="state.hud" @custom-action="$emit('custom-action', $event)" />
       </div>
@@ -94,6 +98,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import MinigameBoard from '../components/MinigameBoard.vue';
 import MinigameHud from '../components/MinigameHud.vue';
 import MinigameOverlay from '../components/MinigameOverlay.vue';
+import MinigameRulesPanel from '../components/MinigameRulesPanel.vue';
 import PowerUpBar from '../components/PowerUpBar.vue';
 import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
 

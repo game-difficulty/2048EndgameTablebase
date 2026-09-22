@@ -11,6 +11,12 @@ from Config import SingletonConfig
 from ..engine.base import BaseMinigameEngine, trophy_level_name
 
 
+ENDLESS_TROPHY_THRESHOLDS = {
+    "standard": (50000, 120000, 300000, 600000),
+    "hybrid": (30000, 60000, 120000, 240000),
+}
+
+
 class EndlessFamilyEngine(BaseMinigameEngine):
     def __init__(self, definition, difficulty: int) -> None:
         self.variant = self._detect_variant(definition.legacy_name)
@@ -38,9 +44,9 @@ class EndlessFamilyEngine(BaseMinigameEngine):
         return mapping.get(legacy_name, "explosions")
 
     def _levels_for_variant(self) -> list[tuple[int, int]]:
-        if self.variant == "hybrid":
-            return [(150000, 4), (100000, 3), (50000, 2), (20000, 1)]
-        return [(300000, 4), (200000, 3), (100000, 2), (40000, 1)]
+        key = "hybrid" if self.variant == "hybrid" else "standard"
+        thresholds = ENDLESS_TROPHY_THRESHOLDS[key]
+        return list(reversed([(threshold, index + 1) for index, threshold in enumerate(thresholds)]))
 
     def load_legacy_extra(self, extra_state: list[Any]) -> None:
         if self.variant == "airraid":
@@ -80,9 +86,11 @@ class EndlessFamilyEngine(BaseMinigameEngine):
         self.save_to_config()
 
     def _queue_score_trophy(self) -> None:
+        # Grandfather trophies earned under earlier thresholds; only announce an upgrade.
+        previous_level = max(int(self.current_level), int(self.is_passed))
         earned_level = 0
         for score_threshold, level_number in self.levels:
-            if self.score >= score_threshold and self.current_level < level_number:
+            if self.score >= score_threshold and previous_level < level_number:
                 self.is_passed = max(self.is_passed, level_number)
                 self.current_level = level_number
                 earned_level = level_number
