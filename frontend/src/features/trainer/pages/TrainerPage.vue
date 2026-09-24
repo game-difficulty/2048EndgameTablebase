@@ -182,7 +182,7 @@
               :class="['palette-btn', currentPaletteValue === 0 ? 'ring-2 ring-accent shadow-lg scale-110' : '']"
               style="background: var(--bg-main); color: var(--text-secondary); border: 1px solid var(--border-main);"
             >
-              {{ $t('trainer.palette.erase') }}
+              <span class="palette-label">{{ $t('trainer.palette.erase') }}</span>
             </button>
             <button
               v-for="val in cellPalette"
@@ -191,7 +191,7 @@
               :class="['palette-btn', currentPaletteValue === val ? 'ring-2 ring-accent shadow-lg scale-110' : '']"
               :style="`background: var(--color-tile-${val}); color: var(--color-text-${val}); font-weight: bold;` "
             >
-              {{ val >= 1024 ? `${val / 1024}k` : val }}
+              <span class="palette-label">{{ val >= 1024 ? `${val / 1024}k` : val }}</span>
             </button>
           </div>
         </div>
@@ -612,13 +612,19 @@ const handleDis32kChange = (event) => {
   aspect-ratio: 1;
   border-radius: 0.48rem;
   font-size: var(--font-ui-2xs);
-  font-weight: 900;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.palette-label {
+  font-family: var(--font-stack-ui);
+  font-weight: 700;
+  line-height: 1;
 }
 
 .palette-btn:hover {

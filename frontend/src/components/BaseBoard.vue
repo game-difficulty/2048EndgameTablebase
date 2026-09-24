@@ -55,6 +55,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import { useBoardAnimation } from './useBoardAnimation.js';
+import { getTileLabelStyle } from './tileLabelStyle.js';
 
 import { boardSwipeDirection } from './boardPointerGesture.js';
 import {
@@ -240,34 +241,6 @@ const getTileInnerStyle = (tile) => {
     boxShadow: glowRatio > 0
       ? `0 0 ${glowSpread} rgba(255, 214, 102, ${glowAlpha}), 0 0 ${glowOuter} rgba(255, 214, 102, ${(glowRatio * 0.22).toFixed(3)}), inset 0 0 0 1px rgba(255,255,255,${(0.08 + glowRatio * 0.12).toFixed(3)})`
       : 'none'
-  };
-};
-
-const getTileLabelStyle = (tile) => {
-  const len = String(tile.value).length;
-  const smallTileScale = tile.value >= 2 && tile.value <= 64 ? 1.2 : 1;
-  let fontSize = 'var(--tile-label-small, 2.5rem)';
-  let textOffset = '0.015em';
-
-  if (len > 4) {
-    fontSize = 'var(--tile-label-large, 1.5rem)';
-    textOffset = '0.05em';
-  } else if (len > 3) {
-    fontSize = 'var(--tile-label-medium, 2rem)';
-    textOffset = '0.04em';
-  } else if (len === 3) {
-    textOffset = '0.03em';
-  } else if (len === 2) {
-    textOffset = '0.02em';
-  }
-
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: `calc(${fontSize} * var(--tile-font-scale, 1) * ${smallTileScale})`,
-    lineHeight: 1,
-    transform: `translateY(${textOffset})`,
   };
 };
 </script>
