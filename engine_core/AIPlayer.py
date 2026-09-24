@@ -7,7 +7,7 @@ from typing import Tuple, List
 import numpy as np
 
 from engine_core.BookReader import BookReaderDispatcher
-from engine_core.reader_results import complete_positive_moves, certain_legal_moves
+from engine_core.reader_results import complete_positive_moves, certain_legal_moves, missing_immediate_merge_result
 from engine_core.Calculator import (
     ReverseLR,
     ReverseUD,
@@ -182,6 +182,11 @@ class DispatcherCommon(BaseDispatcher):
             masked_board, pattern, target_str, table
         )
         _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG["uint32"])
+        if missing_immediate_merge_result(self.board, 1 << target, r1, zero_val):
+            self.ai_search_moves = None
+            self.last_operator = 0
+            self.current_table = "AI"
+            return "AI"
         low_sum_complete = require_complete and complete_positive_moves(r1, zero_val)
         if require_complete and not low_sum_complete:
             return None
