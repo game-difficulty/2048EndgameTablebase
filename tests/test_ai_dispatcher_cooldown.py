@@ -22,7 +22,7 @@ class DispatcherCooldownTests(unittest.TestCase):
         dispatcher.ad_readers = {}
         dispatcher._restore_reader_state = lambda state: None
         dispatcher.book_reader = SimpleNamespace(
-            move_on_dic=lambda *args: ({'down': 1.0}, 'uint32'))
+            move_on_dic=lambda *args: ({'down': 1.0, 'left': .9, 'right': .9, 'up': .9}, 'uint32'))
         for item in (
             reader('free10_128', 128, 6, 6),
             reader('ordinary_512', 512, 4, 0),

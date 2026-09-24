@@ -13,6 +13,21 @@ export function maskLargeTiles(board, count) {
   return masked;
 }
 
+function positiveResult(value, offset) {
+  return typeof value === 'number' && Number.isFinite(value) && value + offset > 0;
+}
+
+export function missingImmediateMergeResult(board, target, payload) {
+  if (board.filter(value => value === target / 2).length < 2) return false;
+  const offset = String(payload.dtype).startsWith('1-') ? 1 : 0;
+  return ['left', 'right', 'up', 'down'].some(direction => {
+    if (positiveResult(payload.results?.[direction], offset)) return false;
+    // Terminal merge directions need not appear in the table's legal mask.
+    const moved = simulateMove(board, direction);
+    return moved.popPositions.some((merged, index) => merged && moved.board[index] === target);
+  });
+}
+
 export function completePositiveMoves(payload) {
   const mask = payload.legal_moves_mask;
   if (!Number.isInteger(mask) || mask <= 0 || mask >= 16) return false;
@@ -20,7 +35,7 @@ export function completePositiveMoves(payload) {
   return ['left', 'right', 'up', 'down'].every((direction, index) => {
     if (!(mask & (1 << index))) return true;
     const value = payload.results?.[direction];
-    return typeof value === 'number' && Number.isFinite(value) && value + offset > 0;
+    return positiveResult(value, offset);
   });
 }
 
@@ -124,6 +139,10 @@ export class TableDispatcher {
   }
 
   accept({ table, type }, payload) {
+    if (missingImmediateMergeResult(this.board, Number(table.target), payload)) {
+      this.aiSearchMoves = null;
+      return 'AI';
+    }
     const masked = maskLargeTiles(this.board, table.n);
     const smallSum = masked.reduce((sum, value) => sum + value, 0) - table.n * 32768;
     const requireComplete = smallSum < (table.pattern === 'free10' ? 32 : 28);

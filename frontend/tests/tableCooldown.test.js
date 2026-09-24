@@ -15,7 +15,7 @@ const names = d => d.candidates().map(c => c.table.fullPattern);
 function setup() {
   const d = new TableDispatcher(tables);
   d.reset(current);
-  assert.equal(d.accept({ table: tables[0], type: 1 }, { results: { down: 1 }, dtype: 'uint32' }), 'AI');
+  assert.equal(d.accept({ table: tables[0], type: 1 }, { results: { down: 1, left: .9, right: .9, up: .9 }, dtype: 'uint32' }), 'AI');
   return d;
 }
 
