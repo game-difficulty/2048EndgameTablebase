@@ -481,6 +481,7 @@ const getTileInnerStyle = (tile) => {
 
 const getTileLabelStyle = (tile) => {
   const len = String(tile.value).length;
+  const smallTileScale = tile.value >= 2 && tile.value <= 64 ? 1.2 : 1;
   let fontSize = 'var(--tile-label-small, 2.5rem)';
   let textOffset = '0.015em';
 
@@ -500,7 +501,7 @@ const getTileLabelStyle = (tile) => {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: `calc(${fontSize} * var(--tile-font-scale, 1))`,
+    fontSize: `calc(${fontSize} * var(--tile-font-scale, 1) * ${smallTileScale})`,
     lineHeight: 1,
     transform: `translateY(${textOffset})`,
   };
