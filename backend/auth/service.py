@@ -4,6 +4,7 @@ import json
 import os
 import random
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -459,6 +460,35 @@ def request_account_deactivation_code(
     return _send_code_or_raise(email, code, purpose="account_deactivate")
 
 
+class _InvalidEmailCode(ValueError):
+    def __init__(self, code_id: int):
+        self.code_id = code_id
+        super().__init__("Invalid verification code.")
+
+
+@contextmanager
+def _email_code_transaction():
+    failure = None
+    with auth_db() as db:
+        # Serialize the attempt check and update, including successful consumption.
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("SAVEPOINT email_code_operation")
+        try:
+            yield db
+        except _InvalidEmailCode as exc:
+            # Roll back business changes, but retain the write lock while recording
+            # this failed attempt. Raising only after commit keeps it durable.
+            db.execute("ROLLBACK TO SAVEPOINT email_code_operation")
+            db.execute(
+                "UPDATE email_verification_codes SET attempts = attempts + 1 WHERE id = ?",
+                (exc.code_id,),
+            )
+            failure = exc
+        db.execute("RELEASE SAVEPOINT email_code_operation")
+    if failure is not None:
+        raise failure
+
+
 def _consume_email_code(
     db: sqlite3.Connection,
     *,
@@ -466,6 +496,7 @@ def _consume_email_code(
     code: str,
     purpose: str,
 ) -> None:
+    """Validate and consume inside _email_code_transaction to retain failed attempts."""
     row = db.execute(
         """
         SELECT * FROM email_verification_codes
@@ -480,12 +511,12 @@ def _consume_email_code(
         raise ValueError("Verification code has expired.")
     if int(row["attempts"]) >= int(row["max_attempts"]):
         raise ValueError("Too many verification attempts.")
+    if not constant_time_equal(hash_token(code.strip()), row["code_hash"]):
+        raise _InvalidEmailCode(int(row["id"]))
     db.execute(
         "UPDATE email_verification_codes SET attempts = attempts + 1 WHERE id = ?",
         (row["id"],),
     )
-    if not constant_time_equal(hash_token(code.strip()), row["code_hash"]):
-        raise ValueError("Invalid verification code.")
     cursor = db.execute(
         """
         UPDATE email_verification_codes
@@ -512,7 +543,7 @@ def register_user(
     _validate_password(password)
     display_name_value, display_name_key = validate_display_name(display_name)
 
-    with auth_db() as db:
+    with _email_code_transaction() as db:
         invite_code_value = str(invite_code or "").strip()
         invite = _validate_invite(db, invite_code_value, normalized) if invite_code_value else None
         existing_user = db.execute(
@@ -669,7 +700,7 @@ def reset_password(
         raise ValueError("Invalid email.")
     _validate_password(new_password)
 
-    with auth_db() as db:
+    with _email_code_transaction() as db:
         user = db.execute("SELECT * FROM users WHERE email = ?", (normalized,)).fetchone()
         if user is None or user["status"] != "active":
             raise ValueError("Invalid verification code.")
@@ -743,7 +774,7 @@ def deactivate_account(
 ) -> None:
     if str(confirm or "").strip() != ACCOUNT_DEACTIVATE_CONFIRM_TEXT:
         raise ValueError("Confirmation text is incorrect.")
-    with auth_db() as db:
+    with _email_code_transaction() as db:
         user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if user is None or user["status"] != "active":
             raise ValueError("Account is not active.")

@@ -339,6 +339,12 @@ async def state(stats_range: str = Query('all')):
             'music_url': os.environ.get('LIVE_MUSIC_URL', ''), 'gifts': list(hub.gift_history)}
 
 
+@router.get('/status')
+async def live_status(response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return {'online': bool(hub.control_status()['online'])}
+
+
 @router.get('/audience')
 async def room_audience(request: Request, response: Response):
     hub.limit(('audience-ip', client_ip(request)), 120)

@@ -54,7 +54,7 @@
           ×
         </button>
       </div>
-      <AuxiliaryEntry v-if="tab.id === TAB_IDS.MAIN_MENU" :entry="AUXILIARY_ENTRIES.live" class="top-live-entry" />
+      <LiveTabEntry v-if="tab.id === TAB_IDS.MAIN_MENU" />
       </template>
       <div class="relative ml-auto flex items-center gap-2 whitespace-nowrap pl-3" data-account-menu>
         <template v-if="authUser">
@@ -413,8 +413,7 @@ import {
 } from './app/trainerDock';
 import { useTabManager } from './app/useTabManager';
 import MainMenuView from './components/MainMenuView.vue';
-import AuxiliaryEntry from './components/AuxiliaryEntry.vue';
-import { AUXILIARY_ENTRIES } from './app/auxiliaryEntries.js';
+import LiveTabEntry from './components/LiveTabEntry.vue';
 import AnnouncementBanner from './features/announcements/AnnouncementBanner.vue';
 import { resolveAnnouncementTarget, findAnnouncement } from './features/announcements/catalog.js';
 import AccountAvatar from './features/auth/AccountAvatar.vue';
