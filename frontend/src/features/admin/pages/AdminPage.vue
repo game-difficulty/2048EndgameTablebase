@@ -161,7 +161,7 @@
       </section>
 
       <section class="admin-panel">
-        <div class="admin-panel-head">
+        <div class="admin-panel-head admin-users-head">
           <h2>{{ $t('admin.users.title') }}</h2>
           <div class="admin-users-toolbar">
             <div class="admin-segmented" role="group" :aria-label="$t('admin.users.tierFilter')">
@@ -1049,19 +1049,31 @@ watch(() => props.active, (active) => {
   transition: background-color 0.16s ease, color 0.16s ease;
 }
 
+.admin-users-head h2 {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .admin-users-toolbar {
   display: flex;
-  flex: 1 1 36rem;
+  flex: 0 1 auto;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 0.5rem;
 }
 
 .admin-users-toolbar .admin-search {
-  min-width: 12rem;
-  flex: 1 1 14rem;
+  width: 14rem;
+  min-width: 6rem;
+  flex: 0 1 14rem;
+}
+
+.admin-users-toolbar .action-btn-small {
+  width: auto;
+  min-height: 2.35rem;
+  flex: 0 0 auto;
 }
 
 .admin-segment-btn:last-child {
