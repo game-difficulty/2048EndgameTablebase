@@ -48,7 +48,7 @@ import { layoutViewport as liveLayoutViewport } from '../../utils/layoutViewport
 const props = defineProps({ state: Object, user: Object, connected: Boolean, lang: String, dockTarget: String });
 const emit = defineEmits(['login', 'balance', 'open']);
 const t = (zh,en) => props.lang === 'zh' ? zh : en;
-const format = n => Number(n).toLocaleString(props.lang === 'zh' ? 'zh-CN' : 'en-US');
+const format = n => Number(n).toLocaleString(props.lang === 'zh' ? 'zh-CN' : 'en-US', { maximumFractionDigits: 1 });
 const art = motion => `/live-gifts/red-envelope${motion ? '-motion' : ''}.webp`;
 const active = computed(() => props.state?.active);
 const now = ref(Date.now()/1000), offset = ref(0);

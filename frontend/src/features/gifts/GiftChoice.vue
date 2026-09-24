@@ -23,7 +23,7 @@ const props = defineProps({gift:Object,lang:String,disabled:Boolean});
 const emit = defineEmits(['send']);
 const card = ref(null), active = ref(false), expanded = ref(false), custom = ref(1), position = ref({});
 const t = (zh,en) => props.lang === 'zh' ? zh : en;
-const tokens = n => ((n || 0)/1000).toLocaleString(undefined,{maximumFractionDigits:3});
+const tokens = n => ((n || 0)/1000).toLocaleString(undefined,{maximumFractionDigits:1});
 const customCost = computed(() => giftPrice(props.gift, Number(custom.value)));
 let enterTimer, leaveTimer;
 function hold() { clearTimeout(leaveTimer); }

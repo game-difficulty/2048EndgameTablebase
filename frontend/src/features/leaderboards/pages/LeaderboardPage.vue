@@ -224,7 +224,7 @@ const formatInteger = (value) => new Intl.NumberFormat(localeName(), {
 }).format(Number(value || 0));
 const formatScore = (value, unit) => {
   const formatted = new Intl.NumberFormat(localeName(), {
-    maximumFractionDigits: unit === 'points' ? 0 : 3,
+    maximumFractionDigits: unit === 'points' ? 0 : 1,
   }).format(Number(value || 0));
   return unit === 'points'
     ? `${formatted} ${t('leaderboards.points')}`

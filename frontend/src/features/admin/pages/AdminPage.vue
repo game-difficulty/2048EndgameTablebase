@@ -429,7 +429,7 @@ const formatCompact = (value) => Intl.NumberFormat(undefined, {
 }).format(Number(value || 0));
 const formatTokens = (value) => Number(value || 0).toLocaleString(undefined, {
   minimumFractionDigits: 0,
-  maximumFractionDigits: 3,
+  maximumFractionDigits: 1,
 });
 const formatDate = (value) => {
   if (!value) return '-';

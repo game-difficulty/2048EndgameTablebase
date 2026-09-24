@@ -59,7 +59,7 @@ const visible = computed(() => visibleBags(bags.value, now.value));
 const floating = computed(() => visible.value.find(bag => !dismissed.value.includes(bag.id)));
 const selected = computed(() => bags.value.find(bag => bag.id===selectedId.value));
 const caption = bag => bagCaption(bag,now.value,props.lang);
-const format = value => Number(value || 0).toLocaleString(props.lang==='zh'?'zh-CN':'en-US');
+const format = value => Number(value || 0).toLocaleString(props.lang==='zh'?'zh-CN':'en-US', { maximumFractionDigits: 1 });
 function install(data, personal=false) {
   if (!data || !Array.isArray(data.bags) || data.server_time < revision) return;
   revision=data.server_time; offset=data.server_time-Date.now()/1000; now.value=Date.now()/1000+offset;

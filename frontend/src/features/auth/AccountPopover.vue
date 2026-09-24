@@ -82,7 +82,7 @@ defineProps({ open: Boolean, authUser: Object, hasSupporterPresentation: Boolean
 defineEmits(['avatar', 'name', 'quota', 'sponsor', 'admin', 'security', 'logout']);
 const formatTokens = value => {
   const number = Number(value || 0);
-  return Number.isFinite(number) ? number.toLocaleString(undefined, { minimumFractionDigits: number % 1 === 0 ? 0 : 1, maximumFractionDigits: 3 }) : '0';
+  return Number.isFinite(number) ? number.toLocaleString(undefined, { maximumFractionDigits: 1 }) : '0';
 };
 </script>
 <style scoped>

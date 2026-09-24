@@ -74,7 +74,7 @@ const catalog = ref({ gifts: [] }), account = ref(null), selectedId = ref('two')
 const selected = computed(() => catalog.value.gifts.find(item => item.id === selectedId.value));
 const cost = computed(() => giftPrice(selected.value,quantity.value));
 const name = id => catalog.value.gifts.find(item => item.id === id)?.[props.lang] || id;
-const tokens = value => ((value || 0) / 1000).toLocaleString(props.lang === 'zh' ? 'zh-CN' : 'en-US', { maximumFractionDigits: 3 });
+const tokens = value => ((value || 0) / 1000).toLocaleString(props.lang === 'zh' ? 'zh-CN' : 'en-US', { maximumFractionDigits: 1 });
 const status = ref(''), settingsStatus = ref(''), busy = ref(false), saving = ref(false), uncertain = ref(false), queue = ref([]);
 const quick = ref(false), quickBudget = ref(0), quickSpent = ref(0), budgetInput = ref(128);
 const confirmation = ref(null), confirmDialog = ref(null), quickDialog = ref(null), settingsDialog = ref(null), balanceDialog = ref(null);

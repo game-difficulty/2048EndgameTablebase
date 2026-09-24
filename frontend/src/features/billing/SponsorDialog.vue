@@ -67,7 +67,7 @@ const paymentRemark = computed(() => (
   props.user?.email || props.user?.display_name || '-'
 ));
 
-const formatTokens = (value) => Number(value || 0).toLocaleString();
+const formatTokens = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 1 });
 </script>
 
 <style scoped>

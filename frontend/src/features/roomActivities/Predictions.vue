@@ -96,7 +96,7 @@ function marketCaption(value) {
 }
 const caption=computed(()=>marketCaption(market.value));
 const startedTime=value=>value == null ? '—' : new Date(value*1000).toLocaleString(props.lang==='zh'?'zh-CN':'en-GB',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-const tokens=units=>Number((Number(units || 0)/1000).toFixed(3)).toLocaleString(undefined,{maximumFractionDigits:3});
+const tokens=units=>(Number(units || 0)/1000).toLocaleString(undefined,{maximumFractionDigits:1});
 const name=id=>market.value?.options.find(p=>p.id===id)?.name || room.participants?.find(p=>p.id===id)?.name || id;
 const storageKey=()=>`room:prediction-pending:${room.id}:${props.user?.id}`;
 function persist(){try{if(pending.value)sessionStorage.setItem(storageKey(),JSON.stringify(pending.value));else sessionStorage.removeItem(storageKey());}catch{}}
