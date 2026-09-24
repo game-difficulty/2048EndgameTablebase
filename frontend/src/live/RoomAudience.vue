@@ -10,9 +10,11 @@
   </div>
 </template>
 <script setup>
+import { useRoom } from './roomContext.js';
+const { url } = useRoom();
 import { ref,watch,onUnmounted } from 'vue';
 import { Users,ChevronDown,CircleHelp } from '@lucide/vue';
-import LiveIdentity from './LiveIdentity.vue';
+import LiveIdentity from '../features/auth/AudienceIdentity.vue';
 const props=defineProps({lang:String,count:Number});
 const emit=defineEmits(['count','help']);
 const t=(zh,en)=>props.lang==='zh'?zh:en;
@@ -26,7 +28,7 @@ async function refresh(){
   if(document.hidden || controller)return;
   const current=new AbortController();controller=current;
   const timeout=setTimeout(()=>current.abort(),8000);
-  try {const response=await fetch('/api/live/audience',{signal:current.signal});if(!response.ok)throw new Error();const data=await response.json();viewers.value=data.viewers;emit('count',data.viewers.length);error.value=false;}
+  try {const response=await fetch(url('/audience'),{signal:current.signal});if(!response.ok)throw new Error();const data=await response.json();viewers.value=data.viewers;emit('count',data.viewers.length);error.value=false;}
   catch {if(open.value)error.value=true;}finally{clearTimeout(timeout);if(controller===current)controller=null;}
 }
 watch(open,value=>{clearInterval(timer);if(value){refresh();timer=setInterval(refresh,5000);}else{controller?.abort();}});

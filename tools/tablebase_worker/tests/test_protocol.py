@@ -32,16 +32,24 @@ def request(**overrides):
 
 
 class WorkerProtocolTests(unittest.TestCase):
-    def test_gamer_route_limits_and_state(self):
-        options = dict(board_codes=[1]*16, rng_state=[1,2,3,4], steps=4,
+    def test_gamer_stream_limits_and_state(self):
+        options = dict(board_codes=[1]*16, rng_state=[1,2,3,4], steps=1,
                        difficulty=0, spawn_rate4=.1, random_only=False)
-        message = dict(type='GENERATE_GAMER_ROUTE', request_id='gamer-1',
-                       full_pattern='free11_512', pattern='free11', target='512', options=options)
+        message = dict(type='GAMER_STREAM_OPEN', request_id='gamer-1',
+                       full_pattern='free11_512', pattern='free11', target='512', options=options, allow_through=7)
         self.assertEqual(self.validate(message).gamer_options, options)
-        for changes in ({'steps':5}, {'steps':0}, {'rng_state':[0]*4},
+        for changes in ({'steps':2}, {'steps':0}, {'rng_state':[0]*4},
                         {'board_codes':[32]*16}, {'difficulty':True}, {'spawn_rate4':float('nan')}):
             with self.subTest(changes=changes), self.assertRaises(ProtocolError):
                 self.validate({**message, 'options':{**options, **changes}})
+
+    def test_retired_gamer_batch_action_is_rejected(self):
+        from tools.tablebase_worker.protocol import WORKER_CAPABILITIES
+
+        self.assertNotIn('gamer_route_v1', WORKER_CAPABILITIES)
+        with self.assertRaises(ProtocolError) as error:
+            self.validate({'type': 'GENERATE_GAMER_ROUTE', 'request_id': 'old-client'})
+        self.assertEqual(error.exception.code, 'UNSUPPORTED_ACTION')
 
     def validate(self, message):
         return validate_request(

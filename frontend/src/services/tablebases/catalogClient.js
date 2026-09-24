@@ -1,8 +1,7 @@
 import { getBackendUrl } from '../runtime/backendUrl.js';
 import { tablebaseResultCache } from './tablebaseResultCache.js';
+import { getPatternCategory, PATTERN_CATEGORY_ORDER } from '../../utils/patternCategories.js';
 
-const VARIANT_PATTERNS = new Set(['2x4', '3x3', '3x4', '3x4free9', '3x3free8']);
-const CATEGORY_ORDER = ['4x4', 'variant'];
 let currentCatalogVersion = '';
 
 function normalizeTable(rawTable = {}) {
@@ -88,21 +87,20 @@ export function groupTablebasesByPattern(tables = []) {
 }
 
 export function groupTablebasePatternsByCategory(tables = []) {
-  const patternsByCategory = {
-    '4x4': new Set(),
-    variant: new Set(),
-  };
+  const patternsByCategory = Object.fromEntries(
+    PATTERN_CATEGORY_ORDER.map((category) => [category, new Set()])
+  );
 
   for (const table of tables) {
     const pattern = String(table?.pattern || '');
     if (!pattern) {
       continue;
     }
-    const category = VARIANT_PATTERNS.has(pattern) ? 'variant' : '4x4';
+    const category = getPatternCategory(pattern);
     patternsByCategory[category].add(pattern);
   }
 
-  return CATEGORY_ORDER.reduce((categories, category) => {
+  return PATTERN_CATEGORY_ORDER.reduce((categories, category) => {
     const patterns = [...patternsByCategory[category]].sort();
     if (patterns.length) {
       categories[category] = patterns;

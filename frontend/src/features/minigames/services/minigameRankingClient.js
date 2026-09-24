@@ -1,6 +1,7 @@
 import { emitAuthRequired } from '../../../services/auth/authEvents';
 import { authHeaders, clearDeviceSession } from '../../../services/auth/sessionTokenStore';
 import { getBackendUrl } from '../../../services/runtime/backendUrl';
+import { displayRequest } from '../../../services/runtime/displayRequest.js';
 
 async function readJson(response, { authenticated = false } = {}) {
   const payload = await response.json().catch(() => ({}));
@@ -122,11 +123,14 @@ export async function fetchMinigameLeaderboard(gameId, { difficulty = 1, limit =
     difficulty: String(Number(difficulty) ? 1 : 0),
     limit: String(limit),
   });
-  const response = await fetch(
-    getBackendUrl(`/api/minigame-rankings/games/${encodeURIComponent(gameId)}?${query}`),
-    { headers: { Accept: 'application/json' }, cache: 'no-store' }
-  );
-  return readJson(response);
+  const path = getBackendUrl(`/api/minigame-rankings/games/${encodeURIComponent(gameId)}?${query}`);
+  return displayRequest(path, async () => {
+    const response = await fetch(
+      path,
+      { headers: { Accept: 'application/json' }, cache: 'no-store' }
+    );
+    return readJson(response);
+  });
 }
 
 export async function fetchMinigameTrophyLeaderboard({ difficulty = 1, limit = 100 } = {}) {
@@ -134,9 +138,12 @@ export async function fetchMinigameTrophyLeaderboard({ difficulty = 1, limit = 1
     difficulty: String(Number(difficulty) ? 1 : 0),
     limit: String(limit),
   });
-  const response = await fetch(
-    getBackendUrl(`/api/minigame-rankings/overall?${query}`),
-    { headers: { Accept: 'application/json' }, cache: 'no-store' }
-  );
-  return readJson(response);
+  const path = getBackendUrl(`/api/minigame-rankings/overall?${query}`);
+  return displayRequest(path, async () => {
+    const response = await fetch(
+      path,
+      { headers: { Accept: 'application/json' }, cache: 'no-store' }
+    );
+    return readJson(response);
+  });
 }

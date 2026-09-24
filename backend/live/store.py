@@ -140,9 +140,10 @@ class LiveStore:
         with self.connect() as db:
             row = db.execute('''SELECT payload FROM live_stats_snapshots
                 WHERE stats_range=? AND version=?''', (stats_range, VERSION)).fetchone()
+            likes = db.execute('SELECT likes FROM live_totals WHERE id=1').fetchone()[0]
         if row:
             try:
-                return json.loads(row[0])
+                return {**json.loads(row[0]), 'likes': likes}
             except (TypeError, ValueError):
                 pass
         # Initialization and recovery happen outside request handling in normal

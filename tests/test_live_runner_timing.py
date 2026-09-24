@@ -5,7 +5,7 @@ from tools import live_runner
 
 
 class LiveRunnerTimingTests(unittest.IsolatedAsyncioTestCase):
-    async def wait_step(self, source, elapsed, *, wake_early=False, board=None):
+    async def wait_step(self, source, elapsed, *, wake_early=False, board=None, drift=0):
         now = elapsed
         waits = []
 
@@ -16,13 +16,28 @@ class LiveRunnerTimingTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(live_runner.time, 'monotonic', side_effect=lambda: now), \
                 patch.object(live_runner.asyncio, 'sleep', side_effect=sleep):
-            await live_runner.wait_for_step(0, source, .08, .05, board)
+            await live_runner.wait_for_step(0, source, .08, .05, board, drift=drift)
         return now, waits
 
     async def test_search_only_waits_to_fifty_milliseconds(self):
         now, waits = await self.wait_step('AI', .02)
         self.assertAlmostEqual(now, .05)
         self.assertAlmostEqual(sum(waits), .03)
+
+    async def test_drift_adds_to_each_stage_minimum_including_early_wake(self):
+        for tiles, minimum in [([2], .015), ([1024]*3, .05),
+                               ([1024]*6, .12), ([1024]*7, .18)]:
+            board = tiles + [0] * (16-len(tiles))
+            now, _ = await self.wait_step('AI', .01, board=board, drift=.005, wake_early=True)
+            self.assertAlmostEqual(now, minimum+.005)
+        now, _ = await self.wait_step('table', .01, board=[1024]*3+[0]*13, drift=.005)
+        self.assertAlmostEqual(now, .085)
+
+    async def test_drift_does_not_add_sleep_after_slow_search_or_reduce_minimum(self):
+        now, waits = await self.wait_step('AI', .2, drift=.005)
+        self.assertEqual((now, waits), (.2, []))
+        now, _ = await self.wait_step('AI', .01, drift=-.005)
+        self.assertAlmostEqual(now, .05)
 
     async def test_table_keeps_eighty_milliseconds(self):
         now, waits = await self.wait_step('free11_2048', .02)

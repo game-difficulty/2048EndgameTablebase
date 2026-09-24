@@ -1,4 +1,13 @@
-# AI live stream V1
+# AI live stream
+
+Room/content/gift separation now uses `/rooms/ai-classic` and
+`/api/live/rooms/{room_id}/*`, retaining the legacy default-room URLs.
+See [room architecture, extension contracts and migration notes](live_rooms_design.md).
+
+Production now uses three independent AI runs (`LIVE_AI_LANES=3`), with one
+coordinator and three native AI child processes. Viewers choose a main-board layout
+or three equal boards. See [three-run protocol, behavior and deployment notes](live_three_ai_design.md).
+The protocol and runner sections below describe the retained **single-run V1** mode.
 
 ## Architecture
 
@@ -25,8 +34,8 @@ JSON messages are separate: snapshot/restart, decision-source changes, presence
 (5 seconds), completed-game summary, chat, and aggregated likes. All transport
 ordering is on one socket. Spectators never acknowledge individual moves.
 An initial/reconnect snapshot contains exact tile values, score, elapsed time,
-milestones, and sequence. A slow spectator has a bounded 32-message send buffer;
-overflow replaces its backlog with the latest snapshot. Hidden tabs disconnect
+milestones, and sequence. A slow spectator has a bounded 32-message / 256 KiB send buffer;
+overflow reconnects and restores both game state and social history. Hidden tabs disconnect
 and recover a snapshot when visible, rather than accumulating animations.
 
 The runner sleeps only for the remaining part of its configured 80ms interval.
@@ -141,8 +150,9 @@ GET `/api/live/replays/{id}`. The producer credential cannot be used by browsers
 Publisher exclusivity is enforced by the single cloud process.
 
 Build with `npm run build`; deploy the complete generated frontend assets and both
-HTML entries. The added shared animation-duration prop defaults to the old 300ms;
-only live boards request a 45ms animation. Gamer's move implementation has been
+HTML entries. Live boards use the shared 300ms animation duration: 100ms slide,
+200ms pop/appear, merge reveal at 100ms and spawn reveal at 125ms. The earlier
+45ms note is obsolete; do not introduce a live-only duration override. Gamer's move implementation has been
 extracted unchanged to `classicMove.js`, shared by the live frontend.
 
 Production uses `deploy/live.nginx.conf` with a dedicated Let's Encrypt certificate.
@@ -336,6 +346,64 @@ the viewer's own award. Guests are prompted to sign in. Reduced motion uses the
 static poster.
 
 ## Verification
+
+### Prediction window and presentation update (2026-09-24)
+
+Current side-bet net reward multipliers are 8× / 50× (principal returned
+separately: 100 Tokens returns 900 / 5,100). Existing unsettled markets use the
+current multipliers; completed settlements remain unchanged. Newly created
+batches accept entries for 600 seconds, retaining all earlier closure rules.
+Existing batch deadlines are retained. The dialog uses two columns and shows
+at most five recent settlements below, identified by local start time. Each row
+combines both stakes: original principal = returned principal + refunds + losses;
+net profit = rewards minus losses, including negative values.
+
+### Independent side-bet reward tiers (2026-09-24)
+
+The existing `target65536` side stake now awards the highest achieved tier once
+at batch settlement: 65536 pays 10× net reward plus principal; a 65536 tile and
+a 32768 tile coexisting on the same board pay 100× net reward plus principal.
+A stake of 100 thus returns 1,100 or 10,100 Tokens. Tiers do not stack and do not
+require a new stake. Entries still close at the first 65536 hit (or game end),
+within the original market deadline. Technical voids refund principal only.
+
+`LiveRun.apply` records the coexistence milestone in `nodes['65536+32768']`;
+checkpoint restoration rebuilds it from validated moves, preserving a hit even
+if those tiles later merge. Batch facts can advance from `reached` to
+`reached_combo`, persist before ledger reconciliation, and cannot downgrade.
+An additive `combo_reached` column retains the existing reached/missed outcome
+constraint and all historical settlements. Unsettled batches use the new tier;
+settled markets are never recalculated. The wire move format is unchanged.
+
+### Room activity dock and batch pacing (2026-09-24)
+
+`features/roomActivities/RoomActivityEntry.vue` provides the room-level activity
+card, with an icon, countdown, open action and dismiss action. Lucky bags, red
+envelopes and predictions share it; dismissals are scoped to room and activity ID
+in session storage. Multiple active cards stack without changing the content
+rectangle. The permanent prediction entry in the gift strip remains available.
+The prediction dock card only appears during the connected/live opening window.
+The red envelope card only appears while shares are claimable (not expired,
+exhausted, the sender's own envelope, or already claimed by this viewer). Its
+chat message still opens the result after the dock card disappears.
+
+`tools/live_pacing.py` derives a shuffled three-lane delay profile from each fresh
+batch UUID, independently of gameplay randomness. The smallest mean is 2–3 ms;
+successive means are separated by 2–2.5 ms, so every pair differs by 2–5 ms.
+Each step adds uniform ±1 ms jitter around its lane's mean. All delays remain
+positive (1–9 ms) and are added to the existing stage/source minimum interval.
+Computation time still counts towards that interval: a slow search receives no
+extra forced sleep. There is no AI-specific permanent speed advantage, change
+to move choice/spawn RNG, delayed batch start, or added network payload.
+
+The profile and per-step jitter are derived from batch ID, lane and sequence;
+reconnects/restarts retain the same values without checkpoint schema changes.
+New batches get fresh profiles; the worker logs each profile in milliseconds.
+
+```text
+python -m unittest tests.test_live_pacing tests.test_live_runner_timing tests.test_live_batches tests.test_live_multi
+node --test frontend/tests/roomActivityAvailability.test.js frontend/tests/liveLuckyBags.test.js
+```
 
 ```text
 python -m unittest tests.test_live tests.test_live_routes tests.test_live_gifts

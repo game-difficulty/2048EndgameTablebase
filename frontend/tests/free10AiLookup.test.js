@@ -13,14 +13,29 @@ function setup(pattern, target, smallTiles) {
   return { dispatcher, board, candidate };
 }
 
-test('free10 skips lookup below 32 for every target, including the low-sum mask fallback', async () => {
+test('free10 queries below 32 but rejects incomplete direction coverage', async () => {
   for (const target of [128, 256, 512]) {
     for (const tiles of [[], [16, 4, 2], [16, 8], [16, 8, 4, 2]]) {
       const { dispatcher, board } = setup('free10', target, tiles);
-      assert.equal(await dispatcher.choose(() => assert.fail('Must not query or consume cache')), 'AI');
+      let calls = 0;
+      assert.equal(await dispatcher.choose(async () => {
+        calls++;
+        return { results: { left: .9, right: 0 }, legal_moves_mask: 3, dtype: 'float64' };
+      }), 'AI');
+      assert.equal(calls, 1);
       assert.deepEqual(dispatcher.board, board);
       assert.equal(dispatcher.cooldowns.size, 0);
     }
+  }
+});
+
+test('free10 accepts complete positive coverage below 32 without a cooldown', async () => {
+  for (const target of [128, 256, 512]) {
+    const { dispatcher } = setup('free10', target, [16, 8, 4, 2]);
+    assert.equal(await dispatcher.choose(async () => ({
+      results: { left: .9, right: .8 }, legal_moves_mask: 3, dtype: 'float64',
+    })), 'left');
+    assert.equal(dispatcher.cooldowns.size, 0);
   }
 });
 
@@ -38,7 +53,7 @@ test('free10 still queries at 32 and above with the same masked board', async ()
   }
 });
 
-test('skipping free10 continues with the next candidate without adding a cooldown', async () => {
+test('incomplete free10 coverage continues with the next candidate without adding a cooldown', async () => {
   const { dispatcher, candidate } = setup('free10', 512, [16, 8, 4, 2]);
   const next = { ...candidate, table: { ...candidate.table, pattern: 'free11', fullPattern: 'free11_512' } };
   dispatcher.candidates = () => [candidate, next];
@@ -47,6 +62,6 @@ test('skipping free10 continues with the next candidate without adding a cooldow
     calls.push(table.fullPattern);
     return { results: { right: .9 }, dtype: 'float64' };
   }), 'right');
-  assert.deepEqual(calls, ['free11_512']);
+  assert.deepEqual(calls, ['free10_512', 'free11_512']);
   assert.equal(dispatcher.cooldowns.size, 0);
 });

@@ -94,8 +94,8 @@ def step_interval(board, source, table_interval, search_interval):
     return search_interval if source == 'AI' else table_interval
 
 
-async def wait_for_step(started, source, table_interval, search_interval, board=None):
-    interval = step_interval(board, source, table_interval, search_interval)
+async def wait_for_step(started, source, table_interval, search_interval, board=None, *, drift=0.0):
+    interval = step_interval(board, source, table_interval, search_interval) + max(0.0, drift)
     # Windows timers can wake early; enforce the minimum on the clock.
     remaining = interval - (time.monotonic() - started)
     while remaining > 0:
@@ -105,13 +105,14 @@ async def wait_for_step(started, source, table_interval, search_interval, board=
 
 class RunnerControl:
     """Fence steps at the send boundary; a native search already running may finish."""
-    def __init__(self, socket, initial, checkpoint):
+    def __init__(self, socket, initial, checkpoint, on_message=None):
         self.socket, self.checkpoint = socket, checkpoint
         self.enabled = initial.get('enabled', True)
         self.revision = initial.get('revision', 0)
         self.lock = asyncio.Lock()
         self.wake = asyncio.Event()
         self.reader = None
+        self.on_message = on_message
         if self.enabled:
             self.wake.set()
 
@@ -122,6 +123,9 @@ class RunnerControl:
         try:
             while True:
                 data = json.loads(await self.socket.recv())
+                if data.get('type') != 'control' and self.on_message:
+                    await self.on_message(data)
+                    continue
                 if data.get('type') != 'control' or data['revision'] < self.revision:
                     continue
                 async with self.lock:

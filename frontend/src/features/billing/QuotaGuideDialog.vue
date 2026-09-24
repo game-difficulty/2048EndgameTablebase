@@ -385,7 +385,7 @@ watch(
 
 .quota-notes {
   display: grid;
-  grid-template-columns: auto 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.45rem 1rem;
   color: var(--text-secondary);
   font-size: var(--font-ui-xs);
@@ -394,7 +394,12 @@ watch(
 }
 
 .quota-notes h3 {
-  grid-row: span 2;
-  padding-right: 0.5rem;
+  grid-column: 1 / -1;
+  grid-row: auto;
+}
+
+.quota-notes p {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 </style>

@@ -1,19 +1,21 @@
-# Experimental live picture-in-picture
+# Live picture-in-picture acceptance
 
-Open `/live/?pip=1` locally (or `/?pip=1` on the live subdomain).
-The normal URL has no experimental UI. Nothing is published or recorded: a
-480x480 canvas feeds a local muted video MediaStream. No extra WebSocket is
-created. This prototype redraws complete boards, without move/pop animations.
+Open the normal live root or `/rooms/ai-classic`; no query parameter is required.
+Use the room-header Mini player button. Automatic mode prefers Document PiP;
+the video fallback uses a local muted 960x540 canvas stream. No video is uploaded
+and no second WebSocket is created. The old `?pip=1` URL remains compatible.
+Diagnostics and test labels were removed for the production launch.
 
 ## Device procedure
 
-1. Open the experimental URL, then click the square Experimental PiP icon to
-   the right of Copy board. Record any API error.
+1. Open the normal URL, then click Mini player in the room header. Try Automatic,
+   Room window and Video fallback independently.
 2. Observe changing boards in the floating window. Switch to another tab,
    then another app. Remain away for at least four minutes.
 3. Confirm the floating board continues changing, including a new game.
-4. Return and expand PiP diagnostics. Record browser/version, lastUpdate,
-   hiddenUpdates, maxHiddenTickGapMs, videoFrames and videoTime.
+4. In Document PiP, resize the window and switch main/equal layouts: the stage
+   keeps its 16:9 ratio and fits the available space. Close it and verify the
+   original content node, selected AI, and layout are restored.
 5. Briefly disconnect networking while PiP is open, then restore it; check
    reconnect and the next board. Close PiP using its system close control.
 6. Confirm the video source/track is released; without PiP the usual three-minute
@@ -24,14 +26,12 @@ Test background tabs and switching apps separately. Lock-screen playback is
 not promised. Missing video PiP/canvas capture is reported, not replaced with
 another kind of window. Android emulation is not an Android device test.
 
-## What counters mean
+## Developer inspection
 
-`draws` counts canvas renders, not necessarily video frames presented by the OS.
-`videoFrames` comes from getVideoPlaybackQuality, or null if unavailable.
-`hiddenUpdates` counts distinct board revisions received while document.hidden
-is true; some PiP environments keep the document visible even after switching
-tabs. Increasing decoded video frames is useful evidence, but a human must
-still check the system floating window on each device.
+Use browser tooling to inspect video playback and media track cleanup when needed.
+Increasing decoded frames is useful evidence, but a human must still check the
+system floating window on each device. Some PiP environments keep the opener
+document visible after switching tabs; that does not simulate mobile freezing.
 
 ## Automated checks
 
@@ -44,8 +44,8 @@ video playback counters over time and sample decoded video pixels.
 Application timeout checks may inject document.hidden=true, but explicitly
 label that simulation: it does not reproduce mobile OS throttling.
 
-No server changes, production deployment or Android device certification are
-part of this prototype. First establish device viability before animations.
+The production launch updates only the live frontend. Physical mobile device
+behavior still needs device-specific checks; desktop emulation is not certification.
 
 ## 2026-09-18 smoke results
 

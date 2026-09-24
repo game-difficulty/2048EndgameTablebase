@@ -6,8 +6,8 @@
 
 <script setup>
 import { onMounted, onBeforeUnmount, ref } from 'vue';
-import GiftIcon from './GiftIcon.vue';
-import { giftAsset, referenceArtwork } from './giftArtwork.js';
+import GiftIcon from '../features/gifts/GiftIcon.vue';
+import { giftAsset, referenceArtwork } from '../features/gifts/giftArtwork.js';
 import { likeReactionWeights, pickLikeReaction } from './likeReaction.js';
 
 const active = ref(null);

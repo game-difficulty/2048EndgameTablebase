@@ -10,7 +10,7 @@ test('stage sizing never measures its own rendered size or needs ResizeObserver'
 });
 
 test('live board dimensions and typography share a fixed design size', () => {
-  const source = readFileSync(new URL('../src/live/LivePage.vue', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../src/live/content/ClassicAiContent.vue', import.meta.url), 'utf8');
   assert.match(source, /--live-board-size:480px/);
   assert.match(source, /height:var\(--live-board-size\)/);
   for (const divisor of [12, 15, 20]) {

@@ -12,6 +12,7 @@ server {
     client_max_body_size 32k;
 
     location = / { try_files /live/index.html =404; add_header Cache-Control no-cache; }
+    location /rooms/ { try_files /live/index.html =404; add_header Cache-Control no-cache; }
     location /assets/ { try_files $uri =404; expires 1y; add_header Cache-Control "public, immutable"; }
     location /live-music/ { try_files $uri =404; expires 30d; }
     location /payments/ { try_files $uri =404; expires 1d; }
@@ -32,8 +33,22 @@ server {
         proxy_read_timeout 45s;
         proxy_buffering off;
     }
+    location ~ "^/api/live/rooms/[a-z0-9][a-z0-9-]{0,47}/watch$" {
+        limit_conn live_viewers 8;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Sec-WebSocket-Extensions "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header CF-Connecting-IP "";
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
     # Publishing is only exposed on the main domain and authenticated separately.
     location = /api/live/publish { return 404; }
+    location ~ "^/api/live/rooms/[a-z0-9][a-z0-9-]{0,47}/publish$" { return 404; }
     location /api/ {
         limit_req zone=live_http burst=15 nodelay;
         proxy_pass http://127.0.0.1:8000;

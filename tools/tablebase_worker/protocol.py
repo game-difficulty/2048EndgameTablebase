@@ -10,10 +10,9 @@ from typing import Any, Iterable
 
 PROTOCOL_VERSION = 1
 CAPABILITY_BATTLE_ROUTE_V1 = "battle_route_v1"
-CAPABILITY_GAMER_ROUTE_V1 = "gamer_route_v1"
 CAPABILITY_GAMER_STREAM_V1 = "gamer_stream_v1"
 CAPABILITY_GAMER_STREAM_V2 = "gamer_stream_v2"
-WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1, CAPABILITY_GAMER_STREAM_V2)
+WORKER_CAPABILITIES = (CAPABILITY_BATTLE_ROUTE_V1, CAPABILITY_GAMER_STREAM_V1, CAPABILITY_GAMER_STREAM_V2)
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 BOARD_RE = re.compile(r"^[0-9a-fA-F]{16}$")
 SEED_RE = re.compile(r"^[0-9a-fA-F]{32}$")
@@ -22,7 +21,6 @@ REQUEST_TYPES = {
     "LOOKUP_BATCH",
     "RANDOM_STATE",
     "GENERATE_BATTLE_ROUTE",
-    "GENERATE_GAMER_ROUTE",
     "GAMER_STREAM_OPEN",
     "GAMER_STREAM_CREDIT",
     "CANCEL",
@@ -190,7 +188,6 @@ def validate_request(
         "LOOKUP": common | {"board", "use_variant", "board_is_lookup"},
         "LOOKUP_BATCH": common | {"boards", "use_variant", "board_is_lookup"},
         "RANDOM_STATE": common,
-        "GENERATE_GAMER_ROUTE": common | {"options"},
         "GAMER_STREAM_OPEN": common | {"options", "allow_through"},
         "GENERATE_BATTLE_ROUTE": common
         | {
@@ -221,7 +218,7 @@ def validate_request(
             request_id,
         )
 
-    if message_type in {"GENERATE_GAMER_ROUTE", "GAMER_STREAM_OPEN"}:
+    if message_type == "GAMER_STREAM_OPEN":
         from backend.gamer_tablebase_route import validate_options
         try:
             options = validate_options(message.get('options'))

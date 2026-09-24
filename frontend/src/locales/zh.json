@@ -1,4 +1,11 @@
 {
+  "patternCategories": {
+    "free": "Free",
+    "space10": "10 格",
+    "space12": "12 格",
+    "others": "其他",
+    "variant": "Variant"
+  },
   "announcements": {
     "title": "公告",
     "history": "历史公告",

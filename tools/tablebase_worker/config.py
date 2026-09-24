@@ -21,6 +21,7 @@ TABLE_FILE_SUFFIXES = (
     ".exadbook",
     ".exadzbook",
     ".bccmp",
+    ".bcraw",
     ".bcpos",
     ".bcsuc",
 )

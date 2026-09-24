@@ -11,7 +11,6 @@
     decodeReplayText,
     playbackDuration,
     playbackTimelineAtState,
-    planMoveTransitions,
     progressAtPlaybackTimeline,
     replayTimeAtPlaybackTimeline,
     snapshotToHex,
@@ -206,16 +205,7 @@
 
     if (!shouldAnimate) return;
 
-    const step = state.replay.steps[fromProgress];
-    const before = state.replay.getBoardAt(fromProgress);
-    const transition = planMoveTransitions(
-      before,
-      state.replay.width,
-      state.replay.height,
-      step.direction,
-      step.number,
-      step.special32k,
-    );
+    const transition = state.replay.transitions[fromProgress];
     const movingTiles = transition.sources.map((source) => {
       const tile = createMotionTile(source.exponent, source.fromIndex, ' is-moving');
       const fromCell = state.tileElements[source.fromIndex].parentElement;
@@ -230,8 +220,11 @@
     for (const merge of transition.merges) {
       createMotionTile(merge.exponent, merge.toIndex, ' is-merge-result');
     }
-    const spawnIndex = step.spawnY * state.replay.width + step.spawnX;
-    createMotionTile(board[spawnIndex], spawnIndex, ' is-new-result');
+    createMotionTile(
+      transition.spawn.exponent,
+      transition.spawn.index,
+      ' is-new-result',
+    );
 
     // Force the source positions to commit before applying destination
     // transforms. The original site uses the same 100 ms slide followed by
@@ -469,7 +462,7 @@
       state.clockMs = 0;
       elements.progress.min = '0';
       elements.progress.max = String(replay.moveCount);
-      elements.fileName.textContent = t(`${sourceName} · ${replay.width}×${replay.height} · ${replay.moveCount.toLocaleString('zh-CN')} 步`);
+      elements.fileName.textContent = t(`${sourceName} · ${replay.height}×${replay.width} · ${replay.moveCount.toLocaleString('zh-CN')} 步`);
       elements.timingNote.textContent = replay.unknownTimings
         ? t(`含 ${replay.unknownTimings} 个未知间隔；统一按 ${UNKNOWN_TIMING_FALLBACK_MS} ms 计入回放用时。秒表采用绝对时间基准，不累计页面渲染延迟。`)
         : t('秒表采用绝对时间基准连续计时，不累计页面渲染延迟。');
@@ -522,7 +515,7 @@
     if (liveId) {
       elements.fileName.textContent = t('正在载入 AI 直播回放…');
       try {
-        const response = await fetch(`/api/live/replays/${encodeURIComponent(liveId)}`);
+        const response = await fetch(`/api/live/rooms/${encodeURIComponent(new URLSearchParams(location.search).get('room') || 'ai-classic')}/replays/${encodeURIComponent(liveId)}`);
         if (!response.ok) throw new Error(response.status === 404 ? t('回放已过期或不存在') : t('暂时无法获取回放'));
         const responseText = await response.text();
         await installReplay(() => decodeReplayText(responseText), t('AI 直播对局'), responseText);
@@ -681,8 +674,39 @@
     loadFile(event.dataTransfer.files[0]);
   });
 
+  function receiveLocalHumanReplay() {
+    const token = new URLSearchParams(location.hash.slice(1)).get('human');
+    if (!token || !/^[a-f0-9-]{36}$/i.test(token)) return false;
+    const sourceWindow = window.opener;
+    async function load(payload) {
+      try {
+        await installReplay(() => decodeReplayText(payload.text), payload.filename || t('人类对局'), payload.text);
+        // This tab alone retains the snapshot for refresh; no server or permanent archive.
+        try { sessionStorage.setItem('human-replay-snapshot', JSON.stringify(payload)); } catch (_) {}
+        sourceWindow?.postMessage({ type: 'human-replay-loaded', token }, location.origin);
+      } catch (_) {
+        sourceWindow?.postMessage({ type: 'human-replay-error', token }, location.origin);
+      } finally { window.opener = null; }
+    }
+    try {
+      const saved = JSON.parse(sessionStorage.getItem('human-replay-snapshot') || 'null');
+      if (saved?.token === token && typeof saved.text === 'string') { void load(saved); return true; }
+    } catch (_) {}
+    if (!sourceWindow) { showError(t('本地回放已失效，请从人类站重新打开。')); return true; }
+    const timeout = setTimeout(() => { window.removeEventListener('message', receive); showError(t('本地回放已失效，请从人类站重新打开。')); }, 15000);
+    function receive(event) {
+      if (event.origin !== location.origin || event.source !== sourceWindow || event.data?.token !== token || event.data?.type !== 'human-replay-data') return;
+      if (typeof event.data.text !== 'string' || event.data.text.length > 2 * 1024 * 1024) return;
+      clearTimeout(timeout); window.removeEventListener('message', receive);
+      void load({ token, text: event.data.text, filename: String(event.data.filename || '').slice(0, 120) });
+    }
+    window.addEventListener('message', receive);
+    sourceWindow.postMessage({ type: 'human-replay-ready', token }, location.origin);
+    return true;
+  }
+
   renderSpeedButton();
   renderStats();
   renderControls();
-  loadRankedReplayFromUrl();
+  if (!receiveLocalHumanReplay()) loadRankedReplayFromUrl();
 })();

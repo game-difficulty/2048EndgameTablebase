@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
 from .config import TABLE_FILE_SUFFIXES, TableConfig, WorkerConfig, table_path_status
+from .layer_inventory import LayerInventory
 
 
 logger = logging.getLogger("tablebase_worker.reader")
@@ -346,6 +347,7 @@ class ReaderPool:
         }
         self._init_locks = {table_id: threading.Lock() for table_id in config.tables}
         self._tables: dict[str, TableRuntime] = {}
+        self._layer_inventory = LayerInventory()
         for table_id, table in config.tables.items():
             ready, error_code = path_checker(table)
             self._tables[table_id] = TableRuntime(table, ready, error_code)
@@ -373,10 +375,14 @@ class ReaderPool:
         }
 
     def hello_tables(self) -> list[dict[str, Any]]:
-        return [
-            {"full_pattern": table_id, "ready": runtime.ready}
-            for table_id, runtime in sorted(self._tables.items())
-        ]
+        tables = []
+        for table_id, runtime in sorted(self._tables.items()):
+            item = {"full_pattern": table_id, "ready": runtime.ready}
+            inventory = self._layer_inventory.get(runtime.config) if runtime.ready else None
+            if inventory is not None:
+                item['layer_inventory'] = inventory
+            tables.append(item)
+        return tables
 
     def refresh_readiness(self) -> list[dict[str, Any]]:
         for table_id, runtime in self._tables.items():
@@ -495,19 +501,6 @@ class ReaderPool:
     async def random_state(self, table_id: str) -> int:
         return await self._run(table_id, lambda reader: reader.random_state())
 
-    async def generate_gamer_route(self, table_id: str, options: dict):
-        from Config import category_info, pattern_32k_tiles_map
-        from backend.gamer_tablebase_route import generate_route
-        from .protocol import sanitize_results
-        table = self._runtime(table_id).config
-        if table.pattern in category_info.get('variant', []):
-            raise TableUnavailable('Variant is not supported by Gamer')
-        def execute(reader):
-            def lookup(board):
-                results, dtype = reader.lookup(board, use_variant=False, board_is_lookup=False)
-                return sanitize_results(results), str(dtype or '?')
-            return generate_route(options, pattern_32k_tiles_map[table.pattern][0], lookup)
-        return await self._run(table_id, execute)
 
     async def generate_battle_route(
         self,

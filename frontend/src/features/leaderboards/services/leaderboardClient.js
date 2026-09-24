@@ -1,3 +1,5 @@
+import { displayRequest } from '../../../services/runtime/displayRequest.js';
+
 const readJson = async (response) => {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -6,20 +8,23 @@ const readJson = async (response) => {
   return payload;
 };
 
-export const fetchLeaderboardCatalog = async () => {
+export const fetchLeaderboardCatalog = () => displayRequest('/api/leaderboards', async () => {
   const response = await fetch('/api/leaderboards', {
     headers: { Accept: 'application/json' },
   });
   return readJson(response);
-};
+});
 
 export const fetchLeaderboard = async (boardKey, { limit } = {}) => {
   const query = Number.isInteger(limit) && limit > 0
     ? `?limit=${encodeURIComponent(limit)}`
     : '';
-  const response = await fetch(`/api/leaderboards/${encodeURIComponent(boardKey)}${query}`, {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
+  const path = `/api/leaderboards/${encodeURIComponent(boardKey)}${query}`;
+  return displayRequest(path, async () => {
+    const response = await fetch(path, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    return readJson(response);
   });
-  return readJson(response);
 };

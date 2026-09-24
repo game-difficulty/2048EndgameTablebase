@@ -115,6 +115,7 @@ struct LzmaApi {
     void *module = nullptr;
 #endif
     size_t (*stream_buffer_bound)(size_t) = nullptr;
+    uint64_t (*crc64)(const uint8_t *, size_t, uint64_t) = nullptr;
     lzma_ret (*easy_buffer_encode)(
         uint32_t,
         lzma_check,
@@ -177,6 +178,8 @@ LzmaApi &lzma_api() {
 
         api.stream_buffer_bound =
             reinterpret_cast<size_t (*)(size_t)>(load_symbol("lzma_stream_buffer_bound"));
+        api.crc64 = reinterpret_cast<uint64_t (*)(const uint8_t *, size_t, uint64_t)>(
+            load_symbol("lzma_crc64"));
         api.easy_buffer_encode =
             reinterpret_cast<lzma_ret (*)(uint32_t, lzma_check, const lzma_allocator *, const uint8_t *, size_t, uint8_t *, size_t *, size_t)>(
                 load_symbol("lzma_easy_buffer_encode"));
@@ -1256,6 +1259,14 @@ std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, 
 
 std::vector<uint8_t> decompress_xz_block_native(const uint8_t *data, size_t size) {
     return xz_decompress_bytes(data, size);
+}
+
+uint64_t crc64_bytes_native(const uint8_t *data, size_t size) {
+    const auto &api = lzma_api();
+    if (!api.crc64 || (size != 0U && data == nullptr)) {
+        throw std::runtime_error("BC RAW CRC64 is unavailable or input is null");
+    }
+    return api.crc64(data, size, 0U);
 }
 
 bool compress_with_7z_or_xz(const std::string &input_path, int lvl) {

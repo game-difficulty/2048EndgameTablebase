@@ -10,7 +10,9 @@ export function livePageWidth(width, height) {
 
 export function useLiveLayoutScale() {
   const update = () => {
-    const width = document.documentElement.clientWidth, height = window.innerHeight;
+    // The previous layout may briefly have a scrollbar during a resize. Its
+    // clientWidth must not determine the next scale and leave a stale gutter.
+    const width = window.innerWidth, height = window.innerHeight;
     document.body.style.setProperty('--live-scale', String(livePageScale(width, height)));
     document.body.style.setProperty('--live-page-width', `${livePageWidth(width, height)}px`);
   };
@@ -27,13 +29,5 @@ export function useLiveLayoutScale() {
   });
 }
 
-// DOM rectangles are visual pixels; fixed-position offsets use zoomed CSS pixels.
-export function liveLayoutViewport(element) {
-  const scale = Number.parseFloat(getComputedStyle(document.body).getPropertyValue('--live-scale')) || 1;
-  const rect = element.getBoundingClientRect();
-  return {
-    width: innerWidth / scale,
-    height: innerHeight / scale,
-    rect: Object.fromEntries(['left', 'top', 'right', 'bottom', 'width', 'height'].map(key => [key, rect[key] / scale])),
-  };
-}
+// DOM rectangles use the shared host viewport utility.
+export { layoutViewport as liveLayoutViewport } from '../utils/layoutViewport.js';

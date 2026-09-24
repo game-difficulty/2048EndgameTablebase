@@ -1,0 +1,286 @@
+"""Permanent-token escrow and deterministic, capped pari-mutuel settlement."""
+import json
+import time
+import uuid
+from datetime import datetime, timezone
+
+from fastapi import HTTPException
+from backend.auth.db import auth_db
+
+AMOUNTS = (100, 500, 1000, 5000)
+UNIT = 1000
+RULE_VERSION = 'matched-accounts-v1'
+TARGET = 65536
+TARGET_REWARD = 8  # Net reward; winning principal is returned separately.
+BONUS_TARGET = 32768  # Must coexist with TARGET on the same board.
+BONUS_REWARD = 50  # Highest tier only, not added to TARGET_REWARD.
+
+
+def init_schema():
+    with auth_db() as db:
+        db.executescript('''
+            CREATE TABLE IF NOT EXISTS room_prediction_markets (
+                id TEXT PRIMARY KEY, room_id TEXT NOT NULL, options TEXT NOT NULL,
+                started REAL NOT NULL, deadline REAL NOT NULL, status TEXT NOT NULL,
+                rules TEXT NOT NULL, winners TEXT, reason TEXT, settled REAL);
+            CREATE INDEX IF NOT EXISTS prediction_room ON room_prediction_markets(room_id,started DESC);
+            CREATE TABLE IF NOT EXISTS room_prediction_stakes (
+                market_id TEXT NOT NULL REFERENCES room_prediction_markets(id),
+                user_id INTEGER NOT NULL REFERENCES users(id), option_id TEXT NOT NULL,
+                units INTEGER NOT NULL CHECK(units>0), PRIMARY KEY(market_id,user_id));
+            CREATE TABLE IF NOT EXISTS room_prediction_requests (
+                user_id INTEGER NOT NULL REFERENCES users(id), request_id TEXT NOT NULL,
+                market_id TEXT NOT NULL, option_id TEXT NOT NULL, units INTEGER NOT NULL,
+                PRIMARY KEY(user_id,request_id));
+            CREATE TABLE IF NOT EXISTS room_prediction_settlements (
+                market_id TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id),
+                principal INTEGER NOT NULL, profit INTEGER NOT NULL, refund INTEGER NOT NULL,
+                loss INTEGER NOT NULL, PRIMARY KEY(market_id,user_id));
+            CREATE TABLE IF NOT EXISTS room_prediction_target_stakes (
+                market_id TEXT NOT NULL REFERENCES room_prediction_markets(id),
+                user_id INTEGER NOT NULL REFERENCES users(id), option_id TEXT NOT NULL,
+                units INTEGER NOT NULL CHECK(units>0), PRIMARY KEY(market_id,user_id));
+            CREATE TABLE IF NOT EXISTS room_prediction_target_requests (
+                user_id INTEGER NOT NULL REFERENCES users(id), request_id TEXT NOT NULL,
+                market_id TEXT NOT NULL, option_id TEXT NOT NULL, units INTEGER NOT NULL,
+                PRIMARY KEY(user_id,request_id));
+            CREATE TABLE IF NOT EXISTS room_prediction_target_settlements (
+                market_id TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id),
+                principal INTEGER NOT NULL, profit INTEGER NOT NULL, refund INTEGER NOT NULL,
+                loss INTEGER NOT NULL, PRIMARY KEY(market_id,user_id));
+            CREATE TABLE IF NOT EXISTS room_prediction_target_outcomes (
+                market_id TEXT NOT NULL REFERENCES room_prediction_markets(id),
+                option_id TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('reached','missed')),
+                PRIMARY KEY(market_id,option_id));
+        ''')
+        # Additive migration retains historical outcomes/settlements unchanged.
+        db.execute('BEGIN IMMEDIATE')
+        columns = {row['name'] for row in db.execute('PRAGMA table_info(room_prediction_target_outcomes)')}
+        if 'combo_reached' not in columns:
+            db.execute('ALTER TABLE room_prediction_target_outcomes ADD COLUMN combo_reached INTEGER NOT NULL DEFAULT 0 CHECK(combo_reached IN (0,1))')
+
+
+def ensure_market(room_id, batch):
+    if batch.get('transition'):
+        return
+    with auth_db() as db:
+        db.execute('''INSERT OR IGNORE INTO room_prediction_markets
+            (id,room_id,options,started,deadline,status,rules) VALUES(?,?,?,?,?,'open',?)''',
+            (batch['id'], room_id, json.dumps(batch['participants']), batch['started_at'],
+             batch['deadline'], RULE_VERSION))
+        saved = db.execute('SELECT room_id,started FROM room_prediction_markets WHERE id=?', (batch['id'],)).fetchone()
+        if saved['room_id'] != room_id or saved['started'] != batch['started_at']:
+            raise ValueError('prediction_market_conflict')
+
+
+def close(room_id, market_id):
+    with auth_db() as db:
+        db.execute("UPDATE room_prediction_markets SET status='closed' WHERE id=? AND room_id=? AND status='open'",
+                   (market_id, room_id))
+
+
+def record_targets(room_id, market_id, outcomes):
+    """Only trusted, persisted content facts enter this bridge, never client claims."""
+    with auth_db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        market = db.execute('SELECT options,settled FROM room_prediction_markets WHERE id=? AND room_id=?',
+                            (market_id,room_id)).fetchone()
+        if not market or market['settled'] is not None:
+            return
+        options = {p['id'] for p in json.loads(market['options'])}
+        for option, outcome in outcomes.items():
+            if option not in options or outcome not in ('reached','missed','reached_combo'):
+                raise ValueError('invalid_prediction_target')
+            base = 'reached' if outcome == 'reached_combo' else outcome
+            combo = int(outcome == 'reached_combo')
+            old = db.execute('SELECT outcome FROM room_prediction_target_outcomes WHERE market_id=? AND option_id=?',
+                             (market_id,option)).fetchone()
+            if old and old['outcome'] != base:
+                raise ValueError('prediction_target_conflict')
+            db.execute('''INSERT INTO room_prediction_target_outcomes(market_id,option_id,outcome,combo_reached)
+                VALUES(?,?,?,?) ON CONFLICT(market_id,option_id)
+                DO UPDATE SET combo_reached=MAX(combo_reached,excluded.combo_reached)''', (market_id,option,base,combo))
+
+
+def _target_outcomes(db, market_id):
+    return {row['option_id']: 'reached_combo' if row['combo_reached'] else row['outcome']
+            for row in db.execute('SELECT option_id,outcome,combo_reached FROM room_prediction_target_outcomes WHERE market_id=?', (market_id,))}
+
+
+def allocate(stakes, winners, void=False):
+    """Integer units throughout. Each account is aggregated before matching."""
+    winning = [s for s in stakes if s['option_id'] in winners]
+    total = sum(s['units'] for s in winning)
+    if void or not total:
+        return {s['user_id']: dict(principal=0, profit=0, refund=s['units'], loss=0) for s in stakes}
+    losing = [s for s in stakes if s['option_id'] not in winners]
+    pool = sum(min(s['units'], total) for s in losing)
+    result = {s['user_id']: dict(principal=0, profit=0, refund=max(0, s['units']-total),
+                               loss=min(s['units'], total)) for s in losing}
+    remainders = []
+    for s in winning:
+        profit, remainder = divmod(s['units'] * pool, total)
+        result[s['user_id']] = dict(principal=s['units'], profit=profit, refund=0, loss=0)
+        remainders.append((-remainder, s['user_id']))
+    left = pool - sum(r['profit'] for r in result.values())
+    for _, uid in sorted(remainders)[:left]:
+        result[uid]['profit'] += 1
+    return result
+
+
+def _account(db, uid, stamp):
+    db.execute('INSERT OR IGNORE INTO token_accounts(user_id,created_at,updated_at) VALUES(?,?,?)', (uid, stamp, stamp))
+    return db.execute('SELECT * FROM token_accounts WHERE user_id=?', (uid,)).fetchone()
+
+
+def _credit(db, uid, delta, event, operation, metadata, stamp):
+    account = _account(db, uid, stamp)
+    before = account['paid_balance_units'] + account['bonus_balance_units']
+    if account['paid_balance_units'] + delta < 0:
+        raise HTTPException(402, 'prediction_insufficient_permanent')
+    db.execute('UPDATE token_accounts SET paid_balance_units=paid_balance_units+?,updated_at=? WHERE user_id=?',
+               (delta, stamp, uid))
+    db.execute('''INSERT INTO token_ledger(user_id,event_type,operation_key,paid_delta_units,
+        balance_before_units,balance_after_units,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?)''',
+        (uid, event, operation, delta, before, before + delta, json.dumps(metadata), stamp))
+
+
+def place(room_id, user_id, body, available, now=None):
+    override_now = now
+    market_id, option, request_id, amount = (body.get(k) for k in ('market_id','option_id','request_id','amount'))
+    kind = body.get('kind', 'winner')
+    if kind not in ('winner', 'target65536'):
+        raise HTTPException(400, 'prediction_invalid_kind')
+    target = kind == 'target65536'
+    stakes_table = 'room_prediction_target_stakes' if target else 'room_prediction_stakes'
+    requests_table = 'room_prediction_target_requests' if target else 'room_prediction_requests'
+    other_requests = 'room_prediction_requests' if target else 'room_prediction_target_requests'
+    try:
+        request_id = str(uuid.UUID(request_id))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(400, 'prediction_invalid_request')
+    if type(amount) is not int or amount not in AMOUNTS or not isinstance(option, str) or not isinstance(market_id, str):
+        raise HTTPException(400, 'prediction_invalid_stake')
+    units = amount * UNIT
+    with auth_db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        now = time.time() if override_now is None else override_now
+        stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+        market = db.execute('SELECT * FROM room_prediction_markets WHERE id=? AND room_id=?', (market_id,room_id)).fetchone()
+        if not market:
+            raise HTTPException(404, 'prediction_not_found')
+        if db.execute(f'SELECT 1 FROM {other_requests} WHERE user_id=? AND request_id=?', (user_id,request_id)).fetchone():
+            raise HTTPException(409, 'prediction_request_conflict')
+        previous = db.execute(f'SELECT * FROM {requests_table} WHERE user_id=? AND request_id=?', (user_id,request_id)).fetchone()
+        if previous:
+            if (previous['market_id'],previous['option_id'],previous['units']) != (market_id,option,units):
+                raise HTTPException(409, 'prediction_request_conflict')
+            return dict(ok=True, request_id=request_id, market_id=market_id)
+        if market['status'] != 'open' or now >= market['deadline'] or not (available() if callable(available) else available):
+            raise HTTPException(409, 'prediction_closed')
+        if option not in {p['id'] for p in json.loads(market['options'])}:
+            raise HTTPException(400, 'prediction_invalid_option')
+        stake = db.execute('SELECT * FROM room_prediction_stakes WHERE market_id=? AND user_id=?', (market_id,user_id)).fetchone()
+        if target and not stake:
+            raise HTTPException(409, 'prediction_main_required')
+        if stake and stake['option_id'] != option:
+            raise HTTPException(409, 'prediction_cannot_switch')
+        if target and db.execute('SELECT 1 FROM room_prediction_target_outcomes WHERE market_id=? AND option_id=?',
+                                 (market_id,option)).fetchone():
+            raise HTTPException(409, 'prediction_target_closed')
+        _credit(db,user_id,-units,'room_prediction_target_stake' if target else 'room_prediction_stake','prediction:'+request_id,
+                dict(room_id=room_id,market_id=market_id,option_id=option,kind=kind),stamp)
+        db.execute(f'''INSERT INTO {stakes_table} VALUES(?,?,?,?) ON CONFLICT(market_id,user_id)
+            DO UPDATE SET units=units+excluded.units''', (market_id,user_id,option,units))
+        db.execute(f'INSERT INTO {requests_table} VALUES(?,?,?,?,?)', (user_id,request_id,market_id,option,units))
+    return dict(ok=True, request_id=request_id, market_id=market_id)
+
+
+def settle(room_id, market_id, winners=(), void=False, now=None):
+    now = time.time() if now is None else now
+    with auth_db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        market = db.execute('SELECT * FROM room_prediction_markets WHERE id=? AND room_id=?', (market_id,room_id)).fetchone()
+        if not market or market['settled'] is not None:
+            return False
+        options = {p['id'] for p in json.loads(market['options'])}
+        if not void and (not winners or not set(winners) <= options):
+            raise ValueError('invalid_prediction_result')
+        stakes = [dict(r) for r in db.execute('SELECT * FROM room_prediction_stakes WHERE market_id=?', (market_id,))]
+        reason = 'technical_void' if void else 'no_winners' if not any(s['option_id'] in winners for s in stakes) else 'result'
+        payouts = allocate(stakes, set(winners), void)
+        stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+        for uid, parts in payouts.items():
+            payout = parts['principal'] + parts['profit'] + parts['refund']
+            _credit(db,uid,payout,'room_prediction_settlement','prediction:'+market_id,
+                    dict(room_id=room_id,market_id=market_id,**parts),stamp)
+            db.execute('INSERT INTO room_prediction_settlements VALUES(?,?,?,?,?,?)',
+                       (market_id,uid,parts['principal'],parts['profit'],parts['refund'],parts['loss']))
+        outcomes = _target_outcomes(db, market_id)
+        for stake in db.execute('SELECT * FROM room_prediction_target_stakes WHERE market_id=?', (market_id,)).fetchall():
+            uid, units = stake['user_id'], stake['units']
+            outcome = outcomes.get(stake['option_id'])
+            reward = BONUS_REWARD if outcome == 'reached_combo' else TARGET_REWARD if outcome == 'reached' else 0
+            if void:
+                parts = dict(principal=0, profit=0, refund=units, loss=0)
+            elif stake['option_id'] not in outcomes:
+                raise ValueError('prediction_target_result_missing')
+            elif reward:
+                parts = dict(principal=units, profit=units*reward, refund=0, loss=0)
+            else:
+                parts = dict(principal=0, profit=0, refund=0, loss=units)
+            _credit(db,uid,parts['principal']+parts['profit']+parts['refund'],
+                    'room_prediction_target_settlement','prediction-target:'+market_id,
+                    dict(room_id=room_id,market_id=market_id,target=TARGET,bonus_target=BONUS_TARGET,
+                         outcome=outcome,reward_multiplier=0 if void else reward,**parts),stamp)
+            db.execute('INSERT INTO room_prediction_target_settlements VALUES(?,?,?,?,?,?)',
+                       (market_id,uid,parts['principal'],parts['profit'],parts['refund'],parts['loss']))
+        db.execute('UPDATE room_prediction_markets SET status=?,winners=?,reason=?,settled=? WHERE id=?',
+                   ('void' if void else 'settled',json.dumps(sorted(winners)),reason,now,market_id))
+    return True
+
+
+def listing(room_id, user_id=None, market_id=None, now=None):
+    now = time.time() if now is None else now
+    with auth_db() as db:
+        row = db.execute('''SELECT * FROM room_prediction_markets WHERE room_id=? AND (? IS NULL OR id=?)
+            ORDER BY started DESC LIMIT 1''', (room_id,market_id,market_id)).fetchone()
+        market = None
+        if row:
+            market = dict(row)
+            market['options'] = json.loads(market['options'])
+            market['winners'] = json.loads(market['winners'] or '[]')
+            if market['status'] == 'open' and now >= market['deadline']:
+                market['status'] = 'closed'
+            totals = {r['option_id']: dict(units=r['units'],count=r['count']) for r in db.execute(
+                'SELECT option_id,SUM(units) AS units,COUNT(*) AS count FROM room_prediction_stakes WHERE market_id=? GROUP BY option_id', (row['id'],))}
+            for option in market['options']:
+                option.update(totals.get(option['id'],dict(units=0,count=0)))
+            market['pool_units'] = sum(o['units'] for o in market['options'])
+            market['target_bet'] = dict(target=TARGET,reward_multiplier=TARGET_REWARD,
+                bonus_target=BONUS_TARGET,bonus_reward_multiplier=BONUS_REWARD,
+                outcomes=_target_outcomes(db, row['id']))
+            if user_id is not None:
+                stake = db.execute('SELECT option_id,units FROM room_prediction_stakes WHERE market_id=? AND user_id=?', (row['id'],user_id)).fetchone()
+                result = db.execute('SELECT principal,profit,refund,loss FROM room_prediction_settlements WHERE market_id=? AND user_id=?', (row['id'],user_id)).fetchone()
+                market['mine'] = dict(stake) if stake else None
+                market['result'] = dict(result) if result else None
+                stake = db.execute('SELECT option_id,units FROM room_prediction_target_stakes WHERE market_id=? AND user_id=?', (row['id'],user_id)).fetchone()
+                result = db.execute('SELECT principal,profit,refund,loss FROM room_prediction_target_settlements WHERE market_id=? AND user_id=?', (row['id'],user_id)).fetchone()
+                market['target_bet'].update(mine=dict(stake) if stake else None, result=dict(result) if result else None)
+        response = dict(market=market, server_time=now, amounts=list(AMOUNTS))
+        if user_id is not None:
+            account = db.execute('SELECT paid_balance_units FROM token_accounts WHERE user_id=?', (user_id,)).fetchone()
+            response['paid_balance_units'] = account[0] if account else 0
+            rows = db.execute('''SELECT m.id,m.started AS started_at,m.winners,m.reason,s.* FROM room_prediction_settlements s
+                JOIN room_prediction_markets m ON m.id=s.market_id WHERE m.room_id=? AND s.user_id=?
+                ORDER BY m.started DESC LIMIT 5''',(room_id,user_id))
+            response['recent'] = [dict(r, winners=json.loads(r['winners'] or '[]')) for r in rows]
+            for result in response['recent']:
+                target = db.execute('SELECT principal,profit,refund,loss FROM room_prediction_target_settlements WHERE market_id=? AND user_id=?',
+                                    (result['id'],user_id)).fetchone()
+                result['target_bet'] = dict(target) if target else None
+                parts = [result] + ([result['target_bet']] if result['target_bet'] else [])
+                result['stake_units'] = sum(part['principal'] + part['refund'] + part['loss'] for part in parts)
+                result['net_profit_units'] = sum(part['profit'] - part['loss'] for part in parts)
+        return response

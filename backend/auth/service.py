@@ -798,6 +798,21 @@ def deactivate_account(
         _revoke_user_sessions(db, user_id)
 
 
+def authenticate_session_identity(token: str | None) -> dict[str, Any] | None:
+    """Authenticate without billing, entitlement or profile reads. Never cache revocation."""
+    if not token:
+        return None
+    with auth_db() as db:
+        row = db.execute("""SELECT users.id, users.status, sessions.id AS session_id,
+            sessions.expires_at, sessions.revoked_at FROM sessions
+            JOIN users ON users.id=sessions.user_id WHERE session_token_hash=?""",
+            (hash_token(token),)).fetchone()
+    if row is None or row['revoked_at'] or row['status'] != 'active':
+        return None
+    expiry = parse_iso(row['expires_at'])
+    return dict(row) if expiry is not None and expiry > utcnow() else None
+
+
 def authenticate_session_token(token: str | None) -> dict[str, Any] | None:
     if not token:
         return None

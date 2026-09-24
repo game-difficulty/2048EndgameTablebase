@@ -37,6 +37,21 @@ async def admin_live_control(request: Request, payload: dict = Body(...)):
     return await hub.set_enabled(payload['enabled'])
 
 
+@router.post('/live/batch/void')
+async def admin_live_void(request: Request, payload: dict = Body(...)):
+    _require_admin(request)
+    from backend.live.routes import hub, same_origin
+    same_origin(request.headers)
+    async with hub.activity_lock:
+        batch = getattr(hub.content, 'batch', None)
+        if not batch or payload.get('batch_id') != batch['id']:
+            raise HTTPException(409, 'batch_changed')
+        if hub.control['enabled']:
+            raise HTTPException(409, 'pause_before_void')
+        await hub.content.void_batch()
+    return dict(ok=True, batch=hub.content.batch)
+
+
 @router.get("/tablebase-workers")
 async def admin_tablebase_workers(request: Request):
     _require_admin(request)

@@ -13,6 +13,8 @@
 namespace BCCompressedResult {
 
 inline constexpr const char *kCompressedLayerFileExtension = ".bccmp";
+inline constexpr const char *kRawLayerFileExtension = ".bcraw";
+void validate_archive_file(const std::filesystem::path &path);
 
 struct CompressOptions {
     uint32_t bucket_block_raw_target_bytes = 32U * 1024U;

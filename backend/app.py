@@ -23,7 +23,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
+from backend.http_compression import DisplayCompression, CacheControlledStaticFiles
 from starlette.websockets import WebSocketState
 
 from backend.actions import Action, Message
@@ -44,7 +44,7 @@ from backend.auth.service import authenticate_session_token, record_usage
 from backend.battle.realtime import disconnect as disconnect_battle_socket
 from backend.battle.realtime import handle_battle_action
 from backend.battle.routes import router as battle_router
-from backend.live.routes import router as live_router, hub as live_hub
+from backend.live.routes import router as live_router, start_rooms, stop_rooms
 from backend.battle.service import shutdown as shutdown_battle_service
 from backend.battle.service import startup as startup_battle_service
 from backend.cloud_analysis_jobs import (
@@ -91,6 +91,8 @@ from backend.handlers.tablebase_query import (
     handle_tablebase_query_action,
 )
 from backend.gamer_ranked.routes import router as gamer_ranked_router
+from backend.human_play.routes import router as human_play_router
+from backend.human_play.store import init_db as init_human_play_db
 from backend.gamer_tablebase_stream import gamer_stream_service
 from backend.gamer_ranked.service import (
     cleanup_stale_ranked_runs,
@@ -179,18 +181,6 @@ def _broadcast_tablebase_catalog_update(_epoch: int) -> None:
     )
 
 
-class CacheControlledStaticFiles(StaticFiles):
-    def __init__(self, *args, cache_control: str = "", **kwargs):
-        super().__init__(*args, **kwargs)
-        self.cache_control = cache_control
-
-    async def get_response(self, path, scope):  # type: ignore[override]
-        response = await super().get_response(path, scope)
-        if self.cache_control and response.status_code == 200:
-            response.headers["Cache-Control"] = self.cache_control
-        return response
-
-
 async def _leaderboard_refresh_loop() -> None:
     while True:
         try:
@@ -237,7 +227,8 @@ async def _minigame_validation_loop() -> None:
 async def app_lifespan(_app: FastAPI):
     SingletonConfig()
     init_auth_db()
-    await live_hub.start()
+    init_human_play_db()
+    await start_rooms()
     await startup_battle_service()
     prepare_gamer_validation_queue()
     prepare_minigame_validation_queue()
@@ -255,7 +246,7 @@ async def app_lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        await live_hub.stop()
+        await stop_rooms()
         await shutdown_battle_service()
         leaderboard_refresh_task.cancel()
         gamer_validation_task.cancel()
@@ -288,6 +279,7 @@ async def app_lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=app_lifespan)
+app.add_middleware(DisplayCompression)
 app.include_router(auth_router)
 app.include_router(guest_router)
 app.include_router(admin_router)
@@ -297,6 +289,7 @@ app.include_router(leaderboard_router)
 app.include_router(minigame_rankings_router)
 app.include_router(profile_router)
 app.include_router(gamer_ranked_router)
+app.include_router(human_play_router)
 app.include_router(battle_router)
 app.include_router(live_router)
 

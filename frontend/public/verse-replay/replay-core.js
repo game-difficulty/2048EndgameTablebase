@@ -25,7 +25,7 @@
   const NEXT_REPLAY_PREFIX = 'REPLAY_v1RPL_B64_';
   const NEXT_DIRECTIONS = ['up', 'right', 'down', 'left'];
   const STATE_REPLAY_RECORD_BYTES = 13;
-  const MAX_REPLAY_FILE_BYTES = 500 * 1024;
+  const MAX_REPLAY_FILE_BYTES = 2 * 1024 * 1024;
   const STATE_REPLAY_DIRECTIONS = new Map([
     [1, 'left'],
     [2, 'right'],
@@ -119,25 +119,6 @@
     return text;
   }
 
-  function collapseLine(line) {
-    const compact = Array.from(line).filter(Boolean);
-    const output = [];
-    let addedScore = 0;
-
-    for (let index = 0; index < compact.length; index += 1) {
-      if (index + 1 < compact.length && compact[index] === compact[index + 1]) {
-        const mergedExponent = compact[index] + 1;
-        output.push(mergedExponent);
-        addedScore += 2 ** mergedExponent;
-        index += 1;
-      } else {
-        output.push(compact[index]);
-      }
-    }
-    while (output.length < line.length) output.push(0);
-    return { line: output, addedScore };
-  }
-
   function arraysEqual(left, right) {
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
@@ -146,95 +127,7 @@
     return true;
   }
 
-  function moveBoard(board, width, height, direction) {
-    const output = new Uint8Array(board);
-    let addedScore = 0;
-
-    if (direction === 'left' || direction === 'right') {
-      for (let y = 0; y < height; y += 1) {
-        const line = [];
-        for (let x = 0; x < width; x += 1) line.push(board[y * width + x]);
-        if (direction === 'right') line.reverse();
-        const collapsed = collapseLine(line);
-        if (direction === 'right') collapsed.line.reverse();
-        addedScore += collapsed.addedScore;
-        for (let x = 0; x < width; x += 1) output[y * width + x] = collapsed.line[x];
-      }
-    } else {
-      for (let x = 0; x < width; x += 1) {
-        const line = [];
-        for (let y = 0; y < height; y += 1) line.push(board[y * width + x]);
-        if (direction === 'down') line.reverse();
-        const collapsed = collapseLine(line);
-        if (direction === 'down') collapsed.line.reverse();
-        addedScore += collapsed.addedScore;
-        for (let y = 0; y < height; y += 1) output[y * width + x] = collapsed.line[y];
-      }
-    }
-
-    return {
-      board: output,
-      moved: !arraysEqual(board, output),
-      addedScore,
-    };
-  }
-
-  function applySpecial32kRule(
-    board,
-    width,
-    height,
-    direction,
-    moveNumber,
-    force = false,
-  ) {
-    if (width !== 4 || height !== 4 || (!force && moveNumber < 27000)) {
-      return { board, addedScore: 0 };
-    }
-
-    const positions = [];
-    for (let index = 0; index < board.length; index += 1) {
-      if (board[index] === 15) positions.push(index);
-    }
-    if (positions.length !== 2) return { board, addedScore: 0 };
-
-    const first = { x: positions[0] % width, y: Math.floor(positions[0] / width) };
-    const second = { x: positions[1] % width, y: Math.floor(positions[1] / width) };
-    const horizontal = first.y === second.y &&
-      (direction === 'left' || direction === 'right') &&
-      Array.from(
-        { length: Math.max(0, Math.abs(first.x - second.x) - 1) },
-        (_, index) => board[first.y * width + Math.min(first.x, second.x) + index + 1],
-      ).every((value) => value === 0);
-    const vertical = first.x === second.x &&
-      (direction === 'up' || direction === 'down') &&
-      Array.from(
-        { length: Math.max(0, Math.abs(first.y - second.y) - 1) },
-        (_, index) => board[(Math.min(first.y, second.y) + index + 1) * width + first.x],
-      ).every((value) => value === 0);
-
-    if (!horizontal && !vertical) return { board, addedScore: 0 };
-    const adjusted = new Uint8Array(board);
-    adjusted[positions[0]] = 14;
-    adjusted[positions[1]] = 14;
-    return { board: adjusted, addedScore: 32768 };
-  }
-
-  function planMoveTransitions(
-    board,
-    width,
-    height,
-    direction,
-    moveNumber = 0,
-    forceSpecial32k = false,
-  ) {
-    const prepared = applySpecial32kRule(
-      board,
-      width,
-      height,
-      direction,
-      moveNumber,
-      forceSpecial32k,
-    ).board;
+  function planMoveTransitions(board, width, height, direction) {
     const sources = [];
     const merges = [];
     const horizontal = direction === 'left' || direction === 'right';
@@ -251,11 +144,10 @@
       if (direction === 'right' || direction === 'down') positions.reverse();
 
       const occupied = positions
-        .filter((position) => prepared[position] !== 0)
+        .filter((position) => board[position] !== 0)
         .map((position) => ({
           position,
-          moveExponent: prepared[position],
-          displayExponent: board[position] || prepared[position],
+          exponent: board[position],
         }));
 
       let sourceIndex = 0;
@@ -266,29 +158,26 @@
         const toIndex = positions[destinationIndex];
         destinationIndex += 1;
 
-        if (second && first.moveExponent === second.moveExponent) {
+        if (second && first.exponent === second.exponent) {
           sources.push({
             fromIndex: first.position,
             toIndex,
-            exponent: first.displayExponent,
-            moveExponent: first.moveExponent,
+            exponent: first.exponent,
             merged: true,
           });
           sources.push({
             fromIndex: second.position,
             toIndex,
-            exponent: second.displayExponent,
-            moveExponent: second.moveExponent,
+            exponent: second.exponent,
             merged: true,
           });
-          merges.push({ toIndex, exponent: first.moveExponent + 1 });
+          merges.push({ toIndex, exponent: first.exponent + 1 });
           sourceIndex += 2;
         } else {
           sources.push({
             fromIndex: first.position,
             toIndex,
-            exponent: first.displayExponent,
-            moveExponent: first.moveExponent,
+            exponent: first.exponent,
             merged: false,
           });
           sourceIndex += 1;
@@ -297,6 +186,31 @@
     }
 
     return { sources, merges };
+  }
+
+  function moveBoard(board, width, height, direction) {
+    const transition = planMoveTransitions(board, width, height, direction);
+    const output = new Uint8Array(board.length);
+    let addedScore = 0;
+
+    for (const source of transition.sources) {
+      if (!source.merged) output[source.toIndex] = source.exponent;
+    }
+    for (const merge of transition.merges) {
+      output[merge.toIndex] = merge.exponent;
+      addedScore += 2 ** merge.exponent;
+    }
+
+    return {
+      board: output,
+      moved: !arraysEqual(board, output),
+      addedScore,
+      transition: {
+        direction,
+        sources: transition.sources,
+        merges: transition.merges,
+      },
+    };
   }
 
   function boardReachesRequirements(board, requirements) {
@@ -342,10 +256,19 @@
     return true;
   }
 
-  function findSpawn(movedBoard, targetBoard) {
+  function projectPackedBoard(board) {
+    const projected = new Uint8Array(board.length);
+    for (let index = 0; index < board.length; index += 1) {
+      projected[index] = Math.min(15, board[index]);
+    }
+    return projected;
+  }
+
+  function findProjectedSpawn(movedBoard, targetBoard) {
+    const projected = projectPackedBoard(movedBoard);
     let spawn = null;
     for (let index = 0; index < movedBoard.length; index += 1) {
-      if (movedBoard[index] === targetBoard[index]) continue;
+      if (projected[index] === targetBoard[index]) continue;
       if (
         spawn !== null ||
         movedBoard[index] !== 0 ||
@@ -356,6 +279,156 @@
       spawn = { index, exponent: targetBoard[index] };
     }
     return spawn;
+  }
+
+  // Every format adapter ends here so snapshots, scoring and animation metadata
+  // are rebuilt from the same full-width exponent board.
+  function reconstructReplay({
+    width,
+    height,
+    mode,
+    format,
+    initialBoard,
+    records,
+  }) {
+    const cellCount = width * height;
+    if (initialBoard.length !== cellCount) {
+      throw new ReplayFormatError('回放初始棋盘尺寸无效。');
+    }
+
+    const moveCount = records.length;
+    if (moveCount > 200000) throw new ReplayFormatError('回放不能超过 200000 步。');
+    const snapshots = new Uint8Array((moveCount + 1) * cellCount);
+    const scores = new Float64Array(moveCount + 1);
+    const cumulativeMs = new Float64Array(moveCount + 1);
+    const knownCumulativeMs = new Float64Array(moveCount + 1);
+    const unknownCumulative = new Uint32Array(moveCount + 1);
+    const steps = new Array(moveCount);
+    const transitions = new Array(moveCount);
+    const milestones = DEFAULT_MILESTONES.map((milestone) => ({
+      ...milestone,
+      reachedStep: null,
+      timeMs: null,
+    }));
+    let board = new Uint8Array(initialBoard);
+    let score = 0;
+    snapshots.set(board, 0);
+
+    records.forEach((record, index) => {
+      const moveNumber = index + 1;
+      const moved = moveBoard(board, width, height, record.direction);
+      const constrained = record.targetPackedBoard instanceof Uint8Array;
+      if (!moved.moved) {
+        const message = constrained
+          ? `第 ${moveNumber} 步无法还原为合法移动和一次出数。`
+          : `第 ${moveNumber} 步 ${record.direction} 没有改变棋盘。`;
+        throw new ReplayFormatError(message);
+      }
+
+      let spawnIndex = record.spawnIndex;
+      let spawnExponent = record.spawnExponent;
+      if (constrained) {
+        const spawn = findProjectedSpawn(moved.board, record.targetPackedBoard);
+        if (!spawn) {
+          throw new ReplayFormatError(`第 ${moveNumber} 步无法还原为合法移动和一次出数。`);
+        }
+        spawnIndex = spawn.index;
+        spawnExponent = spawn.exponent;
+      }
+
+      if (
+        !Number.isInteger(spawnIndex) ||
+        spawnIndex < 0 ||
+        spawnIndex >= cellCount ||
+        (spawnExponent !== 1 && spawnExponent !== 2) ||
+        moved.board[spawnIndex] !== 0
+      ) {
+        throw new ReplayFormatError(`第 ${moveNumber} 步的出生位置或棋块无效。`);
+      }
+
+      const nextBoard = moved.board;
+      nextBoard[spawnIndex] = spawnExponent;
+      if (
+        constrained &&
+        !arraysEqual(projectPackedBoard(nextBoard), record.targetPackedBoard)
+      ) {
+        throw new ReplayFormatError(`第 ${moveNumber} 步无法还原为合法移动和一次出数。`);
+      }
+
+      const nextScore = score + moved.addedScore;
+      if (record.scoreAfter !== undefined && record.scoreAfter !== nextScore) {
+        throw new ReplayFormatError(
+          `第 ${moveNumber} 步的分数增量与棋盘合并结果不一致。`,
+        );
+      }
+      score = nextScore;
+      board = nextBoard;
+
+      const deltaMs = record.deltaMs ?? null;
+      const playbackDeltaMs = deltaMs === null ? UNKNOWN_TIMING_FALLBACK_MS : deltaMs;
+      cumulativeMs[moveNumber] = cumulativeMs[index] + playbackDeltaMs;
+      knownCumulativeMs[moveNumber] = knownCumulativeMs[index] + (deltaMs === null ? 0 : deltaMs);
+      unknownCumulative[moveNumber] = unknownCumulative[index] + (deltaMs === null ? 1 : 0);
+      scores[moveNumber] = score;
+      snapshots.set(board, moveNumber * cellCount);
+
+      const spawn = {
+        index: spawnIndex,
+        exponent: spawnExponent,
+        value: 2 ** spawnExponent,
+      };
+      transitions[index] = {
+        ...moved.transition,
+        spawn,
+        scoreDelta: moved.addedScore,
+      };
+      steps[index] = {
+        number: moveNumber,
+        direction: record.direction,
+        deltaMs,
+        playbackDeltaMs,
+        spawnValue: spawn.value,
+        spawnX: spawnIndex % width,
+        spawnY: Math.floor(spawnIndex / width),
+        special32k: moved.transition.merges.some((merge) => merge.exponent === 16),
+        source: record.source ?? null,
+      };
+
+      for (const milestone of milestones) {
+        if (
+          milestone.reachedStep === null &&
+          boardReachesRequirements(board, milestone.requirements)
+        ) {
+          milestone.reachedStep = moveNumber;
+          milestone.timeMs = cumulativeMs[moveNumber];
+        }
+      }
+    });
+
+    return {
+      width,
+      height,
+      mode,
+      format,
+      moveCount,
+      steps,
+      transitions,
+      snapshots,
+      scores,
+      cumulativeMs,
+      knownCumulativeMs,
+      unknownCumulative,
+      knownTimeMs: knownCumulativeMs[moveCount],
+      unknownTimings: unknownCumulative[moveCount],
+      playbackTimeMs: cumulativeMs[moveCount],
+      milestones,
+      cellCount,
+      getBoardAt(progress) {
+        const bounded = Math.max(0, Math.min(moveCount, Number(progress) || 0));
+        const start = bounded * cellCount;
+        return snapshots.subarray(start, start + cellCount);
+      },
+    };
   }
 
   function decodeStateReplayBytes(source) {
@@ -386,126 +459,44 @@
       previousScore = score;
     }
 
-    const width = 4;
-    const height = 4;
-    const cellCount = 16;
-    const moveCount = Math.max(0, recordCount - 1);
-    const snapshots = new Uint8Array(recordCount * cellCount);
-    const scores = new Float64Array(recordCount);
-    const cumulativeMs = new Float64Array(recordCount);
-    const knownCumulativeMs = new Float64Array(recordCount);
-    const unknownCumulative = new Uint32Array(recordCount);
-    const steps = new Array(moveCount);
-    const milestones = DEFAULT_MILESTONES.map((milestone) => ({
-      ...milestone,
-      reachedStep: null,
-      timeMs: null,
-    }));
-
-    records.forEach((record, index) => {
-      snapshots.set(record.board, index * cellCount);
-      scores[index] = record.score;
-      if (index > 0) {
-        cumulativeMs[index] = cumulativeMs[index - 1] + UNKNOWN_TIMING_FALLBACK_MS;
-        unknownCumulative[index] = unknownCumulative[index - 1] + 1;
-      }
-    });
-
-    for (let index = 0; index < moveCount; index += 1) {
-      const sourceRecord = records[index];
-      const targetRecord = records[index + 1];
+    const reconstructionRecords = records.slice(1).map((targetRecord, index) => {
       const direction = STATE_REPLAY_DIRECTIONS.get(targetRecord.moveCode);
       if (!direction) {
         throw new ReplayFormatError(
           `第 ${index + 2} 条记录的方向码 ${targetRecord.moveCode} 无效。`,
         );
       }
-
-      const candidates = [{ board: sourceRecord.board, special32k: false }];
-      const special = applySpecial32kRule(
-        sourceRecord.board,
-        width,
-        height,
-        direction,
-        index + 1,
-        true,
-      );
-      if (!arraysEqual(special.board, sourceRecord.board)) {
-        candidates.push({ board: special.board, special32k: true });
-      }
-
-      let transition = null;
-      for (const candidate of candidates) {
-        const moved = moveBoard(candidate.board, width, height, direction);
-        if (!moved.moved) continue;
-        const spawn = findSpawn(moved.board, targetRecord.board);
-        if (spawn) {
-          transition = { ...candidate, spawn };
-          break;
-        }
-      }
-      if (!transition) {
-        throw new ReplayFormatError(`第 ${index + 1} 步无法还原为合法移动和一次出数。`);
-      }
-
-      const moveNumber = index + 1;
-      steps[index] = {
-        number: moveNumber,
+      return {
         direction,
         deltaMs: null,
-        playbackDeltaMs: UNKNOWN_TIMING_FALLBACK_MS,
-        spawnValue: 2 ** transition.spawn.exponent,
-        spawnX: transition.spawn.index % width,
-        spawnY: Math.floor(transition.spawn.index / width),
-        special32k: transition.special32k,
+        targetPackedBoard: targetRecord.board,
+        scoreAfter: targetRecord.score,
       };
+    });
 
-      for (const milestone of milestones) {
-        if (
-          milestone.reachedStep === null &&
-          boardReachesRequirements(targetRecord.board, milestone.requirements)
-        ) {
-          milestone.reachedStep = moveNumber;
-          milestone.timeMs = cumulativeMs[moveNumber];
-        }
-      }
-    }
-
-    return {
-      width,
-      height,
+    return reconstructReplay({
+      width: 4,
+      height: 4,
       mode: 'state-vrs',
-      moveCount,
-      steps,
-      snapshots,
-      scores,
-      cumulativeMs,
-      knownCumulativeMs,
-      unknownCumulative,
-      knownTimeMs: 0,
-      unknownTimings: moveCount,
-      playbackTimeMs: cumulativeMs[moveCount],
-      milestones,
-      cellCount,
-      getBoardAt(progress) {
-        const bounded = Math.max(0, Math.min(moveCount, Number(progress) || 0));
-        const start = bounded * cellCount;
-        return snapshots.subarray(start, start + cellCount);
-      },
-    };
+      format: 'state-vrs13',
+      initialBoard: records[0].board,
+      records: reconstructionRecords,
+    });
   }
 
   function decodeReplayBytes(source) {
     const bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
     if (bytes.length > MAX_REPLAY_FILE_BYTES) {
-      throw new ReplayFormatError('回放文件不能超过 500 KB。');
+      throw new ReplayFormatError('回放文件不能超过 2 MB。');
     }
+    if (bytes.length >= 4 && String.fromCharCode(...bytes.subarray(0, 4)) === 'RPL1') return buildDecodedRankedReplay(bytes);
     if (looksLikeStateReplay(bytes)) return decodeStateReplayBytes(bytes);
     return buildDecodedReplay(bytesToLatin1(bytes));
   }
 
   function buildDecodedReplay(text) {
     const replayText = String(text).replace(/^\uFEFF/, '').trim();
+    if (replayText.length > MAX_REPLAY_FILE_BYTES) throw new ReplayFormatError('回放文件不能超过 2 MB。');
     if (replayText.startsWith(NEXT_REPLAY_PREFIX)) {
       return buildDecodedRankedReplay(replayText);
     }
@@ -514,8 +505,10 @@
       throw new ReplayFormatError('不支持的回放头；应类似 4x4-1_。');
     }
 
-    const width = Number.parseInt(header[1], 10);
-    const height = Number.parseInt(header[2], 10);
+    // 2048Verse writes dimensions as rows x columns (height x width),
+    // while the replay engine stores them as width x height.
+    const height = Number.parseInt(header[1], 10);
+    const width = Number.parseInt(header[2], 10);
     const mode = header[3];
     if (width < 1 || width > 8 || height < 1 || height > 8) {
       throw new ReplayFormatError(`不支持 ${width}×${height} 棋盘；宽高必须在 1 到 8 之间。`);
@@ -540,108 +533,31 @@
       );
     }
 
-    const moveCount = recordCount - 2;
     const cellCount = width * height;
-    const snapshots = new Uint8Array((moveCount + 1) * cellCount);
-    const scores = new Float64Array(moveCount + 1);
-    const cumulativeMs = new Float64Array(moveCount + 1);
-    const knownCumulativeMs = new Float64Array(moveCount + 1);
-    const unknownCumulative = new Uint32Array(moveCount + 1);
-    let board = new Uint8Array(cellCount);
+    const initialBoard = new Uint8Array(cellCount);
 
     for (let index = 0; index < 2; index += 1) {
       const record = records[index];
       const position = record.spawnY * width + record.spawnX;
-      if (board[position] !== 0) {
+      if (initialBoard[position] !== 0) {
         throw new ReplayFormatError('两个初始方块占用了同一格。');
       }
-      board[position] = record.spawnExponent;
-    }
-    snapshots.set(board, 0);
-
-    const steps = new Array(moveCount);
-    let score = 0;
-    const milestones = DEFAULT_MILESTONES.map((milestone) => ({
-      ...milestone,
-      reachedStep: null,
-      timeMs: null,
-    }));
-
-    for (let index = 0; index < moveCount; index += 1) {
-      const record = records[index + 2];
-      const moveNumber = index + 1;
-      const special = applySpecial32kRule(board, width, height, record.direction, moveNumber);
-      const moved = moveBoard(special.board, width, height, record.direction);
-      if (!moved.moved) {
-        throw new ReplayFormatError(`第 ${moveNumber} 步 ${record.direction} 没有改变棋盘。`);
-      }
-
-      board = moved.board;
-      score += special.addedScore + moved.addedScore;
-      const spawnPosition = record.spawnY * width + record.spawnX;
-      if (board[spawnPosition] !== 0) {
-        throw new ReplayFormatError(
-          `第 ${moveNumber} 步的出生位置 (${record.spawnX}, ${record.spawnY}) 不为空。`,
-        );
-      }
-      board[spawnPosition] = record.spawnExponent;
-
-      const playbackDeltaMs = record.deltaMs === null
-        ? UNKNOWN_TIMING_FALLBACK_MS
-        : record.deltaMs;
-      cumulativeMs[moveNumber] = cumulativeMs[index] + playbackDeltaMs;
-      knownCumulativeMs[moveNumber] =
-        knownCumulativeMs[index] + (record.deltaMs === null ? 0 : record.deltaMs);
-      unknownCumulative[moveNumber] =
-        unknownCumulative[index] + (record.deltaMs === null ? 1 : 0);
-      scores[moveNumber] = score;
-      snapshots.set(board, moveNumber * cellCount);
-
-      steps[index] = {
-        number: moveNumber,
-        direction: record.direction,
-        deltaMs: record.deltaMs,
-        playbackDeltaMs,
-        spawnValue: record.spawnValue,
-        spawnX: record.spawnX,
-        spawnY: record.spawnY,
-      };
-
-      for (const milestone of milestones) {
-        if (
-          milestone.reachedStep === null &&
-          boardReachesRequirements(board, milestone.requirements)
-        ) {
-          milestone.reachedStep = moveNumber;
-          milestone.timeMs = cumulativeMs[moveNumber];
-        }
-      }
+      initialBoard[position] = record.spawnExponent;
     }
 
-    const knownTimeMs = knownCumulativeMs[moveCount];
-    const unknownTimings = unknownCumulative[moveCount];
-    return {
+    return reconstructReplay({
       width,
       height,
       mode,
-      moveCount,
-      steps,
-      snapshots,
-      scores,
-      cumulativeMs,
-      knownCumulativeMs,
-      unknownCumulative,
-      knownTimeMs,
-      unknownTimings,
-      playbackTimeMs: cumulativeMs[moveCount],
-      milestones,
-      cellCount,
-      getBoardAt(progress) {
-        const bounded = Math.max(0, Math.min(moveCount, Number(progress) || 0));
-        const start = bounded * cellCount;
-        return snapshots.subarray(start, start + cellCount);
-      },
-    };
+      format: 'legacy-text',
+      initialBoard,
+      records: records.slice(2).map((record) => ({
+        direction: record.direction,
+        spawnIndex: record.spawnY * width + record.spawnX,
+        spawnExponent: record.spawnExponent,
+        deltaMs: record.deltaMs,
+      })),
+    });
   }
 
   function decodeUleb128(bytes, state, limit) {
@@ -681,7 +597,7 @@
   }
 
   function buildDecodedRankedReplay(replayText) {
-    const bytes = rankedBytes(replayText);
+    const bytes = replayText instanceof Uint8Array ? replayText : rankedBytes(replayText);
     if (bytes.length < 11 || String.fromCharCode(...bytes.subarray(0, 4)) !== 'RPL1') {
       throw new ReplayFormatError('2048next 回放头无效。');
     }
@@ -698,19 +614,20 @@
     const dimensions = bytes[4];
     const width = dimensions & 0x0f;
     const height = dimensions >>> 4;
-    if (width !== 4 || height !== 4) throw new ReplayFormatError('排位回放仅支持 4×4 棋盘。');
+    if (!['4x4', '3x4', '2x4', '3x3'].includes(`${height}x${width}`)) throw new ReplayFormatError('不支持的 RPL1 棋盘尺寸。');
     const flags = bytes[5];
     if (flags !== 0) throw new ReplayFormatError('排位回放含有不支持的头标志。');
     const initialCount = bytes[6];
-    if (initialCount > 16) throw new ReplayFormatError('回放初始棋块数量无效。');
+    if (initialCount > width * height) throw new ReplayFormatError('回放初始棋块数量无效。');
     const state = { offset: 7 };
-    let board = new Uint8Array(16);
+    let board = new Uint8Array(width * height);
     for (let index = 0; index < initialCount; index += 1) {
       if (state.offset >= payloadEnd) throw new ReplayFormatError('回放初始棋块数据不完整。');
       const packed = bytes[state.offset];
       state.offset += 1;
       const cell = packed & 0x0f;
       const exponent = ((packed >>> 4) & 1) + 1;
+      if (cell >= board.length) throw new ReplayFormatError('回放初始棋块位置越界。');
       if (board[cell]) throw new ReplayFormatError('排位回放初始棋块位置重复。');
       board[cell] = exponent;
     }
@@ -723,6 +640,7 @@
       state.offset += 1;
       if (ended) throw new ReplayFormatError('End 记录后仍有数据。');
       if (type < 128) {
+        if (rawMoves.length >= 200000) throw new ReplayFormatError('回放不能超过 200000 步。');
         rawMoves.push({
           direction: NEXT_DIRECTIONS[type & 3],
           spawnIndex: (type >>> 2) & 0x0f,
@@ -730,7 +648,7 @@
           deltaMs: decodeUleb128(bytes, state, payloadEnd),
         });
       } else if (type === 130) {
-        if (rawMoves.length || hasCheckpoint || initialCount !== 0 || state.offset + 10 > payloadEnd) {
+        if (width !== 4 || height !== 4 || rawMoves.length || hasCheckpoint || initialCount !== 0 || state.offset + 10 > payloadEnd) {
           throw new ReplayFormatError('回放起始局面记录无效。');
         }
         board = new Uint8Array(16);
@@ -755,69 +673,14 @@
     }
     if (!ended || (!initialCount && !hasCheckpoint)) throw new ReplayFormatError('回放缺少起始局面或结束标记。');
 
-    const moveCount = rawMoves.length;
-    const snapshots = new Uint8Array((moveCount + 1) * 16);
-    const scores = new Float64Array(moveCount + 1);
-    const cumulativeMs = new Float64Array(moveCount + 1);
-    const knownCumulativeMs = new Float64Array(moveCount + 1);
-    const unknownCumulative = new Uint32Array(moveCount + 1);
-    const steps = new Array(moveCount);
-    const milestones = DEFAULT_MILESTONES.map((milestone) => ({
-      ...milestone,
-      reachedStep: null,
-      timeMs: null,
-    }));
-    snapshots.set(board, 0);
-    let score = 0;
-    rawMoves.forEach((record, index) => {
-      const moveNumber = index + 1;
-      const moved = moveBoard(board, 4, 4, record.direction);
-      if (!moved.moved) throw new ReplayFormatError(`第 ${moveNumber} 步没有改变棋盘。`);
-      board = moved.board;
-      score += moved.addedScore;
-      if (board[record.spawnIndex]) throw new ReplayFormatError(`第 ${moveNumber} 步出生位置不为空。`);
-      board[record.spawnIndex] = record.spawnExponent;
-      cumulativeMs[moveNumber] = cumulativeMs[index] + record.deltaMs;
-      knownCumulativeMs[moveNumber] = cumulativeMs[moveNumber];
-      scores[moveNumber] = score;
-      snapshots.set(board, moveNumber * 16);
-      steps[index] = {
-        number: moveNumber,
-        direction: record.direction,
-        deltaMs: record.deltaMs,
-        playbackDeltaMs: record.deltaMs,
-        spawnValue: 2 ** record.spawnExponent,
-        spawnX: record.spawnIndex % 4,
-        spawnY: Math.floor(record.spawnIndex / 4),
-      };
-      for (const milestone of milestones) {
-        if (milestone.reachedStep === null && boardReachesRequirements(board, milestone.requirements)) {
-          milestone.reachedStep = moveNumber;
-          milestone.timeMs = cumulativeMs[moveNumber];
-        }
-      }
-    });
-    return {
-      width: 4,
-      height: 4,
+    return reconstructReplay({
+      width,
+      height,
       mode: 'ranked',
-      moveCount,
-      steps,
-      snapshots,
-      scores,
-      cumulativeMs,
-      knownCumulativeMs,
-      unknownCumulative,
-      knownTimeMs: cumulativeMs[moveCount],
-      unknownTimings: 0,
-      playbackTimeMs: cumulativeMs[moveCount],
-      milestones,
-      cellCount: 16,
-      getBoardAt(progress) {
-        const bounded = Math.max(0, Math.min(moveCount, Number(progress) || 0));
-        return snapshots.subarray(bounded * 16, bounded * 16 + 16);
-      },
-    };
+      format: 'rpl1',
+      initialBoard: board,
+      records: rawMoves,
+    });
   }
 
   function snapshotToHex(board) {

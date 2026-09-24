@@ -53,6 +53,20 @@ def write_config(root: Path, **overrides) -> Path:
 
 
 class WorkerConfigTests(unittest.TestCase):
+    def test_raw_bc_layers_are_ready_and_counted_without_temporary_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = write_config(root)
+            table = load_worker_config(path, require_auth=False).tables["free11_512"]
+            (table.path / "free11_512_0.exadbook").unlink()
+            (table.path / "free11_512_1.bcraw.tmp").touch()
+            self.assertEqual(table_path_status(table), (False, "TABLE_FILES_MISSING"))
+            self.assertEqual(_count_available_layers(table), 0)
+            (table.path / "free11_512_1.bcraw").touch()
+            (table.path / "free11_512_2.bccmp").touch()
+            self.assertEqual(table_path_status(table), (True, None))
+            self.assertEqual(_count_available_layers(table), 2)
+
     def test_multiple_paths_are_preserved_checked_and_layers_deduplicated(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

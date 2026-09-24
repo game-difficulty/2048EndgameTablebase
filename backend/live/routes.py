@@ -16,16 +16,43 @@ from backend.quota.errors import InsufficientTokens
 from . import gifts, audience, lucky_bags, red_envelopes
 from backend.auth.dependencies import current_guest_from_websocket
 from backend.auth.principal import ActorRef
-from .protocol import LiveRun, STEP
-from .store import LiveStore, week_bounds
+from .store import week_bounds
+from .rooms import DEFAULT_ROOM, DEFAULT_ROOM_ID, ROOMS
+from .content import create_content
+from backend.room_activities import predictions
+from backend.room_activities.runtime import RoomActivities
 
 router = APIRouter(prefix='/api/live', tags=['live'])
 
 
-class LiveHub:
+class ViewerQueue(asyncio.Queue):
+    """Bound both message count and pending payload bytes per spectator."""
     def __init__(self):
-        self.store = None
-        self.run = None
+        super().__init__(maxsize=32)
+        self.bytes = 0
+        self.closing = False
+
+    @staticmethod
+    def size(item):
+        return len(item) if isinstance(item, bytes) else len(json.dumps(item, ensure_ascii=False).encode('utf-8'))
+
+    def put_nowait(self, item):
+        size = self.size(item)
+        if self.bytes + size > 256 * 1024:
+            raise asyncio.QueueFull
+        super().put_nowait((item, size))
+        self.bytes += size
+
+    def get_nowait(self):
+        item, size = super().get_nowait()
+        self.bytes -= size
+        return item
+
+
+class LiveHub:
+    def __init__(self, room=DEFAULT_ROOM):
+        self.room = room
+        self.content = create_content(room)
         self.producer = None
         self.last_seen = 0
         self.viewers = {}
@@ -54,14 +81,34 @@ class LiveHub:
         self.red_state = dict(active=None, queued=0)
         self.red_task = None
         self.stats_task = None
+        self.activities = RoomActivities(self)
+        self.activity_lock = self.activities.lock
+        self.activity_task = None
+
+    @property
+    def store(self):
+        return self.content.store
+
+    @store.setter
+    def store(self, value):
+        self.content.store = value
+
+    @property
+    def run(self):
+        return self.content.run
+
+    @run.setter
+    def run(self, value):
+        self.content.run = value
 
     async def start(self):
         await asyncio.to_thread(gifts.init_schema)
         await asyncio.to_thread(lucky_bags.init_schema)
         await asyncio.to_thread(red_envelopes.init_schema)
-        self.red_state = await asyncio.to_thread(red_envelopes.tick)
-        self.lucky_bags = await asyncio.to_thread(lucky_bags.listing)
-        self.gift_history.extend(await asyncio.to_thread(gifts.recent_events))
+        await asyncio.to_thread(predictions.init_schema)
+        self.red_state = await asyncio.to_thread(red_envelopes.tick, room_id=self.room.id)
+        self.lucky_bags = await asyncio.to_thread(lucky_bags.listing, room_id=self.room.id)
+        self.gift_history.extend(await asyncio.to_thread(gifts.recent_events, self.room.target))
         for event in self.gift_history:
             self.append_gift_chat(event)
         entrances = {}
@@ -72,22 +119,36 @@ class LiveHub:
             [item for item in self.chat if item.get('type') != 'entrance'] + list(entrances.values()),
             maxlen=100,
         )
-        history = [*self.chat, *await asyncio.to_thread(red_envelopes.events)]
+        history = [*self.chat, *await asyncio.to_thread(red_envelopes.events, room_id=self.room.id)]
         self.chat = deque(sorted(history, key=lambda item: item['at'])[-100:], maxlen=100)
-        self.store = LiveStore()
+        await self.content.start()
+        if hasattr(self.content, 'batch'):
+            self.content.hub = self
+            await self.content.advance_batch(force=True)
+        await self.activities.refresh()
         self.control = await asyncio.to_thread(self.store.control)
         await asyncio.to_thread(self.store.refresh_stats_snapshots)
         summary = await asyncio.to_thread(self.store.summary)
         self.like_total = summary['likes']
         self.summary_week = summary['week']['start']
-        saved = await asyncio.to_thread(self.store.load)
-        if saved:
-            self.run = await asyncio.to_thread(LiveRun.restore, saved)
         self.task = asyncio.create_task(self.maintenance())
         self.gift_task = asyncio.create_task(self.gift_maintenance())
         self.lucky_task = asyncio.create_task(self.lucky_maintenance())
         self.red_task = asyncio.create_task(self.red_maintenance())
         self.stats_task = asyncio.create_task(self.backfill_stats())
+        self.activity_task = asyncio.create_task(self.activity_maintenance())
+
+    async def activity_maintenance(self):
+        while True:
+            try:
+                async with self.activity_lock:
+                    if hasattr(self.content, 'advance_batch'):
+                        await self.content.advance_batch()
+                    await self.activities.drain()
+                    await self.activities.refresh()
+            except Exception:
+                logging.getLogger(__name__).exception('Room activity reconciliation delayed')
+            await asyncio.sleep(1)
 
     async def backfill_stats(self):
         changed = False
@@ -97,9 +158,17 @@ class LiveHub:
         if changed:
             await asyncio.to_thread(self.store.refresh_stats_snapshots)
             summary = await asyncio.to_thread(self.store.summary)
-            await self.broadcast(dict(type='summary', **summary))
+            self.broadcast(dict(type='summary', **summary))
+
+    async def publisher_joined(self):
+        await asyncio.to_thread(audience.online_tick, {}, room_id=self.room.id)
+        self.audience.tick()
 
     async def stop(self):
+        if self.activity_task:
+            self.activity_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.activity_task
         if self.stats_task:
             self.stats_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -120,9 +189,9 @@ class LiveHub:
             self.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.task
-        if self.run:
-            await asyncio.to_thread(self.store.save, self.run)
-        await asyncio.to_thread(self.store.add_likes, self.likes)
+        await self.content.save()
+        if self.store:
+            await asyncio.to_thread(self.store.add_likes, self.likes)
 
     def append_gift_chat(self, event):
         key = 'gift:' + event['combo_id']
@@ -148,7 +217,7 @@ class LiveHub:
 
     async def drain_gifts(self):
         async with self.gift_lock:
-            pending = await asyncio.to_thread(gifts.pending_events)
+            pending = await asyncio.to_thread(gifts.pending_events, self.room.target)
             known = {event['id'] for event in self.gift_history}
             for item in pending:
                 if item['id'] not in known:
@@ -175,17 +244,18 @@ class LiveHub:
             await asyncio.sleep(1)
 
     def snapshot(self):
-        return dict(type='snapshot', online=self.control_status()['online'], paused=not self.control['enabled'],
-                    run=self.run.snapshot() if self.run else None, viewers=len(self.audience.identities()),
-                    lucky_bags=self.lucky_bags, red_envelopes=self.red_state, server_time=time.time())
+        return dict(type='snapshot', room_id=self.room.id, protocol=self.room.protocol, online=self.control_status()['online'], paused=not self.control['enabled'],
+                    **self.content.snapshot(), viewers=len(self.audience.identities()),
+                    lucky_bags=self.lucky_bags, red_envelopes=self.red_state,
+                    predictions=self.activities.state, server_time=time.time())
 
     async def refresh_red(self):
         async with self.red_lock:
-            state = await asyncio.to_thread(red_envelopes.tick)
+            state = await asyncio.to_thread(red_envelopes.tick, room_id=self.room.id)
             if state != self.red_state:
                 self.red_state = state
                 self.broadcast(dict(type='red_envelopes', **state, server_time=time.time()))
-            pending = await asyncio.to_thread(red_envelopes.events, True)
+            pending = await asyncio.to_thread(red_envelopes.events, True, room_id=self.room.id)
             known = {item['id'] for item in self.chat}
             for event in pending:
                 if event['id'] not in known:
@@ -210,10 +280,11 @@ class LiveHub:
         applied = connected and self.control_ack == self.control['revision']
         return dict(self.control, connected=connected, supported=self.control_supported,
                     applied=applied, online=connected and self.control['enabled'] and (applied or not self.control_supported),
-                    run_id=self.run.id if self.run else None)
+                    run_id=self.content.run_id,
+                    lanes=self.content.control_lanes() if hasattr(self.content, 'control_lanes') else [])
 
     async def set_enabled(self, enabled):
-        async with self.control_lock:
+        async with self.control_lock, self.activity_lock:
             self.control = await asyncio.to_thread(self.store.control, enabled)
             if self.producer_ready and self.control_supported and self.producer:
                 try:
@@ -232,17 +303,16 @@ class LiveHub:
                 and self.viewer_times[ws][1] >= now - 35}
 
     async def refresh_lucky(self):
-        self.lucky_bags = await asyncio.to_thread(lucky_bags.listing)
+        self.lucky_bags = await asyncio.to_thread(lucky_bags.listing, room_id=self.room.id)
         self.broadcast(dict(type='lucky_bags', bags=self.lucky_bags, server_time=time.time()))
 
     async def tick_lucky(self):
         async with self.lucky_lock:
             # Only two milestone inserts per run; no database work on ordinary steps.
-            reached = {(self.run.id, value) for value in lucky_bags.RULES
-                       if str(value) in self.run.nodes} if self.run else set()
+            reached = self.content.reached_milestones() if self.room.milestone_rewards else set()
             new = reached - self.lucky_seen
             for run_id, value in sorted(new):
-                await asyncio.to_thread(lucky_bags.create, run_id, value)
+                await asyncio.to_thread(lucky_bags.create, run_id, value, room_id=self.room.id)
             self.lucky_seen = reached
             if new:
                 await self.refresh_lucky()
@@ -251,7 +321,7 @@ class LiveHub:
             for bag in self.lucky_bags:
                 if bag['drawn_at'] is None and bag['draw_at'] <= now:
                     present = self.lucky_present(bag['draw_at'])
-                    changed |= await asyncio.to_thread(lucky_bags.draw, bag['id'], present)
+                    changed |= await asyncio.to_thread(lucky_bags.draw, bag['id'], present, room_id=self.room.id)
                 elif bag['expires_at'] <= now:
                     changed = True
             if changed:
@@ -270,12 +340,17 @@ class LiveHub:
 
     def broadcast(self, message):
         for queue in tuple(self.viewers.values()):
-            if queue.full():
+            if getattr(queue, 'closing', False):
+                continue
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
                 while not queue.empty():
                     queue.get_nowait()
-                queue.put_nowait(self.snapshot())
-            else:
-                queue.put_nowait(message)
+                # Reconnect reloads the room snapshot AND social histories; silently
+                # replacing the queue with a board snapshot would lose paid events.
+                queue.closing = True
+                queue.put_nowait(None)
 
     def limit(self, key, count, seconds=60, cost=1, commit=True):
         now = time.monotonic()
@@ -305,8 +380,8 @@ class LiveHub:
                 self.broadcast({**summary, 'type':'summary', 'likes':self.like_total})
             watch = self.audience.tick()
             if self.snapshot()['online']:
-                await asyncio.to_thread(audience.online_tick, watch)
-            if self.producer and time.monotonic()-self.last_seen >= 20:
+                await asyncio.to_thread(audience.online_tick, watch, room_id=self.room.id)
+            if self.producer and time.monotonic()-self.last_seen >= (20 if self.producer_ready else 180):
                 expired = self.producer
                 with contextlib.suppress(RuntimeError):
                     await expired.close(code=1013)
@@ -314,8 +389,7 @@ class LiveHub:
                     self.producer = None
             self.broadcast(dict(type='presence', online=self.control_status()['online'],
                                 paused=not self.control['enabled'], viewers=len(self.audience.identities())))
-            if self.run:
-                await asyncio.to_thread(self.store.save, self.run)
+            await self.content.save()
             if self.likes:
                 count, self.likes = self.likes, 0
                 await asyncio.to_thread(self.store.add_likes, count)
@@ -323,6 +397,48 @@ class LiveHub:
 
 
 hub = LiveHub()
+
+room_hubs = {}
+
+
+def resolve_hub(connection=None):
+    room_id = connection.path_params.get('room_id', DEFAULT_ROOM_ID) if connection is not None else DEFAULT_ROOM_ID
+    if room_id == DEFAULT_ROOM_ID:
+        return hub
+    if room_id not in ROOMS or room_id not in room_hubs:
+        raise HTTPException(404, 'room_not_found')
+    return room_hubs[room_id]
+
+
+async def start_rooms():
+    await hub.start()
+    try:
+        for room_id, definition in ROOMS.items():
+            if room_id != DEFAULT_ROOM_ID:
+                runtime = LiveHub(definition)
+                room_hubs[room_id] = runtime
+                await runtime.start()
+    except BaseException:
+        await stop_rooms()
+        raise
+
+
+async def stop_rooms():
+    for runtime in [*room_hubs.values(), hub]:
+        await runtime.stop()
+    room_hubs.clear()
+
+
+@router.get('/rooms')
+async def list_rooms():
+    return {'rooms': [room.public() for room in ROOMS.values()]}
+
+
+@router.get('/rooms/{room_id}')
+async def room_detail(room_id: str):
+    if room_id not in ROOMS:
+        raise HTTPException(404, 'room_not_found')
+    return ROOMS[room_id].public()
 
 
 def same_origin(headers):
@@ -333,8 +449,10 @@ def same_origin(headers):
         raise HTTPException(403, 'origin_not_allowed')
 
 
+@router.get('/rooms/{room_id}/state')
 @router.get('/state')
-async def state(stats_range: str = Query('all')):
+async def state(request: Request, stats_range: str = Query('all')):
+    hub = resolve_hub(request)
     return {**hub.snapshot(), **await asyncio.to_thread(hub.store.summary, stats_range), 'likes': hub.like_total, 'chat': list(hub.chat),
             'music_url': os.environ.get('LIVE_MUSIC_URL', ''), 'gifts': list(hub.gift_history)}
 
@@ -345,39 +463,71 @@ async def live_status(response: Response):
     return {'online': bool(hub.control_status()['online'])}
 
 
+@router.get('/rooms/{room_id}/audience')
 @router.get('/audience')
 async def room_audience(request: Request, response: Response):
+    hub = resolve_hub(request)
     hub.limit(('audience-ip', client_ip(request)), 120)
     response.headers['Cache-Control'] = 'no-store'
-    return await asyncio.to_thread(audience.ranking, hub.audience.identities())
+    return await asyncio.to_thread(audience.ranking, hub.audience.identities(), room_id=hub.room.id)
 
 
+@router.get('/rooms/{room_id}/history')
 @router.get('/history')
 async def run_history(request: Request, response: Response, page: int = Query(1, ge=1)):
+    hub = resolve_hub(request)
     hub.limit(('history-ip', client_ip(request)), 120)
     response.headers['Cache-Control'] = 'no-store'
     return await asyncio.to_thread(hub.store.history, page)
 
 
+@router.get('/rooms/{room_id}/lucky-bags')
 @router.get('/lucky-bags')
 async def lucky_list(request: Request, response: Response):
+    hub = resolve_hub(request)
     hub.limit(('lucky-read', client_ip(request)), 120)
     user = current_user_from_request(request)
     response.headers['Cache-Control'] = 'no-store'
-    return dict(bags=await asyncio.to_thread(lucky_bags.listing, user['id'] if user else None), server_time=time.time())
+    return dict(bags=await asyncio.to_thread(lucky_bags.listing, user['id'] if user else None, room_id=hub.room.id), server_time=time.time())
 
 
+@router.get('/rooms/{room_id}/predictions')
+async def prediction_state(request: Request, response: Response, market_id: str = Query(None, max_length=36)):
+    hub = resolve_hub(request)
+    hub.limit(('prediction-read', client_ip(request)), 120)
+    response.headers['Cache-Control'] = 'no-store'
+    user = current_user_from_request(request)
+    state = await asyncio.to_thread(predictions.listing, hub.room.id, user['id'] if user else None, market_id)
+    return dict(state, available=hub.control_status()['online'])
+
+
+@router.post('/rooms/{room_id}/predictions')
+async def prediction_place(request: Request):
+    hub = resolve_hub(request)
+    user = require_user(request)
+    body = await gift_body(request)
+    hub.limit(('prediction-write', user['id']), 30)
+    async with hub.activity_lock:
+        if hasattr(hub.content, 'advance_batch'):
+            await hub.content.advance_batch()
+        result = await asyncio.to_thread(predictions.place, hub.room.id, user['id'], body,
+                                         lambda: hub.control_status()['online'])
+    return result
+
+
+@router.post('/rooms/{room_id}/lucky-bags/{bag_id}/join')
 @router.post('/lucky-bags/{bag_id}/join')
 async def lucky_join(bag_id: str, request: Request):
+    hub = resolve_hub(request)
     same_origin(request.headers)
     user = require_user(request)
     hub.limit(('lucky-join', user['id']), 12)
     if user['id'] not in hub.viewer_users.values():
         raise HTTPException(409, 'lucky_bag_not_present')
     async with hub.lucky_lock:
-        await asyncio.to_thread(lucky_bags.join, bag_id, user['id'])
+        await asyncio.to_thread(lucky_bags.join, bag_id, user['id'], room_id=hub.room.id)
         await hub.refresh_lucky()
-    return dict(bags=await asyncio.to_thread(lucky_bags.listing, user['id']), server_time=time.time())
+    return dict(bags=await asyncio.to_thread(lucky_bags.listing, user['id'], room_id=hub.room.id), server_time=time.time())
 
 
 async def gift_body(request):
@@ -396,74 +546,90 @@ async def gift_body(request):
         raise HTTPException(400, 'invalid_gift')
 
 
+@router.post('/rooms/{room_id}/red-envelopes')
 @router.post('/red-envelopes')
 async def red_send(request: Request):
+    hub = resolve_hub(request)
     user = require_user(request)
     body = await gift_body(request)
     hub.limit(('red-send', user['id']), 20)
     if user['id'] not in hub.lucky_present(time.time()):
         raise HTTPException(409, 'red_not_present')
     actor = await asyncio.to_thread(gifts.public_actor, user)
-    result = await asyncio.to_thread(red_envelopes.create, user['id'], actor, body)
+    result = await asyncio.to_thread(red_envelopes.create, user['id'], actor, body, room_id=hub.room.id)
     # The money has committed; a broadcast failure must not report failed payment.
     with contextlib.suppress(Exception):
         await hub.refresh_red()
     return result
 
 
+@router.get('/rooms/{room_id}/red-envelopes/{envelope_id}')
 @router.get('/red-envelopes/{envelope_id}')
 async def red_detail(envelope_id: str, request: Request, response: Response):
+    hub = resolve_hub(request)
     hub.limit(('red-read', client_ip(request)), 120)
     response.headers['Cache-Control'] = 'no-store'
     user = current_user_from_request(request)
-    return await asyncio.to_thread(red_envelopes.detail, envelope_id, user['id'] if user else None)
+    return await asyncio.to_thread(red_envelopes.detail, envelope_id, user['id'] if user else None, room_id=hub.room.id)
 
 
+@router.post('/rooms/{room_id}/red-envelopes/{envelope_id}/claim')
 @router.post('/red-envelopes/{envelope_id}/claim')
 async def red_claim(envelope_id: str, request: Request):
+    hub = resolve_hub(request)
     same_origin(request.headers)
     user = require_user(request)
     hub.limit(('red-claim', user['id']), 30)
     if user['id'] not in hub.lucky_present(time.time()):
         raise HTTPException(409, 'red_not_present')
-    result = await asyncio.to_thread(red_envelopes.claim, envelope_id, user['id'])
+    result = await asyncio.to_thread(red_envelopes.claim, envelope_id, user['id'], room_id=hub.room.id)
     with contextlib.suppress(Exception):
         await hub.refresh_red()
     return result
 
 
+@router.get('/rooms/{room_id}/gifts/catalog')
 @router.get('/gifts/catalog')
-async def gift_catalog():
+async def gift_catalog(request: Request):
+    hub = resolve_hub(request)
     catalog, _ = await asyncio.to_thread(gifts.catalogue)
     return catalog
 
 
+@router.get('/rooms/{room_id}/gifts/me')
 @router.get('/gifts/me')
 async def gift_me(request: Request):
+    hub = resolve_hub(request)
     return await asyncio.to_thread(gifts.mine, require_user(request)['id'])
 
 
+@router.post('/rooms/{room_id}/gifts/preferences')
 @router.post('/gifts/preferences')
 async def gift_preferences(request: Request):
+    hub = resolve_hub(request)
     user = require_user(request)
     body = await gift_body(request)
     return await asyncio.to_thread(gifts.set_preferences, user['id'], body.get('daily_limit_units'), body.get('entrance_enabled'))
 
 
+@router.get('/rooms/{room_id}/gifts/orders/{request_id}')
 @router.get('/gifts/orders/{request_id}')
 async def gift_order(request_id: str, request: Request):
-    return await asyncio.to_thread(gifts.order, require_user(request)['id'], request_id)
+    hub = resolve_hub(request)
+    return await asyncio.to_thread(gifts.order, require_user(request)['id'], request_id, hub.room.target)
 
 
+@router.post('/rooms/{room_id}/gifts/send')
 @router.post('/gifts/send')
 async def gift_send(request: Request):
+    hub = resolve_hub(request)
     user = require_user(request)
     body = await gift_body(request)
     hub.limit(('gift-second', user['id']), 5, seconds=1)
     hub.limit(('gift-minute', user['id']), 30)
     hub.limit(('gift-ip', client_ip(request)), 90)
     try:
-        result = await asyncio.to_thread(gifts.send, user, body, hub.snapshot()['online'])
+        result = await asyncio.to_thread(gifts.send, user, body, hub.snapshot()['online'], target=hub.room.target)
     except InsufficientTokens as error:
         raise HTTPException(402, error.payload)
     except ValueError:
@@ -474,16 +640,20 @@ async def gift_send(request: Request):
     return result
 
 
+@router.get('/rooms/{room_id}/replays/{run_id}')
 @router.get('/replays/{run_id}')
-async def replay(run_id: str):
+async def replay(run_id: str, request: Request):
+    hub = resolve_hub(request)
     content = await asyncio.to_thread(hub.store.replay, run_id)
     if not content:
         raise HTTPException(404, 'replay_expired')
     return Response(content, media_type='text/plain', headers={'Cache-Control': 'public, max-age=3600'})
 
 
+@router.post('/rooms/{room_id}/chat')
 @router.post('/chat')
 async def chat(request: Request):
+    hub = resolve_hub(request)
     same_origin(request.headers)
     actor = require_actor(request)
     body = await request.body()
@@ -508,12 +678,14 @@ async def chat(request: Request):
     hub.chat.append(message)
     hub.broadcast(message)
     if hub.snapshot()['online']:
-        await asyncio.to_thread(audience.record, actor.actor_key, 'messages')
+        await asyncio.to_thread(audience.record, actor.actor_key, 'messages', room_id=hub.room.id)
     return {'ok': True}
 
 
+@router.post('/rooms/{room_id}/like')
 @router.post('/like')
 async def like(request: Request):
+    hub = resolve_hub(request)
     same_origin(request.headers)
     actor = require_actor(request)
     body = await request.body()
@@ -534,12 +706,14 @@ async def like(request: Request):
     hub.likes += amount
     hub.like_total += amount
     if hub.snapshot()['online']:
-        await asyncio.to_thread(audience.record, actor.actor_key, 'likes', amount)
+        await asyncio.to_thread(audience.record, actor.actor_key, 'likes', amount, room_id=hub.room.id)
     return {'ok': True, 'count': hub.like_total, 'accepted': amount}
 
 
+@router.websocket('/rooms/{room_id}/watch')
 @router.websocket('/watch')
 async def watch(ws: WebSocket):
+    hub = resolve_hub(ws)
     try:
         same_origin(ws.headers)
         hub.limit(('connect', websocket_client_ip(ws)), 30)
@@ -550,7 +724,7 @@ async def watch(ws: WebSocket):
         await ws.close(code=1013)
         return
     await ws.accept()
-    queue = asyncio.Queue(maxsize=32)
+    queue = ViewerQueue()
     hub.viewers[ws] = queue
     queue.put_nowait(hub.snapshot())
     user = None
@@ -582,6 +756,9 @@ async def watch(ws: WebSocket):
     async def send():
         while True:
             item = await queue.get()
+            if item is None:
+                await asyncio.wait_for(ws.close(code=1013, reason='slow_consumer'), 5)
+                return
             if isinstance(item, bytes):
                 await asyncio.wait_for(ws.send_bytes(item), 5)
             else:
@@ -609,101 +786,13 @@ async def watch(ws: WebSocket):
             await ws.close()
 
 
+@router.websocket('/rooms/{room_id}/publish')
 @router.websocket('/publish')
 async def publish(ws: WebSocket):
-    secret = os.environ.get('LIVE_PUBLISH_TOKEN', '')
+    hub = resolve_hub(ws)
+    secret = os.environ.get(hub.room.publish_token_env, '')
     supplied = ws.headers.get('authorization', '')
     if not secret or not hmac.compare_digest(supplied, 'Bearer ' + secret) or ws.headers.get('origin'):
         await ws.close(code=1008)
         return
-    if hub.producer:
-        await ws.close(code=1008)
-        return
-    hub.producer = ws
-    hub.producer_ready = False
-    hub.control_supported = False
-    hub.control_ack = None
-    hub.last_seen = time.monotonic()
-    ready = False
-    try:
-        await ws.accept()
-        while hub.producer is ws:
-            packet = await asyncio.wait_for(ws.receive(), 20)
-            if packet['type'] == 'websocket.disconnect':
-                break
-            hub.last_seen = time.monotonic()
-            raw = packet.get('bytes')
-            if raw is not None:
-                if not ready or len(raw) != STEP.size or not hub.run:
-                    raise ValueError('invalid_packet')
-                if not hub.control['enabled'] and hub.control_ack == hub.control['revision']:
-                    raise ValueError('publisher_paused')
-                hub.run.apply(raw)
-                hub.broadcast(raw)
-                continue
-            text = packet.get('text') or ''
-            if len(text) > 710_000:
-                raise ValueError('message_too_large')
-            data = json.loads(text)
-            action = data.get('type')
-            if action == 'hello':
-                await asyncio.to_thread(audience.online_tick, {})
-                hub.audience.tick()
-                proposed = data.get('run')
-                if proposed:
-                    restored = await asyncio.to_thread(LiveRun.restore, proposed)
-                    if hub.run and hub.run.id != restored.id:
-                        restored = hub.run
-                    elif hub.run and hub.run.seed != restored.seed:
-                        raise ValueError('seed_conflict')
-                    elif hub.run and len(hub.run.records) > len(restored.records):
-                        restored = hub.run
-                    elif hub.run and not restored.records.startswith(hub.run.records):
-                        raise ValueError('record_conflict')
-                    hub.run = restored
-                if hub.run:
-                    if hub.run.ended:
-                        await asyncio.to_thread(hub.store.finish, hub.run)
-                    await asyncio.to_thread(hub.store.save, hub.run)
-                async with hub.control_lock:
-                    hub.control_supported = data.get('control_version') == 1
-                    if not hub.control['enabled'] and not hub.control_supported:
-                        raise ValueError('control_upgrade_required')
-                    ready = hub.producer_ready = True
-                    await ws.send_json({'type': 'resume', 'run': hub.run.checkpoint() if hub.run else None,
-                                        'control': hub.control})
-                hub.broadcast(hub.snapshot())
-            elif action == 'control_ack' and ready and hub.control_supported:
-                if data.get('revision') == hub.control['revision']:
-                    hub.control_ack = data['revision']
-                    hub.broadcast(hub.snapshot())
-            elif action == 'start' and ready:
-                if not hub.control['enabled'] and hub.control_ack == hub.control['revision']:
-                    raise ValueError('publisher_paused')
-                if hub.run and not hub.run.ended:
-                    raise ValueError('run_not_finished')
-                hub.run = LiveRun(data['seed'], data['run_id'])
-                await asyncio.to_thread(hub.store.save, hub.run)
-                hub.broadcast(hub.snapshot())
-            elif action == 'source' and ready and hub.run:
-                hub.run.source = str(data['source'])[:80]
-                hub.broadcast({'type': 'source', 'source': hub.run.source})
-            elif action == 'end' and ready and hub.run:
-                hub.run.end(time.time() + min(20, max(10, int(data.get('delay', 15)))))
-                await asyncio.to_thread(hub.store.finish, hub.run)
-                await asyncio.to_thread(hub.store.save, hub.run)
-                hub.broadcast(hub.snapshot())
-                hub.broadcast({'type': 'summary', **await asyncio.to_thread(hub.store.summary), 'likes': hub.like_total})
-            elif action != 'ping':
-                raise ValueError('invalid_message')
-    except (WebSocketDisconnect, asyncio.TimeoutError, ValueError, KeyError, TypeError):
-        with contextlib.suppress(Exception):
-            await ws.close(code=1008)
-    finally:
-        if hub.producer is ws:
-            hub.producer = None
-            hub.producer_ready = False
-            hub.control_ack = None
-            hub.broadcast(hub.snapshot())
-            if hub.run:
-                await asyncio.to_thread(hub.store.save, hub.run)
+    await hub.content.publish(ws, hub)

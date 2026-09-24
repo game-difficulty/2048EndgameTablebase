@@ -26,7 +26,7 @@
                   activePatternCategory === group.category ? 'bg-btn-bg text-white' : 'text-text-main hover:bg-btn-bg/10'
                 ]"
               >
-                {{ group.category }}
+                {{ $t(`patternCategories.${group.category}`) }}
               </button>
             </div>
             <div class="grid max-h-[320px] min-w-[220px] grid-cols-2 content-start gap-1.5 overflow-y-auto p-2">

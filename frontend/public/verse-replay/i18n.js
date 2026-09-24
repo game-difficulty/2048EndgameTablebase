@@ -3,6 +3,12 @@
   const requested = new URLSearchParams(root.location.search).get('lang');
   const english = requested === 'en' || (requested !== 'zh' && !root.navigator.language.toLowerCase().startsWith('zh'));
   const messages = {
+    '人类对局': 'Human game',
+    '本地回放已失效，请从人类站重新打开。': 'This local replay is unavailable. Reopen it from the human game site.',
+    '回放文件不能超过 2 MB。': 'Replay files must be no larger than 2 MB.',
+    '回放不能超过 200000 步。': 'Replays cannot exceed 200,000 moves.',
+    '不支持的 RPL1 棋盘尺寸。': 'Unsupported RPL1 board dimensions.',
+    '回放初始棋块位置越界。': 'An initial tile is outside the replay board.',
     '2048 回放播放器': '2048 Replay Player',
     '带连续秒表、单步用时和节点用时的 2048 回放播放器': 'Watch 2048 replays with recorded move timings, elapsed time, and tile milestones.',
     '尚未载入回放': 'No replay loaded', '载入与步速设置': 'Replay files and playback speed',

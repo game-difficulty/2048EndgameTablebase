@@ -1,4 +1,11 @@
 {
+  "patternCategories": {
+    "free": "Free",
+    "space10": "10 cells",
+    "space12": "12 cells",
+    "others": "Other",
+    "variant": "Variant"
+  },
   "announcements": {
     "title": "Announcements",
     "history": "Past Announcements",

@@ -21,6 +21,7 @@ namespace BCCompressedResult {
 namespace {
 
 constexpr char kMagic[8] = {'B', 'C', 'C', 'M', 'P', '1', '\0', '\0'};
+constexpr char kRawMagic[8] = {'B', 'C', 'R', 'A', 'W', '1', '\0', '\0'};
 constexpr uint32_t kFormatVersion = 1U;
 
 template <typename T>
@@ -82,6 +83,11 @@ void read_exact(std::ifstream &in, uint64_t offset, void *data, uint64_t size, c
     std::ifstream in(path, std::ios::binary);
     if (!in) {
         throw std::runtime_error("failed to open BC compressed file: " + path.string());
+    }
+    in.seekg(0, std::ios::end);
+    const auto length = in.tellg();
+    if (length < 0 || offset > static_cast<uint64_t>(length) || size > static_cast<uint64_t>(length) - offset) {
+        throw std::runtime_error("BC archive range exceeds file: " + path.string());
     }
     std::vector<uint8_t> bytes(static_cast<size_t>(size));
     read_exact(in, offset, bytes.data(), size, what);
@@ -1229,8 +1235,12 @@ template <class SuccessAdapter>
     return state.stats;
 }
 
+bool is_raw_value_archive(const Header &header) {
+    return std::memcmp(header.magic, kRawMagic, sizeof(kRawMagic)) == 0;
+}
+
 void validate_header(const Header &header) {
-    if (std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0) {
+    if (std::memcmp(header.magic, kMagic, sizeof(kMagic)) != 0 && !is_raw_value_archive(header)) {
         throw std::runtime_error("BC compressed magic mismatch");
     }
     if (header.version != kFormatVersion || header.header_bytes != sizeof(Header)) {
@@ -1429,6 +1439,30 @@ void validate_header(const Header &header) {
 }
 
 } // namespace
+
+void validate_archive_file(const std::filesystem::path &path) {
+    const Header h = read_pod_at<Header>(path, 0U, "BC archive header");
+    validate_header(h);
+    const uint64_t size = std::filesystem::file_size(path);
+    auto end_of = [&](uint64_t offset, uint64_t count, uint64_t stride) {
+        if (offset > size || count > (size - offset) / stride) {
+            throw std::runtime_error("BC archive directory exceeds file: " + path.string());
+        }
+        return offset + count * stride;
+    };
+    if (h.data_offset != sizeof(Header) ||
+        end_of(h.data_offset, h.data_bytes, 1U) != h.axis_offset ||
+        h.axis_bytes != static_cast<uint64_t>(h.family_count) * sizeof(uint32_t) ||
+        end_of(h.axis_offset, h.axis_bytes, 1U) != h.cell_dir_offset ||
+        h.cell_count != static_cast<uint64_t>(h.family_count) * h.family_count ||
+        h.cell_dir_count != h.cell_count ||
+        end_of(h.cell_dir_offset, h.cell_dir_count, sizeof(CellDirEntry)) != h.bucket_dir_offset ||
+        end_of(h.bucket_dir_offset, h.bucket_block_count, sizeof(BucketBlockDirEntry)) != h.value_dir_offset ||
+        end_of(h.value_dir_offset, h.value_block_count, sizeof(ValueBlockDirEntry)) != size ||
+        h.value_block_raw_hard_cap_bytes == 0U) {
+        throw std::runtime_error("BC archive layout invalid: " + path.string());
+    }
+}
 
 CompressStats compress_exact_layer_to_result(
     const std::filesystem::path &position_path,
@@ -1778,6 +1812,7 @@ void PointReader::open(
     const std::filesystem::path &compressed_path,
     const BC::BCLut &lut
 ) {
+    validate_archive_file(compressed_path);
     auto impl = std::make_shared<Impl>();
     impl->path = compressed_path;
     impl->lut = &lut;
@@ -1980,13 +2015,35 @@ ColdLookupResult PointReader::lookup(uint64_t board, uint32_t lane) const {
     if (!value_block_found) {
         throw std::runtime_error("BC compressed value block not found");
     }
+    if (value_dir.value_size != impl_->header.value_size || value_dir.value_count == 0U ||
+        value_dir.raw_size != static_cast<uint64_t>(value_dir.value_count) * value_dir.value_size ||
+        value_dir.raw_size > impl_->header.value_block_raw_hard_cap_bytes ||
+        value_dir.compressed_offset < impl_->header.data_offset ||
+        value_dir.compressed_offset > impl_->header.axis_offset ||
+        value_dir.compressed_size > impl_->header.axis_offset - value_dir.compressed_offset) {
+        throw std::runtime_error("BC archive value block directory invalid");
+    }
+    if (is_raw_value_archive(impl_->header) &&
+        (value_dir.raw_size > std::numeric_limits<uint64_t>::max() - 8U ||
+         value_dir.compressed_size != value_dir.raw_size + 8U)) {
+        throw std::runtime_error("BC RAW value block stored size mismatch");
+    }
     std::vector<uint8_t> compressed_value = read_range(
         impl_->path,
         value_dir.compressed_offset,
         value_dir.compressed_size,
         "BC compressed value block");
-    std::vector<uint8_t> value_raw =
-        decompress_xz_block_native(compressed_value.data(), compressed_value.size());
+    std::vector<uint8_t> value_raw;
+    if (is_raw_value_archive(impl_->header)) {
+        const auto crc = BC::load_u64_le(compressed_value.data() + value_dir.raw_size);
+        if (crc != crc64_bytes_native(compressed_value.data(), static_cast<size_t>(value_dir.raw_size))) {
+            throw std::runtime_error("BC RAW value block CRC64 mismatch: " + impl_->path.string());
+        }
+        compressed_value.resize(static_cast<size_t>(value_dir.raw_size));
+        value_raw = std::move(compressed_value);
+    } else {
+        value_raw = decompress_xz_block_native(compressed_value.data(), compressed_value.size());
+    }
     if (value_raw.size() != value_dir.raw_size ||
         value_dir.value_size != impl_->header.value_size) {
         throw std::runtime_error("BC compressed value block raw size mismatch");

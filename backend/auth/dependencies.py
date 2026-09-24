@@ -12,6 +12,23 @@ from .guest_service import (
 )
 from .principal import ActorRef
 from .service import SESSION_COOKIE_NAME, SHARED_SESSION_COOKIE_NAME, authenticate_session_token
+from .service import authenticate_session_identity
+
+
+def current_identity_from_request(request: Request):
+    for token in auth_tokens_from_request(request):
+        user = authenticate_session_identity(token)
+        if user is not None:
+            request.state.auth_session_token = token
+            return user
+    return None
+
+
+def require_identity(request: Request):
+    user = current_identity_from_request(request)
+    if user is None:
+        raise HTTPException(401, "Authentication required.")
+    return user
 
 
 def cookie_secure() -> bool:

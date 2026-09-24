@@ -57,6 +57,23 @@ class LiveProtocolTests(unittest.TestCase):
         self.assertEqual(run.score, 65536)
         self.assertEqual(run.nodes['65536'], 50)
 
+    def test_combo_milestone_survives_later_merges_and_checkpoint_replay(self):
+        from backend.live import protocol
+        initial = protocol.initial_board
+        def late_game(seed):
+            _, tiles, rng = initial(seed)
+            return [65536,32768,32768]+[0]*13, tiles, rng
+        with patch.object(protocol, 'initial_board', side_effect=late_game):
+            run=LiveRun(SEED)
+            run.apply(run.make_step('down',50))
+            self.assertEqual(run.nodes['65536+32768'],50)
+            run.apply(run.make_step('left',50))
+            self.assertNotIn(32768,run.board)
+            self.assertEqual(run.nodes['65536+32768'],50)
+            restored=LiveRun.restore(run.checkpoint())
+            self.assertEqual(restored.snapshot(),run.snapshot())
+            self.assertEqual(restored.nodes['65536+32768'],50)
+
     def test_bad_spawn_does_not_advance_rng_or_state(self):
         run = LiveRun(SEED)
         packet = bytearray(run.make_step(legal_moves(run.board)[0], 50))
@@ -99,7 +116,7 @@ class LiveProtocolTests(unittest.TestCase):
         for _ in range(3):
             hub.broadcast(b'packet')
         self.assertEqual(queue.qsize(), 1)
-        self.assertEqual(queue.get_nowait()['type'], 'snapshot')
+        self.assertIsNone(queue.get_nowait())  # Slow consumers reconnect and reload social history too.
 
     def test_chat_rate_limit_expires_and_is_per_actor(self):
         hub = LiveHub()

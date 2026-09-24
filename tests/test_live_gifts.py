@@ -13,6 +13,7 @@ from fastapi import HTTPException, FastAPI
 from fastapi.testclient import TestClient
 from backend.auth.db import auth_db, init_auth_db
 from backend.live import gifts, audience
+from backend.gifts import service as gift_service
 from backend.live import routes
 from backend.live.supporters import supporter_level, public_actor
 from backend.quota.errors import InsufficientTokens
@@ -252,7 +253,7 @@ class LiveGiftTests(unittest.TestCase):
 
     def test_failed_order_rolls_back_debit_ledger_and_request(self):
         before = get_token_balance(1)
-        with patch.object(gifts, 'receipt', side_effect=RuntimeError('after_insert')):
+        with patch.object(gift_service, 'receipt', side_effect=RuntimeError('after_insert')):
             with self.assertRaises(RuntimeError):
                 gifts.send(self.user, self.request(), True)
         self.assertEqual(get_token_balance(1), before)

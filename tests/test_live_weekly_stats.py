@@ -82,6 +82,8 @@ class WeeklyStatsTests(unittest.TestCase):
         self.assertEqual(restored.summary()['week']['median_score'],120)
         with restored.connect() as db:
             db.execute('UPDATE live_days SET games=2,score_sum=360')
+        # Direct database maintenance must refresh the materialized summaries.
+        restored.refresh_stats_snapshots()
         weekly=restored.summary()['week']
         self.assertEqual(weekly['games'],2)
         self.assertIsNone(weekly['median_score'])

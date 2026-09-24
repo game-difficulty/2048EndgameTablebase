@@ -2,9 +2,12 @@
   <div class="live-page">
     <header class="live-header">
       <a href="https://2048tables.online/" class="brand"
-        ><Radio :size="24" /><strong>2048 <span>AI LIVE</span></strong></a
+        ><Radio :size="24" /><strong>2048 <span>LIVE</span></strong></a
       >
       <nav>
+        <a class="room-address" :href="room.path">{{ room.title[lang] || room.title.en }}</a>
+        <RoomPipControls ref="roomPip" :get-surface="() => roomStage?.element()" :get-frame="() => content?.getPipFrame?.()"
+          :lang="lang" :title="room.title[lang] || room.title.en" @active="setPipActive" @surface="setSurfaceDetached" />
         <span :class="['live-status', streamState === 'live' ? 'on' : '']">{{
           streamState === 'loading' ? t('连接中', 'CONNECTING') : streamState === 'reconnecting' ? t('重连中', 'RECONNECTING') : streamState === 'live' ? t("直播中", "LIVE") : t("暂停", "OFFLINE")
         }}</span
@@ -24,149 +27,24 @@
     </header>
     <main>
       <div class="live-layout">
-      <div ref="stageColumn" class="stage-column">
-      <div class="live-title">
-        <div>
-          <h1>{{ t("2048 AI 直播", "2048 AI Live") }}</h1>
-          <p>
-            {{
-              t(
-                "AI 实时思考，搜索与残局定式共同决策。",
-                "Live decisions powered by search and endgame tables.",
-              )
-            }}
-          </p>
-        </div>
-      </div>
-      <GiftEffects ref="giftEffects" v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
-      <section class="broadcast-grid" :class="{ 'timing-collapsed': timingCollapsed, 'history-collapsed': historyCollapsed }">
-        <div class="board-column">
-          <div class="score-strip">
-            <div>
-              <small>{{ t("本局得分", "SCORE") }}</small
-              ><strong>{{ format(run?.score) }}</strong>
-            </div>
-            <div>
-              <small>{{ t("历史最高", "ALL-TIME BEST") }}</small
-              ><strong>{{ format(Math.max(best, run?.score || 0)) }}</strong>
-            </div>
-          </div>
-          <div class="source-line">
-            <span>{{
-              run?.source && run.source !== "AI"
-                ? run.source
-                : t("AI 搜索", "AI search")
-            }}</span
-            ><small>#{{ format(run?.seq) }}</small>
-          </div>
-          <BaseBoard :frame="frame">
-            <template #overlay>
-              <div v-if="streamState === 'loading' || streamState === 'reconnecting'" class="board-overlay loading" role="status" aria-live="polite" aria-busy="true">
-                <LoaderCircle :size="30" class="loading-spinner" />
-                <h2>{{ streamState === 'loading' ? t('正在加载直播', 'Loading the stream') : t('正在恢复连接', 'Reconnecting') }}</h2>
-                <p>{{ streamState === 'loading' ? t('正在连接直播间，请稍候', 'Connecting to the stream. Please wait.') : t('连接恢复后，画面将继续播放', 'Playback will resume when reconnected.') }}</p>
-              </div>
-              <div v-else-if="streamState === 'paused'" class="board-overlay" role="status">
-                <h2>{{ t('直播已暂停', 'Stream paused') }}</h2>
-                <p>{{ t('等待主播恢复直播', 'Waiting for the stream to resume') }}</p>
-              </div>
-              <div v-else-if="streamState === 'offline'" class="board-overlay">
-                <WifiOff :size="30" />
-                <h2>{{ t("主播暂时离线", "Stream paused") }}</h2>
-                <p>{{ t("等待恢复直播", "Waiting for the broadcaster") }}</p>
-              </div>
-              <div v-else-if="run?.ended_at" class="board-overlay ended">
-                <Trophy :size="32" />
-                <h2>{{ t("本局结束", "Game over") }}</h2>
-                <strong>{{ format(run.score) }}</strong>
-                <p>
-                  {{ countdown
-                  }}{{ t(" 秒后开始新局", "s until the next game") }}
-                </p>
-              </div>
-            </template>
-          </BaseBoard>
-          <div class="board-code">
-            <input
-              :value="hex"
-              readonly
-              aria-label="Board hexadecimal code"
-              @focus="$event.target.select()"
-            /><button @click="copyHex" :title="t('复制盘面', 'Copy board')">
-              <Copy :size="17" />
-            </button>
-            <LivePipProbe v-if="pipExperiment" :run="run" :state="streamState" :lang="lang" @active="setPipActive" />
-          </div>
-        </div>
-        <aside class="timing-column" :class="{ 'side-collapsed': timingCollapsed }">
-          <button v-if="timingCollapsed" class="expand-panel" @click="timingCollapsed = false" :title="t('展开用时', 'Expand run time')" :aria-label="t('展开用时', 'Expand run time')" aria-expanded="false" aria-controls="live-timing-content"><PanelLeftOpen :size="18" /></button>
-          <div v-show="!timingCollapsed" id="live-timing-content">
-          <div class="panel-heading">
-            <Clock :size="17" />
-            <h2>{{ t("本局用时", "RUN TIME") }}</h2>
-            <button class="collapse-panel" @click="timingCollapsed = true" :title="t('收起用时', 'Collapse run time')" :aria-label="t('收起用时', 'Collapse run time')" aria-expanded="true" aria-controls="live-timing-content"><PanelLeftClose :size="18" /></button>
-          </div>
-          <div class="elapsed">{{ duration(run?.elapsed_ms) }}</div>
-          <div class="table-heading">
-            <span>{{ t("棋块", "TILE") }}</span
-            ><span>{{ t("累计用时", "REACHED AT") }}</span>
-          </div>
-          <div class="node-row" v-for="tile in milestones" :key="tile">
-            <LiveTile :value="tile" /><span>{{
-              run?.nodes?.[tile] != null ? duration(run.nodes[tile]) : "—"
-            }}</span>
-          </div>
-          </div>
-        </aside>
-        <aside class="history-column" :class="{ 'side-collapsed': historyCollapsed }">
-          <button v-if="historyCollapsed" class="expand-panel" @click="historyCollapsed = false" :title="t('展开最近对局', 'Expand recent runs')" :aria-label="t('展开最近对局', 'Expand recent runs')" aria-expanded="false" aria-controls="live-history-content"><PanelRightOpen :size="18" /></button>
-          <div v-show="!historyCollapsed" id="live-history-content">
-          <div class="panel-heading">
-            <History :size="17" />
-            <h2>{{ t("最近对局", "RECENT RUNS") }}</h2>
-            <button @click="refreshSummary(); loadHistory(historyPage)" :title="t('刷新', 'Refresh')">
-              <RefreshCw :size="16" />
-            </button>
-            <button class="collapse-panel" @click="historyCollapsed = true" :title="t('收起最近对局', 'Collapse recent runs')" :aria-label="t('收起最近对局', 'Collapse recent runs')" aria-expanded="true" aria-controls="live-history-content"><PanelRightClose :size="18" /></button>
-          </div>
-          <div class="table-heading">
-            <span>{{ t("得分 / 最大棋块", "SCORE / BEST TILE") }}</span
-            ><span>{{ t("结束时间", "FINISHED") }}</span>
-          </div>
-          <p v-if="!history.length" class="empty">
-            {{ t("等待第一局完成", "Waiting for the first completed run") }}
-          </p>
-          <a
-            class="history-row"
-            v-for="game in history"
-            :key="game.id"
-            :href="replayUrl(game.id)"
-            target="_blank"
-            rel="noopener"
-            ><span
-              ><strong>{{ format(game.score) }}</strong
-              ><small>{{ game.max_tile === 65536 ? '65k' : game.max_tile >= 1024 ? `${game.max_tile / 1024}K` : game.max_tile }}</small></span>
-            <time>{{ dateTime(game.ended) }} <ExternalLink :size="12" /></time
-          ></a>
-          <nav class="history-pagination" :aria-label="t('历史对局分页', 'Run history pages')" :aria-busy="historyLoading">
-            <button :disabled="historyPage === 1 || historyLoading" @click="loadHistory(historyPage - 1)" :title="t('上一页', 'Previous page')">‹</button>
-            <template v-for="(page, index) in historyButtons" :key="index">
-              <span v-if="page === null">…</span>
-              <button v-else :aria-current="page === historyPage ? 'page' : undefined" :disabled="historyLoading" @click="loadHistory(page)">{{ page }}</button>
-            </template>
-            <button :disabled="historyPage === historyPages || historyLoading" @click="loadHistory(historyPage + 1)" :title="t('下一页', 'Next page')">›</button>
-          </nav>
-          </div>
-        </aside>
-      </section>
-      <LuckyBags :state="luckyState" :user="user" :connected="connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
+      <aside id="room-activity-dock" class="room-activity-dock" :aria-label="t('直播间活动','Room activities')"></aside>
+      <div class="stage-column">
+      <div class="room-stage-home">
+      <div v-show="pipDetached" class="room-stage-placeholder"><p>{{ t('直播内容正在小窗中显示','The stream is playing in the mini player') }}</p><button @click="roomPip?.close()">{{ t('返回页面观看','Watch here') }}</button></div>
+      <RoomStage ref="roomStage"><div class="content-stage">
+        <component :is="contentComponent" ref="content" :lang="lang" :stream-state="streamState" :pip-active="pipActive" @notice="showNotice" />
+        <GiftEffects ref="giftEffects" v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
+      </div></RoomStage></div>
+      <RoomActivities ref="redEnvelopes" :room="room" :transport="{api,url}" dock-target="#room-activity-dock" prediction-target="#room-prediction-entry" :lucky-state="luckyState" :red-state="redState" :prediction-state="predictionState" :user="user" :connected="connected" :online="online && synchronized && connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
         <template #default="{ bag, open, caption }">
-          <GiftPanel ref="giftPanel" :user="user" :online="online && connected" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
-            <template #leading><button v-if="bag" class="lucky-strip-entry" @click="open(bag)" :title="t('福袋','Lucky bags')"><LuckyBagIcon /><b>{{ t('福袋','Lucky bags') }}</b><small>{{ caption }}</small></button></template>
+          <GiftPanel :red-envelopes="room.capabilities.red_envelopes" ref="giftPanel" :user="user" :online="online && connected && synchronized" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
+            <template #leading>
+              <div v-if="room.capabilities.predictions" id="room-prediction-entry" class="room-prediction-entry"></div>
+              <button v-if="bag" class="lucky-strip-entry" @click="open(bag)" :title="t('福袋','Lucky bags')"><LuckyBagIcon /><b>{{ t('福袋','Lucky bags') }}</b><small>{{ caption }}</small></button>
+            </template>
           </GiftPanel>
         </template>
-      </LuckyBags>
-      <RedEnvelopes ref="redEnvelopes" :state="redState" :user="user" :connected="connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()" />
+      </RoomActivities>
       </div>
       <section class="history-stats-strip">
         <label class="stats-range">
@@ -319,70 +197,63 @@ import {
   Sun,
   Heart,
   Sparkles,
-  Clock,
-  History,
-  RefreshCw,
-  PanelLeftOpen,
-  PanelLeftClose,
-  PanelRightOpen,
-  PanelRightClose,
-  Copy,
-  ExternalLink,
-  Trophy,
-  WifiOff,
-  LoaderCircle,
   MessageCircle,
   Send,
   ArrowUpRight,
   X,
 } from "@lucide/vue";
-import BaseBoard from "../components/BaseBoard.vue";
 import UiSelect from "../components/UiSelect.vue";
 import NativeLandscapeButton from '../components/NativeLandscapeButton.vue';
-import LiveIdentity from './LiveIdentity.vue';
+import LiveIdentity from '../features/auth/AudienceIdentity.vue';
 import LiveAccountMenu from './LiveAccountMenu.vue';
 import { liveSupporterLevel, entranceChat } from './supporterIdentity.js';
-import { createSnapshotBoardFrame } from "../components/boardFrame.js";
-import { applyLiveStep } from "./liveEngine.js";
-import LiveTile from './LiveTile.vue';
 import LiveMusicPlayer from './LiveMusicPlayer.vue';
 import { LikeFeedback } from './likeFeedback.js';
 import LikeReaction from './LikeReaction.vue';
-import GiftPanel from './GiftPanel.vue';
+import GiftPanel from '../features/gifts/GiftPanel.vue';
 import RoomAudience from './RoomAudience.vue';
-import LuckyBags from './LuckyBags.vue';
-import RedEnvelopes from './RedEnvelopes.vue';
-import LuckyBagIcon from './LuckyBagIcon.vue';
-import GiftEffects from './GiftEffects.vue';
-import GiftIcon from './GiftIcon.vue';
-import { mergeLiveChat } from './giftArtwork.js';
+import RoomActivities from '../features/roomActivities/RoomActivities.vue';
+import LuckyBagIcon from '../features/roomActivities/LuckyBagIcon.vue';
+import GiftEffects from '../features/gifts/GiftEffects.vue';
+import GiftIcon from '../features/gifts/GiftIcon.vue';
+import { mergeLiveChat } from '../features/gifts/giftArtwork.js';
+import { provideRoom } from './roomContext.js';
+import { contentRegistry } from './content/registry.js';
+import { createGiftClient } from '../features/gifts/giftApi.js';
+import { provideGiftClient } from '../features/gifts/context.js';
 import { useI18n } from 'vue-i18n';
 import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
-import LivePipProbe from './LivePipProbe.vue';
 import { canConnectLive, backgroundExpired } from './pipPolicy.js';
-const pipExperiment = new URLSearchParams(location.search).get('pip') === '1';
+import RoomStage from './RoomStage.vue';
+import RoomPipControls from './pip/RoomPipControls.vue';
 const pipActive = ref(false);
+const roomPip = ref(null), roomStage = ref(null), pipDetached = ref(false);
+function setSurfaceDetached(detached) {
+  pipDetached.value = detached;
+  roomStage.value?.refreshLayout();
+}
 
+const props = defineProps({ room: { type: Object, required: true } });
 useLiveLayoutScale();
-const stageColumn = ref(null);
+const room = props.room;
+const contentComponent = contentRegistry[room.content_kind];
+const content = ref(null);
+const { api, url } = provideRoom(room);
+provideGiftClient(createGiftClient({ base: `${room.api_base}/gifts`, target: `live:${room.id}` }));
 
 const lang = ref(navigator.language.startsWith("zh") ? "zh" : "en");
 const { locale } = useI18n();
 watch(lang, value => { locale.value = value; }, { immediate: true });
 const giftEffects = ref(null), giftCatalog = ref([]);
 const effectsMode = ref('full');
-const timingCollapsed = ref(false), historyCollapsed = ref(false);
 const giftPanel = ref(null), luckyState = ref(null);
 const redEnvelopes = ref(null), redState = ref(null);
+const predictionState = ref(null);
 const t = (zh, en) => (lang.value === "zh" ? zh : en);
-const run = ref(null),
-  frame = ref(createSnapshotBoardFrame("empty", Array(16).fill(0)));
 const online = ref(false),
   connected = ref(false),
   viewers = ref(0),
-  best = ref(0),
-  history = ref([]),
   allTime = ref({});
 const synchronized = ref(false), seenSnapshot = ref(false), paused = ref(false);
 const statsRange = ref('all');
@@ -409,104 +280,31 @@ watch(loginOpen, async (open) => {
   await nextTick();
   if (open) loginDialog.value?.showModal();
 });
-const musicUrl = ref(""),
-  now = ref(Date.now());
-const milestones = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
+const musicUrl = ref("");
 let socket,
   backgroundTimer,
   backgroundDeadline = 0,
   retry,
   ping,
-  tick,
   noticeTimer,
   stopped = false,
   failures = 0;
-const hex = computed(() =>
-  (run.value?.board || Array(16).fill(0))
-    .map((v) => (v ? Math.min(15, Math.log2(v)).toString(16) : "0"))
-    .join(""),
-);
-const countdown = computed(() =>
-  Math.max(
-    0,
-    Math.ceil(((run.value?.restart_at || 0) * 1000 - now.value) / 1000),
-  ),
-);
 const format = (n) =>
   Number(n || 0).toLocaleString(lang.value === "zh" ? "zh-CN" : "en-US");
-const duration = (ms) => {
-  const s = Math.floor((ms || 0) / 1000);
-  return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-};
-const dateTime = (at) =>
-  new Date(at * 1000).toLocaleString([], {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-const replayUrl = (id) =>
-  `https://2048tables.online/verse-replay/?live=${encodeURIComponent(id)}`;
 const showNotice = (text) => {
   notice.value = text;
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => (notice.value = ""), 5000);
 };
-async function api(path, body) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-  const response = await fetch(path, {
-    signal: controller.signal,
-    credentials: "same-origin",
-    cache: "no-store",
-    ...(body !== undefined
-      ? {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      : {}),
-  });
-  if (!response.ok)
-    throw Object.assign(Error("request_failed"), { status: response.status });
-  return await response.json();
-  } finally { clearTimeout(timeout); }
-}
 let chatHistoryLoaded = false;
-const historyPage = ref(1), historyTotal = ref(0), historyLoading = ref(false);
-const historyPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / 10)));
-const historyButtons = computed(() => {
-  const pages = [...new Set([1, historyPages.value, historyPage.value - 1, historyPage.value, historyPage.value + 1])]
-    .filter(page => page > 0 && page <= historyPages.value).sort((a,b) => a-b);
-  return pages.flatMap((page,index) => index && page - pages[index-1] > 1 ? [null,page] : [page]);
-});
-let historyRequest = 0;
-function updateHistorySummary(data) {
-  historyTotal.value = data.history_total ?? data.history?.length ?? 0;
-  if (historyPage.value === 1 && !historyLoading.value) history.value = data.history || [];
-}
-async function loadHistory(page) {
-  const request = ++historyRequest;
-  historyLoading.value = true;
-  try {
-    const data = await api(`/api/live/history?page=${page}`);
-    if (request !== historyRequest) return;
-    history.value = data.history;
-    historyPage.value = data.page;
-    historyTotal.value = data.total;
-  } catch {
-    if (request === historyRequest) showNotice(t('历史对局加载失败，请重试。', 'Could not load run history. Please retry.'));
-  } finally {
-    if (request === historyRequest) historyLoading.value = false;
-  }
-}
+let summaryRequest = 0;
 async function refreshSummary() {
+  const request = ++summaryRequest;
   try {
-    const data = await api(`/api/live/state?stats_range=${encodeURIComponent(statsRange.value)}`);
-    best.value = data.best;
+    const data = await api(`/state?stats_range=${encodeURIComponent(statsRange.value)}`);
+    if (stopped || request !== summaryRequest) return;
     likes.update(data.likes);
-    updateHistorySummary(data);
+    content.value?.receive({ ...data, type: 'summary' });
     allTime.value = data.all_time || {};
     statsRange.value = data.stats_range || statsRange.value;
     const firstLoad = !chatHistoryLoaded;
@@ -529,16 +327,13 @@ async function refreshSummary() {
   }
 }
 function installSnapshot(data) {
+  if (data.predictions) predictionState.value = { ...data.predictions, server_time:data.server_time };
   if (data.red_envelopes) redState.value = { ...data.red_envelopes, server_time: data.server_time };
   if (data.lucky_bags) luckyState.value = { bags: data.lucky_bags, server_time: data.server_time };
   online.value = data.online;
   paused.value = Boolean(data.paused);
   viewers.value = data.viewers;
-  run.value = data.run;
-  frame.value = createSnapshotBoardFrame(
-    `${data.run?.run_id}:${data.run?.seq}:sync`,
-    data.run?.board || Array(16).fill(0),
-  );
+  content.value?.receive(data);
 }
 async function receive(event) {
   if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) {
@@ -547,9 +342,7 @@ async function receive(event) {
   }
   if (event.data instanceof ArrayBuffer) {
     try {
-      const next = applyLiveStep(run.value, event.data);
-      run.value = next.run;
-      if (!document.hidden) frame.value = next.frame;
+      content.value?.receive(event.data);
     } catch {
       socket?.close();
     }
@@ -559,31 +352,34 @@ async function receive(event) {
   try { data = JSON.parse(event.data); }
   catch { event.target?.close(); return; }
   if (data.type === "snapshot") {
-    installSnapshot(data);
+    if (data.room_id !== room.id || data.protocol !== room.protocol) { socket?.close(); return; }
+    try { installSnapshot(data); } catch { socket?.close(); return; }
     synchronized.value = true;
     seenSnapshot.value = true;
   }
   else if (data.type === 'lucky_bags') luckyState.value = data;
   else if (data.type === 'red_envelopes') redState.value = data;
+  else if (data.type === 'predictions') predictionState.value = data;
   else if (data.type === 'red_envelope') await appendChat(data);
   else if (data.type === 'gift' || data.type === 'entrance') {
     if (!document.hidden) giftEffects.value?.receive(data);
     if (data.type === 'gift') await appendChat(data);
     else await appendChat(entranceChat(data));
   }
-  else if (data.type === "source" && run.value) run.value.source = data.source;
   else if (data.type === "presence") {
     online.value = data.online;
     paused.value = Boolean(data.paused);
     viewers.value = data.viewers;
   } else if (data.type === "summary") {
-    updateHistorySummary(data);
-    allTime.value = data.all_time || {};
-    best.value = data.best;
+    content.value?.receive({ ...data, type: 'summary' });
+    if (statsRange.value === (data.stats_range || 'all')) allTime.value = data.all_time || {};
+    else refreshSummary();
     likes.update(data.likes);
   } else if (data.type === "likes") likes.update(data.count);
   else if (data.type === "chat") {
     await appendChat(data);
+  } else {
+    try { content.value?.receive(data); } catch { socket?.close(); }
   }
 }
 async function appendChat(data) {
@@ -602,7 +398,7 @@ function connect() {
   clearInterval(ping);
   synchronized.value = false;
   const ws = new WebSocket(
-    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/live/watch`,
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${room.api_base}/watch`,
   );
   socket = ws;
   ws.binaryType = "arraybuffer";
@@ -619,7 +415,7 @@ function connect() {
     }, 10000);
     refreshSummary();
   };
-  ws.onmessage = event => { if (socket === ws) receive(event); };
+  ws.onmessage = event => { if (socket === ws) receive(event).finally(() => roomPip.value?.refresh()); };
   ws.onclose = () => {
     if (socket !== ws) return;
     socket = null;
@@ -644,7 +440,7 @@ async function sendChat() {
   sending.value = true;
   try {
     await ensureActor();
-    await api("/api/live/chat", { text: draft.value });
+    await api("/chat", { text: draft.value });
     draft.value = "";
   } catch (e) {
     showNotice(
@@ -679,7 +475,7 @@ async function flushLikes() {
   if (!amount) return;
   try {
     await ensureActor();
-    const data = await api("/api/live/like", { count: amount });
+    const data = await api("/like", { count: amount });
     likes.finish(data.count);
   } catch (e) {
     likes.reject();
@@ -720,14 +516,6 @@ function toggleTheme() {
   document.documentElement.dataset.theme =
     document.documentElement.dataset.theme === "dark" ? "light" : "dark";
 }
-async function copyHex() {
-  try {
-    await navigator.clipboard.writeText(hex.value);
-    showNotice(t("盘面已复制", "Board copied"));
-  } catch {
-    showNotice(t("请选择盘面编码复制", "Select the board code to copy it"));
-  }
-}
 async function refreshIdentity() {
   try {
     const previousUserId = user.value?.id;
@@ -756,10 +544,7 @@ async function visibility() {
   else {
     const expired = backgroundDeadline && Date.now() >= backgroundDeadline;
     backgroundDeadline = 0;
-    frame.value = createSnapshotBoardFrame(
-      `${run.value?.run_id}:${run.value?.seq}:resume`,
-      run.value?.board || Array(16).fill(0),
-    );
+    content.value?.resume();
     const previousUserId = user.value?.id;
     if (expired) socket?.close();
     else if (socket?.readyState === 1) socket.send('ping');
@@ -775,9 +560,9 @@ async function visibility() {
 }
 onMounted(async () => {
   document.documentElement.dataset.theme = "dark";
-  tick = setInterval(() => (now.value = Date.now()), 500);
   document.addEventListener("visibilitychange", visibility);
   const data = await refreshSummary();
+  if (stopped) return;
   if (data) {
     installSnapshot(data);
   }
@@ -792,7 +577,6 @@ onUnmounted(() => {
   clearTimeout(noticeTimer);
   clearTimeout(likeFlushTimer);
   clearInterval(ping);
-  clearInterval(tick);
   socket?.close();
   document.removeEventListener("visibilitychange", visibility);
 });
@@ -804,7 +588,6 @@ onUnmounted(() => {
 .live-page {
   -webkit-text-size-adjust:100%;
   text-size-adjust:100%;
-  --live-board-size:480px;
   min-width:1500px;
   width:var(--live-page-width,100%);
   margin-inline:auto;
@@ -906,29 +689,8 @@ main {
   margin: auto;
   padding: 26px 20px;
 }
-.live-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: center;
-  margin-bottom: 24px;
-}
-h1 {
-  font-size: 28px;
-  line-height: 1.2;
-  margin: 0 0 8px;
-}
-h2 {
-  font-size: 15px;
-  margin: 0;
-}
-p {
-  line-height: 1.65;
-}
-.live-title p {
-  margin: 0;
-  color: var(--text-secondary);
-}
+h2 { font-size:15px;margin:0; }
+p { line-height:1.65; }
 .live-page .like-button {
   color: #fb7185;
   position: relative;
@@ -937,197 +699,15 @@ p {
   font-variant-numeric: tabular-nums;
 }
 .like-control { position:relative;flex:0 0 auto; }
-.broadcast-grid {
-  display: grid;
-  grid-template-columns: var(--timing-track, 200px) minmax(480px, 1fr) var(--history-track, 280px);
-  grid-template-areas: "timing board history";
-  gap: 26px;
-  align-items: start;
-}
-.board-column {
-  grid-area:board;
-  min-width: 0;
-  width:var(--live-board-size);
-  --tile-label-small:calc(var(--live-board-size) / 12);
-  --tile-label-medium:calc(var(--live-board-size) / 15);
-  --tile-label-large:calc(var(--live-board-size) / 20);
-  justify-self:center;
-}
-.timing-column { grid-area:timing;max-height:660px;overflow:auto; }
-.history-column { grid-area:history; }
-.timing-collapsed { --timing-track:38px; }
-.history-collapsed { --history-track:38px; }
-.live-page .collapse-panel,.live-page .expand-panel { padding:4px;min-width:30px;min-height:30px;flex-shrink:0; }
-.panel-heading .collapse-panel { margin-left:auto; }
-.history-column .panel-heading .collapse-panel { margin-left:0; }
-.timing-column.side-collapsed,.history-column.side-collapsed { padding:0;border:0;overflow:visible; }
-.board-column :deep(.board-stage) { max-width:100%; }
-.board-column :deep(.board-stage) { height:var(--live-board-size); }
-.score-strip {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-.score-strip > div {
-  border-bottom: 2px solid var(--accent);
-  padding-bottom: 10px;
-}
-.score-strip > div + div {
-  border-color: #d6b461;
-}
-small {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.score-strip small,
-.history-stats-strip small {
-  display: block;
-  margin-bottom: 6px;
-}
 .stats-range { grid-column:1 / -1;display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-bottom:2px;color:var(--text-secondary);font-size:15px;font-weight:600;line-height:1.3; }
 .stats-range > :deep(.ui-popover-select) { min-width:142px; }
 .stats-range :deep(.stats-range-select) { min-height:38px;padding:7px 10px;border:1px solid var(--border-main);border-radius:8px;background:var(--bg-input);color:var(--text-main);font-size:15px;font-weight:600; }
 .stats-range :deep(.stats-range-select:hover) { border-color:color-mix(in srgb,var(--accent) 55%,var(--border-main)); }
 .stats-range :deep(.stats-range-menu) { border-radius:10px; }
 .stats-range :deep(.stats-range-option) { min-height:36px;border-radius:7px;font-size:15px; }
-.score-strip strong {
-  font-size: 28px;
-  font-variant-numeric: tabular-nums;
-}
-.source-line {
-  display: flex;
-  justify-content: space-between;
-  padding: 13px 0;
-  font-weight: 700;
-  color: var(--accent);
-}
-.board-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 20px;
-  background: #0a121bd9;
-  color: #fff;
-  border-radius: 10px;
-}
-.board-overlay h2 {
-  font-size: 24px;
-}
-.board-overlay p {
-  margin: 0;
-  color: #ced5df;
-}
-.board-overlay.ended {
-  background: #172028d9;
-}
-.loading-spinner { color:var(--accent);animation:live-loading-spin 1.1s linear infinite; }
-@keyframes live-loading-spin { to { transform:rotate(360deg); } }
-@media (prefers-reduced-motion:reduce) { .loading-spinner { animation:none; } }
-.ended strong {
-  font-size: 34px;
-  color: #e9c76d;
-}
-.board-code {
-  display: flex;
-  gap: 8px;
-  margin-top: 14px;
-}
-.board-code input {
-  width: 100%;
-  font-family: monospace;
-  font-size: 16px;
-}
-.timing-column,
-.history-column {
-  border-left: 1px solid var(--border-main);
-  padding-left: 24px;
-  min-width: 0;
-}
-.panel-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  margin-bottom: 12px;
-}
-.timing-column { border-left:0;padding-left:0;border-right:1px solid var(--border-main);padding-right:24px; }
-.panel-heading button,
-.panel-heading small {
-  margin-left: auto;
-}
-.panel-heading svg {
-  color: var(--accent);
-}
-.elapsed {
-  font-size: 30px;
-  font-variant-numeric: tabular-nums;
-  margin: 18px 0 25px;
-}
-.table-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 0;
-  color: var(--text-secondary);
-  font-size: 11px;
-  border-bottom: 1px solid var(--border-main);
-}
-.node-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-main);
-  font-variant-numeric: tabular-nums;
-}
-.history-column {
-  max-height: 660px;
-  overflow: auto;
-}
-.history-pagination { display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:5px;padding:12px 0; }
-.history-pagination button { min-width:28px;min-height:28px;padding:3px 7px; }
-.history-pagination [aria-current=page] { background:var(--accent);color:var(--bg-main); }
-.history-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  text-decoration: none;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border-main);
-  color: var(--text-main);
-}
-.history-row:hover {
-  color: var(--accent);
-}
-.history-row span small {
-  display: block;
-  margin-top: 3px;
-}
-.history-row time {
-  font-size: 11px;
-  white-space: nowrap;
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.history-row strong {
-  font-size: 17px;
-  font-variant-numeric: tabular-nums;
-}
-.empty {
-  color: var(--text-secondary);
-  padding: 28px 0;
-  font-size: 13px;
-}
+small { font-size:11px;color:var(--text-secondary); }
+.history-stats-strip small { display:block;margin-bottom:6px; }
+.empty { color:var(--text-secondary);padding:28px 0;font-size:13px; }
 .history-stats-strip {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1140,13 +720,20 @@ small {
 .history-stats-strip strong {
   font-size: 23px;
 }
-.live-layout { display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,22%,520px);gap:20px;align-items:start; }
-.stage-column { min-width:0;position:relative; }
+.live-layout { display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,22%,520px) 96px;gap:20px;align-items:start; }
+.room-activity-dock { grid-column:3;grid-row:1;display:flex;flex-direction:column;gap:16px;padding-top:12px; }
+.stage-column { grid-column:1;grid-row:1; }
+.stage-column { min-width:0; }
+.content-stage { position:relative;min-width:0; }
+.room-stage-home { min-width:0; }
+.room-stage-placeholder { aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:var(--bg-card);border:1px solid var(--border-main);border-radius:12px; }
+.room-address { font-size:13px;color:var(--text-secondary);text-decoration:none; }
 .lucky-strip-entry { display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;width:78px;gap:2px;background:transparent;border:0;border-right:1px solid var(--border-main);padding:4px;color:var(--text-main); }
+.room-prediction-entry { display:flex;flex-shrink:0; }
 .lucky-strip-entry :deep(svg) { width:40px;height:44px; }.lucky-strip-entry b,.lucky-strip-entry small { font-size:11px;line-height:1.4; }
-.stage-column :deep(.gift-effects) { height:0;border:0;margin:0;z-index:25;pointer-events:none; }
-.stage-column :deep(.effect-lanes) { position:absolute;top:0;left:0;right:0; }
-.stage-column :deep(.gift-ceremony) { top:68px; }
+.content-stage :deep(.gift-effects) { height:0;border:0;margin:0;z-index:25;pointer-events:none; }
+.content-stage :deep(.effect-lanes) { position:absolute;top:0;left:0;right:0; }
+.content-stage :deep(.gift-ceremony) { top:68px; }
 .chat-panel { grid-column:2;grid-row:1;align-self:stretch;min-height:0;contain:size;position:relative;display:flex;flex-direction:column;border-left:1px solid var(--border-main);padding-left:12px;font-size:16px; }
 .chat-panel small { font-size:13px; }
 .chat-panel .empty,.chat-panel .notice { font-size:15px; }

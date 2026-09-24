@@ -1,0 +1,86 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { move, VARIANTS, DIRECTIONS, initialState, nextMove, initialHash, eventHash, buildReplay, eventBytes, randomSpawn } from '../src/human/engine.js';
+import { practiceCellValue, practiceBoardHex, parsePracticeHex, nodeTime } from '../src/human/practice.js';
+import { humanBoardFrame, paddedBoard } from '../src/human/boardAnimation.js';
+const seed = '00000001000000020000000300000004';
+
+test('rectangular animation frames preserve source positions, merge destinations and spawn', () => {
+  for (const [rows, cols] of Object.values(VARIANTS)) {
+    const board = Array(rows * cols).fill(0); board[cols - 2] = 2; board[cols - 1] = 2;
+    const moved = move(board, rows, cols, 3), target = [...moved.board]; target[target.length - 1] = 4;
+    const frame = humanBoardFrame('move', target, rows, cols, { fromBoard: board, toBoard: target, direction: 3 });
+    assert.equal(frame.kind, 'move');
+    assert.deepEqual(frame.fromBoard, paddedBoard(board, cols));
+    assert.equal(frame.metadata.slide_distances[cols - 2], cols - 2);
+    assert.equal(frame.metadata.slide_distances[cols - 1], cols - 1);
+    assert.equal(frame.metadata.pop_positions[0], 1);
+    assert.equal(frame.metadata.appear_tile.index, (rows - 1) * 4 + cols - 1);
+    assert.equal(frame.metadata.appear_tile.value, 4);
+  }
+});
+
+test('board edits discard stale moves and manual spawn uses an appearance-only frame', () => {
+  const from = [2,0,0,0,0,0,0,0], to = [2,4,0,0,0,0,0,0];
+  const spawn = humanBoardFrame('spawn', to, 2, 4, { fromBoard: from, toBoard: to, spawn: 1 });
+  assert.equal(spawn.kind, 'move'); assert.equal(spawn.metadata.direction, undefined);
+  assert.deepEqual(spawn.metadata.appear_tile, { index: 1, value: 4 });
+  const edit = humanBoardFrame('edit', Array(8).fill(32768), 2, 4, { fromBoard: from, toBoard: to, spawn: 1 });
+  assert.equal(edit.kind, 'snapshot'); assert.equal(edit.toBoard[0],32768);
+});
+
+test('HJKL uses the trainer physical-key mapping', () => {
+  for (const [key, arrow] of [['KeyH','ArrowLeft'],['KeyJ','ArrowDown'],['KeyK','ArrowUp'],['KeyL','ArrowRight']]) assert.equal(DIRECTIONS[key], DIRECTIONS[arrow]);
+});
+test('trainer palette browsing, paint, cycle, erase and pending-spawn precedence', () => {
+  assert.equal(practiceCellValue(8,null,2),8);
+  assert.equal(practiceCellValue(8,128,0),128);
+  assert.equal(practiceCellValue(8,128,2),16);
+  assert.equal(practiceCellValue(8,128,1),4);
+  assert.equal(practiceCellValue(0,2,1),32768);
+  assert.equal(practiceCellValue(32768,2,2),0);
+  assert.equal(practiceCellValue(65536,2,2),65536);
+  assert.equal(practiceCellValue(128,0,0),0);
+  assert.equal(practiceCellValue(0,128,0,true),2);
+  assert.equal(practiceCellValue(0,128,2,true),4);
+  assert.equal(practiceCellValue(8,0,0,true),8);
+});
+test('position codes preserve main-site order and rectangular cell counts', () => {
+  const board=[0,4,4,8,32768,0,2,0];
+  assert.equal(practiceBoardHex(board),'0223f010');
+  assert.deepEqual(parsePracticeHex('0x0223f010',8),board);
+  assert.deepEqual(parsePracticeHex('1',8),[0,0,0,0,0,0,0,2]);
+  assert.equal(parsePracticeHex('100000000',8),null);
+  assert.equal(parsePracticeHex('hjkl',8),null);
+  assert.equal(practiceBoardHex([65536,2]),'');
+});
+test('node times match replay precision and minute/hour rollover', () => {
+  assert.equal(nodeTime(437),'0.437');assert.equal(nodeTime(60188),'1:00.188');assert.equal(nodeTime(3601234),'1:00:01.234');
+});
+
+test('rectangular rows/cols and one merge per tile', () => {
+  const result = move([2,2,2,2,4,0,4,0],2,4,3);
+  assert.deepEqual(result.board,[4,4,0,0,8,0,0,0]); assert.equal(result.score,16);
+  assert.equal(move([65536,65536,0,0,0,0,0,0],2,4,3).board[0],131072);
+});
+test('invalid move neither changes source board nor consumes RNG', () => {
+  const board=[2,0,0,0,4,0,0,0]; const before=[...board];
+  assert.equal(move(board,2,4,3).changed,false); assert.deepEqual(board,before);
+});
+test('practice randomness never touches a formal run', () => {
+  const run=initialState('test','3x4',seed); const before=structuredClone(run);
+  const practice=[...run.board]; randomSpawn(practice,()=>.5); assert.deepEqual(run,before);
+});
+test('seeked replay matches sequential states for every variant', async () => {
+  for(const variant of Object.keys(VARIANTS)){
+    let state={...initialState('test',variant,seed),variant}; const events=[],states=[structuredClone(state)];
+    let hash=await initialHash('test',variant,seed);
+    for(let i=0;i<600;i++){
+      let next;for(let d=0;d<4;d++){next=nextMove(state,d,i?170:0);if(next)break;}if(!next)break;
+      hash=await eventHash(hash,next.event); events.push(next.event);state=next.state;states.push(structuredClone(state));
+    }
+    const replay=buildReplay({header:{run_id:'test',variant,seed},events});
+    for(const step of [0,1,Math.floor(events.length/2),events.length]) assert.deepEqual(replay.seek(step),states[step]);
+    assert.equal(eventBytes(events).length,events.length*5); assert.equal(hash.length,64);
+  }
+});

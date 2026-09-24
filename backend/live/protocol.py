@@ -64,6 +64,9 @@ class LiveRun:
         self.seq = seq
         self.records.extend(RECORD.pack(delta, change))
         maximum = max(moved)
+        if 65536 in moved and 32768 in moved:
+            # Rebuilt from the move journal on restore; never trust a publisher flag.
+            self.nodes.setdefault('65536+32768', self.elapsed)
         for exponent in range(9, 32):
             value = 2 ** exponent
             if value <= maximum:

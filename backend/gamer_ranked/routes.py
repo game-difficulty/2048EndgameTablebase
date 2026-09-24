@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from backend.auth.dependencies import client_ip, require_user
+from backend.auth.dependencies import client_ip, require_identity as require_user
 
 from .service import (
     abandon_ranked_run,

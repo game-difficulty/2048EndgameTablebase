@@ -19,43 +19,50 @@ def init_schema(db):
         );
     ''')
     db.execute('INSERT OR IGNORE INTO live_audience_session VALUES(1,?,?,0)', (str(uuid.uuid4()), time.time()))
+    db.execute("CREATE TABLE IF NOT EXISTS room_audience_sessions (room_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, started_at REAL NOT NULL, last_online_at REAL NOT NULL)")
+    db.execute("INSERT OR IGNORE INTO room_audience_sessions SELECT 'ai-classic',session_id,started_at,last_online_at FROM live_audience_session WHERE singleton=1")
 
 
-def session(db):
-    return db.execute('SELECT * FROM live_audience_session WHERE singleton=1').fetchone()
+
+def session(db, room_id='ai-classic'):
+    current = db.execute('SELECT * FROM room_audience_sessions WHERE room_id=?', (room_id,)).fetchone()
+    if current:
+        return current
+    db.execute('INSERT OR IGNORE INTO room_audience_sessions VALUES(?,?,?,0)', (room_id, str(uuid.uuid4()), time.time()))
+    return db.execute('SELECT * FROM room_audience_sessions WHERE room_id=?', (room_id,)).fetchone()
 
 
-def online_tick(watch, now=None):
+def online_tick(watch, now=None, room_id='ai-classic'):
     now = time.time() if now is None else now
     with auth_db() as db:
         db.execute('BEGIN IMMEDIATE')
-        current = session(db)
+        current = session(db, room_id)
         if current['last_online_at'] and now - current['last_online_at'] > 1800:
-            db.execute('DELETE FROM live_audience_scores')
-            db.execute('UPDATE live_audience_session SET session_id=?,started_at=? WHERE singleton=1', (str(uuid.uuid4()), now))
-        db.execute('UPDATE live_audience_session SET last_online_at=? WHERE singleton=1', (now,))
+            db.execute('DELETE FROM live_audience_scores WHERE session_id=?', (current['session_id'],))
+            db.execute('UPDATE room_audience_sessions SET session_id=?,started_at=? WHERE room_id=?', (str(uuid.uuid4()), now, room_id))
+        db.execute('UPDATE room_audience_sessions SET last_online_at=? WHERE room_id=?', (now, room_id))
         for key, seconds in watch.items():
-            add(db, key, 'watch_seconds', min(10, max(0, seconds)))
+            add(db, key, 'watch_seconds', min(10, max(0, seconds)), room_id=room_id)
 
 
-def add(db, actor_key, kind, amount=1):
+def add(db, actor_key, kind, amount=1, room_id='ai-classic'):
     if kind not in {'watch_seconds', 'likes', 'messages', 'gift_units'}:
         raise ValueError('invalid_contribution')
-    current = session(db)
+    current = session(db, room_id)
     db.execute('INSERT OR IGNORE INTO live_audience_scores(session_id,actor_key) VALUES(?,?)', (current['session_id'], actor_key))
     value = f'min(10,{kind}+?)' if kind in {'likes', 'messages'} else f'{kind}+?'
     db.execute(f'UPDATE live_audience_scores SET {kind}={value} WHERE session_id=? AND actor_key=?',
                (amount, current['session_id'], actor_key))
 
 
-def record(actor_key, kind, amount=1):
+def record(actor_key, kind, amount=1, room_id='ai-classic'):
     with auth_db() as db:
-        add(db, actor_key, kind, amount)
+        add(db, actor_key, kind, amount, room_id=room_id)
 
 
-def ranking(identities):
+def ranking(identities, room_id='ai-classic'):
     with auth_db() as db:
-        current = session(db)
+        current = session(db, room_id)
         # Only connected identities are returned, never IPs, emails or private IDs.
         keys = list(identities)
         placeholders = ','.join('?' for _ in keys)

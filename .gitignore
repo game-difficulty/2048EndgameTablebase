@@ -31,6 +31,10 @@ wheels/
 venv/
 
 # Local Data & Logs
+output/
+data/
+.playwright-cli/
+native_core/*.pyd.bak
 config
 mistakes_book.pkl
 logger.txt

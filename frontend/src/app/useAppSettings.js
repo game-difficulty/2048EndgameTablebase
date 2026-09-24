@@ -196,14 +196,17 @@ const getResolvedPalette = () => {
   return [];
 };
 
-const applyGlobalConfig = () => {
-  setGlobalLocale(config.value.language || 'en');
-
+const applyColorScheme = () => {
   if (config.value.dark_mode) {
     document.documentElement.setAttribute('data-theme', 'dark');
   } else {
     document.documentElement.removeAttribute('data-theme');
   }
+};
+
+const applyGlobalConfig = () => {
+  setGlobalLocale(config.value.language || 'en');
+  applyColorScheme();
 
   const palette = getResolvedPalette();
   if (palette.length > 0) {
@@ -338,16 +341,37 @@ const refreshSettings = () => {
   }
 };
 
+// Same-origin pages (including the human site) share this browser preference.
+const refreshStoredPresentationPreferences = () => {
+  const stored = readStoredUserPreferences();
+  if (typeof stored.dark_mode === 'boolean' && stored.dark_mode !== config.value.dark_mode) {
+    mergeConfig({ dark_mode: stored.dark_mode });
+    applyColorScheme();
+  }
+  if (['zh', 'en'].includes(stored.language) && stored.language !== config.value.language) {
+    mergeConfig({ language: stored.language });
+    setGlobalLocale(stored.language);
+  }
+};
+const handlePreferenceStorage = (event) => {
+  if (event.key === userPreferencesStore.key || event.key === null) refreshStoredPresentationPreferences();
+};
+
 const start = () => {
   if (started) {
     return;
   }
   started = true;
+  refreshStoredPresentationPreferences();
+  window.addEventListener('storage', handlePreferenceStorage);
+  window.addEventListener('focus', refreshStoredPresentationPreferences);
   connect();
 };
 
 const stop = () => {
   started = false;
+  window.removeEventListener('storage', handlePreferenceStorage);
+  window.removeEventListener('focus', refreshStoredPresentationPreferences);
   client?.disconnect();
   client = null;
   wsStatus.value = 'disconnected';

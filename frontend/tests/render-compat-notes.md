@@ -36,3 +36,38 @@ Deployment must include `dist/compat/` along with both HTML entries. Deploy
 the fingerprinted asset before `index.html`; the generated URL is inserted into
 that HTML by the Vite build. Update the loader URL versions only when the
 hand-maintained loader or fallback changes.
+
+## Live board geometry (2026-09-23)
+
+The three-player content previously used `min(100cqw,100cqh)` for both board
+dimensions. Engines that ignore container units dropped those declarations,
+exposing the older `width:100%;height:100%` rule inside a rectangular flex slot.
+With container units and layers disabled, the main board reproduced at roughly
+340 x 204 screen pixels. The existing compatibility stylesheet alone could not
+preserve its shape.
+
+AiRunBoard now measures its unscaled layout slot and gives a centered wrapper
+the same explicit pixel width and height: min(available width, available height).
+Tile fonts use that same side length. The overlay stays inside the square above
+the board's isolated stacking context. RoomStage uses percentage padding to keep
+16:9 without aspect-ratio support. No container units are needed in either layout.
+
+roomSurfaceSize observes the element's actual owning window and rebinds after
+Document PiP adoption/return. Its resize fallback reads on the next animation
+frame, after the room's zoom and width listeners; it also supports layout switches
+without ResizeObserver. It does not measure transformed screen rectangles.
+
+Validation: 33 relevant unit tests and production build passed. In Chromium,
+explicitly removed container-unit declarations, container-type, aspect-ratio,
+layer blocks and registered properties while enabling the existing compatibility
+stylesheet; checked 1440 x 1000, 390 x 844 and 844 x 390, both layouts, selected
+player changes, and square tiles fitting their slots. Repeated with ResizeObserver
+unavailable. Modern Document PiP passed window resizing, both layouts, selection
+and return to a resized opener. This is feature-removal emulation, not a claim of
+testing the user's exact Baidu browser build.
+
+Published live-entry/assets only and repeated compatibility emulation against
+production. The stream remained paused with its original batch. Rollback entry:
+`/opt/2048tables/backups/square-fix-20260923T115321Z/live-index.html`.
+
+Reference: https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/length#container_query_length_units

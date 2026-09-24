@@ -107,7 +107,7 @@ class WorkerClient:
                     protocol_version=PROTOCOL_VERSION,
                     worker_id=self.config.worker_id,
                     auth_token=self.config.auth_token,
-                    tables=self.reader_pool.hello_tables(),
+                    tables=await asyncio.to_thread(self.reader_pool.hello_tables),
                     capabilities=list(WORKER_CAPABILITIES),
                 ),
             )
@@ -149,7 +149,7 @@ class WorkerClient:
             await self._send(
                 websocket,
                 encode_message(
-                    "HEARTBEAT", tables=self.reader_pool.refresh_readiness()
+                    "HEARTBEAT", tables=await asyncio.to_thread(self.reader_pool.refresh_readiness)
                 ),
             )
 
@@ -274,10 +274,6 @@ class WorkerClient:
                     request_id=request.request_id,
                     items=items,
                 )
-            elif request.message_type == "GENERATE_GAMER_ROUTE":
-                items = await self.reader_pool.generate_gamer_route(
-                    request.full_pattern or '', request.gamer_options)
-                payload = encode_message('GAMER_ROUTE_RESULT', request_id=request.request_id, items=items)
             elif request.message_type == "RANDOM_STATE":
                 board = await self.reader_pool.random_state(request.full_pattern or "")
                 payload = encode_message(

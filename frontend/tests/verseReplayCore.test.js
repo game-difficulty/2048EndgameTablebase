@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
 
 await import('../public/verse-replay/replay-core.js');
 
-const { decodeReplayBytes, decodeReplayText, snapshotToHex } = globalThis.ReplayCore;
+const { decodeReplayBytes, decodeReplayText, moveBoard, snapshotToHex } = globalThis.ReplayCore;
 
 function packedBoard(exponents) {
   return exponents.reduce(
@@ -52,6 +53,19 @@ test('verse board snapshots encode 65536 and larger tiles as f', () => {
   );
 });
 
+test('canonical reconstruction keeps a real 65536 tile and matching transition', () => {
+  const board = Uint8Array.from([
+    15, 0, 15, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  const moved = moveBoard(board, 4, 3, 'left');
+
+  assert.equal(moved.board[0], 16);
+  assert.equal(moved.addedScore, 65536);
+  assert.deepEqual(moved.transition.merges, [{ toIndex: 0, exponent: 16 }]);
+});
+
 test('verse viewer decodes ranked 2048next records', () => {
   const replay = decodeReplayText(
     'REPLAY_v1RPL_B64_UlBMMUQAAhARg2QRAQAAAAEAAAACAAAAAwAAAASDAgRwb3cyg2UBAAt7g2YAhMwwCkc=',
@@ -90,15 +104,25 @@ test('verse viewer decodes 13-byte state VRS records', () => {
 test('13-byte state VRS supports the packed 32k merge transition', () => {
   const initial = [15, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   const afterLeft = [15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+  const afterRight = [1, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
   const replay = decodeReplayBytes(stateReplayBytes([
     { board: initial, score: 0, move: 0 },
     { board: afterLeft, score: 65536, move: 1 },
+    { board: afterRight, score: 65536, move: 2 },
   ]));
 
   assert.equal(replay.steps[0].special32k, true);
   assert.equal(replay.steps[0].spawnValue, 2);
-  assert.deepEqual(Array.from(replay.getBoardAt(1)), afterLeft);
-  assert.equal(replay.scores[1], 65536);
+  assert.equal(replay.transitions[0].merges[0].exponent, 16);
+  assert.deepEqual(
+    Array.from(replay.getBoardAt(1)),
+    [16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  );
+  assert.deepEqual(
+    Array.from(replay.getBoardAt(2)),
+    [1, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  );
+  assert.deepEqual(Array.from(replay.scores), [0, 65536, 65536]);
 });
 
 test('13-byte state VRS rejects decreasing scores', () => {
@@ -133,9 +157,30 @@ test('byte decoder keeps supporting textual Verse replay files', () => {
   assert.deepEqual(Array.from(replay.getBoardAt(0).slice(0, 4)), [1, 1, 0, 0]);
 });
 
-test('byte decoder rejects files larger than 500 KB', () => {
+test('Verse VRS fixtures use rows x columns for variant dimensions', () => {
+  const fixtureDir = new URL('./fixtures/verse-replay/', import.meta.url);
+  const fixtures = [
+    ['Blueawa_3x4_2026-09-20_71356.vrs', 4, 3, 3244, 71356],
+    ['P-shiyi592_3x3_2026-09-20_11976.vrs', 3, 3, 691, 11976],
+    ['mmmcccc_4x4_2026-09-19_1285068.vrs', 4, 4, 41458, 1285068],
+    ['p56_4x4_2026-09-21_576348.vrs', 4, 4, 19976, 576348],
+    ['xzyszdj_2x4_2026-09-21_5228.vrs', 4, 2, 343, 5228],
+  ];
+
+  for (const [name, width, height, moveCount, score] of fixtures) {
+    const bytes = fs.readFileSync(new URL(name, fixtureDir));
+    const replay = decodeReplayBytes(bytes);
+    assert.equal(replay.width, width, name);
+    assert.equal(replay.height, height, name);
+    assert.equal(replay.moveCount, moveCount, name);
+    assert.equal(replay.scores[moveCount], score, name);
+    assert.equal(replay.getBoardAt(moveCount).length, width * height, name);
+  }
+});
+
+test('byte decoder rejects files larger than 2 MB', () => {
   assert.throws(
-    () => decodeReplayBytes(new Uint8Array(500 * 1024 + 1)),
-    /不能超过 500 KB/,
+    () => decodeReplayBytes(new Uint8Array(2 * 1024 * 1024 + 1)),
+    /不能超过 2 MB/,
   );
 });
