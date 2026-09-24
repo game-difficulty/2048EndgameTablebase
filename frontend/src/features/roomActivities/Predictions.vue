@@ -26,10 +26,10 @@
       </section>
       <section v-if="targetBet" class="target-bet" aria-labelledby="prediction-target-title">
         <h3 id="prediction-target-title">{{ t('独立加注 · 65536','Side bet · 65536') }}</h3>
-        <p class="note">{{ t('给已下注的同一位 AI 加注。合成 65k，奖励 8 倍；合成 65k+32k，奖励升级为 50 倍。两档不叠加、本金另退。','Back the same AI you selected. Make 65k for an 8× reward, or 65k+32k for a 50× reward. Tiers do not stack; principal is returned separately.') }}</p>
+        <p class="note">{{ t('给已下注的同一位 AI 加注。合成 65k，奖励 8 倍；合成 65k+32k，奖励升级为 50 倍。两档不叠加、本金另退，达标即时到账，升级补差额。','Back the same AI you selected. Make 65k for an 8× reward, or 65k+32k for a 50× reward. Tiers do not stack; principal is returned separately. Paid on reaching the target; upgrades pay the difference.') }}</p>
         <dl><div><dt>{{ t('加注选手','Side-bet player') }}</dt><dd>{{ market.mine ? name(market.mine.option_id) : t('请先完成最高分下注','Place a highest-score stake first') }}</dd></div>
           <div><dt>{{ t('个人加注','Your side stake') }}</dt><dd>{{ tokens(targetBet.mine?.units) }} Token</dd></div>
-          <div v-if="targetOutcome"><dt>{{ t('达标状态','Target status') }}</dt><dd>{{ targetOutcome === 'reached_combo' ? t('65536＋32768 · 50 倍奖励','65536 + 32768 · 50× reward') : targetOutcome === 'reached' ? t('65536 · 8 倍奖励','65536 · 8× reward') : t('已结束，未达标','Ended without reaching target') }}{{ !targetBet.result ? t(' · 待本批结算',' · Awaiting batch settlement') : '' }}</dd></div></dl>
+          <div v-if="targetOutcome"><dt>{{ t('达标状态','Target status') }}</dt><dd>{{ targetOutcome === 'reached_combo' ? t('65536＋32768 · 50 倍奖励','65536 + 32768 · 50× reward') : targetOutcome === 'reached' ? t('65536 · 8 倍奖励','65536 · 8× reward') : t('已结束，未达标','Ended without reaching target') }}{{ targetBet.result && targetBet.result.profit > 0 ? t(' · 已到账',' · Credited') : '' }}</dd></div></dl>
         <p class="note">{{ t('独立扣除常驻额度，不计入最高分奖池。截止时间相同，已达标或已结束的选手不可再加注。','Charged separately from permanent Tokens; excluded from the highest-score pool. The same deadline applies. No more side bets once this AI reaches the target or ends.') }}</p>
         <fieldset class="amounts" :disabled="busy || !!pending || !canTargetBet"><legend>{{ t('65536 加注金额（Token）','65536 side stake (Token)') }}</legend><button v-for="value in amounts" :key="value" type="button" :aria-pressed="targetAmount === value" @click="targetAmount=value">{{ value.toLocaleString() }}</button></fieldset>
         <p v-if="canTargetBet" class="note">{{ t('本次加注','This side stake') }} {{ targetAmount.toLocaleString() }} Token<br />{{ t('65536 总到账','65536 total return') }} {{ (targetAmount*((targetBet.reward_multiplier ?? 8)+1)).toLocaleString() }} Token<br />{{ t('65536＋32768 总到账','65536 + 32768 total return') }} {{ (targetAmount*((targetBet.bonus_reward_multiplier ?? 50)+1)).toLocaleString() }} Token</p>
@@ -62,8 +62,8 @@
       <li>{{ t('沿用开局后 10 分钟及提前封盘规则。暂停或离线不接单；该 AI 已合成 65536 棋块或本局已结束时，不再接受加注。65536 指棋块数值，不是得分。','The same 10-minute window and early closure rules apply. No entries while paused or offline, or once this AI creates a 65536 tile or ends. The target is a tile value, not the score.') }}</li>
       <li>{{ t('本局达到 65536 即成功，与最高分名次无关。之后若同一盘面同时包含一个 65536 棋块和一个 32768 棋块，奖励升级到组合档；曾分别达到两个数值不算组合达标。达标记录会保留，后续继续合并不影响资格。每位 AI 独立判定，不限本批第一位达标者。','Reaching 65536 is a hit regardless of final ranking. Having a 65536 tile and a 32768 tile together on the same board upgrades the reward. Reaching the two values at separate times does not qualify. Once earned, eligibility survives later merges. Each AI qualifies independently, not just the first one.') }}</li>
       <li>{{ t('65536 档：返还本金，另赠送累计加注金额的 8 倍常驻额度。加注 100，到账 900（本金 100＋奖励 800）。','65536 tier: return principal plus an 8× permanent-Token reward. Stake 100, receive 900 (100 principal + 800 reward).') }}</li>
-      <li>{{ t('65536＋32768 档：返还本金，另赠送累计加注金额的 50 倍常驻额度。加注 100，到账 5100（本金 100＋奖励 5000）。两档取最高档，不叠加；本批结束时统一结算一次。未达到 65536 则加注不返还。','65536 + 32768 tier: return principal plus a 50× permanent-Token reward. Stake 100, receive 5100 (100 principal + 5000 reward). Only the highest tier pays, without stacking, once at batch end. No 65536 tile means no return.') }}</li>
-      <li>{{ t('加注独立核算，不进入或消耗最高分奖池；奖励由系统发放，不受最高分下注的赔付上限约束。最高分无人押中不影响加注结果；技术性作废时，两项下注均全额退款。','Side bets neither fund nor draw from the highest-score pool. Rewards come from the system and are not subject to that pool’s payout caps. No highest-score winner does not void side bets. A technical void refunds both stakes in full.') }}</li>
+      <li>{{ t('65536＋32768 档：返还本金，另赠送累计加注金额的 50 倍常驻额度。加注 100，到账 5100（本金 100＋奖励 5000）。两档取最高档，不叠加；达标时即时到账，升级时仅补差额。例如加注 100，先到账 900，升级后再到账 4200，累计 5100（含本金）。未达到 65536 则加注不返还。','65536 + 32768 tier: return principal plus a 50× permanent-Token reward. Stake 100, receive 5100 (100 principal + 5000 reward). Paid immediately at each milestone, without stacking. Upgrades pay only the difference: stake 100, receive 900 first and 4200 on upgrade, totaling 5100 including principal. No 65536 tile means no return.') }}</li>
+      <li>{{ t('加注独立核算，不进入或消耗最高分奖池；奖励由系统发放，不受最高分下注的赔付上限约束。最高分无人押中不影响加注结果；技术性作废时，最高分下注及尚未兑付的加注全额退款；已到账的加注奖励与本金保留，不重复退款。','Side bets neither fund nor draw from the highest-score pool. Rewards come from the system and are not subject to that pool’s payout caps. No highest-score winner does not void side bets. A technical void refunds the highest-score stake and any unpaid side stake. Already credited side-bet rewards and principal are retained, without a second refund.') }}</li>
     </ol><button class="submit" @click="hideRules">{{ t('返回下注','Back to predictions') }}</button>
   </dialog>
 </template>
@@ -118,7 +118,7 @@ function install(result){
 async function refresh(){
   if(fetching){refreshAgain=true;return;}
   fetching=true;lastRefresh=Date.now();const current=generation,request=++version;
-  try{const result=await api();if(current===generation && request===version){install(result);if(result.market?.result)emit('balance');}}
+  try{const result=await api();if(current===generation && request===version){install(result);if(result.market?.result || result.market?.target_bet?.result)emit('balance');}}
   catch{if(current===generation)error.value=t('暂时无法查询，请刷新重试。','Could not refresh. Please try again.');}
   finally{if(current===generation){fetching=false;if(refreshAgain){refreshAgain=false;refresh();}}}
 }

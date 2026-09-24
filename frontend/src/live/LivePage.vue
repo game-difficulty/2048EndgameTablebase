@@ -33,8 +33,9 @@
       <div v-show="pipDetached" class="room-stage-placeholder"><p>{{ t('直播内容正在小窗中显示','The stream is playing in the mini player') }}</p><button @click="roomPip?.close()">{{ t('返回页面观看','Watch here') }}</button></div>
       <RoomStage ref="roomStage"><div class="content-stage">
         <component :is="contentComponent" ref="content" :lang="lang" :stream-state="streamState" :pip-active="pipActive" @notice="showNotice" />
-        <GiftEffects ref="giftEffects" v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
-      </div></RoomStage></div>
+      </div><template #overlays>
+        <GiftEffects ref="giftEffects" overlay v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
+      </template></RoomStage></div>
       <RoomActivities ref="redEnvelopes" :room="room" :transport="{api,url}" dock-target="#room-activity-dock" prediction-target="#room-prediction-entry" :lucky-state="luckyState" :red-state="redState" :prediction-state="predictionState" :user="user" :connected="connected" :online="online && synchronized && connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
         <template #default="{ bag, open, caption }">
           <GiftPanel :red-envelopes="room.capabilities.red_envelopes" ref="giftPanel" :user="user" :online="online && connected && synchronized" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
@@ -113,11 +114,12 @@
             </p>
             <div v-for="message in messages" :key="message.id" :class="['chat-row', { 'chat-gold': liveSupporterLevel(message) === 2, 'chat-entrance': message.type === 'entrance', 'chat-gift': message.type === 'gift' }]">
               <div>
-                <header>
+                <header v-if="message.type !== 'prediction_reward'">
                   <LiveIdentity :actor="message" :lang="lang" />
                   <small v-if="message.guest">{{ t("游客", "Guest") }}</small>
                 </header>
-                <p v-if="message.type === 'entrance'">{{ t('来到直播间，欢迎！', 'joined the stream. Welcome!') }}</p>
+                <PredictionAnnouncement v-if="message.type === 'prediction_reward'" :event="message" :lang="lang" />
+                <p v-else-if="message.type === 'entrance'">{{ t('来到直播间，欢迎！', 'joined the stream. Welcome!') }}</p>
                 <p v-else-if="message.type === 'gift'" class="chat-gift-content"><span>{{ t('送出', 'sent') }} {{ giftCatalog.find(item => item.id === message.gift_id)?.[lang] || message.gift_id }}</span><GiftIcon :id="message.gift_id" /><b>×{{ message.combo_count }}</b></p>
                 <button v-else-if="message.type === 'red_envelope'" class="chat-red" @click="redEnvelopes?.open(message.envelope_id)"><span>{{ t('发了一个红包','sent a red envelope') }} · {{ message.amount.toLocaleString() }} Token</span><img src="/live-gifts/red-envelope.webp" alt="" /></button>
                 <p v-else>{{ message.text }}</p>
@@ -217,6 +219,7 @@ import LuckyBagIcon from '../features/roomActivities/LuckyBagIcon.vue';
 import GiftEffects from '../features/gifts/GiftEffects.vue';
 import GiftIcon from '../features/gifts/GiftIcon.vue';
 import { mergeLiveChat } from '../features/gifts/giftArtwork.js';
+import PredictionAnnouncement from '../features/roomActivities/PredictionAnnouncement.vue';
 import { provideRoom } from './roomContext.js';
 import { contentRegistry } from './content/registry.js';
 import { createGiftClient } from '../features/gifts/giftApi.js';
@@ -361,8 +364,12 @@ async function receive(event) {
   else if (data.type === 'red_envelopes') redState.value = data;
   else if (data.type === 'predictions') predictionState.value = data;
   else if (data.type === 'red_envelope') await appendChat(data);
+  else if (data.type === 'prediction_reward') {
+    await appendChat(data);
+    giftPanel.value?.refreshBalance();
+  }
   else if (data.type === 'gift' || data.type === 'entrance') {
-    if (!document.hidden) giftEffects.value?.receive(data);
+    if (!document.hidden || pipDetached.value) giftEffects.value?.receive(data);
     if (data.type === 'gift') await appendChat(data);
     else await appendChat(entranceChat(data));
   }
@@ -731,9 +738,6 @@ small { font-size:11px;color:var(--text-secondary); }
 .lucky-strip-entry { display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;width:78px;gap:2px;background:transparent;border:0;border-right:1px solid var(--border-main);padding:4px;color:var(--text-main); }
 .room-prediction-entry { display:flex;flex-shrink:0; }
 .lucky-strip-entry :deep(svg) { width:40px;height:44px; }.lucky-strip-entry b,.lucky-strip-entry small { font-size:11px;line-height:1.4; }
-.content-stage :deep(.gift-effects) { height:0;border:0;margin:0;z-index:25;pointer-events:none; }
-.content-stage :deep(.effect-lanes) { position:absolute;top:0;left:0;right:0; }
-.content-stage :deep(.gift-ceremony) { top:68px; }
 .chat-panel { grid-column:2;grid-row:1;align-self:stretch;min-height:0;contain:size;position:relative;display:flex;flex-direction:column;border-left:1px solid var(--border-main);padding-left:12px;font-size:16px; }
 .chat-panel small { font-size:13px; }
 .chat-panel .empty,.chat-panel .notice { font-size:15px; }

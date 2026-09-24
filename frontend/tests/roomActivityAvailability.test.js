@@ -14,13 +14,13 @@ test('prediction dock exists only during the connected, live entry window', () =
 
 test('red envelope dock only advertises claimable shares (also before next server tick)', () => {
   const envelope={status:'active',expires_at:100,sender_id:2,count:5,claimed:0};
-  assert.equal(envelopeIsClaimable(envelope,99,true,1),true);
-  assert.equal(envelopeIsClaimable(envelope,99,true,undefined),true);
-  for(const status of ['queued','exhausted','expired','closed']) assert.equal(envelopeIsClaimable({...envelope,status},99,true,1),false);
-  assert.equal(envelopeIsClaimable(envelope,100,true,1),false);
-  assert.equal(envelopeIsClaimable({...envelope,claimed:5},99,true,1),false);
-  assert.equal(envelopeIsClaimable(envelope,99,false,1),false);
-  assert.equal(envelopeIsClaimable(envelope,99,true,2),false);
-  assert.equal(envelopeIsClaimable(envelope,99,true,1,true),false);
-  assert.equal(envelopeIsClaimable(null,99,true,1),false);
+  // Eligibility does not depend on who sent the envelope or viewer login.
+  assert.equal(envelopeIsClaimable(envelope,99,true),true);
+  for(const sender_id of [1,2,undefined]) assert.equal(envelopeIsClaimable({...envelope,sender_id},99,true),true);
+  for(const status of ['queued','exhausted','expired','closed']) assert.equal(envelopeIsClaimable({...envelope,status},99,true),false);
+  assert.equal(envelopeIsClaimable(envelope,100,true),false);
+  assert.equal(envelopeIsClaimable({...envelope,claimed:5},99,true),false);
+  assert.equal(envelopeIsClaimable(envelope,99,false),false);
+  assert.equal(envelopeIsClaimable(envelope,99,true,true),false);
+  assert.equal(envelopeIsClaimable(null,99,true),false);
 });

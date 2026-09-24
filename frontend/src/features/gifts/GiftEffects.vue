@@ -1,5 +1,5 @@
 <template>
-  <section class="gift-effects" :class="mode" :aria-label="t('直播动态', 'Live activity')">
+  <section class="gift-effects" :class="[mode, { 'room-broadcasts': overlay }]" :aria-label="t('直播动态', 'Live activity')">
     <div class="effect-lanes">
       <article v-for="event in mode === 'off' ? [] : events.active" :key="event.key" :class="['effect-banner', `tier-${event.tier || 0}`, { 'gold-supporter': liveSupporterLevel(event.actor) === 2, 'entrance-banner': event.type === 'entrance' }]">
         <div class="effect-copy"><LiveIdentity :actor="event.actor" :lang="lang" /><span v-if="event.type === 'entrance'">{{ t('欢迎荣耀赞助者来到直播间', 'Welcome to the stream, Gold Supporter') }}</span><span v-else>{{ t('送出', 'sent') }} {{ giftName(event.gift_id) }}</span></div>
@@ -9,13 +9,14 @@
       </article>
     </div>
     <template v-if="animations">
-      <GiftSpotlight v-if="spotlights.active" :key="spotlights.active.key" :event="spotlights.active" :name="giftName(spotlights.active.gift_id)" />
+      <GiftSpotlight v-if="spotlights.active" :key="spotlights.active.key" :event="spotlights.active" :name="giftName(spotlights.active.gift_id)" :target="spotlightTarget" />
       <template v-else><GiftAnimation v-for="event in events.active.filter(item => giftAnimation(item) === 'ceremony')" :key="event.key" :id="event.gift_id" :name="giftName(event.gift_id)" ceremony /></template>
     </template>
   </section>
 </template>
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, reactive, computed, inject, onMounted, onUnmounted, watch } from 'vue';
+import { roomSurfaceHost } from '../../live/roomSurfaceSize.js';
 import { Crown } from '@lucide/vue';
 import LiveIdentity from '../auth/AudienceIdentity.vue';
 import { liveSupporterLevel } from '../auth/supporterIdentity.js';
@@ -25,7 +26,9 @@ import GiftSpotlight from './GiftSpotlight.vue';
 import { GiftSpotlights } from './giftSpotlights.js';
 import { giftAnimation } from './giftArtwork.js';
 import { GiftEvents } from './giftEvents.js';
-const props = defineProps({ lang: String, catalog: { type: Array, default: () => [] } });
+const props = defineProps({ lang: String, overlay: Boolean, catalog: { type: Array, default: () => [] } });
+const surfaceHost = inject(roomSurfaceHost, null);
+const spotlightTarget = computed(() => surfaceHost?.value?.document.body || 'body');
 const t = (zh,en) => props.lang === 'zh' ? zh : en;
 const mode = defineModel('mode', { default: 'full' }), events = reactive(new GiftEvents());
 const spotlights = reactive(new GiftSpotlights());
@@ -51,6 +54,11 @@ onUnmounted(() => { clearInterval(timer); motion?.removeEventListener('change', 
 </script>
 <style scoped>
 .gift-effects { position:relative;height:88px; border-top:1px solid var(--border-main); margin-bottom:18px; display:flex; gap:16px; align-items:center; }
+/* Room coordinates, independent of the content's flow or height. Keep the
+   original title-bottom anchor and the existing banner/ceremony animations. */
+.gift-effects.room-broadcasts { position:absolute;top:92px;left:12px;right:12px;height:0;border:0;margin:0;pointer-events:none; }
+.room-broadcasts .effect-lanes { position:absolute;top:0;left:0;right:0; }
+.room-broadcasts :deep(.gift-ceremony) { top:68px; }
 .effect-lanes { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; width:100%; min-width:0; }
 .effect-banner { height:62px; border:1px solid var(--border-main); border-left:3px solid #39cfa0; background:var(--bg-card); border-radius:6px; padding:8px 12px; display:flex; align-items:center; gap:10px; min-width:0; }
 .effect-banner.gold-supporter { position:relative;overflow:hidden;border-color:#b99240;border-left-width:3px; }

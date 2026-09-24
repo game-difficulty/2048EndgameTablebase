@@ -1,6 +1,9 @@
 <template>
   <div ref="viewport" class="room-stage-viewport" :style="{ '--room-stage-scale': scale }">
-    <div class="room-stage-canvas"><slot /></div>
+    <div class="room-stage-canvas">
+      <div class="room-stage-content"><slot /></div>
+      <div class="room-stage-overlays"><slot name="overlays" /></div>
+    </div>
   </div>
 </template>
 <script setup>
@@ -31,4 +34,6 @@ defineExpose({ element: () => viewport.value, refreshLayout });
 .room-stage-viewport::before { content:'';display:block;padding-top:56.25%; }
 .room-stage-canvas { position:absolute;inset:0 auto auto 0;width:1280px;height:720px;transform:scale(var(--room-stage-scale));transform-origin:top left;overflow:hidden; }
 .room-stage-canvas :deep(.content-stage) { width:100%;height:100%; }
+.room-stage-content { position:absolute;inset:0;isolation:isolate; }
+.room-stage-overlays { position:absolute;inset:0;z-index:25;pointer-events:none; }
 </style>

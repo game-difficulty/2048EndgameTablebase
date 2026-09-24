@@ -1,5 +1,5 @@
 <template>
-  <Teleport to="body">
+  <Teleport :to="target">
     <div class="gift-spotlight" aria-hidden="true" :style="{ '--spotlight-duration': `${SPOTLIGHT_DURATION}ms` }">
       <div class="spotlight-scene">
         <div class="spotlight-art" :class="{ wide: event.gift_id === 'rip' }"><GiftAnimation :id="event.gift_id" /></div>
@@ -12,7 +12,7 @@
 <script setup>
 import GiftAnimation from './GiftAnimation.vue';
 import { SPOTLIGHT_DURATION } from './giftSpotlights.js';
-defineProps({ event: { type: Object, required: true }, name: String });
+defineProps({ event: { type: Object, required: true }, name: String, target: { default: 'body' } });
 </script>
 <style scoped>
 .gift-spotlight { position:fixed;inset:0;z-index:110;display:grid;place-items:center;pointer-events:none;background:#050911c9;animation:spotlight-fade var(--spotlight-duration) linear both; }
