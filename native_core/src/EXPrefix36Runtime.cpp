@@ -998,9 +998,21 @@ void write_layer_file(
     FileIOUtils::DirectIoConfig io_config = {}
 ) {
     const LayerFileHeader header = make_layer_header(layer, spec, mode);
-    FileIOUtils::DirectAppendWriter out(path, layer_file_bytes(layer, mode), io_config);
-    append_layer_payload(out, header, layer, mode);
-    out.close();
+    const auto write = [&](FileIOUtils::DirectIoConfig config) {
+        FileIOUtils::DirectAppendWriter out(path, layer_file_bytes(layer, mode), config);
+        append_layer_payload(out, header, layer, mode);
+        out.close();
+    };
+    try {
+        write(io_config);
+    } catch (const FileIOUtils::DirectIoUnsupported &) {
+        // Restart the entire temporary file; earlier chunks may already be on disk.
+        if (!io_config.enabled) {
+            throw;
+        }
+        io_config.enabled = false;
+        write(io_config);
+    }
 }
 
 template <typename T>

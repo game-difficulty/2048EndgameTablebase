@@ -75,6 +75,27 @@ private:
 public:
     BCFutureSuccessLookupView() = default;
 
+    // Descriptor-only estimate for a fresh flat lookup. No bitmap scan or
+    // allocation: mirror the hash-table and word-rank-base sizing below.
+    template <class PositionReader>
+    [[nodiscard]] static uint64_t estimate_flat_index_bytes(const PositionReader &position) {
+        uint64_t bytes = static_cast<uint64_t>(position.cell_count()) * sizeof(CellIndex);
+        for (CellId cid = 0U; cid < position.cell_count(); ++cid) {
+            const auto &desc = position.descriptor(cid);
+            if (desc.empty()) continue;
+            const uint64_t required = std::max<uint64_t>(4U,
+                (static_cast<uint64_t>(desc.bucket_count) * 16U + 4U) / 5U);
+            uint64_t capacity = 1U;
+            while (capacity < required) capacity <<= 1U;
+            const uint64_t ranks = (desc.rank_payload_bytes / 8U +
+                (desc.rank_payload_bytes % 8U != 0U ? 1U : 0U)) * sizeof(uint32_t);
+            bytes = bc_checked_add_u64(bytes, capacity * sizeof(DirectEntry),
+                "BC flat lookup memory estimate overflow");
+            bytes = bc_checked_add_u64(bytes, ranks, "BC flat lookup memory estimate overflow");
+        }
+        return bytes;
+    }
+
     BCFutureSuccessLookupView(
         const BCLut &lut,
         const BCPositionLayerReader &position,

@@ -56,7 +56,13 @@ public:
 
     void close() {
         out_.flush();
+        if (!out_) {
+            throw_io_error("failed to flush file: " + path_);
+        }
         out_.close();
+        if (!out_) {
+            throw_io_error("failed to close file: " + path_);
+        }
     }
 
 private:
@@ -629,6 +635,15 @@ std::runtime_error make_errno_error(const std::string &prefix) {
     return std::runtime_error(prefix + " (errno=" + std::to_string(errno) + ": " + std::strerror(errno) + ")");
 }
 
+[[noreturn]] void throw_direct_write_error(const std::string &context, int error) {
+    const std::string message = context + " (errno=" + std::to_string(error) +
+        ": " + std::strerror(error) + ")";
+    if (error == EINVAL || error == EOPNOTSUPP || error == ENOSYS) {
+        throw DirectIoUnsupported(message);
+    }
+    throw std::runtime_error(message);
+}
+
 void *alloc_aligned_bytes(size_t bytes) {
     if (bytes == 0U) {
         bytes = static_cast<size_t>(kDirectIoAlignment);
@@ -764,10 +779,11 @@ public:
             scratch_ = alloc_aligned_bytes(chunk_bytes_);
             fd_ = ::open(path_.c_str(), O_CREAT | O_TRUNC | O_WRONLY | O_DIRECT, 0644);
             if (fd_ < 0) {
-                throw make_errno_error("open(O_DIRECT) failed");
+                const int error = errno;
+                throw_direct_write_error("open(O_DIRECT) failed: " + path_, error);
             }
             if (::ftruncate(fd_, static_cast<off_t>(aligned_bytes_)) != 0) {
-                throw make_errno_error("ftruncate preallocate failed");
+                throw make_errno_error("ftruncate preallocate failed: " + path_);
             }
         } catch (...) {
             cleanup();
@@ -805,10 +821,10 @@ public:
             flush_current(padded);
         }
         if (::ftruncate(fd_, static_cast<off_t>(logical_bytes_)) != 0) {
-            throw make_errno_error("ftruncate shrink failed");
+            throw make_errno_error("ftruncate shrink failed: " + path_);
         }
         if (::fsync(fd_) != 0) {
-            throw make_errno_error("fsync failed");
+            throw make_errno_error("fsync failed: " + path_);
         }
     }
 
@@ -823,20 +839,23 @@ private:
     }
 
     void flush_current(size_t bytes) {
-        const ssize_t rv = ::pwrite(
-            fd_,
-            scratch_,
-            bytes,
-            static_cast<off_t>(next_offset_)
-        );
+        ssize_t rv;
+        do {
+            rv = ::pwrite(fd_, scratch_, bytes, static_cast<off_t>(next_offset_));
+        } while (rv < 0 && errno == EINTR);
+        const int error = rv < 0 ? errno : 0;
+        if (rv >= 0 && static_cast<size_t>(rv) == bytes) {
+            next_offset_ += static_cast<uint64_t>(bytes);
+            current_fill_ = 0U;
+            return;
+        }
+        const std::string context = "pwrite(O_DIRECT): " + path_ +
+            " offset=" + std::to_string(next_offset_) +
+            " requested=" + std::to_string(bytes) + " returned=" + std::to_string(rv);
         if (rv < 0) {
-            throw make_errno_error("pwrite(O_DIRECT) failed");
+            throw_direct_write_error(context, error);
         }
-        if (static_cast<size_t>(rv) != bytes) {
-            throw_io_error("short direct write: " + path_);
-        }
-        next_offset_ += static_cast<uint64_t>(bytes);
-        current_fill_ = 0U;
+        throw_io_error("short direct write: " + context);
     }
 
     std::string path_;
@@ -932,7 +951,12 @@ public:
 #else
             throw_io_error("direct I/O is unsupported on this platform");
 #endif
-        } catch (...) {
+        }
+#if defined(__linux__)
+        catch (const DirectIoUnsupported &) {
+#else
+        catch (...) {
+#endif
             buffered_writer_ = std::make_unique<BufferedAppendWriter>(temp_path_);
         }
     }

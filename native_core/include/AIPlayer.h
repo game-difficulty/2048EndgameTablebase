@@ -42,9 +42,9 @@ private:
   int32_t dummy_dead_score = 131072;
 
   inline uint32_t get_signature(uint64_t board) const {
-    return static_cast<uint32_t>(((board ^ (board >> 31)) * 0x1a7daf1bULL) +
-                                 board) >>
-           21;
+    // Shift before narrowing so the signature retains all 32 bits.
+    return static_cast<uint32_t>(
+        ((((board ^ (board >> 31)) * 0x1a7daf1bULL) + board) >> 21));
   }
 
 public:

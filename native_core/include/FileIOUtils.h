@@ -26,6 +26,11 @@ struct DirectIoConfig {
     uint32_t chunk_mib = 8U;
 };
 
+class DirectIoUnsupported : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 inline std::string path_string(const std::string &path_like) {
     return path_like;
 }

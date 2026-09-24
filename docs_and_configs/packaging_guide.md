@@ -242,6 +242,13 @@ if ($LASTEXITCODE -ne 0) { throw "Invalid Linux tar.xz archive" }
 
 不得复用旧版本的 Linux 压缩包。应核对 `$LatestLinux.LastWriteTime` 属于当前构建。
 
+Linux 原生模块必须动态链接系统 `libstdc++.so.6`，不得分别静态链接 C++ 运行库。
+用 `readelf -d` 检查 `ai_core`、`mover_core`、`formation_core` 和 `bookgen_native.so`
+均包含此 `NEEDED` 依赖；不要将构建机的 libstdc++ 打进包内。
+验证时必须在同一进程先导入 `ai_core`、`mover_core` 再运行 `formation_core` 的 BC
+生成和回算，检查 CSV 数值字段、每行列数及完成状态，不能只单独导入计算模块测试。
+分别验证临时压缩开启和关闭；不得通过忽略统计写入异常规避失败。
+
 ## 6. 产物验证
 
 两个包都必须存在、可列出且非空：
@@ -257,8 +264,12 @@ Get-FileHash $WinArchive, $LinuxArchive -Algorithm SHA256 |
 发布前至少验证：
 
 - Windows 包可以解压、启动，并能打开主要页面。
-- Linux 包归档结构完整，顶层目录为 `2048EndgameTablebase/`；条件允许时在 Linux/WSL
-  环境启动验证。
+- Linux 包归档结构完整，顶层目录为 `2048EndgameTablebase/`。必须在不同于构建容器的
+  较新 Linux 桌面环境中验证实际 GUI：启动页、主页面和至少一次页面操作正常。
+  Xvfb 可用于自动化检查，但不能替代 Wayland/GPU 的目标机验证。仅 backend child、
+  HTTP 200 或原生模块 import 成功，不代表桌面包通过；无法验证时必须明确列出缺口。
+  保持默认隐私模式进行测试：GTK WebKit 可能不提供 localStorage，布局等可选偏好必须
+  能在存储缺失或读写失败时退化为会话内设置，不能因此阻断主页面挂载。
 - 两个平台均包含 `frontend/dist`、帮助文档、默认 pattern、主题、MathJax、图片和必要
   原生运行库。
 - 包内不含根目录 `tests/`、源码缓存、日志、本地配置、tablebase 或回放样本。
@@ -271,6 +282,15 @@ Get-FileHash $WinArchive, $LinuxArchive -Algorithm SHA256 |
   `_internal/native_core/`，不能来自 Anaconda、PATH 或旧的解压目录。
 - Linux manifest 中必须包含 `ai_core`、`mover_core`、`formation_core`、
   `bookgen_native` 和两个 BC helper，并记录各自 SHA-256。
+- Linux spec 使用 `exclude_system_libraries`，只额外保留嵌入式 Python 必需的旧 ABI
+  库（当前 Bullseye/Python 3.9 为 libffi.so.7、libssl.so.1.1、libcrypto.so.1.1、
+  libmpdec.so.3）。更换构建基线时重新审核此列表及 ELF 依赖。GTK/WebKit 和通用系统库
+  必须来自目标系统，不能只剔除 GTK 主库后继续混用旧的传递依赖。
+- 检查包内没有 libreadline、libtinfo、libgnutls、libpcre2、libstdc++ 等系统库。
+  目标机需安装 GTK3/WebKit2GTK、GObject introspection，以及 libgomp、liblzma 等原生
+  依赖；对实际包内 ELF 执行依赖检查，确认没有 `not found` 或版本/符号错误。
+  在较新 Linux 上设置 `LD_LIBRARY_PATH` 指向包内 `_internal` 后执行 `/bin/sh -c
+  'exit 0'` 也必须成功，以检查启动外部程序时的库冲突。
 
 ## 7. Release Note 规范
 

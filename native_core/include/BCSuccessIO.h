@@ -1655,77 +1655,65 @@ public:
         if (value_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
             throw std::overflow_error("BC success streaming whole payload value count exceeds size_t");
         }
-        std::vector<T> physical_values(static_cast<size_t>(value_count));
+        // Read directly into the final logical layout. Family output is written
+        // in execution order; a physical-order array followed by a logical-order
+        // copy would keep two complete layers alive during route transitions.
+        std::vector<T> logical_values(static_cast<size_t>(value_count));
+        std::vector<BCFileReadRequest> requests;
+        if (value_count != 0U && is_contiguous_logical_payload_order(value_count)) {
+            requests.push_back({header_.payload_offset, logical_values.data(), header_.payload_bytes});
+        } else if (value_count != 0U) {
+            requests.reserve(success_rows_.size());
+            uint64_t logical_cursor = 0U;
+            for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
+                const uint64_t count = static_cast<uint64_t>(success_rows_[cid]) * header_.row_width;
+                const uint64_t physical_begin = cell_value_offsets_[cid];
+                if (physical_begin > value_count || count > value_count - physical_begin ||
+                    logical_cursor > value_count || count > value_count - logical_cursor) {
+                    throw std::runtime_error("BC success streaming whole payload reorder range mismatch");
+                }
+                if (count != 0U) {
+                    requests.push_back({
+                        header_.payload_offset + physical_begin * sizeof(T),
+                        logical_values.data() + static_cast<size_t>(logical_cursor),
+                        count * sizeof(T)});
+                }
+                logical_cursor += count;
+            }
+            if (logical_cursor != value_count) {
+                throw std::runtime_error("BC success streaming whole payload logical value count mismatch");
+            }
+            std::sort(requests.begin(), requests.end(), [](const auto &lhs, const auto &rhs) {
+                return lhs.offset < rhs.offset;
+            });
+        }
         if (stats != nullptr) {
             *stats = {};
             if (header_.payload_bytes != 0U) {
-                stats->requested_extents = 1U;
-                stats->coalesced_extents = 1U;
+                stats->requested_extents = requests.size();
+                stats->coalesced_extents = requests.size();
                 stats->requested_bytes = header_.payload_bytes;
                 stats->read_bytes = header_.payload_bytes;
             }
         }
         if (header_.payload_bytes == 0U) {
-            return physical_values;
+            return logical_values;
         }
-#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
         BCFileIOStats io_stats;
-        file_->read_many(
-            std::vector<BCFileReadRequest>{
-                BCFileReadRequest{header_.payload_offset, physical_values.data(), header_.payload_bytes}
-            },
-            &io_stats
-        );
+        // The file backend splits requests and bounds staging by transfer size/QD.
+        file_->read_many(requests, &io_stats);
         if (stats != nullptr) {
             stats->backend_read_ops = io_stats.backend_io_count;
             stats->backend_read_bytes = io_stats.backend_bytes;
             stats->backend_read_seconds += io_stats.backend_seconds;
         }
-#else
-        std::vector<uint8_t> bytes(static_cast<size_t>(header_.payload_bytes));
-        BCFileIOStats io_stats;
-        file_->read_many(
-            std::vector<BCFileReadRequest>{
-                BCFileReadRequest{header_.payload_offset, bytes.data(), header_.payload_bytes}
-            },
-            &io_stats
-        );
-        if (stats != nullptr) {
-            stats->backend_read_ops = io_stats.backend_io_count;
-            stats->backend_read_bytes = io_stats.backend_bytes;
-            stats->backend_read_seconds += io_stats.backend_seconds;
-        }
+#if !defined(_WIN32) && (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
+        // Decode in place on big-endian hosts, without another payload buffer.
         for (uint64_t i = 0U; i < value_count; ++i) {
-            physical_values[static_cast<size_t>(i)] =
-                bc_load_success_value_le<T>(bytes.data() + static_cast<size_t>(i * sizeof(T)));
+            T &value = logical_values[static_cast<size_t>(i)];
+            value = bc_load_success_value_le<T>(reinterpret_cast<const uint8_t *>(&value));
         }
 #endif
-        if (is_contiguous_logical_payload_order(value_count)) {
-            return physical_values;
-        }
-        std::vector<T> logical_values(static_cast<size_t>(value_count));
-        uint64_t logical_cursor = 0U;
-        for (size_t cid = 0U; cid < success_rows_.size(); ++cid) {
-            const uint64_t count =
-                static_cast<uint64_t>(success_rows_[cid]) * header_.row_width;
-            if (count == 0U) {
-                continue;
-            }
-            const uint64_t physical_begin = cell_value_offsets_[cid];
-            if (physical_begin > value_count || count > value_count - physical_begin ||
-                logical_cursor > value_count || count > value_count - logical_cursor) {
-                throw std::runtime_error("BC success streaming whole payload reorder range mismatch");
-            }
-            std::copy_n(
-                physical_values.data() + static_cast<size_t>(physical_begin),
-                static_cast<size_t>(count),
-                logical_values.data() + static_cast<size_t>(logical_cursor)
-            );
-            logical_cursor += count;
-        }
-        if (logical_cursor != value_count) {
-            throw std::runtime_error("BC success streaming whole payload logical value count mismatch");
-        }
         return logical_values;
     }
 

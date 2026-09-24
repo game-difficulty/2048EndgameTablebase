@@ -161,8 +161,10 @@ void accumulate_bc_solve_stats_total(
     total.writer_open_seconds += m.writer_open_seconds;
     total.solve_call_seconds += m.solve_call_seconds;
     if (m.has_family_stats) {
-        total.spawn4_compute_seconds += fs.spawn4_cell_compute_seconds;
-        total.spawn2_compute_seconds += fs.spawn2_cell_compute_seconds;
+        total.spawn4_compute_seconds += m.solve_route == "single"
+            ? s.spawn4_compute_seconds : fs.spawn4_cell_compute_seconds;
+        total.spawn2_compute_seconds += m.solve_route == "single"
+            ? s.spawn2_compute_seconds : fs.spawn2_cell_compute_seconds;
         total.compact_seconds += s.compact_seconds;
         total.current_position_read_seconds += s.current_position_read_seconds;
         total.future2_position_read_seconds += s.future2_position_read_seconds;

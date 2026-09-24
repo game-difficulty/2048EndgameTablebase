@@ -171,17 +171,20 @@ namespace detail {
     return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
 }
 
-[[nodiscard]] inline uint64_t bc_family_runner_available_memory_bytes() {
+[[nodiscard]] inline uint64_t bc_family_runner_available_memory_bytes(uint64_t *total_bytes = nullptr) {
+    if (total_bytes != nullptr) *total_bytes = 0U;
 #if defined(_WIN32)
     MEMORYSTATUSEX status{};
     status.dwLength = sizeof(status);
     if (GlobalMemoryStatusEx(&status) != 0) {
+        if (total_bytes != nullptr) *total_bytes = status.ullTotalPhys;
         return static_cast<uint64_t>(status.ullAvailPhys);
     }
     return 0U;
 #else
     struct sysinfo info {};
     if (sysinfo(&info) == 0) {
+        if (total_bytes != nullptr) *total_bytes = static_cast<uint64_t>(info.totalram) * info.mem_unit;
         return static_cast<uint64_t>(info.freeram) * static_cast<uint64_t>(info.mem_unit);
     }
     return 0U;
@@ -1517,40 +1520,53 @@ inline void bc_family_runner_cleanup_solve_tmp_layers(
     const std::filesystem::path &position_path,
     const std::filesystem::path &success_path
 ) {
-    std::error_code ec;
-    if (!std::filesystem::exists(output_path, ec) || ec) {
+    if (!std::filesystem::exists(output_path)) {
         return false;
     }
-    const auto compressed_time = std::filesystem::last_write_time(output_path, ec);
-    if (ec) {
+    const bool has_position = std::filesystem::exists(position_path);
+    const bool has_success = std::filesystem::exists(success_path);
+    // Freshness is meaningful only relative to an existing exact pair.
+    if (!has_position || !has_success) {
         return false;
     }
-    const auto position_time = std::filesystem::last_write_time(position_path, ec);
-    if (ec) {
-        return false;
-    }
-    const auto success_time = std::filesystem::last_write_time(success_path, ec);
-    if (ec) {
-        return false;
-    }
+    const auto compressed_time = std::filesystem::last_write_time(output_path);
+    const auto position_time = std::filesystem::last_write_time(position_path);
+    const auto success_time = std::filesystem::last_write_time(success_path);
     return compressed_time >= position_time && compressed_time >= success_time;
 }
 
-[[nodiscard]] inline std::optional<std::filesystem::path> bc_family_runner_find_fresh_compressed_output(
+[[nodiscard]] inline std::optional<std::filesystem::path> bc_family_runner_find_reusable_compressed_output(
     const BCFamilySolveRunOptions &options,
     uint32_t ordinal,
     const std::filesystem::path &position_path,
     const std::filesystem::path &success_path
 ) {
+    const bool has_position = std::filesystem::exists(position_path);
+    const bool has_success = std::filesystem::exists(success_path);
+    if (has_position != has_success) {
+        throw std::runtime_error(
+            "BC compression exact source pair is incomplete; preserving remaining file; missing: " +
+            (has_position ? success_path.string() : position_path.string()));
+    }
     std::optional<std::filesystem::path> found;
     for (const std::filesystem::path &candidate :
          bc_family_runner_compressed_output_candidates(options, ordinal, position_path)) {
-        if (bc_family_runner_compressed_file_is_fresh(candidate, position_path, success_path)) {
+        const bool reusable = has_position
+            ? bc_family_runner_compressed_file_is_fresh(candidate, position_path, success_path)
+            : std::filesystem::exists(candidate);
+        if (reusable) {
+            if (has_position) {
+                BCCompressedResult::validate_archive_file(candidate);
+            }
             if (found && found->extension() != candidate.extension()) {
                 throw std::runtime_error("BC conflicting archive formats for layer " + std::to_string(ordinal));
             }
             if (!found) found = candidate;
         }
+    }
+    if (!has_position && !found) {
+        throw std::runtime_error("BC compression has neither exact sources nor an archive for layer " +
+            std::to_string(ordinal));
     }
     return found;
 }
@@ -1560,12 +1576,14 @@ inline void bc_family_runner_remove_exact_sources_after_compress(
     const std::filesystem::path &position_path,
     const std::filesystem::path &success_path
 ) {
-    BCCompressedResult::validate_archive_file(output_path);
-    if (!bc_family_runner_compressed_file_is_fresh(output_path, position_path, success_path)) {
-        throw std::runtime_error(
-            "BC compressed layer is not fresh after compression: " +
-            output_path.string());
+    const bool has_position = std::filesystem::exists(position_path);
+    const bool has_success = std::filesystem::exists(success_path);
+    if (!has_position && !has_success) {
+        return;
     }
+    BCCompressedResult::validate_archive_file(output_path);
+    // Caller has just published this archive or selected a fresh one.
+    // Cleanup is idempotent, including an earlier partially completed deletion.
     auto remove_one = [](const std::filesystem::path &path) {
         std::error_code ec;
         std::filesystem::remove(path, ec);
@@ -1590,7 +1608,7 @@ inline void bc_family_runner_remove_exact_sources_after_compress(
         return {};
     }
     if (const std::optional<std::filesystem::path> fresh_output =
-            bc_family_runner_find_fresh_compressed_output(options, ordinal, position_path, success_path)) {
+            bc_family_runner_find_reusable_compressed_output(options, ordinal, position_path, success_path)) {
         if (remove_sources_after_compress) {
             bc_family_runner_remove_exact_sources_after_compress(
                 *fresh_output,
@@ -1645,7 +1663,7 @@ bc_family_runner_final_compression_hook_flat(
         return {};
     }
     if (const std::optional<std::filesystem::path> fresh_output =
-            bc_family_runner_find_fresh_compressed_output(options, ordinal, position_path, success_path)) {
+            bc_family_runner_find_reusable_compressed_output(options, ordinal, position_path, success_path)) {
         if (remove_sources_after_compress) {
             bc_family_runner_remove_exact_sources_after_compress(
                 *fresh_output,
@@ -1807,8 +1825,7 @@ inline void bc_family_runner_write_checkpoint(
 }
 
 [[nodiscard]] inline std::optional<BCFamilySolveCheckpoint>
-bc_family_runner_read_checkpoint(const BCFamilySolveRunOptions &options) {
-    const std::filesystem::path path = bc_family_runner_checkpoint_path(options);
+bc_family_runner_read_checkpoint_file(const std::filesystem::path &path) {
     if (!std::filesystem::exists(path)) {
         return std::nullopt;
     }
@@ -1836,6 +1853,105 @@ bc_family_runner_read_checkpoint(const BCFamilySolveRunOptions &options) {
     checkpoint.dtype = static_cast<uint32_t>(std::stoul(fields[3]));
     checkpoint.family_modulus = static_cast<uint32_t>(std::stoul(fields[4]));
     return checkpoint;
+}
+
+// Publication guards must read the checkpoint written in the current output
+// directory, not an older checkpoint left on another storage path.
+[[nodiscard]] inline std::optional<BCFamilySolveCheckpoint>
+bc_family_runner_read_checkpoint(const BCFamilySolveRunOptions &options) {
+    return bc_family_runner_read_checkpoint_file(bc_family_runner_checkpoint_path(options));
+}
+
+inline void bc_family_runner_require_generated_range(
+    const std::map<uint32_t, BCFamilySolveRunLayerFile> &layers,
+    uint32_t min_ordinal,
+    int64_t next_ordinal
+) {
+    for (int64_t ordinal = min_ordinal; ordinal <= next_ordinal; ++ordinal) {
+        if (layers.find(static_cast<uint32_t>(ordinal)) == layers.end()) {
+            throw std::runtime_error(
+                "BC family runner cannot resume: generated layer " +
+                std::to_string(ordinal) + " is missing from configured storage paths");
+        }
+    }
+}
+
+template <typename StorageT>
+[[nodiscard]] inline std::optional<BCFamilySolveCheckpoint>
+bc_family_runner_find_resume_checkpoint(
+    const BCFamilySolveRunOptions &options,
+    const std::map<uint32_t, BCFamilySolveRunLayerFile> &layers,
+    const BCLut &lut,
+    uint32_t min_ordinal,
+    uint32_t max_ordinal
+) {
+    std::optional<BCFamilySolveCheckpoint> selected;
+    std::filesystem::path selected_path;
+    for (const auto &dir : bc_family_runner_solved_dirs(options)) {
+        const auto path = dir / (options.prefix + "family_checkpoint.csv");
+        try {
+            auto checkpoint = bc_family_runner_read_checkpoint_file(path);
+            if (!checkpoint) continue;
+            if (checkpoint->dtype != static_cast<uint32_t>(options.success_dtype) ||
+                checkpoint->family_modulus != options.family_modulus ||
+                checkpoint->next_ordinal < static_cast<int64_t>(min_ordinal) - 1 ||
+                checkpoint->next_ordinal >= static_cast<int64_t>(max_ordinal)) {
+                throw std::runtime_error("checkpoint parameters or ordinal do not match this run");
+            }
+            const int64_t recorded_next = checkpoint->next_ordinal;
+            const bool completed_marker = recorded_next == -1 &&
+                checkpoint->exact_future2_ordinal == -1 && checkpoint->exact_future4_ordinal == -1;
+            if (!completed_marker &&
+                (checkpoint->exact_future2_ordinal != recorded_next + 1 ||
+                 checkpoint->exact_future4_ordinal != recorded_next + 2)) {
+                throw std::runtime_error("checkpoint frontier ordinals are inconsistent");
+            }
+            // A crash can leave a published exact layer ahead of its checkpoint.
+            // Probe without deleting anything: another path may hold a valid copy.
+            int64_t next = recorded_next;
+            while (next >= static_cast<int64_t>(min_ordinal) &&
+                   bc_family_runner_exact_layer_valid<StorageT>(options,
+                       static_cast<uint32_t>(next), lut, false)) {
+                --next;
+            }
+            if (next < static_cast<int64_t>(min_ordinal)) {
+                for (uint64_t ordinal = min_ordinal;
+                     ordinal <= static_cast<uint64_t>(max_ordinal) + 1U; ++ordinal) {
+                    if (!bc_family_runner_exact_layer_valid<StorageT>(options,
+                            static_cast<uint32_t>(ordinal), lut, false)) {
+                        throw std::runtime_error("completed checkpoint has no complete exact range");
+                    }
+                }
+            } else {
+                bc_family_runner_require_generated_range(layers, min_ordinal, next);
+                if (!bc_family_runner_exact_layer_valid<StorageT>(options,
+                        static_cast<uint32_t>(next + 1), lut, false) ||
+                    !bc_family_runner_exact_layer_valid<StorageT>(options,
+                        static_cast<uint32_t>(next + 2), lut, false)) {
+                    throw std::runtime_error("checkpoint exact future frontier is missing or invalid");
+                }
+            }
+            checkpoint->next_ordinal = next;
+            checkpoint->exact_future2_ordinal = next + 1;
+            checkpoint->exact_future4_ordinal = next + 2;
+            // Backward solving progresses toward smaller ordinals. Path order
+            // and timestamps must not let a stale hot checkpoint win.
+            if (!selected || next < selected->next_ordinal) {
+                selected = *checkpoint;
+                selected_path = path;
+            }
+        } catch (const std::exception &error) {
+            std::cerr << "BC_RESUME_CHECKPOINT_IGNORED path=" << path.string()
+                << " reason=" << error.what() << '\n';
+        }
+    }
+    if (selected) {
+        std::cerr << "BC_RESUME_CHECKPOINT_SELECTED path=" << selected_path.string()
+            << " next=" << selected->next_ordinal
+            << " future2=" << selected->exact_future2_ordinal
+            << " future4=" << selected->exact_future4_ordinal << '\n';
+    }
+    return selected;
 }
 
 template <typename StorageT>
@@ -2133,7 +2249,8 @@ template <typename StorageT>
 bc_family_runner_take_single_frontier_layer(
     BCFamilySolveFrontierLayer<StorageT> &frontier,
     const BCLut &lut,
-    const BCFamilySolveRunOptions &options
+    const BCFamilySolveRunOptions &options,
+    BCSingleChunkSolveStats *load_stats = nullptr
 ) {
     if (!frontier.single_frontier_cache) {
         frontier.single_frontier_cache =
@@ -2143,7 +2260,12 @@ bc_family_runner_take_single_frontier_layer(
                     frontier.success,
                     lut,
                     1U,
-                    options.success_dtype));
+                    options.success_dtype,
+                    load_stats ? &load_stats->future4_position_load : nullptr,
+                    load_stats ? &load_stats->future4_success_load : nullptr,
+                    load_stats ? &load_stats->future4_position_read_seconds : nullptr,
+                    load_stats ? &load_stats->future4_success_read_seconds : nullptr,
+                    load_stats ? &load_stats->future4_index_seconds : nullptr));
     }
     BCSingleChunkFrontierLayer<StorageT> out =
         std::move(*frontier.single_frontier_cache);
@@ -2167,21 +2289,106 @@ bc_family_runner_take_single_frontier_layer(
     return layer;
 }
 
+// Includes the raw position bytes and the reader's copied bucket/descriptor
+// directories. Lookup indices are accounted separately, without reading boards.
+[[nodiscard]] inline uint64_t bc_family_runner_position_memory_bytes(
+    const BCPositionStreamingReader &position
+) {
+    return bc_route_saturating_add_u64(position.file_size(),
+        bc_route_saturating_add_u64(position.header().bucket_meta_bytes,
+            bc_route_saturating_add_u64(position.header().descriptor_table_bytes,
+                position.header().axis_coord_table_bytes)));
+}
+
 template <typename StorageT>
 [[nodiscard]] inline BCSolveRouteDecision bc_family_runner_decide_solve_route(
     const BCFamilySolveRunOptions &options,
     uint64_t current_rows,
+    const BCPositionStreamingReader &current,
     const BCFamilySolveFrontierLayer<StorageT> &future2,
-    const BCFamilySolveFrontierLayer<StorageT> &future4
+    const BCFamilySolveFrontierLayer<StorageT> &future4,
+    BCSolveRoute previous_route,
+    uint32_t resident_upgrade_streak,
+    uint32_t single_upgrade_streak
 ) {
     BCSolveRouteInputs route_inputs;
     route_inputs.current_rows = current_rows;
     route_inputs.future2_live_rows = bc_family_runner_success_value_rows(future2.success);
     route_inputs.future4_live_rows = bc_family_runner_success_value_rows(future4.success);
+    const uint64_t available = bc_family_runner_available_memory_bytes(&route_inputs.total_memory_bytes);
     route_inputs.available_memory_bytes = options.available_memory_override_bytes != 0U
         ? options.available_memory_override_bytes
-        : bc_family_runner_available_memory_bytes();
+        : available;
     route_inputs.fixed_modulus = options.family_modulus;
+    route_inputs.previous_route = previous_route;
+    route_inputs.resident_upgrade_streak = resident_upgrade_streak;
+    route_inputs.single_upgrade_streak = single_upgrade_streak;
+    const auto add = bc_route_saturating_add_u64;
+    const auto mul = bc_route_saturating_mul_u64;
+    using Lookup = BCFutureSuccessLookupView<StorageT>;
+    const auto future_bytes = [&](const auto &future) {
+        return add(bc_family_runner_position_memory_bytes(future.position),
+            add(mul(bc_family_runner_success_value_rows(future.success), sizeof(StorageT)),
+                Lookup::estimate_flat_index_bytes(future.position)));
+    };
+    const uint64_t future2_bytes = future_bytes(future2);
+    const uint64_t future4_bytes = future_bytes(future4);
+    // Fixed support allowance for worker scratch/archive codecs plus bounded I/O.
+    // OS headroom is deducted separately by the route planner.
+    const uint64_t support_bytes = add(2U * kBCFamilyRouteGiB,
+        add(mul(static_cast<uint64_t>(bc_resident_solve_effective_threads(options.num_threads)),
+                64U * 1024U * 1024U),
+            mul(mul(std::max<uint32_t>(1U, options.direct_queue_depth),
+                    static_cast<uint64_t>(options.direct_io_chunk_mib) * 1024U * 1024U), 4U)));
+
+    // Upper-bound every possible current row slab. The actual temp codec may
+    // reduce the 512 MiB numeric budget; its slabs are subsets of these ranges.
+    // Oversized single family rows remain indivisible and must be charged fully.
+    const BCSingleChunkSolveOptions<StorageT> single_options;
+    const BCCellMatrix matrix(current.axis());
+    const uint32_t families = matrix.family_count();
+    std::vector<uint64_t> row_values(families, 0U), row_positions(families, 0U);
+    for (uint32_t row = 0U; row < families; ++row) {
+        for (uint32_t col = 0U; col < families; ++col) {
+            const auto &desc = current.descriptor(matrix.cid(row, col));
+            row_values[row] = add(row_values[row], mul(desc.success_rows, sizeof(StorageT)));
+            row_positions[row] = add(row_positions[row], add(desc.rank_payload_bytes,
+                mul(desc.bucket_count, sizeof(BCBucketEntry))));
+        }
+    }
+    uint64_t slab_peak = 0U;
+    for (uint32_t begin = 0U; begin < families; ++begin) {
+        uint64_t values = 0U, positions = 0U;
+        for (uint32_t end = begin; end < families && end - begin < single_options.current_chunk_rows; ++end) {
+            const uint64_t next = add(values, row_values[end]);
+            if (end != begin && next > single_options.current_chunk_max_bytes) break;
+            values = next;
+            positions = add(positions, row_positions[end]);
+            // Loaded cells plus compacted position payloads/capacity growth.
+            slab_peak = std::max(slab_peak, add(values, mul(positions, 4U)));
+        }
+    }
+    route_inputs.single_peak_bytes = add(support_bytes,
+        add(std::max(future2_bytes, future4_bytes), slab_peak));
+    // Resident keeps both futures and current input through compaction. Account
+    // for the raw->compact value copy and position serialization overlap too.
+    route_inputs.resident_peak_bytes = add(support_bytes, add(add(future2_bytes, future4_bytes),
+        add(mul(bc_family_runner_position_memory_bytes(current), 4U),
+            add(mul(mul(current_rows, sizeof(StorageT)), 2U),
+                Lookup::estimate_flat_index_bytes(current)))));
+    const auto resident_credit = [&](const auto &future) -> uint64_t {
+        if (!future.resident_cache) return 0U;
+        const auto &cache = *future.resident_cache;
+        return add(cache.position.bytes().size(), mul(cache.success_values.size(), sizeof(StorageT)));
+    };
+    route_inputs.resident_reusable_bytes = add(resident_credit(future2), resident_credit(future4));
+    if (future4.single_frontier_cache) {
+        const auto &cache = *future4.single_frontier_cache;
+        // Only the compatible, owned payload is credited. Index/capacity slack,
+        // incompatible caches and process RSS are deliberately not credited.
+        route_inputs.single_reusable_bytes = add(cache.position.bytes().size(),
+            mul(cache.success_value_count(), sizeof(StorageT)));
+    }
     return bc_plan_solve_route(route_inputs, options.solve_route);
 }
 
@@ -3299,7 +3506,7 @@ inline void bc_family_runner_compress_existing_archive_exact_layers(
         metric.ordinal = ordinal;
 
         if (const std::optional<std::filesystem::path> compressed_path =
-                bc_family_runner_find_fresh_compressed_output(
+                bc_family_runner_find_reusable_compressed_output(
                     options,
                     ordinal,
                     layer.position_path,
@@ -3544,46 +3751,23 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
     bool initialized_from_checkpoint = false;
     const std::optional<BCFamilySolveCheckpoint> checkpoint =
         (!options.force_restart && options.resume_from_checkpoint && !options.start_ordinal)
-            ? bc_family_runner_read_checkpoint(options)
+            ? bc_family_runner_find_resume_checkpoint<StorageT>(
+                  options, layers, lut, min_ordinal, max_ordinal)
             : std::nullopt;
-    if (checkpoint &&
-        checkpoint->dtype == static_cast<uint32_t>(options.success_dtype) &&
-        checkpoint->family_modulus == options.family_modulus) {
-        int64_t resume_next_ordinal = checkpoint->next_ordinal;
-        while (resume_next_ordinal >= static_cast<int64_t>(min_ordinal) &&
-               bc_family_runner_exact_layer_valid<StorageT>(
-                   options,
-                   static_cast<uint32_t>(resume_next_ordinal),
-                   lut,
-                   true)) {
-            --resume_next_ordinal;
-        }
+    if (checkpoint) {
+        const int64_t resume_next_ordinal = checkpoint->next_ordinal;
         if (resume_next_ordinal < static_cast<int64_t>(min_ordinal)) {
-            bool all_requested_exact = true;
-            for (uint32_t ordinal = min_ordinal; ordinal <= max_ordinal + 1U; ++ordinal) {
-                if (!bc_family_runner_exact_layer_valid<StorageT>(options, ordinal, lut, true)) {
-                    all_requested_exact = false;
-                    break;
-                }
-            }
-            if (all_requested_exact) {
-                run_result.completed = true;
-                return run_result;
-            }
-        } else if (resume_next_ordinal <= static_cast<int64_t>(max_ordinal) - 1 &&
-                   bc_family_runner_exact_layer_valid<StorageT>(
-                       options,
-                       static_cast<uint32_t>(resume_next_ordinal + 1),
-                       lut,
-                       true) &&
-                   bc_family_runner_exact_layer_valid<StorageT>(
-                       options,
-                       static_cast<uint32_t>(resume_next_ordinal + 2),
-                       lut,
-                       true)) {
+            run_result.completed = true;
+            return run_result;
+        } else {
             first_solve_ordinal = resume_next_ordinal;
             open_frontier_pair_for(first_solve_ordinal);
             initialized_from_checkpoint = true;
+            // Once the frontier has opened successfully, adopt the selected
+            // progress on the new hot path before doing any retirement work.
+            bc_family_runner_write_checkpoint(options, BCFamilySolveCheckpoint{
+                first_solve_ordinal, first_solve_ordinal + 1, first_solve_ordinal + 2,
+                static_cast<uint32_t>(options.success_dtype), options.family_modulus});
 
             // The checkpoint is published before its retired +4 layer is archived.
             // Recover any such stranded exact layer before advancing the solve again.
@@ -3625,10 +3809,12 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             );
         }
         first_solve_ordinal = static_cast<int64_t>(*options.start_ordinal);
-        ensure_initial_exact_frontiers();
+        bc_family_runner_require_generated_range(layers, min_ordinal, first_solve_ordinal);
+        if (first_solve_ordinal == static_cast<int64_t>(max_ordinal) - 1) {
+            ensure_initial_exact_frontiers();
+        }
         open_frontier_pair_for(first_solve_ordinal);
     } else if (!initialized_from_checkpoint) {
-        ensure_initial_exact_frontiers();
         if (options.force_restart) {
             first_solve_ordinal = static_cast<int64_t>(max_ordinal) - 1;
         } else {
@@ -3637,7 +3823,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                  ordinal_signed >= static_cast<int64_t>(min_ordinal);
                  --ordinal_signed) {
                 const uint32_t ordinal = static_cast<uint32_t>(ordinal_signed);
-                if (bc_family_runner_exact_layer_valid<StorageT>(options, ordinal, lut, true)) {
+                if (bc_family_runner_exact_layer_valid<StorageT>(options, ordinal, lut, false)) {
                     BCFamilySolveRunLayerMetric skip_metric;
                     skip_metric.kind = "skip";
                     skip_metric.solve_route = "existing_exact";
@@ -3650,6 +3836,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 break;
             }
             if (!found_missing_layer) {
+                ensure_initial_exact_frontiers();
                 bc_family_runner_write_checkpoint(
                     options,
                     BCFamilySolveCheckpoint{
@@ -3663,6 +3850,11 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 return run_result;
             }
         }
+        // Generated files of already solved layers are normally retired. Do
+        // not mistake a sparse remainder for a fresh full build and publish a
+        // new terminal/checkpoint before detecting the missing input.
+        bc_family_runner_require_generated_range(layers, min_ordinal, first_solve_ordinal);
+        ensure_initial_exact_frontiers();
         open_frontier_pair_for(first_solve_ordinal);
         bc_family_runner_write_checkpoint(
             options,
@@ -3677,6 +3869,9 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
 
     BCFamilySolveWorkspace<StorageT> workspace;
     BCSingleChunkSolveWorkspace<StorageT> single_workspace;
+    BCSolveRoute previous_solve_route = BCSolveRoute::Auto;
+    uint32_t resident_upgrade_streak = 0U;
+    uint32_t single_upgrade_streak = 0U;
     for (int64_t ordinal_signed = first_solve_ordinal;
          ordinal_signed >= static_cast<int64_t>(min_ordinal);
          --ordinal_signed) {
@@ -3690,13 +3885,18 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         double t0 = bc_family_solve_runner_now_seconds();
         BCGeneratedArchiveInput *archive_input = nullptr;
         BCPositionStreamingReader current;
-        if (bc_family_runner_is_position_archive_path(layers.at(ordinal).path)) {
-            auto input = std::make_unique<BCGeneratedArchiveInput>(layers.at(ordinal).path);
+        const auto layer_file = layers.find(ordinal);
+        if (layer_file == layers.end()) {
+            throw std::runtime_error("BC family runner cannot solve: generated layer " +
+                std::to_string(ordinal) + " is missing from configured storage paths");
+        }
+        if (bc_family_runner_is_position_archive_path(layer_file->second.path)) {
+            auto input = std::make_unique<BCGeneratedArchiveInput>(layer_file->second.path);
             archive_input = input.get();
             current.open(std::move(input), lut);
             current.set_validate_loaded_cells(false);
         } else {
-            current = bc_family_runner_open_position_stream(options, layers.at(ordinal).path, lut);
+            current = bc_family_runner_open_position_stream(options, layer_file->second.path, lut);
         }
         metric.open_current_position_seconds = bc_family_solve_runner_now_seconds() - t0;
         metric.open_future2_position_seconds = future2.open_position_seconds;
@@ -3711,8 +3911,26 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         metric.descriptor_rows_seconds = bc_family_solve_runner_now_seconds() - t0;
 
         const BCSolveRouteDecision route_decision =
-            bc_family_runner_decide_solve_route(options, descriptor_row_count, future2, future4);
+            bc_family_runner_decide_solve_route(options, descriptor_row_count, current, future2, future4,
+                previous_solve_route, resident_upgrade_streak, single_upgrade_streak);
         bc_family_runner_apply_route_metric(metric, route_decision);
+        std::cerr << "BC_SOLVE_ROUTE ordinal=" << ordinal
+            << " previous=" << bc_solve_route_name(previous_solve_route)
+            << " selected=" << bc_solve_route_name(route_decision.route)
+            << " available=" << route_decision.available_memory_bytes
+            << " budget=" << route_decision.budget_bytes
+            << " resident_peak=" << route_decision.resident_peak_bytes
+            << " single_peak=" << route_decision.single_peak_bytes
+            << " resident_reuse=" << route_decision.resident_reusable_bytes
+            << " single_reuse=" << route_decision.single_reusable_bytes
+            << " resident_new=" << route_decision.resident_required_bytes
+            << " single_new=" << route_decision.single_required_bytes
+            << " resident_streak=" << route_decision.resident_upgrade_streak
+            << " single_streak=" << route_decision.single_upgrade_streak
+            << " reason=" << route_decision.reason << '\n';
+        previous_solve_route = route_decision.route;
+        resident_upgrade_streak = route_decision.resident_upgrade_streak;
+        single_upgrade_streak = route_decision.single_upgrade_streak;
 
         std::optional<BCPositionLayerReader> decoded_resident_current;
         if (archive_input != nullptr) {
@@ -3902,6 +4120,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             metric.writer_open_seconds = bc_family_solve_runner_now_seconds() - t0;
 
             const double solve_t0 = bc_family_solve_runner_now_seconds();
+            BCSingleChunkSolveStats frontier_load_stats;
             BCSingleChunkStrictFrontierFileResult<StorageT> solve_result =
                 bc_single_chunk_solve_strict_1x_to_files_from_future4_frontier<StorageT>(
                     current,
@@ -3910,12 +4129,20 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                     bc_family_runner_take_single_frontier_layer<StorageT>(
                         future4,
                         lut,
-                        options),
+                        options,
+                        &frontier_load_stats),
                     *position_writer,
                     *success_writer,
                     single_temp_dir,
                     solve_options,
                     &single_workspace);
+            solve_result.stats.future4_position_read_seconds += frontier_load_stats.future4_position_read_seconds;
+            solve_result.stats.future4_success_read_seconds += frontier_load_stats.future4_success_read_seconds;
+            solve_result.stats.future4_index_seconds += frontier_load_stats.future4_index_seconds;
+            bc_single_chunk_add_cell_load_stats(solve_result.stats.future4_position_load,
+                frontier_load_stats.future4_position_load);
+            bc_single_chunk_add_success_load_stats(solve_result.stats.future4_success_load,
+                frontier_load_stats.future4_success_load);
             metric.solve_call_seconds = bc_family_solve_runner_now_seconds() - solve_t0;
             produced_single_future4_cache =
                 std::make_unique<BCSingleChunkFrontierLayer<StorageT>>(
@@ -4125,7 +4352,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 static_cast<uint32_t>(options.success_dtype),
                 options.family_modulus
             });
-        bc_family_runner_remove_generated_layer_file(layers.at(ordinal));
+        bc_family_runner_remove_generated_layer_file(layer_file->second);
         metric.total_seconds = bc_family_solve_runner_now_seconds() - layer_t0;
         bc_family_runner_emit_metric<StorageT>(run_result, callback, metric);
         deletion_state = RuntimeControls::refresh_deletion_thresholds(deletion_options, deletion_state);

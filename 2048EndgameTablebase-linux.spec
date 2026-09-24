@@ -88,6 +88,16 @@ a = Analysis(
     optimize=0,
 )
 
+# GTK/WebKit and their subprocesses must use one coherent host system stack.
+# Keep only Python's private, old-ABI dependencies that newer hosts may lack.
+# PyInstaller automatically retains libpython, Python extensions and wheel libs.
+a.exclude_system_libraries([
+    "libffi.so.7",
+    "libssl.so.1.1",
+    "libcrypto.so.1.1",
+    "libmpdec.so.3",
+])
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

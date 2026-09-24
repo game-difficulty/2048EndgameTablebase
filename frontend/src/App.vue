@@ -235,9 +235,14 @@ const dragTargetTabId = ref(null);
 const viewportWidth = ref(window.innerWidth);
 const viewportHeight = ref(window.innerHeight);
 const lastPrimaryTab = ref(TAB_IDS.MAIN_MENU);
-const trainerDockPreference = ref(normalizeTrainerDockPlacement(
-  window.localStorage.getItem('2048tables:trainer-dock-placement'),
-));
+const trainerDockPreference = ref(TRAINER_DOCK_PLACEMENTS.NONE);
+try {
+  trainerDockPreference.value = normalizeTrainerDockPlacement(
+    window.localStorage?.getItem('2048tables:trainer-dock-placement'),
+  );
+} catch {
+  // Layout persistence is optional when the webview blocks storage.
+}
 
 const dockAvailable = computed(() => trainerDockAvailable(
   viewportWidth.value,
@@ -288,10 +293,14 @@ watch(trainerDocked, (docked) => {
 
 const persistTrainerDockPreference = (placement) => {
   trainerDockPreference.value = normalizeTrainerDockPlacement(placement);
-  window.localStorage.setItem(
-    '2048tables:trainer-dock-placement',
-    trainerDockPreference.value,
-  );
+  try {
+    window.localStorage?.setItem(
+      '2048tables:trainer-dock-placement',
+      trainerDockPreference.value,
+    );
+  } catch {
+    // Keep the selected layout for this session if persistence is unavailable.
+  }
 };
 
 const setTrainerDockPlacement = (placement) => {

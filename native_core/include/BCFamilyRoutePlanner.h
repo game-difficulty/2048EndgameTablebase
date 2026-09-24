@@ -396,6 +396,16 @@ struct BCSolveRouteInputs {
     uint64_t future4_live_rows = 0U;
     uint64_t available_memory_bytes = 0U;
     uint32_t fixed_modulus = 0U;
+    // Production supplies descriptor/dtype-based peaks. Row-only estimates are
+    // retained for callers without file metadata.
+    uint64_t resident_peak_bytes = 0U;
+    uint64_t single_peak_bytes = 0U;
+    uint64_t resident_reusable_bytes = 0U;
+    uint64_t single_reusable_bytes = 0U;
+    uint64_t total_memory_bytes = 0U;
+    BCSolveRoute previous_route = BCSolveRoute::Auto;
+    uint32_t resident_upgrade_streak = 0U;
+    uint32_t single_upgrade_streak = 0U;
 };
 
 struct BCSolveRouteDecision {
@@ -405,6 +415,14 @@ struct BCSolveRouteDecision {
     uint64_t resident_required_bytes = 0U;
     uint64_t single_required_bytes = 0U;
     uint64_t route_required_bytes = 0U;
+    uint64_t budget_bytes = 0U;
+    uint64_t resident_peak_bytes = 0U;
+    uint64_t single_peak_bytes = 0U;
+    uint64_t resident_reusable_bytes = 0U;
+    uint64_t single_reusable_bytes = 0U;
+    uint32_t resident_upgrade_streak = 0U;
+    uint32_t single_upgrade_streak = 0U;
+    const char *reason = "memory_fit";
 };
 
 [[nodiscard]] inline const char *bc_solve_route_name(BCSolveRoute route) {
@@ -483,13 +501,23 @@ struct BCSolveRouteDecision {
     BCSolveRouteDecision decision;
     decision.family_modulus = inputs.fixed_modulus;
     decision.available_memory_bytes = inputs.available_memory_bytes;
-    decision.resident_required_bytes = bc_solve_resident_required_bytes(
+    decision.resident_peak_bytes = inputs.resident_peak_bytes != 0U
+        ? inputs.resident_peak_bytes : bc_solve_resident_required_bytes(
         inputs.current_rows,
         inputs.future2_live_rows,
         inputs.future4_live_rows);
-    decision.single_required_bytes = bc_solve_single_required_bytes(
+    decision.single_peak_bytes = inputs.single_peak_bytes != 0U
+        ? inputs.single_peak_bytes : bc_solve_single_required_bytes(
         inputs.future2_live_rows,
         inputs.future4_live_rows);
+    decision.resident_reusable_bytes = std::min(inputs.resident_reusable_bytes, decision.resident_peak_bytes);
+    decision.single_reusable_bytes = std::min(inputs.single_reusable_bytes, decision.single_peak_bytes);
+    decision.resident_required_bytes = decision.resident_peak_bytes - decision.resident_reusable_bytes;
+    decision.single_required_bytes = decision.single_peak_bytes - decision.single_reusable_bytes;
+    const uint64_t reserve = inputs.total_memory_bytes != 0U
+        ? std::max<uint64_t>(2U * kBCFamilyRouteGiB, inputs.total_memory_bytes / 20U) : 0U;
+    decision.budget_bytes = inputs.available_memory_bytes > reserve
+        ? inputs.available_memory_bytes - reserve : 0U;
 
     auto set_route = [&](BCSolveRoute route) {
         decision.route = route == BCSolveRoute::Auto ? BCSolveRoute::Family : route;
@@ -510,15 +538,39 @@ struct BCSolveRouteDecision {
 
     if (requested_route != BCSolveRoute::Auto) {
         set_route(requested_route);
+        decision.reason = "forced";
         return decision;
     }
-    if (inputs.available_memory_bytes >= decision.resident_required_bytes) {
-        set_route(BCSolveRoute::Resident);
-    } else if (inputs.available_memory_bytes >= decision.single_required_bytes) {
-        set_route(BCSolveRoute::Single);
-    } else {
-        set_route(BCSolveRoute::Family);
+    const bool resident_fits = decision.resident_required_bytes <= decision.budget_bytes;
+    const bool single_fits = decision.single_required_bytes <= decision.budget_bytes;
+    const uint64_t upgrade_budget = decision.budget_bytes - decision.budget_bytes / 10U;
+    const bool resident_upgrade_fits = decision.resident_required_bytes <= upgrade_budget;
+    const bool single_upgrade_fits = decision.single_required_bytes <= upgrade_budget;
+    auto advance = [](uint32_t streak, bool fits) {
+        return fits ? (streak >= 2U ? 2U : streak + 1U) : 0U;
+    };
+    decision.resident_upgrade_streak = advance(inputs.resident_upgrade_streak, resident_upgrade_fits);
+    decision.single_upgrade_streak = advance(inputs.single_upgrade_streak, single_upgrade_fits);
+    BCSolveRoute selected = resident_fits ? BCSolveRoute::Resident
+        : single_fits ? BCSolveRoute::Single : BCSolveRoute::Family;
+    // No inherited route on restart: ordinary safe admission. Subsequent
+    // upgrades need 10% spare budget for two layers; downgrades never wait.
+    if (inputs.previous_route != BCSolveRoute::Auto &&
+        static_cast<int>(selected) < static_cast<int>(inputs.previous_route)) {
+        if (selected == BCSolveRoute::Resident && decision.resident_upgrade_streak < 2U) {
+            selected = single_fits ? BCSolveRoute::Single : BCSolveRoute::Family;
+        }
+        if (selected == BCSolveRoute::Single && inputs.previous_route == BCSolveRoute::Family &&
+            decision.single_upgrade_streak < 2U) {
+            selected = BCSolveRoute::Family;
+        }
+        if (selected == inputs.previous_route) decision.reason = "upgrade_wait";
     }
+    if (inputs.previous_route != BCSolveRoute::Auto &&
+        static_cast<int>(selected) > static_cast<int>(inputs.previous_route)) {
+        decision.reason = "memory_downgrade";
+    }
+    set_route(selected);
     return decision;
 }
 

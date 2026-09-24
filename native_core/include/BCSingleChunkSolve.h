@@ -116,6 +116,8 @@ struct BCSingleChunkSolveStats {
     double raw_alloc_seconds = 0.0;
     double future_release_seconds = 0.0;
     double recalc_seconds = 0.0;
+    double spawn4_compute_seconds = 0.0;
+    double spawn2_compute_seconds = 0.0;
     double compact_seconds = 0.0;
     double partial_write_seconds = 0.0;
     double partial_read_seconds = 0.0;
@@ -1320,7 +1322,10 @@ void bc_single_chunk_solve_phase_for_current_cells(
         }
         flush();
     }
-    stats.recalc_seconds += bc_single_chunk_now_seconds() - t0;
+    const double phase_seconds = bc_single_chunk_now_seconds() - t0;
+    stats.recalc_seconds += phase_seconds;
+    if (phase == BCSingleChunkSolvePhase::Spawn4) stats.spawn4_compute_seconds += phase_seconds;
+    else if (phase == BCSingleChunkSolvePhase::Spawn2) stats.spawn2_compute_seconds += phase_seconds;
     if (phase == BCSingleChunkSolvePhase::Spawn2) {
         const uint64_t rows = cell_offsets.back();
         stats.current_rows = bc_checked_add_u64(

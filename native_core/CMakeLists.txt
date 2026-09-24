@@ -97,7 +97,8 @@ else()
         $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
         $<$<CONFIG:Release>:-Wl,--gc-sections -s>
         $<$<CONFIG:MinSizeRel>:-Wl,--gc-sections -s>
-        -static-libstdc++
+        # Linux extensions must share one C++ runtime (including locale facets).
+        $<$<PLATFORM_ID:Windows>:-static-libstdc++>
         -fopenmp
     )
 endif()
@@ -639,7 +640,7 @@ else()
         $<$<CONFIG:RelWithDebInfo>:-Wl,--gc-sections>
         $<$<CONFIG:Release>:-Wl,--gc-sections -s>
         $<$<CONFIG:MinSizeRel>:-Wl,--gc-sections -s>
-        -static-libstdc++
+        $<$<PLATFORM_ID:Windows>:-static-libstdc++>
         -fopenmp
     )
 endif()
