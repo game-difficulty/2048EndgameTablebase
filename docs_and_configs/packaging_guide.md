@@ -62,8 +62,8 @@ git commit -m "<简短、具体的英文提交信息>"
 - `logger.txt`、本地配置、tablebase、回放样本及其他用户数据。
 - 与本次发布无关的改动。
 
-`native_core/tests_src/` 是原生项目自带的测试/基准源码，不属于根目录临时测试，按原有
-源码策略保留。根目录 `/tests/` 已在 `.gitignore` 中忽略。提交前执行
+`native_core/tests_src/` 与根目录 `/tests/` 均为本地测试目录，不提交到远端，
+已在 `.gitignore` 中忽略。提交前执行
 `git ls-files tests`，应无输出。
 
 提交完成后确认：
