@@ -198,6 +198,9 @@
         <div v-if="isTabOpen(TAB_IDS.MORE)" v-show="activeTab === TAB_IDS.MORE" class="absolute inset-0">
           <MoreView @navigate="navigateAuxiliary" />
         </div>
+        <div v-if="isTabOpen(TAB_IDS.CONTACT)" v-show="activeTab === TAB_IDS.CONTACT" class="absolute inset-0">
+          <ContactView />
+        </div>
       </div>
 
       <div
@@ -438,6 +441,7 @@ const HelpView = defineAsyncComponent(() => import('./features/help/pages/HelpPa
 const AdminView = defineAsyncComponent(() => import('./features/admin/pages/AdminPage.vue'));
 const AnnouncementsView = defineAsyncComponent(() => import('./features/announcements/AnnouncementsPage.vue'));
 const MoreView = defineAsyncComponent(() => import('./features/more/MorePage.vue'));
+const ContactView = defineAsyncComponent(() => import('./features/contact/ContactPage.vue'));
 function navigateAuxiliary(entry) {
   if (entry.dialog === 'quota') openQuotaGuideDialog();
   else if (entry.tab) openTab(entry.tab);

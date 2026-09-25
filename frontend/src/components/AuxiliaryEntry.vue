@@ -11,11 +11,11 @@
   </component>
 </template>
 <script setup>
-import { Radio, Clapperboard, Megaphone, Coins, CircleHelp, Ellipsis, ExternalLink } from '@lucide/vue';
+import { Radio, Clapperboard, Megaphone, Coins, CircleHelp, Ellipsis, Mail, ExternalLink } from '@lucide/vue';
 import Github from './GitHubIcon.vue';
 const props = defineProps({ entry: { type: Object, required: true }, live: Boolean });
 const emit = defineEmits(['navigate']);
-const icons = { Radio, Clapperboard, Megaphone, Coins, CircleHelp, Ellipsis, Github };
+const icons = { Radio, Clapperboard, Megaphone, Coins, CircleHelp, Ellipsis, Mail, Github };
 function activate() { if (!props.entry.href) emit('navigate', props.entry); }
 </script>
 <style scoped>

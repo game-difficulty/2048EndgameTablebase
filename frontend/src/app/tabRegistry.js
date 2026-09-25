@@ -12,6 +12,7 @@ export const TAB_IDS = {
   ADMIN: 'AdminView',
   ANNOUNCEMENTS: 'AnnouncementsView',
   MORE: 'MoreView',
+  CONTACT: 'ContactView',
 };
 
 export const MAIN_TAB_ID = TAB_IDS.MAIN_MENU;
@@ -30,10 +31,12 @@ export const TAB_ORDER = [
   TAB_IDS.ADMIN,
   TAB_IDS.ANNOUNCEMENTS,
   TAB_IDS.MORE,
+  TAB_IDS.CONTACT,
 ];
 
 export const TAB_REGISTRY = {
   [TAB_IDS.MORE]: { id: TAB_IDS.MORE, titleKey: 'menu.more', closable: true },
+  [TAB_IDS.CONTACT]: { id: TAB_IDS.CONTACT, titleKey: 'menu.contact', closable: true },
   [TAB_IDS.ANNOUNCEMENTS]: {
     id: TAB_IDS.ANNOUNCEMENTS,
     titleKey: 'announcements.title',
