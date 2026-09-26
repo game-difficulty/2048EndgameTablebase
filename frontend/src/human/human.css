@@ -90,6 +90,9 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .human-account-control .account-token-row > span:last-child { width: 100%; overflow: hidden; color: var(--text); font-size: 14px !important; text-align: right; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .human-account-control .account-token-total { grid-column: 1 / -1; min-height: 52px; flex-direction: row; align-items: center; justify-content: space-between; border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); background: color-mix(in srgb, var(--accent) 11%, var(--bg-card)); }
 .human-account-control .account-token-total > span:last-child { width: auto; color: var(--accent-ink); font-size: 18px !important; }
+:root[data-theme="dark"] .human-account-control .account-token-total { background: color-mix(in srgb, var(--accent) 18%, var(--bg-card)) !important; }
+:root[data-theme="dark"] .human-account-control .account-token-total > span:first-child { color: var(--accent-ink) !important; }
+:root[data-theme="dark"] .human-account-control .account-token-total > span:last-child { color: var(--text) !important; }
 .human-account-control .account-primary-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 12px; }
 .human-account-control .account-primary-actions .action-btn-small { margin-top: 0; }
 .human-account-control .account-popover .action-btn-small,
