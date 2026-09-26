@@ -25,6 +25,7 @@ import { battleRequestId } from '../../services/battleClient.js';
 import { correctionOverlayForResult } from '../../core/battleCorrection.js';
 import { isBattlePlaybackStopped } from '../../core/battlePlaybackState.js';
 import { createObserverPlayback } from '../../core/observerPlayback.js';
+import { observedFreeBoardView, observedFreeStepTransition } from './observedTransition.js';
 
 const KEY_DIRECTIONS = Object.freeze({
   ArrowLeft: 'left',
@@ -135,22 +136,7 @@ export function useFreeGoodnessMatch(
     );
   };
   const responseTransition = (response) => {
-    const fromBoard = boardFromHex(response.previous_board_hex || currentBoardHex);
-    const toBoard = boardFromHex(response.board_hex);
-    const moved = buildOptimisticMoveOnlyTransition(
-      fromBoard,
-      response.executed_direction,
-      useVariant.value,
-    );
-    if (!moved) return null;
-    const metadata = { ...moved.metadata };
-    if (Number(response.spawn_index) >= 0 && [2, 4].includes(Number(response.spawn_value))) {
-      metadata.appear_tile = {
-        index: Number(response.spawn_index),
-        value: Number(response.spawn_value),
-      };
-    }
-    return { fromBoard, toBoard, metadata };
+    return observedFreeStepTransition(response, useVariant.value, currentBoardHex);
   };
   const acknowledge = (response) => {
     if (!response?.awaiting_ack) {
@@ -247,12 +233,7 @@ export function useFreeGoodnessMatch(
 
   const observer = createObserverPlayback({
     canSee: (result) => spectatorMode.value || ownFinished.value || roomSession.isOwnActor(result),
-    resolve: (result, time) => {
-      const correction = correctionOverlayForResult(result, time);
-      const hex = correction?.previousBoardHex || result.mode_data?.board_hex;
-      return hex ? { board: boardFromHex(hex), index: Number(result.route_index || 0),
-        overlay: correction, nextAt: correction?.visibleUntil } : null;
-    },
+    resolve: (result, time) => observedFreeBoardView(result, time, useVariant.value),
     publish: (frames, overlays) => {
       opponentBoards.value = frames;
       opponentOverlays.value = overlays;

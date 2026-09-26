@@ -153,6 +153,7 @@ import {
 } from '../core/battleActor.js';
 import { battleCountdownState } from '../core/battleCountdown.js';
 import { isPermanentBattleRoom } from '../core/battleRoomSettings.js';
+import { createStablePlayerOrder } from '../core/stablePlayerOrder.js';
 
 const props = defineProps({
   room: { type: Object, required: true },
@@ -223,10 +224,8 @@ const watchOthers = () => {
   watchingRoundKey.value = viewKey.value;
 };
 const canForfeit = computed(() => !props.spectator && ['playing', 'disconnected'].includes(ownResult.value?.status));
-const playerRows = computed(() => (props.room.results || []).map((result) => {
-  const member = props.room.members?.find((item) => sameBattleActor(item, result)) || {};
-  return { ...member, ...result };
-}));
+const stablePlayerOrder = createStablePlayerOrder();
+const playerRows = computed(() => stablePlayerOrder(props.room));
 const spectatorGrid = computed(() => spectatorLayout(playerRows.value.length));
 const countdownState = computed(() => battleCountdownState({
   deadline: ownResult.value?.timeout_at,
