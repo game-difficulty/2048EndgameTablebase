@@ -532,8 +532,14 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .best-ten-panel, .history-table { padding: 0 0 12px; }
 .best-ten-panel>.table-title, .history-table>.table-title { margin-bottom: 12px; }
 .best-ten-panel>.table-title>div { display: grid; gap: 2px; }
+.best-ten-panel>.table-title>.best-poster-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.best-poster-layout-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.best-poster-layout-switch button { min-width: 48px; padding: 4px 9px; border-color: transparent; background: transparent; color: var(--muted); }
+.best-poster-layout-switch button.active { border-color: var(--line); background: var(--button); color: var(--text); box-shadow: 0 1px 3px #0002; }
 .best-poster-stage { position: relative; width: 100%; margin: 0 auto; }
-.best-poster-canvas { display: block; width: 100%; height: auto; aspect-ratio: 1600 / 2700; }
+.best-poster-canvas { display: block; width: 100%; height: auto; }
+.best-poster-canvas--portrait { aspect-ratio: 1600 / 2700; }
+.best-poster-canvas--landscape { aspect-ratio: 2700 / 1600; }
 .best-poster-hit { position: absolute; display: block; padding: 0; border: 0; border-radius: 12px; background: transparent; }
 .best-poster-hit:hover:not(:disabled) { background: #fff5d322; outline: 2px solid #b18a38; outline-offset: -3px; }
 .best-poster-hit:focus-visible { background: #fff5d322; outline: 3px solid #f4ca58; outline-offset: -3px; }
@@ -672,6 +678,8 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .player-heading h1 { font-size: 28px; }
   .player-bests { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
   .player-best strong { font-size: 22px; }
+  .best-ten-panel>.table-title { align-items: flex-start; gap: 10px; }
+  .best-ten-panel>.table-title>.best-poster-actions { flex-wrap: wrap; }
   .profile-history-row { grid-template-columns: 48px minmax(0,1fr); gap: 4px; padding: 9px 4px; }
   .profile-history-actions { grid-column: 1 / -1; justify-content: flex-start; margin-top: 4px; }
   .profile-history-row strong { font-size: 15px; }
