@@ -1,10 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { move, VARIANTS, DIRECTIONS, initialState, nextMove, initialHash, eventHash, buildReplay, eventBytes, randomSpawn } from '../src/human/engine.js';
 import { createPracticeMoveReminder, practiceCellValue, practiceBoardHex, parsePracticeHex, nodeTime } from '../src/human/practice.js';
 import { humanBoardFrame, paddedBoard } from '../src/human/boardAnimation.js';
 import { createTerminalOverlay, TERMINAL_OVERLAY_DELAY_MS } from '../src/human/terminalOverlay.js';
 const seed = '00000001000000020000000300000004';
+const playerProfileSource = readFileSync(new URL('../src/human/PlayerProfile.vue', import.meta.url), 'utf8');
+
+test('history delete controls are enabled while no delete request is pending', () => {
+  assert.match(playerProfileSource, /deletingId\s*=\s*ref\(null\)/);
+  assert.match(playerProfileSource, /finally\s*\{\s*deletingId\.value\s*=\s*null;/);
+  assert.doesNotMatch(playerProfileSource, /deletingId\s*=\s*ref\(['"]{2}\)/);
+});
 
 test('terminal overlay waits two seconds and stays dismissed for that game', () => {
   let visible = false, scheduled = null, cleared = 0;

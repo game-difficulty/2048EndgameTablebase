@@ -108,7 +108,7 @@ const currentPage = ref(1), pageSize = ref(20);
 const posterCanvas = ref(null), posterDark = ref(document.documentElement.dataset.theme === 'dark');
 const posterThemeVersion = ref(0);
 const preview = ref(null), previewElement = ref(null), previewPosition = ref({});
-const deleteCandidate = ref(null), deletingId = ref('');
+const deleteCandidate = ref(null), deletingId = ref(null);
 let previewTrigger = null;
 let historySerial = 0, bestSerial = 0, posterFrame = 0;
 const historyCache = new Map(), bestCache = new Map();
@@ -297,7 +297,7 @@ async function deleteHistoryRun() {
     deleteCandidate.value = null; historyCache.clear(); bestCache.clear();
     await Promise.all([loadHistory(true), loadBestTen(true)]);
   } catch { error.value = '删除记录失败，请稍后重试。'; }
-  finally { deletingId.value = ''; }
+  finally { deletingId.value = null; }
 }
 watch(() => props.username, () => {closePreview();historyCache.clear();bestCache.clear();profile.value=null;entries.value=[];currentPage.value=1;loadHistory();loadBestTen();}, {immediate:true});
 watch([filterVariant,sort,pageSize], () => { currentPage.value=1; loadHistory(); });
