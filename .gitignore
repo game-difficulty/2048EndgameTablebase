@@ -117,6 +117,18 @@ tmp_vec_report*.txt
 tmp_*
 tmp/
 
+# Local deployment bundles and remote verification snapshots
+.deploy-*/
+deploy-*.tar.gz
+play-v*.tar.gz
+*.tar.gz.before-*
+frontend/deploy-*/
+frontend/.remote-*
+frontend/.inspect-*
+frontend/.work-*
+frontend/patch_v*.py
+*cloc-by-file.json
+
 # OS / editor junk
 Thumbs.db
 Desktop.ini
