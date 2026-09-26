@@ -1,6 +1,6 @@
 <template>
-  <details class="stage-picker" :open="expanded">
-    <summary>{{ label('阶段回放', 'Stage replays') }} <span class="stage-count">{{ artifacts.length }}</span></summary>
+  <component :is="collapsible ? 'details' : 'section'" class="stage-picker" :open="collapsible ? expanded : undefined">
+    <summary v-if="collapsible">{{ label('阶段回放', 'Stage replays') }} <span class="stage-count">{{ artifacts.length }}</span></summary>
     <div class="stage-picker-scroll" tabindex="0" :aria-label="label('选择回放阶段', 'Choose a replay stage')">
       <table>
         <thead><tr><th>{{ label('阶段', 'Stage') }}</th><th>{{ label('原局步号', 'Game moves') }}</th><th>{{ label('吻合度', 'Fit') }}</th></tr></thead>
@@ -16,13 +16,13 @@
       <span v-else>{{ label('暂无可用回放', 'No available replay') }}</span>
       <button type="button" :disabled="!selected || busy" @click="$emit('open', selectedId)">{{ busy ? label('正在打开…', 'Opening…') : label('打开回放 ↗', 'Open replay ↗') }}</button>
     </footer>
-  </details>
+  </component>
 </template>
 
 <script setup>
 import { computed, ref, useId, watch } from 'vue';
 import { language } from './i18n.js';
-const props = defineProps({ artifacts: { type: Array, default: () => [] }, expanded: Boolean, busy: Boolean });
+const props = defineProps({ artifacts: { type: Array, default: () => [] }, expanded: Boolean, busy: Boolean, collapsible: { type: Boolean, default: true } });
 defineEmits(['open']);
 const groupId = useId();
 const selectedId = ref('');

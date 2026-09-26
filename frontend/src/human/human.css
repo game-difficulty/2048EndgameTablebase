@@ -673,8 +673,12 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .analysis-fit { font-weight: 700; }
 .analysis-library-actions { text-align: right; white-space: nowrap; }
 .analysis-library-actions button { padding: 9px 12px; font-size: 12px; }
-.analysis-library-detail-row > td { background: var(--bg-card); padding: 16px 20px 20px; }
-.analysis-library-detail-row .stage-picker { max-width: 650px; margin-left: auto; }
+.analysis-stage-dialog { width: 640px; max-width: 100%; }
+.analysis-stage-dialog h2 { margin: 0 32px 12px 0; font-size: 20px; }
+.analysis-stage-dialog h2 span { display: block; margin-top: 7px; font-size: 14px; font-weight: 400; }
+.analysis-stage-context { margin: 0 0 18px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.analysis-stage-dialog .stage-picker-scroll { max-height: 45vh; }
+.analysis-stage-dialog .stage-picker { overflow: hidden; }
 .analysis-library-pagination { display: flex; justify-content: center; align-items: center; gap: 18px; margin: 24px 0; font-size: 13px; }
 .analysis-library-table .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 .analysis-result-group { padding: 12px 0; border-top: 1px solid var(--line); }
@@ -688,7 +692,6 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .analysis-library-page { padding: 20px 10px; }
   .analysis-library-filters { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; padding: 14px; }
   .analysis-library-table > thead > tr > th, .analysis-library-table > tbody > tr > td { padding-left: 12px; padding-right: 12px; }
-  .analysis-library-detail-row .stage-picker { margin-left: 0; max-width: calc(100vw - 70px); }
   .analysis-library-scroll-hint { display: block; margin: 0; padding: 10px 12px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
 }
 @media (max-width: 520px) {
