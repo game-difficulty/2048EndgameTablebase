@@ -66,48 +66,64 @@ def list_entries(*, limit: int = 20, cursor: str = "", username: str = "",
     if source:
         where.append("r.source=?")
         params.append(source)
-    if cursor:
-        ended, summary_id = _decode_cursor(cursor)
-        where.append("(r.ended<? OR (r.ended=? AND s.id<?))")
-        params.extend((ended, ended, summary_id))
-    with database() as db:
-        init_schema(db)
-        rows = db.execute(f"""SELECT s.id,s.run_id,s.user_id,s.pattern,s.target,
-            s.metric_version,s.analyzer_version,s.created,s.first_listed_at,s.final_score,
-            r.variant,r.ended AS run_ended_at,r.source,
-            a.weighted_score,a.grade,a.mean_goodness_of_fit,a.max_combo,
-            a.stage_count,a.evaluated_moves
-            FROM human_analysis_summaries s
-            JOIN human_runs r ON r.id=s.run_id
-            LEFT JOIN human_analysis_results a ON a.summary_id=s.id AND a.active=1
-            WHERE {' AND '.join(where)}
-            ORDER BY r.ended DESC,s.id DESC LIMIT ?""", (*params, size + 1)).fetchall()
-    visible = rows[:size]
-    subjects = _subjects({int(row["user_id"]) for row in visible})
-    from backend.analysis_history import library_artifacts
-    artifacts = library_artifacts({int(row["id"]) for row in visible})
+    scan_cursor = _decode_cursor(cursor) if cursor else None
+    batch_size = max(50, min(200, size * 3))
     items = []
-    for row in visible:
-        subject = subjects.get(int(row["user_id"]))
-        if not subject:
-            continue
-        stages = artifacts.get(int(row["id"]), [])
-        if not any(item["available"] for item in stages):
-            continue
-        items.append({
-            "id": int(row["id"]), "run_id": row["run_id"], "subject": subject,
-            "variant": row["variant"], "score": int(row["final_score"] or 0),
-            "run_ended_at": row["run_ended_at"], "source": row["source"],
-            "pattern": row["pattern"], "target": row["target"],
-            "metric_version": row["metric_version"], "analyzer_version": row["analyzer_version"],
-            "analyzed_at": row["created"], "grade": row["grade"],
-            "mean_goodness_of_fit": row["mean_goodness_of_fit"],
-            "max_combo": int(row["max_combo"] or 0),
-            "stage_count": int(row["stage_count"] if row["stage_count"] is not None else len(stages)),
-            "evaluated_moves": int(row["evaluated_moves"] or 0),
-            "replay_available": any(item["available"] for item in stages),
-        })
-    next_cursor = _encode_cursor(rows[size - 1]["run_ended_at"], rows[size - 1]["id"]) if len(rows) > size else ""
+    last_visible = None
+    has_more = False
+    while not has_more:
+        scan_where = list(where)
+        scan_params = list(params)
+        if scan_cursor:
+            ended, summary_id = scan_cursor
+            scan_where.append("(r.ended<? OR (r.ended=? AND s.id<?))")
+            scan_params.extend((ended, ended, summary_id))
+        with database() as db:
+            init_schema(db)
+            rows = db.execute(f"""SELECT s.id,s.run_id,s.user_id,s.pattern,s.target,
+                s.metric_version,s.analyzer_version,s.created,s.first_listed_at,s.final_score,
+                r.variant,r.ended AS run_ended_at,r.source,
+                a.weighted_score,a.grade,a.mean_goodness_of_fit,a.max_combo,
+                a.stage_count,a.evaluated_moves
+                FROM human_analysis_summaries s
+                JOIN human_runs r ON r.id=s.run_id
+                LEFT JOIN human_analysis_results a ON a.summary_id=s.id AND a.active=1
+                WHERE {' AND '.join(scan_where)}
+                ORDER BY r.ended DESC,s.id DESC LIMIT ?""",
+                (*scan_params, batch_size)).fetchall()
+        if not rows:
+            break
+        subjects = _subjects({int(row["user_id"]) for row in rows})
+        from backend.analysis_history import library_artifacts
+        artifacts = library_artifacts({int(row["id"]) for row in rows})
+        for row in rows:
+            subject = subjects.get(int(row["user_id"]))
+            stages = artifacts.get(int(row["id"]), [])
+            if not subject or not any(stage["available"] for stage in stages):
+                continue
+            if len(items) >= size:
+                has_more = True
+                break
+            items.append({
+                "id": int(row["id"]), "run_id": row["run_id"], "subject": subject,
+                "variant": row["variant"], "score": int(row["final_score"] or 0),
+                "run_ended_at": row["run_ended_at"], "source": row["source"],
+                "pattern": row["pattern"], "target": row["target"],
+                "metric_version": row["metric_version"], "analyzer_version": row["analyzer_version"],
+                "analyzed_at": row["created"], "grade": row["grade"],
+                "mean_goodness_of_fit": row["mean_goodness_of_fit"],
+                "max_combo": int(row["max_combo"] or 0),
+                "stage_count": int(row["stage_count"] if row["stage_count"] is not None else len(stages)),
+                "evaluated_moves": int(row["evaluated_moves"] or 0),
+                "replay_available": True,
+            })
+            last_visible = row
+        if has_more or len(rows) < batch_size:
+            break
+        tail = rows[-1]
+        scan_cursor = (float(tail["run_ended_at"]), int(tail["id"]))
+    next_cursor = (_encode_cursor(last_visible["run_ended_at"], last_visible["id"])
+                   if has_more and last_visible is not None else "")
     return {"items": items, "next_cursor": next_cursor}
 
 

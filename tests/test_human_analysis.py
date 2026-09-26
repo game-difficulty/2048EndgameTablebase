@@ -254,6 +254,22 @@ def test_public_analysis_library_orders_by_game_time_not_rerun_time():
         # A newer rerun timestamp for the older game must not affect discovery order.
         save_summary(run_id="older", user_id=1, pattern="free10", target="512",
                      job_id="rerun", summary=build_summary([], []), listed=True)
+        # Pre-library summaries can be newer while having no retained stage
+        # artifacts. They must not consume a result page and hide older,
+        # actually playable library entries.
+        for index in range(25):
+            run_id = f"unbacked-{index}"
+            state = engine.initial(run_id, "4x4", SEED)
+            with database() as db:
+                db.execute("""INSERT INTO human_runs
+                    (id,user_id,browser,variant,request_id,seed,threshold,status,created,ended,
+                     reason,writer,state,archive,visible,eligibility,has_replay)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (run_id, 1, "browser", "4x4", f"request-{run_id}", SEED, 0, "sealed", 1,
+                     100 + index, "game_over", "writer", json.dumps(state), b"archive", 1,
+                     "eligible", 1))
+            save_summary(run_id=run_id, user_id=1, pattern="free10", target="512",
+                         job_id=f"job-{run_id}", summary=build_summary([], []), listed=True)
         with patch("backend.analysis_history.library_artifacts", return_value={
             1: [{"available": True}], 2: [{"available": True}],
         }):
