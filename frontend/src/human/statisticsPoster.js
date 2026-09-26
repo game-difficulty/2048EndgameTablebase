@@ -102,14 +102,19 @@ function wrappedLabel(ctx,label,x,y,width,size,color) {
   parts.forEach(part=>{const candidate=row?`${row} + ${part}`:part;if(ctx.measureText(candidate).width<=width||!row)row=candidate;else{lines.push(row);row=part;}});if(row)lines.push(row);
   lines.slice(0,2).forEach((value,index)=>text(ctx,value,x,y+(index-(lines.length-1)/2)*size*1.05,size,color,{align:'center',maxWidth:width}));
 }
+export function statisticsAchievementGeometry(y,h) {
+  const labelY=y+87, base=y+h-94, plotTop=y+118;
+  return {labelY,base,maxHeight:Math.max(0,base-plotTop)};
+}
 function achievements(ctx,{x,y,w,h,labels,features,palette,copy,lang}) {
   rounded(ctx,x,y,w,h,18,palette.card);ctx.strokeStyle=palette.line;ctx.lineWidth=2;ctx.strokeRect(x+.5,y+.5,w-1,h-1);
   text(ctx,copy.achievements,x+28,y+42,28,palette.text);text(ctx,copy.inclusive,x+w-28,y+42,16,palette.muted,{weight:500,align:'right'});
   const entries=Object.entries(labels), values=entries.map(([key])=>Number(features?.[key]||0)), maximum=Math.max(...values,1);
-  const gap=16, innerW=w-56, columnW=(innerW-gap*(entries.length-1))/entries.length, base=y+h-94, maxHeight=h-180;
+  const gap=16, innerW=w-56, columnW=(innerW-gap*(entries.length-1))/entries.length;
+  const {labelY,base,maxHeight}=statisticsAchievementGeometry(y,h);
   entries.forEach(([key,raw],index)=>{
     const value=values[index], cx=x+28+columnW/2+index*(columnW+gap), bh=value?Math.max(8,value/maximum*maxHeight):0;
-    text(ctx,number(value),cx,y+87,22,palette.text,{align:'center'});
+    text(ctx,number(value),cx,labelY,22,palette.text,{align:'center'});
     rounded(ctx,cx-columnW*.32,base-bh,columnW*.64,bh,7,['#d6b45e','#c99b4c','#b77f45','#9c6742','#825240','#69423a'][index%6]);
     line(ctx,cx-columnW*.4,base,cx+columnW*.4,base,palette.line,2);
     const label=FEATURE_COPY[lang]?.[raw]||raw;ctx.font=`700 15px ${FONT}`;wrappedLabel(ctx,label,cx,base+32,columnW,15,palette.text);

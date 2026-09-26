@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'node:fs';
-import { statisticsChartExtent } from '../src/human/statisticsPoster.js';
+import { statisticsAchievementGeometry, statisticsChartExtent } from '../src/human/statisticsPoster.js';
 
 test('statistics poster uses the selected game axis range', () => {
   const extent=statisticsChartExtent([
@@ -35,6 +35,12 @@ test('statistics poster rating extent includes negative early ratings', () => {
   const extent=statisticsChartExtent([{game_index:1,b10_rating:-120},{game_index:2,b10_rating:220}],['b10_rating'],'games','rating');
   assert.ok(extent.minY < -120);
   assert.ok(extent.maxY > 220);
+});
+
+test('statistics poster reserves space between achievement values and the tallest bar', () => {
+  const geometry=statisticsAchievementGeometry(940,455);
+  const tallestBarTop=geometry.base-geometry.maxHeight;
+  assert.ok(tallestBarTop>=geometry.labelY+30);
 });
 
 test('statistics download waits for variant-specific data after switching', () => {
