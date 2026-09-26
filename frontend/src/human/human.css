@@ -147,7 +147,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
   display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
   grid-template-rows: repeat(var(--rows), auto);
   gap: var(--board-gap); padding: var(--board-gap); background: #30302e; border-radius: 6px;
-  position: relative;
+  position: relative; width: 100%; align-self: start;
   touch-action: none; user-select: none;
 }
 .tile {
@@ -423,7 +423,9 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .site-header { gap: 12px; }
   .local-badge { display: none; }
 }
-@media (max-width: 620px) {
+/* max-device-width keeps the mobile layout when Chrome uses a desktop-sized
+   layout viewport (for example after Desktop site or page-scale restoration). */
+@media (max-width: 620px), (max-device-width: 620px) {
   .human-shell { max-width: 520px; padding: 10px; }
   .site-header { gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
   .brand { font-size: 22px; }

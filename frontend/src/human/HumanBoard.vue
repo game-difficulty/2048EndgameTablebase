@@ -1,7 +1,7 @@
 <template>
   <div class="human-board" :class="{ editable }" :style="{ '--cols': cols, '--rows': rows, '--human-slide-duration': animate ? '100ms' : '0ms' }"
        role="group" :aria-label="t(`${rows} 行 ${cols} 列棋盘`)" tabindex="0"
-       @pointerdown="down" @pointerup="up" @pointercancel="pointer = null" @contextmenu="editable && $event.preventDefault()" @auxclick="editable && $event.preventDefault()">
+       @pointerdown="down" @pointerup="up" @pointercancel="pointer = null" @contextmenu.prevent @auxclick.prevent>
     <button v-for="(value, index) in board" :key="index" type="button" class="tile"
       :class="{ empty: !value }"
       :style="resolvedTileStyle(0)" :tabindex="editable ? 0 : -1" :data-cell="index"

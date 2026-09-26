@@ -131,6 +131,7 @@ html[data-css-compat="ready"] .trainer-page--dock-right .tool-palette-grid > .pa
 html[data-css-compat="ready"] .game-column { grid-template-rows:auto 72px 40px auto auto; }
 html[data-css-compat="ready"] .timing-panel,
 html[data-css-compat="ready"] .ranking-panel { grid-template-rows:72px 40px minmax(0,var(--board-height,500px)) auto; }
+html[data-css-compat="ready"] .human-board { width:100%;align-self:start; }
 html[data-css-compat="ready"] .human-board .tile { aspect-ratio:auto; }
 html[data-css-compat="ready"] .human-board .tile::before { content:"";display:block;width:0;padding-top:100%; }
 

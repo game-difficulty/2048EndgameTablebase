@@ -112,9 +112,9 @@
             <span class="ui-caption font-black uppercase tracking-[0.18em] text-text-secondary">{{ displayedResultDtype || '?' }}</span>
           </div>
           <div class="grid grid-cols-[176px_minmax(0,1fr)] items-stretch gap-4">
-            <div class="result-mini-board">
+            <div class="result-mini-board" :style="resultMiniBoardStyle">
               <div
-                v-for="tile in resultConsoleTiles"
+                v-for="tile in visibleResultConsoleTiles"
                 :key="tile.key"
                 class="result-mini-tile"
                 :style="getResultMiniTileStyle(tile)"
@@ -209,6 +209,7 @@ import { computed, nextTick, ref, toRef, watch } from 'vue';
 import BaseBoard from '../../../components/BaseBoard.vue';
 import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
+import { createBoardViewport } from '../../../utils/boardViewport';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
 import { useTesterSession } from '../composables/useTesterSession';
 
@@ -306,6 +307,24 @@ const {
   getResultMiniTileStyle,
 } = useTesterSession(toRef(props, 'active'));
 
+const resultMiniBoardViewport = computed(() => createBoardViewport(
+  resultConsoleTiles.value.map((tile) => Number(tile?.value || 0)),
+  isVariant.value
+));
+const visibleResultConsoleTiles = computed(() => (
+  resultMiniBoardViewport.value.visibleIndices.map((index) => resultConsoleTiles.value[index])
+));
+const resultMiniBoardStyle = computed(() => {
+  const rows = Math.max(1, Number(resultMiniBoardViewport.value.rows || 4));
+  const cols = Math.max(1, Number(resultMiniBoardViewport.value.cols || 4));
+  return {
+    width: `${cols >= rows ? 100 : (cols / rows) * 100}%`,
+    aspectRatio: `${cols} / ${rows}`,
+    '--result-mini-rows': rows,
+    '--result-mini-cols': cols,
+  };
+});
+
 const targetOptions = computed(() =>
   availableTargetsForPattern.value.map((target) => ({
     value: target,
@@ -398,12 +417,11 @@ watch(
 
 .result-mini-board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-rows: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--result-mini-cols), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--result-mini-rows), minmax(0, 1fr));
   gap: 0.45rem;
-  width: 100%;
-  aspect-ratio: 1;
   align-self: start;
+  justify-self: center;
 }
 
 .result-mini-tile {
