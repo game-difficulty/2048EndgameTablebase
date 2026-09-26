@@ -562,6 +562,15 @@ def test_archive_id_creates_task_without_client_reupload():
                                          estimate["total_cost_units"], "test-catalog",
                                          "request-id-00000001")
             assert task.total == 2
+            with auth_db() as db:
+                assert db.execute("SELECT job_id FROM human_analysis_requests WHERE user_id=1 AND request_id=?",
+                                  ("request-id-00000001",)).fetchone()[0] == task.job_id
+                assert db.execute("SELECT count(*) FROM analysis_queue WHERE job_id=?", (task.job_id,)).fetchone()[0] == 1
+            with patch.object(human_analysis, "reserve_operation_tokens_many", side_effect=AssertionError("charged twice")):
+                retried = human_analysis.create("archived-run", 1, None, selection,
+                                                estimate["total_cost_units"], "test-catalog",
+                                                "request-id-00000001")
+                assert retried.job_id == task.job_id
             assert len(task.input_paths) == 1
             assert task.input_paths[0].exists()
             assert jobs._claim_job() == task.job_id

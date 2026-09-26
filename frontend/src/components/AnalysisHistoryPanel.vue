@@ -37,6 +37,7 @@
 
 <script setup>
 import { onMounted, ref } from 'vue';
+import { openAsyncLink } from '../services/openAsyncLink.js';
 import { authHeaders } from '../services/auth/sessionTokenStore.js';
 import { getBackendUrl } from '../services/runtime/backendUrl.js';
 
@@ -73,8 +74,7 @@ async function toggle(job) {
 async function openReplay(artifact) {
   opening.value = artifact.artifact_id;
   try {
-    const data = await api(`/api/analysis/replays/${encodeURIComponent(artifact.artifact_id)}/open-link`, { method: 'POST' });
-    window.open(data.url, '_blank', 'noopener');
+    await openAsyncLink(async () => (await api(`/api/analysis/replays/${encodeURIComponent(artifact.artifact_id)}/open-link`, { method: 'POST' })).url);
   } catch { error.value = text('回放暂时无法打开。', 'The replay cannot be opened right now.'); }
   finally { opening.value = ''; }
 }

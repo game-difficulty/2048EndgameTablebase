@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
+import io
+import json
 from pathlib import Path
+import subprocess
 import tarfile
 
 
@@ -14,9 +18,10 @@ STATIC_DIRS = (
     "frontend/dist/human",
     "frontend/dist/verse-replay",
     "frontend/dist/compat",
+    "frontend/dist/payments",
 )
 SOURCE_FILES = ("Config.py", "SignalHub.py", "error_bridge.py")
-STATIC_FILES = ("frontend/dist/favicon.ico",)
+STATIC_FILES = ("frontend/dist/favicon.ico", "frontend/dist/release.json")
 
 
 def validate_human_entry() -> None:
@@ -44,6 +49,20 @@ def main() -> None:
     parser.add_argument("archive", type=Path)
     args = parser.parse_args()
     validate_human_entry()
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    built = json.loads((ROOT / "frontend/dist/release.json").read_text(encoding="utf-8"))
+    if built["revision"] != revision:
+        raise RuntimeError("Frontend build revision does not match backend checkout; rebuild before packaging")
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain", "--", *SOURCE_DIRS, *SOURCE_FILES,
+         "frontend/src", "frontend/public", "frontend/scripts", "frontend/vite.config.js"],
+        cwd=ROOT, text=True)
+    if dirty.strip():
+        raise RuntimeError("Commit release source changes before packaging from a clean checkout")
+    manifest = {"revision": revision, "build_id": built["buildId"], "files": {}}
+    def add(tar, path, name):
+        manifest["files"][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        tar.add(path, arcname=name)
     args.archive.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(args.archive, "w:gz") as tar:
         for name in SOURCE_DIRS + STATIC_DIRS:
@@ -52,12 +71,16 @@ def main() -> None:
                 raise FileNotFoundError(directory)
             for path in sorted(directory.rglob("*")):
                 if path.is_file() and include(path.relative_to(ROOT)):
-                    tar.add(path, arcname=path.relative_to(ROOT).as_posix())
+                    add(tar, path, path.relative_to(ROOT).as_posix())
         for name in SOURCE_FILES + STATIC_FILES:
             path = ROOT / name
             if not path.is_file():
                 raise FileNotFoundError(path)
-            tar.add(path, arcname=name)
+            add(tar, path, name)
+        payload = json.dumps(manifest, sort_keys=True).encode()
+        info = tarfile.TarInfo("play-release-manifest.json")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
     print(f"{args.archive} ({args.archive.stat().st_size} bytes)")
 
 

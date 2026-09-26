@@ -398,7 +398,8 @@ def history(user_id, viewer_id, before=None, limit=30, variant="all", sort="newe
 def delete_history_run(run_id: str, user_id: int) -> dict:
     """Soft-delete one owned archived game and refresh every derived public view."""
     with database() as db:
-        row = db.execute("""SELECT id,user_id,variant,status,visible,deleted_by_user,archive
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("""SELECT id,user_id,variant,status,visible,deleted_by_user
             FROM human_runs WHERE id=? AND user_id=? AND status='sealed'""",
             (run_id, int(user_id))).fetchone()
         if not row:

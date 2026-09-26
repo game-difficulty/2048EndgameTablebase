@@ -202,9 +202,9 @@ def create(run_id: str, user_id: int, session_id: int | None, items: list[dict],
             subject_user_id=run["subject"]["id"], listing_snapshot=listing_snapshot,
             source_ended_at=run["ended_at"],
         ) for index, item in enumerate(valid)]
-        job = create_analysis_job(work_items=work_items, user_id=user_id, session_id=session_id)
+        job = create_analysis_job(work_items=work_items, user_id=user_id, session_id=session_id,
+                                  request_id=request_id)
         path.unlink(missing_ok=True)
-        _finish_request(user_id, request_id, job.job_id)
         return job
     except Exception:
         if job is not None:

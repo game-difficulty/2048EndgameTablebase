@@ -38,6 +38,7 @@ export function saveReplaySource(buffer, metadata = {}) {
       filename: String(metadata.filename || ''),
       pattern: String(metadata.pattern || ''),
       source: String(metadata.source || metadata.filename || ''),
+      analysisArtifactId: String(metadata.analysisArtifactId || ''),
       useVariant: !!metadata.useVariant,
     }));
     return true;
@@ -68,6 +69,7 @@ export function restoreReplaySession() {
       filename: String(source.filename || ''),
       pattern: String(source.pattern || ''),
       source: String(source.source || source.filename || ''),
+      analysisArtifactId: String(source.analysisArtifactId || ''),
       useVariant: !!source.useVariant,
       step: Math.max(0, Number(store.getItem(POSITION_KEY)) || 0),
     };

@@ -78,6 +78,7 @@
         <section class="modal history-delete-dialog" role="dialog" aria-modal="true" :aria-label="t('删除这局记录？')">
           <button class="modal-close" type="button" :disabled="deletingId" :aria-label="t('关闭')" @click="closeDeleteDialog">×</button>
           <h2>{{ t('删除这局记录？') }}</h2>
+          <p v-if="deleteError" class="notice danger" role="alert">{{ t(deleteError) }}</p>
           <p><strong>{{ deleteCandidate.variant.replace('x',' × ') }} · {{ number(deleteCandidate.score) }} {{ t('分') }}</strong><br>{{ date(deleteCandidate.ended_at) }}</p>
           <p>{{ t('删除后，这局将从历史记录、排行榜、PB、B10 和个人统计中移除。服务器仍会保留对局及审核资料。') }}</p>
           <div class="modal-actions"><button type="button" :disabled="deletingId" @click="closeDeleteDialog">{{ t('取消') }}</button><button type="button" class="history-delete-confirm" :disabled="deletingId" @click="deleteHistoryRun">{{ t(deletingId ? '删除中…' : '确认删除') }}</button></div>
@@ -109,6 +110,7 @@ const posterCanvas = ref(null), posterDark = ref(document.documentElement.datase
 const posterThemeVersion = ref(0);
 const preview = ref(null), previewElement = ref(null), previewPosition = ref({});
 const deleteCandidate = ref(null), deletingId = ref(null);
+const deleteError = ref('');
 let previewTrigger = null;
 let historySerial = 0, bestSerial = 0, posterFrame = 0;
 const historyCache = new Map(), bestCache = new Map();
@@ -217,12 +219,12 @@ function applyHistory(result) {
   if (tab.value === 'settings' && !isOwner.value) selectTab('profile');
 }
 async function loadHistory(force = false) {
+  const serial = ++historySerial;
   closePreview();
   const params = new URLSearchParams({variant:filterVariant.value,sort:sort.value,
     page:String(currentPage.value),page_size:String(pageSize.value)});
   const key = `${props.username}?${params}`;
   if (!force && historyCache.has(key)) { applyHistory(historyCache.get(key)); loading.value = false; return; }
-  const serial = ++historySerial;
   loading.value = true; error.value = '';
   try {
     const result = await json(`/api/human/users/${encodeURIComponent(props.username)}/history?${params}`);
@@ -239,9 +241,10 @@ function goToPage(page) {
 }
 function applyBestTen(result) { bestMeta.value = result; bestTen.value = result.entries; }
 async function loadBestTen(force = false) {
+  const serial = ++bestSerial;
   const key = `${props.username}:${bestVariant.value}`;
   if (!force && bestCache.has(key)) { applyBestTen(bestCache.get(key)); bestLoading.value = false; return; }
-  const serial = ++bestSerial; bestLoading.value = true;
+  bestLoading.value = true;
   try {
     const result = await json(`/api/human/users/${encodeURIComponent(props.username)}/best10?variant=${bestVariant.value}`);
     if (serial === bestSerial) { bestCache.set(key, result); applyBestTen(result); }
@@ -286,17 +289,17 @@ async function attachReplay(item,event) {
     await Promise.all([loadHistory(true),loadBestTen(true)]);
   } catch(e) { error.value=e.code==='replay_result_mismatch'?'回放终盘或分数与继承记录不一致。':'回放补充失败，请检查文件后重试。'; }
 }
-function askDelete(item) { closePreview(); deleteCandidate.value = item; }
+function askDelete(item) { closePreview(); deleteError.value = ''; deleteCandidate.value = item; }
 function closeDeleteDialog() { if (!deletingId.value) deleteCandidate.value = null; }
 async function deleteHistoryRun() {
   const item = deleteCandidate.value;
   if (!item || deletingId.value) return;
-  deletingId.value = item.id; error.value = '';
+  deletingId.value = item.id; deleteError.value = '';
   try {
     await json(`/api/human/runs/${encodeURIComponent(item.id)}/history`, { method:'DELETE' });
     deleteCandidate.value = null; historyCache.clear(); bestCache.clear();
     await Promise.all([loadHistory(true), loadBestTen(true)]);
-  } catch { error.value = '删除记录失败，请稍后重试。'; }
+  } catch { deleteError.value = '删除记录失败，请稍后重试。'; }
   finally { deletingId.value = null; }
 }
 watch(() => props.username, () => {closePreview();historyCache.clear();bestCache.clear();profile.value=null;entries.value=[];currentPage.value=1;loadHistory();loadBestTen();}, {immediate:true});

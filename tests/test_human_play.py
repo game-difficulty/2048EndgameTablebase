@@ -341,7 +341,19 @@ class HumanPlayTests(unittest.TestCase):
 
         with self.assertRaisesRegex(service.RunError, 'run_not_found'):
             service.delete_history_run(run['run_id'], 2)
-        response = self.client.delete(f"/api/human/runs/{run['run_id']}/history")
+        # Deletion must not load the potentially large replay BLOB.
+        from contextlib import contextmanager
+        @contextmanager
+        def narrow_database():
+            with database() as db:
+                def authorize(action, table, column, *_):
+                    if action == sqlite3.SQLITE_READ and table == 'human_runs' and column == 'archive':
+                        return sqlite3.SQLITE_DENY
+                    return sqlite3.SQLITE_OK
+                db.set_authorizer(authorize)
+                yield db
+        with patch.object(service, 'database', narrow_database):
+            response = self.client.delete(f"/api/human/runs/{run['run_id']}/history")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {
             'run_id': run['run_id'], 'deleted': True, 'already_deleted': False})
@@ -364,6 +376,29 @@ class HumanPlayTests(unittest.TestCase):
         with self.assertRaisesRegex(service.RunError, 'replay_not_found'):
             service.replay(run['run_id'], 2)
         self.assertTrue(service.delete_history_run(run['run_id'], 1)['already_deleted'])
+
+    def test_deleting_pb_promotes_remaining_game_and_repeated_delete_is_safe(self):
+        runs = []
+        for count in (3, 9):
+            run = self.new('2x4')
+            raw, state, _ = self.records(run, count=count)
+            self.send(run, raw, reason='restarted')
+            self.approve(run, state)
+            runs.append(run)
+        best_id = service.best_ten(1, 1, '2x4')['entries'][0]['id']
+        remaining_id = next(run['run_id'] for run in runs if run['run_id'] != best_id)
+        response = self.client.delete(f'/api/human/runs/{best_id}/history')
+        self.assertEqual(response.status_code, 200)
+        repeated = self.client.delete(f'/api/human/runs/{best_id}/history')
+        self.assertTrue(repeated.json()['already_deleted'])
+        self.assertEqual(service.best_ten(1, 1, '2x4')['entries'][0]['id'], remaining_id)
+        self.assertEqual(service.leaderboard('2x4')['entries'][0]['id'], remaining_id)
+        self.assertEqual(service.leaderboard('2x4', 'week')['entries'][0]['id'], remaining_id)
+        self.assertEqual(service.history(1, 1)['total'], 1)
+        with database() as db:
+            self.assertEqual(db.execute("SELECT game_count FROM human_player_statistics WHERE user_id=1 AND variant='2x4'").fetchone()[0], 1)
+        self.client.headers.pop('Authorization')
+        self.assertEqual(self.client.delete(f'/api/human/runs/{remaining_id}/history').status_code, 401)
 
     def test_old_run_without_spawn_counters_still_seals(self):
         run = self.new('2x4')

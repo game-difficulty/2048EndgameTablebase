@@ -205,6 +205,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { openAsyncLink } from '../../../services/openAsyncLink.js';
 import { userError } from '../../../services/errors/userError.js';
 
 import UiSelect from '../../../components/UiSelect.vue';
@@ -315,12 +316,14 @@ const normalizedEntries = computed(() =>
 
 async function openAnalysisReplay(artifactId) {
   try {
+    await openAsyncLink(async () => {
     const response = await fetch(getBackendUrl(`/api/analysis/replays/${encodeURIComponent(artifactId)}/open-link`), {
       method: 'POST', credentials: 'include', headers: authHeaders({ Accept: 'application/json' }),
     });
     if (!response.ok) throw new Error(String(response.status));
     const data = await response.json();
-    window.open(data.url, '_blank', 'noopener');
+    return data.url;
+    });
   } catch {
     analysisError.value = String(locale.value).startsWith('zh') ? '回放暂时无法打开。' : 'The replay cannot be opened right now.';
   }

@@ -75,11 +75,13 @@ import { nextTick, onUnmounted, reactive, ref, watch } from 'vue';
 import { json } from './client.js';
 import { language, t } from './i18n.js';
 import AnalysisStagePicker from './AnalysisStagePicker.vue';
+import { openAsyncLink } from '../services/openAsyncLink.js';
 
 defineEmits(['back','player','replay']);
 const variants = ['4x4','3x4','3x3','2x4'];
 const grades = ['SSS','SS','S','A','B','C','D','E','F'];
 const filters = reactive({ username:'', variant:'4x4', pattern:'', target:'', grade:'' });
+let appliedFilters = { ...filters };
 const items = ref([]), loading = ref(false), error = ref(''), nextCursor = ref('');
 const cursors = ref(['']);
 const page = ref(0);
@@ -114,7 +116,7 @@ async function load() {
   ++detailRequest;
   loading.value = true; error.value = ''; detail.value = null;
   const params = new URLSearchParams({ limit:'20' });
-  for (const [key,value] of Object.entries(filters)) if (value) params.set(key,value);
+  for (const [key,value] of Object.entries(appliedFilters)) if (value) params.set(key,value);
   if (cursors.value[page.value]) params.set('cursor',cursors.value[page.value]);
   try {
     const data = await json(`/api/analysis/library?${params}`);
@@ -123,7 +125,7 @@ async function load() {
   } catch { if (request === loadRequest) error.value = t('无法读取分析库，请稍后重试。'); }
   finally { if (request === loadRequest) loading.value = false; }
 }
-function search() { page.value = 0; cursors.value = ['']; load(); }
+function search() { appliedFilters = { ...filters }; page.value = 0; cursors.value = ['']; load(); }
 function next() { if (!nextCursor.value) return; cursors.value[page.value + 1] = nextCursor.value; page.value += 1; load(); }
 function previous() { if (!page.value) return; page.value -= 1; load(); }
 async function openDetail(item) {
@@ -141,8 +143,7 @@ async function openArtifact(id) {
   opening.value = true; replayError.value = '';
   const request = detailRequest;
   try {
-    const data = await json(`/api/analysis/replays/${encodeURIComponent(id)}/open-link`, { method:'POST' });
-    window.open(data.url, '_blank', 'noopener');
+    await openAsyncLink(async () => (await json(`/api/analysis/replays/${encodeURIComponent(id)}/open-link`, { method:'POST' })).url);
   } catch { if (request === detailRequest) replayError.value = t('回放暂时无法打开。'); }
   finally { opening.value = false; }
 }

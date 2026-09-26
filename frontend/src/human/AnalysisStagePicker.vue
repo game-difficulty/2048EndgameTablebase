@@ -6,7 +6,7 @@
         <thead><tr><th>{{ label('阶段', 'Stage') }}</th><th>{{ label('原局步号', 'Game moves') }}</th><th>{{ label('吻合度', 'Fit') }}</th></tr></thead>
         <tbody><tr v-for="stage in artifacts" :key="stage.artifact_id" :class="{ selected: selectedId === stage.artifact_id, unavailable: stage.available === false }">
           <td><label><input v-model="selectedId" type="radio" :name="groupId" :value="stage.artifact_id" :disabled="stage.available === false" :aria-label="`${label('阶段', 'Stage')} ${stage.segment_index + 1}`">{{ stage.segment_index + 1 }}</label></td>
-          <td>{{ number(stage.source_start_index) }}–{{ number(stage.source_end_index) }}<small v-if="stage.available === false"> · {{ label('已过期', 'Expired') }}</small></td>
+          <td>{{ number(stage.source_start_index == null ? null : stage.source_start_index + 1) }}–{{ number(stage.source_end_index) }}<small v-if="stage.available === false"> · {{ label('已过期', 'Expired') }}</small></td>
           <td>{{ percent(stage.goodness_of_fit) }}</td>
         </tr></tbody>
       </table>

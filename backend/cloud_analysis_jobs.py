@@ -187,7 +187,7 @@ def _load_job(job_id: str, *, restore_reservations: bool = True) -> AnalysisJob:
     return job
 
 
-def _admit_job(job: AnalysisJob) -> None:
+def _admit_job(job: AnalysisJob, request_id: str | None = None) -> None:
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
         _ensure_queue(db)
@@ -203,6 +203,12 @@ def _admit_job(job: AnalysisJob) -> None:
             raise AnalysisQueueFull("analysis_queue_full")
         db.execute("INSERT INTO analysis_queue(job_id,user_id,total,pending,status,created_at) VALUES(?,?,?,?,?,?)",
                    (job.job_id, job.user_id, job.total, job.total, "queued", job.created_at))
+        if request_id is not None:
+            updated = db.execute("""UPDATE human_analysis_requests SET job_id=?
+                WHERE user_id=? AND request_id=? AND job_id IS NULL""",
+                (job.job_id, job.user_id, request_id))
+            if updated.rowcount != 1:
+                raise ValueError("analysis_request_claim_lost")
 
 
 def check_analysis_capacity(user_id: int, item_count: int) -> None:
@@ -573,6 +579,7 @@ def create_analysis_job(
     session_id: int | None = None,
     quota_reservations: list[Any] | None = None,
     work_items: list[AnalysisWorkItem] | None = None,
+    request_id: str | None = None,
 ) -> AnalysisJob:
     cleanup_expired_jobs(max_age_seconds=get_analysis_result_ttl_seconds())
     if work_items is None:
@@ -622,7 +629,7 @@ def create_analysis_job(
         register_job(job)
         _persist_job(job)
         _write_manifest(job)
-        _admit_job(job)
+        _admit_job(job, request_id=request_id)
     except Exception:
         with auth_db() as db:
             db.execute("DELETE FROM analysis_jobs WHERE job_id=?", (job_id,))

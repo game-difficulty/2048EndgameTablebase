@@ -85,6 +85,7 @@ import { serverErrorText } from '../services/errors/serverErrorText.js';
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { groupTablebasePatternsByCategory } from '../services/tablebases/catalogClient.js';
 import { json } from './client.js';
+import { openAsyncLink } from '../services/openAsyncLink.js';
 import { language } from './i18n.js';
 import { loadLastAnalysisSelection, saveLastAnalysisSelection } from './analysisSelectionHistory.js';
 import HumanAnalysisPosterDialog from './HumanAnalysisPosterDialog.vue';
@@ -238,15 +239,18 @@ async function submit() {
     terminalSummariesLoadedJob = '';
     job.value = data; sessionStorage.setItem(`human-analysis:${props.runId}`, data.job_id);
     sessionStorage.removeItem(`human-analysis-pending:${props.runId}`); poll(data.job_id);
-  } catch (e) { error.value = failure(e); if (e.status === 409) invalidateQuote(); }
+  } catch (e) {
+    error.value = failure(e);
+    // A concurrent retry must keep the same key; only a new price/catalog needs a new quote.
+    if (['analysis_catalog_changed', 'analysis_price_changed'].includes(e.code)) invalidateQuote();
+  }
   finally { busy.value = false; }
 }
 async function openAnalysisReplay(artifactId) {
   if (openingReplay.value) return;
   openingReplay.value = true;
   try {
-    const data = await json(`/api/analysis/replays/${encodeURIComponent(artifactId)}/open-link`, { method: 'POST' });
-    window.open(data.url, '_blank', 'noopener');
+    await openAsyncLink(async () => (await json(`/api/analysis/replays/${encodeURIComponent(artifactId)}/open-link`, { method: 'POST' })).url);
   } catch { error.value = label('回放暂时无法打开。', 'The replay cannot be opened right now.'); }
   finally { openingReplay.value = false; }
 }

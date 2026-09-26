@@ -573,9 +573,17 @@ export function useReplaySession(activeRef, emit) {
     loadingReplay.value = true;
     replayStatus.value = t('replay.status.loading');
     try {
+      const stored = restoreReplaySession();
+      if (!fragment.get('token') && stored?.analysisArtifactId === artifactId) {
+        await installReplay(stored.buffer, stored, { step: stored.step, persist: false });
+        return true;
+      }
       const replay = await fetchAnalysisReplay({ artifactId, token: fragment.get('token') || '' });
-      await installReplay(replay.buffer, replay, { step: 0, persist: true });
-      fragment.delete('token');
+      replay.analysisArtifactId = artifactId;
+      await installReplay(replay.buffer, replay, { step: 0, persist: false });
+      saveReplayPosition(0);
+      // Remove the credential only after the exact artifact is durable in this tab.
+      if (saveReplaySource(replay.buffer, replay)) fragment.delete('token');
       const clean = new URL(window.location.href);
       clean.hash = fragment.toString();
       window.history.replaceState(window.history.state, '', clean);
