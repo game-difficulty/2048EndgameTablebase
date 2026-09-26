@@ -753,6 +753,6 @@ def replay_open_link_route(artifact_id: str, request: Request):
 
 def analysis_replay_viewer_url(artifact_id: str, token: str) -> str:
     return (
-        "https://2048tables.online/?tab=replay&analysis_replay_v=3"
+        "https://2048tables.online/?tab=replay&analysis_replay_v=4"
         f"#analysisReplay={artifact_id}&token={token}"
     )

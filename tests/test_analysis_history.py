@@ -103,6 +103,6 @@ def test_free_account_keeps_newest_fifty_replays(tmp_path):
 def test_analysis_replay_viewer_url_busts_cached_entry_document():
     url = analysis_replay_viewer_url("artifact-id", "signed-token")
     assert url == (
-        "https://2048tables.online/?tab=replay&analysis_replay_v=3"
+        "https://2048tables.online/?tab=replay&analysis_replay_v=4"
         "#analysisReplay=artifact-id&token=signed-token"
     )

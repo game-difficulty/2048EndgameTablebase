@@ -24,6 +24,7 @@ from .store import init_db
 from .routes import router, same_origin
 from backend.admin.routes import router as admin_router
 from backend.analysis_history import router as analysis_history_router
+from backend.profile.routes import router as profile_router
 
 
 @asynccontextmanager
@@ -75,6 +76,7 @@ app.include_router(auth_router)
 app.include_router(router)
 app.include_router(admin_router)
 app.include_router(analysis_history_router)
+app.include_router(profile_router)
 
 
 @app.get('/api/analysis/jobs/{job_id}')
