@@ -6,6 +6,7 @@ import { createWsClient } from '../services/ws/createWsClient';
 import { normalizeBCFamilyModulus } from '../utils/bcFamilyModulus';
 import { applyTileColors, resolveTileColors } from '../utils/tileColors';
 import { writeSharedTilePalette } from '../utils/sharedTilePalette';
+import { ACCOUNT_GLOBAL_KEYS, saveAccountPreferences } from '../services/preferences/accountPreferences';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
 const INITIAL_DARK_MODE = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -76,6 +77,7 @@ const userPreferencesStore = createLocalStorageStore({
 const wsStatus = ref('connecting');
 const loaded = ref(false);
 const config = ref({ ...DEFAULT_CONFIG });
+let presentationDefaults = { ...DEFAULT_CONFIG };
 const categories = ref({});
 const themeMap = ref({});
 const targetTiles = ref([]);
@@ -264,6 +266,11 @@ const applyBuildFailed = () => {
 };
 
 const handleSettingsData = (payload = {}) => {
+  for (const key of ['colors', ...ACCOUNT_GLOBAL_KEYS]) {
+    if (Object.prototype.hasOwnProperty.call(payload.config || {}, key)) {
+      presentationDefaults[key] = clonePreferenceValue(payload.config[key]);
+    }
+  }
   categories.value = payload.categories || {};
   themeMap.value = payload.theme_map || {};
   targetTiles.value = payload.target_tiles || [];
@@ -283,6 +290,7 @@ const handleSettingUpdated = (payload = {}) => {
   if (!key) {
     return;
   }
+  if (ACCOUNT_GLOBAL_KEYS.includes(key)) return;
 
   if (key === 'colors') {
     mergeConfig({ colors: value });
@@ -342,20 +350,24 @@ const refreshSettings = () => {
 };
 
 // Same-origin pages (including the human site) share this browser preference.
-const refreshStoredPresentationPreferences = () => {
+const refreshStoredPresentationPreferences = (resetMissing = false) => {
   const stored = readStoredUserPreferences();
-  if (typeof stored.dark_mode === 'boolean' && stored.dark_mode !== config.value.dark_mode) {
-    mergeConfig({ dark_mode: stored.dark_mode });
-    applyColorScheme();
-  }
-  if (['zh', 'en'].includes(stored.language) && stored.language !== config.value.language) {
-    mergeConfig({ language: stored.language });
-    setGlobalLocale(stored.language);
+  // Focus events must not reset preferences that were never explicitly saved.
+  const resetAccountKeys = resetMissing === true
+    ? Object.fromEntries(['colors', ...ACCOUNT_GLOBAL_KEYS].map(key => [key, presentationDefaults[key]]))
+    : {};
+  const current = { ...resetAccountKeys, ...stored };
+  const changed = Object.fromEntries(Object.entries(current).filter(([key, value]) =>
+    JSON.stringify(config.value[key]) !== JSON.stringify(value)));
+  if (Object.keys(changed).length) {
+    mergeConfig(changed);
+    applyGlobalConfig();
   }
 };
 const handlePreferenceStorage = (event) => {
-  if (event.key === userPreferencesStore.key || event.key === null) refreshStoredPresentationPreferences();
+  if (event.key === userPreferencesStore.key || event.key === null) refreshStoredPresentationPreferences(true);
 };
+const handleAccountPreferences = () => refreshStoredPresentationPreferences(true);
 
 const start = () => {
   if (started) {
@@ -365,6 +377,7 @@ const start = () => {
   refreshStoredPresentationPreferences();
   window.addEventListener('storage', handlePreferenceStorage);
   window.addEventListener('focus', refreshStoredPresentationPreferences);
+  window.addEventListener('account-preferences-changed', handleAccountPreferences);
   connect();
 };
 
@@ -372,6 +385,7 @@ const stop = () => {
   started = false;
   window.removeEventListener('storage', handlePreferenceStorage);
   window.removeEventListener('focus', refreshStoredPresentationPreferences);
+  window.removeEventListener('account-preferences-changed', handleAccountPreferences);
   client?.disconnect();
   client = null;
   wsStatus.value = 'disconnected';
@@ -428,6 +442,7 @@ const saveSetting = (key, explicitValue = config.value[key]) => {
     mergeConfig({ ui_scale: nextUiScale });
     applyGlobalConfig();
     persistUserPreferences({ ui_scale: config.value.ui_scale });
+    saveAccountPreferences({ ui_scale: config.value.ui_scale });
     if (shouldSendSettingToServer(key)) {
       client?.send('UPDATE_SETTING', { key, value: nextUiScale });
     }
@@ -438,6 +453,9 @@ const saveSetting = (key, explicitValue = config.value[key]) => {
   }
   applyGlobalConfig();
   persistUserPreferences(persistedPreferences);
+  saveAccountPreferences(key === 'use_custom_theme' && config.value.use_custom_theme
+    ? { ...persistedPreferences, custom_colors: config.value.custom_colors }
+    : persistedPreferences);
   if (shouldSendSettingToServer(key)) {
     client?.send('UPDATE_SETTING', { key, value: explicitValue });
   }
@@ -456,6 +474,7 @@ const saveCustomColors = (colors = config.value.custom_colors) => {
     colors: config.value.colors,
     use_custom_theme: config.value.use_custom_theme,
   });
+  saveAccountPreferences({ custom_colors: config.value.custom_colors });
   if (shouldSendSettingToServer('colors')) {
     client?.send('UPDATE_SETTING', { key: 'colors', value: nextColors });
   }
