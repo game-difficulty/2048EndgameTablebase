@@ -15,9 +15,23 @@
           currentUrl.port = backendPort;
         }
         window.__APP_BACKEND_ORIGIN__ = currentUrl.origin;
-        if (startupTheme === 'dark') {
+        let savedPreferences = {};
+        try {
+          const stored = JSON.parse(window.localStorage.getItem('2048tables:user-preferences') || 'null');
+          if (stored?.version === 1 && stored.value && typeof stored.value === 'object') {
+            savedPreferences = stored.value;
+          }
+        } catch (_) {
+          // The app continues with its defaults when storage is unavailable.
+        }
+        if (savedPreferences.language === 'zh' || savedPreferences.language === 'en') {
+          document.documentElement.lang = savedPreferences.language === 'zh' ? 'zh-CN' : 'en';
+        }
+        const darkMode = startupTheme === 'dark' ? true
+          : startupTheme === 'light' ? false : savedPreferences.dark_mode;
+        if (darkMode === true) {
           document.documentElement.setAttribute('data-theme', 'dark');
-        } else if (startupTheme === 'light') {
+        } else if (darkMode === false) {
           document.documentElement.removeAttribute('data-theme');
         }
       })();

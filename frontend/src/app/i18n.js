@@ -4,7 +4,7 @@ import en from '../locales/en.json';
 import zh from '../locales/zh.json';
 
 const i18n = createI18n({
-  locale: 'en',
+  locale: document.documentElement.lang.toLowerCase().startsWith('zh') ? 'zh' : 'en',
   fallbackLocale: 'en',
   messages: {
     en,
