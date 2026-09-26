@@ -679,12 +679,12 @@ def history_route(request: Request, limit: int = Query(20, ge=1, le=50), cursor:
 @router.get("/library")
 def library_route(limit: int = Query(20, ge=1, le=50), cursor: str = "",
                   username: str = "", variant: str = "", pattern: str = "",
-                  target: str = "", source: str = ""):
+                  target: str = "", grade: str = ""):
     from .human_play.analysis_library import list_entries
     from .human_play.service import RunError
     try:
         return list_entries(limit=limit, cursor=cursor, username=username,
-                            variant=variant, pattern=pattern, target=target, source=source)
+                            variant=variant, pattern=pattern, target=target, grade=grade)
     except RunError as exc:
         raise HTTPException(exc.status, {"code": exc.code, **exc.details}) from exc
 

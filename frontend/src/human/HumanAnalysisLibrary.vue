@@ -9,7 +9,7 @@
       <label>{{ t('模式') }}<select v-model="filters.variant"><option v-for="item in variants" :key="item" :value="item">{{ item.replace('x',' × ') }}</option></select></label>
       <label>{{ t('定式') }}<input v-model.trim="filters.pattern" maxlength="80" :placeholder="t('全部定式')"></label>
       <label>{{ t('目标') }}<input v-model.trim="filters.target" maxlength="12" :placeholder="t('全部目标')"></label>
-      <label>{{ t('来源') }}<select v-model="filters.source"><option value="">{{ t('全部来源') }}</option><option value="native">{{ t('本站') }}</option><option value="verse">2048Verse</option><option value="manual">{{ t('补录') }}</option></select></label>
+      <label>{{ t('评价') }}<select v-model="filters.grade"><option value="">{{ t('全部评价') }}</option><option v-for="grade in grades" :key="grade" :value="grade">{{ grade }}</option><option value="unrated">{{ t('未评级') }}</option></select></label>
       <button class="primary" type="submit">{{ t('筛选') }}</button>
     </form>
 
@@ -78,7 +78,8 @@ import AnalysisStagePicker from './AnalysisStagePicker.vue';
 
 defineEmits(['back','player','replay']);
 const variants = ['4x4','3x4','3x3','2x4'];
-const filters = reactive({ username:'', variant:'4x4', pattern:'', target:'', source:'' });
+const grades = ['SSS','SS','S','A','B','C','D','E','F'];
+const filters = reactive({ username:'', variant:'4x4', pattern:'', target:'', grade:'' });
 const items = ref([]), loading = ref(false), error = ref(''), nextCursor = ref('');
 const cursors = ref(['']);
 const page = ref(0);

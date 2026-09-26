@@ -12,6 +12,9 @@ from .service import RunError, player_id_for_name, rankable_sql
 from .store import database
 
 
+GRADES = frozenset(("SSS", "SS", "S", "A", "B", "C", "D", "E", "F"))
+
+
 def _encode_cursor(ended: float, summary_id: int) -> str:
     raw = f"{float(ended)}|{int(summary_id)}".encode()
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -47,7 +50,7 @@ def _subjects(user_ids: set[int]) -> dict[int, dict]:
 
 def list_entries(*, limit: int = 20, cursor: str = "", username: str = "",
                  variant: str = "", pattern: str = "", target: str = "",
-                 source: str = "") -> dict:
+                 grade: str = "") -> dict:
     size = min(50, max(1, int(limit)))
     params: list[Any] = []
     where = ["s.listed=1", "s.admitted=1", "r.status='sealed'", rankable_sql("r")]
@@ -63,9 +66,14 @@ def list_entries(*, limit: int = 20, cursor: str = "", username: str = "",
     if target:
         where.append("s.target=?")
         params.append(target)
-    if source:
-        where.append("r.source=?")
-        params.append(source)
+    if grade:
+        if grade == "unrated":
+            where.append("a.summary_id IS NULL")
+        elif grade in GRADES:
+            where.append("a.grade=?")
+            params.append(grade)
+        else:
+            raise RunError("invalid_analysis_grade", 400)
     scan_cursor = _decode_cursor(cursor) if cursor else None
     batch_size = max(50, min(200, size * 3))
     items = []

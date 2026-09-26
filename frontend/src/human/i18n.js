@@ -98,7 +98,7 @@ const en = {
   '玩家':'Player', '用户名':'Username', '定式':'Formation', '全部定式':'All formations', '目标':'Target', '全部目标':'All targets',
   '来源':'Source', '全部来源':'All sources', '本站':'This site', '筛选':'Filter',
   '正在读取分析…':'Loading analyses…', '暂无可展示分析':'No public analyses',
-  '评价':'Grade', '吻合度':'Fit', '残局数':'Endgames', '收起':'Collapse',
+  '评价':'Grade', '全部评价':'All grades', '未评级':'Ungraded', '吻合度':'Fit', '残局数':'Endgames', '收起':'Collapse',
   '查看分析':'View analysis', '查看原局':'View game', '登录后可以帮助分析':'Sign in to run an analysis',
   '回放阶段':'Replay stage', '阶段回放已过期':'Stage replays expired', '分析库分页':'Analysis library pages',
   '结果未收入公共分析库':'Result not retained in the public library',

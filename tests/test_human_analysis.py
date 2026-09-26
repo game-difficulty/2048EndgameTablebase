@@ -270,11 +270,33 @@ def test_public_analysis_library_orders_by_game_time_not_rerun_time():
                      "eligible", 1))
             save_summary(run_id=run_id, user_id=1, pattern="free10", target="512",
                          job_id=f"job-{run_id}", summary=build_summary([], []), listed=True)
-        with patch("backend.analysis_history.library_artifacts", return_value={
-            1: [{"available": True}], 2: [{"available": True}],
-        }):
+        with database() as db:
+            summary_ids = {row["run_id"]: int(row["id"]) for row in db.execute(
+                "SELECT id,run_id FROM human_analysis_summaries WHERE run_id IN ('older','newer')")}
+        retained = {summary_id: [{"available": True}]
+                    for summary_id in summary_ids.values()}
+        with patch("backend.analysis_history.library_artifacts", return_value=retained):
             result = list_entries(limit=20)
-        assert [item["run_id"] for item in result["items"]] == ["newer", "older"]
+            assert [item["run_id"] for item in result["items"]] == ["newer", "older"]
+            assert [item["run_id"] for item in list_entries(grade="unrated")["items"]] == [
+                "newer", "older"]
+            with database() as db:
+                db.executemany("""INSERT INTO human_analysis_results
+                    (summary_id,run_id,user_id,variant,pattern,target,run_ended_at,
+                     result_created_at,metric_version,grade_version,weighted_score,grade,
+                     mean_goodness_of_fit,mean_ms_per_timed_move,max_combo,stage_count,
+                     evaluated_moves,final_score,active)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""", (
+                    (summary_ids["older"], "older", 1, "4x4", "free10", "512", 10,
+                     1, 1, 2, 75, "A", .9, 1000, 10, 1, 20, 900),
+                    (summary_ids["newer"], "newer", 1, "4x4", "free10", "512", 20,
+                     1, 1, 2, 80, "S", .95, 1000, 12, 1, 20, 800),
+                ))
+            assert [item["run_id"] for item in list_entries(grade="S")["items"]] == ["newer"]
+            assert [item["run_id"] for item in list_entries(grade="A")["items"]] == ["older"]
+            assert list_entries(grade="unrated")["items"] == []
+        with pytest.raises(service.RunError, match="invalid_analysis_grade"):
+            list_entries(grade="Z")
 
 
 def test_result_grade_is_persisted_and_prior_summary_can_be_graded_without_reanalysis():
