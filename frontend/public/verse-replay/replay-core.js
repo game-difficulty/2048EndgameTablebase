@@ -48,6 +48,12 @@
     { key: '32768', label: '32768', requirements: [32768] },
     { key: '65536', label: '65536', requirements: [65536] },
   ];
+  const VARIANT_MILESTONE_MAX = {
+    '2x4': 512,
+    '3x3': 1024,
+    '3x4': 8192,
+    '4x4': 65536,
+  };
 
   class ReplayFormatError extends Error {
     constructor(message) {
@@ -399,11 +405,14 @@
     const unknownCumulative = new Uint32Array(moveCount + 1);
     const steps = new Array(moveCount);
     const transitions = new Array(moveCount);
-    const milestones = DEFAULT_MILESTONES.map((milestone) => ({
-      ...milestone,
-      reachedStep: null,
-      timeMs: null,
-    }));
+    const milestoneMax = VARIANT_MILESTONE_MAX[`${height}x${width}`] || 65536;
+    const milestones = DEFAULT_MILESTONES
+      .filter((milestone) => Number(milestone.key) <= milestoneMax)
+      .map((milestone) => ({
+        ...milestone,
+        reachedStep: null,
+        timeMs: null,
+      }));
     let board = new Uint8Array(initialBoard);
     let score = 0;
     snapshots.set(board, 0);

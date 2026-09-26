@@ -228,14 +228,14 @@ for (const version of [1, 2]) {
 test('Verse VRS fixtures use rows x columns for variant dimensions', () => {
   const fixtureDir = new URL('./fixtures/verse-replay/', import.meta.url);
   const fixtures = [
-    ['Blueawa_3x4_2026-09-20_71356.vrs', 4, 3, 3244, 71356],
-    ['P-shiyi592_3x3_2026-09-20_11976.vrs', 3, 3, 691, 11976],
-    ['mmmcccc_4x4_2026-09-19_1285068.vrs', 4, 4, 41458, 1285068],
-    ['p56_4x4_2026-09-21_576348.vrs', 4, 4, 19976, 576348],
-    ['xzyszdj_2x4_2026-09-21_5228.vrs', 4, 2, 343, 5228],
+    ['Blueawa_3x4_2026-09-20_71356.vrs', 4, 3, 3244, 71356, '8192'],
+    ['P-shiyi592_3x3_2026-09-20_11976.vrs', 3, 3, 691, 11976, '1024'],
+    ['mmmcccc_4x4_2026-09-19_1285068.vrs', 4, 4, 41458, 1285068, '65536'],
+    ['p56_4x4_2026-09-21_576348.vrs', 4, 4, 19976, 576348, '65536'],
+    ['xzyszdj_2x4_2026-09-21_5228.vrs', 4, 2, 343, 5228, '512'],
   ];
 
-  for (const [name, width, height, moveCount, score] of fixtures) {
+  for (const [name, width, height, moveCount, score, finalMilestone] of fixtures) {
     const bytes = fs.readFileSync(new URL(name, fixtureDir));
     const replay = decodeReplayBytes(bytes);
     assert.equal(replay.width, width, name);
@@ -243,6 +243,7 @@ test('Verse VRS fixtures use rows x columns for variant dimensions', () => {
     assert.equal(replay.moveCount, moveCount, name);
     assert.equal(replay.scores[moveCount], score, name);
     assert.equal(replay.getBoardAt(moveCount).length, width * height, name);
+    assert.equal(replay.milestones.at(-1).key, finalMilestone, name);
   }
 });
 
