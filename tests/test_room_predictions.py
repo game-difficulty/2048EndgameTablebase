@@ -43,19 +43,20 @@ class PredictionTests(unittest.TestCase):
         return p.place('room',uid,dict(kind='target65536',market_id=self.batch['id'],option_id=option,
             amount=amount,request_id=request_id or str(uuid.uuid4())),available,now)
 
-    def test_target_win_returns_principal_plus_eight_times_even_when_main_has_no_winner(self):
+    def test_target_win_pays_eight_times_without_principal_even_when_main_has_no_winner(self):
         self.bet(1,'lume');self.target_bet();self.target_bet(amount=500)
         public=p.listing('room',now=120)['market']
         self.assertEqual(public['pool_units'],100000)
         self.assertNotIn('mine',public['target_bet'])
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
-        self.assertEqual(self.balances()[0][0],24700000)
+        self.assertEqual(self.balances()[0][0],24100000)
         p.settle('room',self.batch['id'],['vero'],now=400)
-        self.assertEqual(self.balances()[0],(24800000,777000))
+        self.assertEqual(self.balances()[0],(24200000,777000))
         detail=p.listing('room',1,now=401)
-        result=dict(principal=600000,profit=4800000,refund=0,loss=0)
+        result=dict(principal=0,profit=4800000,refund=0,loss=0)
         self.assertEqual(detail['market']['target_bet']['result'],result)
         self.assertEqual(detail['recent'][0]['target_bet'],result)
+        self.assertEqual(detail['recent'][0]['stake_units'],700000)
         self.assertEqual(detail['market']['result']['refund'],100000)
 
     def test_target_miss_does_not_change_main_pool_settlement(self):
@@ -79,7 +80,7 @@ class PredictionTests(unittest.TestCase):
         self.assertEqual([r['started_at'] for r in recent],[6100,5100,4100,3100,2100])
         self.assertTrue(all(r['stake_units']==2000000 and r['net_profit_units']==-900000 for r in recent))
 
-    def test_combo_upgrades_to_50_times_plus_principal_once_without_stacking(self):
+    def test_combo_upgrades_to_50_times_without_principal_once_without_stacking(self):
         self.bet(1,'lume');self.target_bet()
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
         p.record_targets('room',self.batch['id'],{'lume':'reached_combo'})
@@ -89,22 +90,46 @@ class PredictionTests(unittest.TestCase):
         detail=p.listing('room',1,now=120)['market']['target_bet']
         self.assertEqual(detail['outcomes'],{'lume':'reached_combo'})
         self.assertEqual((detail['bonus_target'],detail['bonus_reward_multiplier']),(32768,50))
-        self.assertEqual(detail['result'],dict(principal=100000,profit=5000000,refund=0,loss=0))
+        self.assertEqual(detail['result'],dict(principal=0,profit=5000000,refund=0,loss=0))
         with self.assertRaises(HTTPException):self.target_bet()
         with ThreadPoolExecutor(max_workers=4) as executor:
             done=list(executor.map(lambda _:p.settle('room',self.batch['id'],['vero'],now=400),range(4)))
         self.assertEqual(sum(done),1)
-        self.assertEqual(self.balances()[0],(25000000,777000))
+        self.assertEqual(self.balances()[0],(24900000,777000))
         self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],
-                         dict(principal=100000,profit=5000000,refund=0,loss=0))
+                         dict(principal=0,profit=5000000,refund=0,loss=0))
 
     def test_combo_direct_hit_and_technical_void_retains_paid_reward(self):
         self.bet(1,'lume');self.target_bet(amount=5000)
         p.record_targets('room',self.batch['id'],{'lume':'reached_combo'})
         p.settle('room',self.batch['id'],void=True)
-        self.assertEqual(self.balances()[0],(270000000,777000))
+        self.assertEqual(self.balances()[0],(265000000,777000))
         self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],
-                         dict(principal=5000000,profit=250000000,refund=0,loss=0))
+                         dict(principal=0,profit=250000000,refund=0,loss=0))
+
+    def test_prechange_returned_principal_counts_toward_later_combo_upgrade(self):
+        self.bet(1,'lume');self.target_bet()
+        p.record_targets('room',self.batch['id'],{'lume':'reached'})
+        # Simulate a 65k settlement paid before the no-principal rule change.
+        with auth_db() as db:
+            db.execute('UPDATE token_accounts SET paid_balance_units=paid_balance_units+100000 WHERE user_id=1')
+            db.execute('''UPDATE room_prediction_target_settlements SET principal=100000
+                WHERE market_id=? AND user_id=1''', (self.batch['id'],))
+        p.record_targets('room',self.batch['id'],{'lume':'reached_combo'})
+        self.assertEqual(self.balances()[0],(24800000,777000))
+        self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],
+                         dict(principal=0,profit=5000000,refund=0,loss=0))
+
+    def test_funded_legacy_target_market_keeps_principal_return(self):
+        self.bet(1,'lume');self.target_bet()
+        with auth_db() as db:
+            db.execute('UPDATE room_prediction_markets SET target_rules=? WHERE id=?',
+                       (p.TARGET_LEGACY_RULE_VERSION, self.batch['id']))
+        p.record_targets('room',self.batch['id'],{'lume':'reached'})
+        detail = p.listing('room',1)['market']['target_bet']
+        self.assertEqual(detail['rules'], p.TARGET_LEGACY_RULE_VERSION)
+        self.assertEqual(self.balances()[0],(20700000,777000))
+        self.assertEqual(detail['result'],dict(principal=100000,profit=800000,refund=0,loss=0))
 
     def test_additive_migration_keeps_old_outcomes_and_settled_balances(self):
         self.bet(1,'lume');self.target_bet()
@@ -155,19 +180,19 @@ class PredictionTests(unittest.TestCase):
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
         p.close('room',self.batch['id'])
         self.target_bet(request_id=key,now=400,available=False)
-        self.assertEqual(self.balances()[0][0],20700000)
+        self.assertEqual(self.balances()[0][0],20600000)
         with ThreadPoolExecutor(max_workers=4) as executor:
             done=list(executor.map(lambda _:p.settle('room',self.batch['id'],['lume'],now=400),range(4)))
         self.assertEqual(sum(done),1)
-        self.assertEqual(self.balances()[0][0],20800000)
+        self.assertEqual(self.balances()[0][0],20700000)
 
     def test_target_void_retains_paid_reward_and_refunds_unpaid_stakes(self):
         self.bet(1,'lume',500);self.target_bet(amount=1000)
         self.bet(2,'clari',500);self.target_bet(uid=2,option='clari',amount=1000)
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
         p.settle('room',self.batch['id'],void=True,now=400)
-        self.assertEqual(self.balances()[:2],[(28000000,777000),(20000000,777000)])
-        self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],dict(principal=1000000,profit=8000000,refund=0,loss=0))
+        self.assertEqual(self.balances()[:2],[(27000000,777000),(20000000,777000)])
+        self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],dict(principal=0,profit=8000000,refund=0,loss=0))
         self.assertEqual(p.listing('room',2)['market']['target_bet']['result'],dict(principal=0,profit=0,refund=1000000,loss=0))
 
     def test_target_missing_facts_or_credit_failure_roll_back_both_settlements(self):
@@ -192,16 +217,16 @@ class PredictionTests(unittest.TestCase):
 
     def test_immediate_tiers_concurrent_replay_pay_only_difference_and_emit_once(self):
         self.bet(1,'lume');self.target_bet()
-        for outcome,balance in [('reached',20700000),('reached_combo',24900000)]:
+        for outcome,balance in [('reached',20600000),('reached_combo',24800000)]:
             with ThreadPoolExecutor(max_workers=5) as executor:
                 list(executor.map(lambda _:p.record_targets('room',self.batch['id'],{'lume':outcome},now=120),range(10)))
             self.assertEqual(self.balances()[0][0],balance)
         events=p.announcement_events('room',True)
-        self.assertEqual([e['total_units'] for e in events],[900000,5100000])
+        self.assertEqual([e['total_units'] for e in events],[800000,5000000])
         self.assertEqual([e['tier'] for e in events],['65k','65k+32k'])
         with auth_db() as db:
             paid=[r[0] for r in db.execute("SELECT paid_delta_units FROM token_ledger WHERE event_type='room_prediction_target_settlement' ORDER BY id")]
-        self.assertEqual(paid,[900000,4200000])
+        self.assertEqual(paid,[800000,4200000])
         p.init_schema()
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
         self.assertEqual(p.announcement_events('room',True),events)
@@ -224,7 +249,7 @@ class PredictionTests(unittest.TestCase):
             self.assertEqual(event['names'],['4','2','5'])
             self.assertEqual(event['recipient_count'],4)
             self.assertEqual(event['option_id'],'lume')
-        self.assertEqual([e['total_units'] for e in events],[8100000,45900000])
+        self.assertEqual([e['total_units'] for e in events],[7200000,45000000])
 
     def test_all_recipient_credits_and_announcement_roll_back_together(self):
         for uid in (1,2):self.bet(uid,'lume');self.target_bet(uid=uid)
@@ -237,7 +262,7 @@ class PredictionTests(unittest.TestCase):
         self.assertEqual(self.balances(),before)
         self.assertEqual(p.announcement_events('room'),[])
         p.record_targets('room',self.batch['id'],{'lume':'reached_combo'})
-        self.assertEqual([r[0] for r in self.balances()[:2]],[24900000,24900000])
+        self.assertEqual([r[0] for r in self.balances()[:2]],[24800000,24800000])
 
     def test_committed_reward_outbox_retries_broadcast_failure_without_repaying(self):
         self.bet(1,'lume');self.target_bet()
@@ -278,6 +303,72 @@ class PredictionTests(unittest.TestCase):
         for _ in range(3):self.bet(3,'vero')
         p.settle('room',self.batch['id'],['lume','clari'],now=400)
         self.assertEqual([r[0] for r in self.balances()[:3]],[20050000,20250000,19700000])
+
+    def test_option_pool_matching_removes_account_split_advantage(self):
+        single = [
+            dict(user_id=1, option_id='a', units=100),
+            dict(user_id=2, option_id='b', units=10000),
+        ]
+        split = [dict(user_id=1, option_id='a', units=100)] + [
+            dict(user_id=uid, option_id='b', units=100) for uid in range(2, 102)
+        ]
+        self.assertEqual(p.allocate(single, {'a'})[1]['profit'], 100)
+        self.assertEqual(p.allocate(split, {'a'})[1]['profit'], 100)
+        self.assertEqual(sum(part['loss'] for uid, part in p.allocate(split, {'a'}).items() if uid != 1), 100)
+
+    def test_equal_probability_options_give_each_stake_zero_expected_net(self):
+        stakes = [
+            dict(user_id=1, option_id='a', units=100),
+            dict(user_id=2, option_id='b', units=100),
+            dict(user_id=3, option_id='b', units=100),
+        ]
+        outcomes = [p.allocate(stakes, {winner}) for winner in 'abc']
+        for uid in (1, 2, 3):
+            self.assertEqual(sum(result[uid]['profit'] - result[uid]['loss'] for result in outcomes), 0)
+
+        # Per-option rounding must mirror the loss allocation exactly. Combining
+        # both winning pools before rounding would favor one of the equal stakes.
+        tiny = [
+            dict(user_id=1, option_id='a', units=1),
+            dict(user_id=2, option_id='a', units=1),
+            dict(user_id=3, option_id='b', units=1),
+            dict(user_id=4, option_id='c', units=1),
+        ]
+        outcomes = [p.allocate(tiny, {winner}) for winner in 'abc']
+        for uid in range(1, 5):
+            self.assertEqual(sum(result[uid]['profit'] - result[uid]['loss'] for result in outcomes), 0)
+
+    def test_tied_winner_coalition_charges_each_losing_option_once(self):
+        stakes = [
+            dict(user_id=1, option_id='a', units=100),
+            dict(user_id=2, option_id='b', units=500),
+        ] + [dict(user_id=uid, option_id='c', units=100) for uid in range(3, 13)]
+        result = p.allocate(stakes, {'a', 'b'})
+        self.assertEqual(result[1]['profit'], 100)
+        self.assertEqual(result[2]['profit'], 500)
+        self.assertEqual(sum(result[uid]['loss'] for uid in range(3, 13)), 600)
+        self.assertEqual(sum(result[uid]['refund'] for uid in range(3, 13)), 400)
+
+    def test_funded_legacy_market_keeps_v1_settlement(self):
+        self.bet(1, 'lume')
+        self.bet(2, 'clari')
+        self.bet(3, 'clari')
+        with auth_db() as db:
+            db.execute('UPDATE room_prediction_markets SET rules=? WHERE id=?',
+                       (p.LEGACY_RULE_VERSION, self.batch['id']))
+        p.init_schema()
+        with auth_db() as db:
+            rules = db.execute('SELECT rules FROM room_prediction_markets WHERE id=?', (self.batch['id'],)).fetchone()[0]
+        self.assertEqual(rules, p.LEGACY_RULE_VERSION)
+        p.settle('room', self.batch['id'], ['lume'], now=400)
+        self.assertEqual(p.listing('room', 1)['market']['result']['profit'], 200000)
+
+    def test_unfunded_legacy_market_is_upgraded(self):
+        with auth_db() as db:
+            db.execute('UPDATE room_prediction_markets SET rules=? WHERE id=?',
+                       (p.LEGACY_RULE_VERSION, self.batch['id']))
+        p.init_schema()
+        self.assertEqual(p.listing('room')['market']['rules'], p.RULE_VERSION)
 
     def test_all_tie_no_winner_and_technical_void_refund_everything(self):
         for winners,void in [(['lume','clari','vero'],False),(['vero'],False),([],True)]:
@@ -339,10 +430,20 @@ class PredictionTests(unittest.TestCase):
             winners=set(rng.sample(list('abc'),rng.randint(1,3)))
             result=p.allocate(stakes,winners)
             self.assertEqual(sum(s['units'] for s in stakes),sum(r['principal']+r['profit']+r['refund'] for r in result.values()))
-            losing_count=sum(s['option_id'] not in winners for s in stakes)
+            losing_count=len({s['option_id'] for s in stakes if s['option_id'] not in winners})
             self.assertEqual(sum(r['profit'] for r in result.values()),sum(r['loss'] for r in result.values()))
             for s in stakes:self.assertLessEqual(result[s['user_id']]['profit'],s['units']*losing_count)
             self.assertEqual(result,p.allocate(list(reversed(stakes)),winners))
+
+    def test_random_equal_probability_expected_net_is_exactly_zero(self):
+        rng = random.Random(54321)
+        for _ in range(1000):
+            stakes = [dict(user_id=i, option_id=rng.choice('abc'), units=rng.randint(1, 100000))
+                      for i in range(rng.randint(1, 25))]
+            outcomes = [p.allocate(stakes, {winner}) for winner in 'abc']
+            for stake in stakes:
+                uid = stake['user_id']
+                self.assertEqual(sum(result[uid]['profit'] - result[uid]['loss'] for result in outcomes), 0)
 
 
 if __name__=='__main__':unittest.main()
