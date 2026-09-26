@@ -24,6 +24,10 @@ GIFTS = [
     ('meaning', '何意味', 'What Does It Mean?', 0), ('rip', '寄', 'RIP', 0),
     ('tea', '如喝水', 'Easy as Tea', 0), ('chicken', '幽默唤鸡', 'Chicken Workout', 0),
     ('serious', '严肃唤鸡', 'Serious Splits', 0),
+    ('bad-four', '坏4', 'Not Another Four', 1),
+    ('dealer-fault', '发牌员全责', 'Dealer’s Fault', 1),
+    ('cry-loss', '赌输痛哭', 'Lost & Sobbing', 1),
+    ('laugh-win', '赌赢爆笑', 'Won & Wheezing', 1),
 ]
 GIFT_IDS = {gift[0] for gift in GIFTS}
 RETIRED_GIFT_IDS = {'coffee', 'fireworks', 'merge', 'brilliant'}
@@ -49,6 +53,13 @@ def init_schema():
             CREATE TABLE IF NOT EXISTS live_gift_daily (
                 user_id INTEGER NOT NULL REFERENCES users(id), day TEXT NOT NULL, spent_units INTEGER NOT NULL,
                 PRIMARY KEY(user_id, day)
+            );
+            CREATE TABLE IF NOT EXISTS live_creator_shares (
+                request_id TEXT PRIMARY KEY REFERENCES live_gift_orders(request_id),
+                creator_user_id INTEGER NOT NULL REFERENCES users(id),
+                paid_source_units INTEGER NOT NULL,
+                share_units INTEGER NOT NULL,
+                created_at TEXT NOT NULL
             );
         ''')
         columns = {row['name'] for row in db.execute('PRAGMA table_info(live_gift_orders)')}
@@ -112,9 +123,49 @@ def order(user_id, request_id, target='live:ai-classic'):
 
 
 def receipt(db, row):
+    share = db.execute('SELECT share_units FROM live_creator_shares WHERE request_id=?',
+                       (row['request_id'],)).fetchone()
     return dict(status='sent', target=row['target'], request_id=row['request_id'], gift_id=row['gift_id'], quantity=row['quantity'],
                 cost_units=row['cost_units'], combo_id=row['combo_id'], combo_count=row['combo_count'],
+                creator_share_units=int(share[0]) if share else 0,
                 token_balance=get_token_balance(row['user_id'], db=db))
+
+
+def _human_creator(db, target):
+    if not target.startswith('live:h-'):
+        return None
+    room_id = target.removeprefix('live:')
+    try:
+        row = db.execute("""SELECT r.owner_user_id FROM live_human_rooms r
+            JOIN users u ON u.id=r.owner_user_id
+            WHERE r.room_id=? AND r.status='active' AND u.status='active'""", (room_id,)).fetchone()
+    except Exception:
+        row = None
+    if not row:
+        raise HTTPException(409, 'stream_offline')
+    return int(row[0])
+
+
+def _credit_creator_share(db, *, request_id, creator_user_id, paid_source_units, now):
+    share_units = int(paid_source_units) // 2
+    stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    db.execute('''INSERT INTO live_creator_shares
+        (request_id,creator_user_id,paid_source_units,share_units,created_at)
+        VALUES(?,?,?,?,?)''', (request_id, creator_user_id, paid_source_units, share_units, stamp))
+    if share_units <= 0:
+        return
+    db.execute('''INSERT OR IGNORE INTO token_accounts
+        (user_id,created_at,updated_at) VALUES(?,?,?)''', (creator_user_id, stamp, stamp))
+    before = db.execute('''SELECT bonus_balance_units+paid_balance_units FROM token_accounts
+        WHERE user_id=?''', (creator_user_id,)).fetchone()[0]
+    db.execute('''UPDATE token_accounts SET paid_balance_units=paid_balance_units+?,updated_at=?
+        WHERE user_id=?''', (share_units, stamp, creator_user_id))
+    db.execute('''INSERT INTO token_ledger(user_id,event_type,operation_key,paid_delta_units,
+        balance_before_units,balance_after_units,metadata_json,created_at)
+        VALUES(?,'live_creator_share',?,?,?,?,?,?)''',
+        (creator_user_id, 'live_creator_share:' + request_id, share_units, before,
+         before + share_units, json.dumps({'request_id': request_id,
+            'paid_source_units': paid_source_units}, separators=(',', ':')), stamp))
 
 
 def send(user, data, online, target='live:ai-classic', on_paid=None):
@@ -145,6 +196,9 @@ def send(user, data, online, target='live:ai-classic', on_paid=None):
             raise HTTPException(400, 'invalid_gift')
         if not online:
             raise HTTPException(409, 'stream_offline')
+        creator_user_id = _human_creator(db, target)
+        if creator_user_id == user_id:
+            raise HTTPException(409, 'self_gift_not_allowed')
         catalog, pricing = catalogue()
         definition = next(gift for gift in catalog['gifts'] if gift['id'] == gift_id)
         cost = apply_pricing_multipliers(definition['base_units'] * quantity, 1000, pricing.global_multiplier_units)
@@ -162,7 +216,8 @@ def send(user, data, online, target='live:ai-classic', on_paid=None):
         combo_count = (previous['combo_count'] if continuing else 0) + quantity
         event = dict(type='gift', target=target, id=request_id, combo_id=combo_id, combo_count=combo_count,
                      gift_id=gift_id, quantity=quantity, tier=definition['tier'], at=now, actor=public_actor(user, db),
-                     bulk_effect=10000 <= definition['base_units'] <= 16000
+                     bulk_effect=(10000 <= definition['base_units'] <= 16000
+                                  or gift_id in {'bad-four', 'dealer-fault', 'cry-loss', 'laugh-win'})
                      and combo_count - quantity < 100 <= combo_count)
         consumed = consume_operation_tokens_once(request_id=request_id, user_id=user_id,
             session_id=user.get('session_id'), operation_key='live_gift_' + gift_id,
@@ -170,10 +225,17 @@ def send(user, data, online, target='live:ai-classic', on_paid=None):
             metadata={'target': target, 'gift_id': gift_id, 'quantity': quantity, 'combo_id': combo_id})
         if not consumed:
             raise HTTPException(409, 'gift_request_conflict')
+        ledger = db.execute('''SELECT l.paid_delta_units FROM token_operation_requests r
+            JOIN token_ledger l ON l.id=r.ledger_id WHERE r.request_id=?''',
+            (request_id,)).fetchone()
+        paid_source_units = max(0, -int(ledger[0])) if ledger else 0
         if on_paid:
             on_paid(db, user_id, cost)
         db.execute('''INSERT INTO live_gift_orders (request_id,user_id,gift_id,quantity,cost_units,fingerprint,combo_id,combo_count,created_at,event_json,delivered_at,target) VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?)''',
             (request_id,user_id,gift_id,quantity,cost,fingerprint,combo_id,combo_count,now,json.dumps(event),target))
+        if creator_user_id is not None:
+            _credit_creator_share(db, request_id=request_id, creator_user_id=creator_user_id,
+                                  paid_source_units=paid_source_units, now=now)
         db.execute('''INSERT INTO live_gift_daily VALUES(?,?,?) ON CONFLICT(user_id,day)
             DO UPDATE SET spent_units=spent_units+excluded.spent_units''', (user_id,day,cost))
         return receipt(db, db.execute('SELECT * FROM live_gift_orders WHERE request_id=?', (request_id,)).fetchone())

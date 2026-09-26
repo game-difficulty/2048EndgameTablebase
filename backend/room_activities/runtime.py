@@ -15,7 +15,8 @@ class RoomActivities:
             return
         room = self.hub.room.id
         await asyncio.to_thread(predictions.ensure_market, room, batch)
-        await asyncio.to_thread(predictions.record_targets, room, batch['id'], batch.get('target_results', {}))
+        if batch['phase'] != 'void':
+            await asyncio.to_thread(predictions.record_targets, room, batch['id'], batch.get('target_results', {}))
         if batch.get('closed') or batch['deadline'] <= time.time():
             await asyncio.to_thread(predictions.close, room, batch['id'])
         if batch['phase'] in ('settling','cooldown','void'):
@@ -27,6 +28,19 @@ class RoomActivities:
         if state['market'] != self.state.get('market'):
             self.state = state
             self.hub.broadcast(dict(type='predictions', **state))
+        await self.flush_announcements()
+
+    async def flush_announcements(self):
+        room = self.hub.room.id
+        events = await asyncio.to_thread(predictions.announcement_events, room, True)
+        known = {item['id'] for item in self.hub.chat}
+        for event in events:
+            if event['id'] not in known:
+                self.hub.chat.append(event)
+                known.add(event['id'])
+            self.hub.broadcast(event)
+        if events:
+            await asyncio.to_thread(predictions.announcements_delivered, room, [e['id'] for e in events])
 
     async def drain(self):
         store = self.hub.store

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import random
 import tempfile
@@ -5,10 +6,13 @@ import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from collections import deque
+from types import SimpleNamespace
 from unittest.mock import patch
 from fastapi import HTTPException
 from backend.auth.db import auth_db, init_auth_db
 from backend.room_activities import predictions as p
+from backend.room_activities.runtime import RoomActivities
 
 
 class PredictionTests(unittest.TestCase):
@@ -45,6 +49,7 @@ class PredictionTests(unittest.TestCase):
         self.assertEqual(public['pool_units'],100000)
         self.assertNotIn('mine',public['target_bet'])
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
+        self.assertEqual(self.balances()[0][0],24700000)
         p.settle('room',self.batch['id'],['vero'],now=400)
         self.assertEqual(self.balances()[0],(24800000,777000))
         detail=p.listing('room',1,now=401)
@@ -84,7 +89,7 @@ class PredictionTests(unittest.TestCase):
         detail=p.listing('room',1,now=120)['market']['target_bet']
         self.assertEqual(detail['outcomes'],{'lume':'reached_combo'})
         self.assertEqual((detail['bonus_target'],detail['bonus_reward_multiplier']),(32768,50))
-        self.assertIsNone(detail['result'])
+        self.assertEqual(detail['result'],dict(principal=100000,profit=5000000,refund=0,loss=0))
         with self.assertRaises(HTTPException):self.target_bet()
         with ThreadPoolExecutor(max_workers=4) as executor:
             done=list(executor.map(lambda _:p.settle('room',self.batch['id'],['vero'],now=400),range(4)))
@@ -93,13 +98,13 @@ class PredictionTests(unittest.TestCase):
         self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],
                          dict(principal=100000,profit=5000000,refund=0,loss=0))
 
-    def test_combo_direct_hit_and_technical_void_refund(self):
+    def test_combo_direct_hit_and_technical_void_retains_paid_reward(self):
         self.bet(1,'lume');self.target_bet(amount=5000)
         p.record_targets('room',self.batch['id'],{'lume':'reached_combo'})
         p.settle('room',self.batch['id'],void=True)
-        self.assertEqual(self.balances()[0],(20000000,777000))
+        self.assertEqual(self.balances()[0],(270000000,777000))
         self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],
-                         dict(principal=0,profit=0,refund=5000000,loss=0))
+                         dict(principal=5000000,profit=250000000,refund=0,loss=0))
 
     def test_additive_migration_keeps_old_outcomes_and_settled_balances(self):
         self.bet(1,'lume');self.target_bet()
@@ -150,18 +155,20 @@ class PredictionTests(unittest.TestCase):
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
         p.close('room',self.batch['id'])
         self.target_bet(request_id=key,now=400,available=False)
-        self.assertEqual(self.balances()[0][0],19800000)
+        self.assertEqual(self.balances()[0][0],20700000)
         with ThreadPoolExecutor(max_workers=4) as executor:
             done=list(executor.map(lambda _:p.settle('room',self.batch['id'],['lume'],now=400),range(4)))
         self.assertEqual(sum(done),1)
         self.assertEqual(self.balances()[0][0],20800000)
 
-    def test_target_void_refunds_both_even_after_reached(self):
+    def test_target_void_retains_paid_reward_and_refunds_unpaid_stakes(self):
         self.bet(1,'lume',500);self.target_bet(amount=1000)
+        self.bet(2,'clari',500);self.target_bet(uid=2,option='clari',amount=1000)
         p.record_targets('room',self.batch['id'],{'lume':'reached'})
         p.settle('room',self.batch['id'],void=True,now=400)
-        self.assertEqual(self.balances()[0],(20000000,777000))
-        self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],dict(principal=0,profit=0,refund=1000000,loss=0))
+        self.assertEqual(self.balances()[:2],[(28000000,777000),(20000000,777000)])
+        self.assertEqual(p.listing('room',1)['market']['target_bet']['result'],dict(principal=1000000,profit=8000000,refund=0,loss=0))
+        self.assertEqual(p.listing('room',2)['market']['target_bet']['result'],dict(principal=0,profit=0,refund=1000000,loss=0))
 
     def test_target_missing_facts_or_credit_failure_roll_back_both_settlements(self):
         self.bet(1,'lume');self.bet(2,'clari');self.target_bet()
@@ -170,15 +177,83 @@ class PredictionTests(unittest.TestCase):
             p.settle('room',self.batch['id'],['lume'])
         self.assertEqual(self.balances(),before)
         self.assertIsNone(p.listing('room',1)['market']['result'])
-        p.record_targets('room',self.batch['id'],{'lume':'reached'})
         original=p._credit
         def fail(db,uid,delta,event,*args):
             original(db,uid,delta,event,*args)
             if event=='room_prediction_target_settlement':raise RuntimeError('target credit failed')
         with patch.object(p,'_credit',side_effect=fail),self.assertRaises(RuntimeError):
-            p.settle('room',self.batch['id'],['lume'])
+            p.record_targets('room',self.batch['id'],{'lume':'reached'})
         self.assertEqual(self.balances(),before)
+        self.assertEqual(p.listing('room')['market']['target_bet']['outcomes'],{})
+        self.assertEqual(p.announcement_events('room'),[])
+        self.assertIsNone(p.listing('room',1)['market']['target_bet']['result'])
+        p.record_targets('room',self.batch['id'],{'lume':'reached'})
         self.assertTrue(p.settle('room',self.batch['id'],['lume']))
+
+    def test_immediate_tiers_concurrent_replay_pay_only_difference_and_emit_once(self):
+        self.bet(1,'lume');self.target_bet()
+        for outcome,balance in [('reached',20700000),('reached_combo',24900000)]:
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                list(executor.map(lambda _:p.record_targets('room',self.batch['id'],{'lume':outcome},now=120),range(10)))
+            self.assertEqual(self.balances()[0][0],balance)
+        events=p.announcement_events('room',True)
+        self.assertEqual([e['total_units'] for e in events],[900000,5100000])
+        self.assertEqual([e['tier'] for e in events],['65k','65k+32k'])
+        with auth_db() as db:
+            paid=[r[0] for r in db.execute("SELECT paid_delta_units FROM token_ledger WHERE event_type='room_prediction_target_settlement' ORDER BY id")]
+        self.assertEqual(paid,[900000,4200000])
+        p.init_schema()
+        p.record_targets('room',self.batch['id'],{'lume':'reached'})
+        self.assertEqual(p.announcement_events('room',True),events)
+        p.announcements_delivered('other',[e['id'] for e in events])
+        self.assertEqual(p.announcement_events('room',True),events)
+        p.announcements_delivered('room',[e['id'] for e in events])
+        self.assertEqual(p.announcement_events('room',True),[])
+        self.assertEqual(p.announcement_events('room'),events)
+        self.assertEqual(p.announcement_events('other'),[])
+
+    def test_announcement_first_side_stake_order_topups_and_aggregate_all_recipients(self):
+        for uid in (4,2,5,1):
+            self.bet(uid,'lume');self.target_bet(uid=uid)
+        self.target_bet(uid=4,amount=500)
+        self.bet(3,'clari')  # Main-only bets never appear in side-bet announcements.
+        p.record_targets('room',self.batch['id'],{'lume':'reached_combo','clari':'reached','vero':'reached_combo'},now=120)
+        events=p.announcement_events('room')
+        self.assertEqual(len(events),2)
+        for event in events:
+            self.assertEqual(event['names'],['4','2','5'])
+            self.assertEqual(event['recipient_count'],4)
+            self.assertEqual(event['option_id'],'lume')
+        self.assertEqual([e['total_units'] for e in events],[8100000,45900000])
+
+    def test_all_recipient_credits_and_announcement_roll_back_together(self):
+        for uid in (1,2):self.bet(uid,'lume');self.target_bet(uid=uid)
+        before=self.balances();original=p._credit
+        def fail(db,uid,*args):
+            original(db,uid,*args)
+            if uid==2:raise RuntimeError('mid payout')
+        with patch.object(p,'_credit',side_effect=fail),self.assertRaises(RuntimeError):
+            p.record_targets('room',self.batch['id'],{'lume':'reached_combo'})
+        self.assertEqual(self.balances(),before)
+        self.assertEqual(p.announcement_events('room'),[])
+        p.record_targets('room',self.batch['id'],{'lume':'reached_combo'})
+        self.assertEqual([r[0] for r in self.balances()[:2]],[24900000,24900000])
+
+    def test_committed_reward_outbox_retries_broadcast_failure_without_repaying(self):
+        self.bet(1,'lume');self.target_bet()
+        p.record_targets('room',self.batch['id'],{'lume':'reached'})
+        before=self.balances()
+        def broken(event):raise RuntimeError('transport down')
+        hub=SimpleNamespace(room=SimpleNamespace(id='room'),chat=deque(maxlen=100),broadcast=broken)
+        activities=RoomActivities(hub)
+        with self.assertRaises(RuntimeError):asyncio.run(activities.flush_announcements())
+        self.assertEqual(len(p.announcement_events('room',True)),1)
+        sent=[];hub.broadcast=sent.append
+        asyncio.run(activities.flush_announcements());asyncio.run(activities.flush_announcements())
+        self.assertEqual(len(sent),1)
+        self.assertEqual(len(hub.chat),1)
+        self.assertEqual(p.announcement_events('room',True),[])
+        self.assertEqual(self.balances(),before)
 
     def test_target_facts_are_room_scoped_and_immutable(self):
         p.record_targets('other',self.batch['id'],{'lume':'reached'})

@@ -1,5 +1,5 @@
 <template>
-  <div class="page-root overflow-y-auto p-5">
+  <div class="page-root overflow-y-auto p-5" @click="actionMenuUserId = null">
     <div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
       <header class="rounded-2xl border border-border-main bg-bg-card/88 p-5 shadow-sm backdrop-blur-md">
         <div class="flex flex-row items-end justify-between gap-4">
@@ -8,14 +8,13 @@
             <h1 class="mt-1 ui-metric font-black text-text-main">{{ $t('admin.title') }}</h1>
             <p class="mt-2 max-w-2xl ui-body text-text-secondary">{{ $t('admin.subtitle') }}</p>
           </div>
-          <button type="button" class="action-btn-small justify-center" :disabled="loading" @click="refresh">
+          <button type="button" class="action-btn-small justify-center" :disabled="loading" @click="refreshCurrent">
             {{ loading ? $t('common.updating') : $t('admin.refresh') }}
           </button>
         </div>
       </header>
 
       <AdminLiveControl :active="active" />
-
       <div v-if="error" class="rounded-2xl border border-red-400/35 bg-red-500/10 p-4 ui-body font-bold text-red-500">
         {{ error }}
       </div>
@@ -160,22 +159,30 @@
         </div>
       </section>
 
-      <section class="admin-panel">
+      <nav class="admin-section-tabs" role="tablist" :aria-label="$t('admin.tabs.label')">
+        <button type="button" role="tab" :aria-selected="adminSection === 'users'" :class="{ active: adminSection === 'users' }" @click="adminSection = 'users'">
+          {{ $t('admin.tabs.users') }}
+        </button>
+        <button type="button" role="tab" :aria-selected="adminSection === 'approvals'" :class="{ active: adminSection === 'approvals' }" @click="adminSection = 'approvals'">
+          {{ $t('admin.tabs.approvals') }}
+        </button>
+      </nav>
+
+      <section v-if="adminSection === 'users'" class="admin-panel">
         <div class="admin-panel-head admin-users-head">
           <h2>{{ $t('admin.users.title') }}</h2>
           <div class="admin-users-toolbar">
-            <div class="admin-segmented" role="group" :aria-label="$t('admin.users.tierFilter')">
-              <button
-                v-for="option in tierFilterOptions"
-                :key="option.value"
-                type="button"
-                :class="['admin-segment-btn', tierFilter === option.value ? 'active' : '']"
-                :disabled="loading"
-                @click="setTierFilter(option.value)"
-              >
-                {{ option.label }}
-              </button>
-            </div>
+            <UiSelect
+              class="admin-tier-select"
+              :model-value="tierFilter"
+              :options="tierFilterOptions"
+              :aria-label="$t('admin.users.tierFilter')"
+              :disabled="loading"
+              align="right"
+              trigger-class="admin-tier-select-trigger"
+              option-class="font-black"
+              @change="setTierFilter"
+            />
             <input
               v-model="query"
               class="admin-search"
@@ -233,10 +240,20 @@
                 <td>{{ formatNumber(item.usage_events) }}</td>
                 <td>{{ formatDate(item.created_at) }}</td>
                 <td>{{ formatDate(item.last_login_at) }}</td>
-                <td>
-                  <button type="button" class="action-btn-small justify-center" @click="openTokenAdjust(item)">
-                    {{ $t('admin.tokens.adjust') }}
-                  </button>
+                <td class="admin-user-action-cell">
+                  <div class="admin-user-actions" data-admin-user-actions @click.stop>
+                    <button type="button" class="action-btn-small admin-action-trigger justify-center" :aria-expanded="actionMenuUserId === item.id" @click="toggleActionMenu(item.id)">
+                      {{ $t('admin.actions.open') }}
+                    </button>
+                    <span v-if="item.pending_approval" class="admin-approval-dot" aria-hidden="true" />
+                    <div v-if="actionMenuUserId === item.id" class="admin-user-action-menu" role="menu">
+                      <button type="button" role="menuitem" @click="openTokenAdjust(item)">{{ $t('admin.tokens.adjust') }}</button>
+                      <button type="button" role="menuitem" @click="openApprovals(item)">{{ $t('admin.actions.approvals') }}</button>
+                      <button type="button" role="menuitem" :class="{ danger: item.status === 'active' }" @click="openStatusChange(item)">
+                        {{ $t(item.status === 'active' ? 'admin.actions.disable' : 'admin.actions.enable') }}
+                      </button>
+                    </div>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -286,6 +303,51 @@
             @click="goToPage(currentPage + 1)"
           >
             &gt;
+          </button>
+        </div>
+      </section>
+      <div v-else>
+      <AdminProfileReviews :active="active && adminSection === 'approvals'" />
+      <AdminApprovalTransactions
+        ref="approvalTransactionsPanel"
+        :active="active && adminSection === 'approvals'"
+        @changed="refresh"
+      />
+      </div>
+    </div>
+
+    <div v-if="approvals.open" class="admin-modal">
+      <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeApprovals" />
+      <section class="admin-modal-panel admin-approval-modal">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('admin.actions.approvals') }}</div>
+            <h2 class="mt-1 ui-metric font-black text-text-main">{{ approvals.user?.display_name || '-' }}</h2>
+            <div class="mt-1 truncate ui-body font-bold text-text-secondary">#{{ approvals.user?.id }} · {{ approvals.user?.email }}</div>
+          </div>
+          <button type="button" class="action-btn-small admin-modal-close" @click="closeApprovals">{{ $t('common.close') }}</button>
+        </div>
+        <AdminVerseClaims :active="approvals.open" :user-id="Number(approvals.user?.id || 0) || null" @changed="refresh" />
+        <AdminArchiveApplications :active="approvals.open" :user-id="Number(approvals.user?.id || 0) || null" @changed="refresh" />
+      </section>
+    </div>
+
+    <div v-if="statusChange.open" class="admin-modal">
+      <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeStatusChange" />
+      <section class="admin-modal-panel">
+        <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('admin.actions.accountStatus') }}</div>
+        <h2 class="mt-1 ui-metric font-black text-text-main">
+          {{ $t(statusChange.target === 'disabled' ? 'admin.actions.disableTitle' : 'admin.actions.enableTitle') }}
+        </h2>
+        <p class="mt-2 ui-body text-text-secondary">{{ statusChange.user?.display_name || '-' }} · {{ statusChange.user?.email }}</p>
+        <p class="mt-4 ui-body text-text-secondary">
+          {{ $t(statusChange.target === 'disabled' ? 'admin.actions.disableHint' : 'admin.actions.enableHint') }}
+        </p>
+        <div v-if="statusChange.error" class="admin-alert error">{{ statusChange.error }}</div>
+        <div class="mt-5 grid grid-cols-2 gap-2">
+          <button type="button" class="action-btn-small justify-center" :disabled="statusChange.submitting" @click="closeStatusChange">{{ $t('common.cancel') }}</button>
+          <button type="button" :class="['action-btn-small justify-center', statusChange.target === 'disabled' ? 'admin-danger-action' : 'btn-prominent']" :disabled="statusChange.submitting" @click="submitStatusChange">
+            {{ statusChange.submitting ? $t('common.updating') : $t(statusChange.target === 'disabled' ? 'admin.actions.confirmDisable' : 'admin.actions.confirmEnable') }}
           </button>
         </div>
       </section>
@@ -388,12 +450,17 @@
 </template>
 
 <script setup>
-import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import { adminClient } from '../../../services/admin/adminClient';
+import UiSelect from '../../../components/UiSelect.vue';
 import AdminLiveControl from '../components/AdminLiveControl.vue';
+import AdminVerseClaims from '../components/AdminVerseClaims.vue';
+import AdminArchiveApplications from '../components/AdminArchiveApplications.vue';
+import AdminApprovalTransactions from '../components/AdminApprovalTransactions.vue';
+import AdminProfileReviews from '../components/AdminProfileReviews.vue';
 
 const props = defineProps({
   active: Boolean,
@@ -401,6 +468,8 @@ const props = defineProps({
 
 const { t } = useI18n();
 const loading = ref(false);
+const adminSection = ref('users');
+const approvalTransactionsPanel = ref(null);
 const error = ref('');
 const query = ref('');
 const tierFilter = ref('all');
@@ -408,6 +477,9 @@ const currentPage = ref(1);
 const pageSize = 20;
 const overview = ref(null);
 const activeChartIndex = ref(null);
+const actionMenuUserId = ref(null);
+const approvals = ref({ open: false, user: null });
+const statusChange = ref({ open: false, user: null, target: 'disabled', submitting: false, error: '' });
 const tokenAdjust = ref({
   open: false,
   user: null,
@@ -499,6 +571,7 @@ const tierFilterOptions = computed(() => [
   { value: 'all', label: t('admin.users.tierAll') },
   { value: 'supporter', label: t('admin.users.tierSupporter') },
   { value: 'free', label: t('admin.users.tierFree') },
+  { value: 'pending', label: t('admin.users.tierPending') },
 ]);
 
 const linePoints = (points, key) => points.map((point) => `${point.x},${point[key]}`).join(' ');
@@ -626,7 +699,7 @@ const runSearch = () => {
 };
 
 const setTierFilter = (value) => {
-  const nextValue = ['all', 'supporter', 'free'].includes(value) ? value : 'all';
+  const nextValue = ['all', 'supporter', 'free', 'pending'].includes(value) ? value : 'all';
   if (tierFilter.value === nextValue) {
     return;
   }
@@ -649,7 +722,9 @@ const replaceUserInOverview = (updatedUser) => {
     return;
   }
   const replace = (items) => (Array.isArray(items)
-    ? items.map((item) => (Number(item.id) === Number(updatedUser.id) ? updatedUser : item))
+    ? items.map((item) => (Number(item.id) === Number(updatedUser.id)
+      ? { ...item, ...updatedUser, pending_approval: updatedUser.pending_approval ?? item.pending_approval }
+      : item))
     : items);
   overview.value = {
     ...overview.value,
@@ -660,7 +735,47 @@ const replaceUserInOverview = (updatedUser) => {
 
 const defaultTokenReason = () => t('admin.tokens.defaultReason');
 
+const toggleActionMenu = (userId) => {
+  actionMenuUserId.value = actionMenuUserId.value === userId ? null : userId;
+};
+
+const openApprovals = (user) => {
+  actionMenuUserId.value = null;
+  approvals.value = { open: true, user };
+};
+
+const closeApprovals = () => { approvals.value = { open: false, user: null }; };
+
+const openStatusChange = (user) => {
+  actionMenuUserId.value = null;
+  statusChange.value = {
+    open: true,
+    user,
+    target: user.status === 'active' ? 'disabled' : 'active',
+    submitting: false,
+    error: '',
+  };
+};
+
+const closeStatusChange = () => {
+  if (statusChange.value.submitting) return;
+  statusChange.value = { ...statusChange.value, open: false, error: '' };
+};
+
+const submitStatusChange = async () => {
+  if (!statusChange.value.user?.id) return;
+  statusChange.value = { ...statusChange.value, submitting: true, error: '' };
+  try {
+    const response = await adminClient.updateUserStatus(statusChange.value.user.id, statusChange.value.target);
+    replaceUserInOverview(response.user);
+    statusChange.value = { ...statusChange.value, open: false, submitting: false, user: response.user };
+  } catch (requestError) {
+    statusChange.value = { ...statusChange.value, submitting: false, error: userError(requestError, t('admin.actions.statusFailed')) };
+  }
+};
+
 const openTokenAdjust = (user) => {
+  actionMenuUserId.value = null;
   tokenAdjust.value = {
     open: true,
     user,
@@ -753,6 +868,14 @@ const refresh = async () => {
   }
 };
 
+const refreshCurrent = () => {
+  if (adminSection.value === 'approvals') {
+    approvalTransactionsPanel.value?.load?.();
+    return;
+  }
+  refresh();
+};
+
 onMounted(() => {
   if (props.active) {
     refresh();
@@ -767,6 +890,33 @@ watch(() => props.active, (active) => {
 </script>
 
 <style scoped>
+.admin-section-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 0.3rem;
+  border: 1px solid var(--border-main);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--bg-card) 90%, transparent);
+  padding: 0.3rem;
+}
+
+.admin-section-tabs button {
+  border: 0;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-ui-sm);
+  font-weight: 900;
+  padding: 0.62rem 1rem;
+  cursor: pointer;
+}
+
+.admin-section-tabs button.active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .admin-card,
 .admin-panel {
   border: 1px solid var(--border-main);
@@ -1024,30 +1174,20 @@ watch(() => props.active, (active) => {
   border-color: var(--accent);
 }
 
-.admin-segmented {
-  display: inline-grid;
-  grid-template-columns: repeat(3, minmax(4.5rem, 1fr));
+.admin-tier-select {
+  width: 8rem;
   flex: 0 0 auto;
-  overflow: hidden;
-  border: 1px solid var(--border-main);
-  border-radius: 0.85rem;
-  background: color-mix(in srgb, var(--bg-main) 74%, transparent);
 }
 
-.admin-segment-btn {
+.admin-tier-select :deep(.admin-tier-select-trigger) {
   min-height: 2.35rem;
-  min-width: 4.5rem;
-  border: 0;
-  border-right: 1px solid var(--border-main);
+  border: 1px solid var(--border-main);
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--bg-main) 82%, transparent);
   color: var(--text-secondary);
-  font-size: var(--font-ui-xs);
-  font-weight: 950;
-  line-height: 1.2;
-  padding: 0.45rem 0.7rem;
-  white-space: nowrap;
-  word-break: keep-all;
-  writing-mode: horizontal-tb;
-  transition: background-color 0.16s ease, color 0.16s ease;
+  font-size: var(--font-ui-sm);
+  font-weight: 850;
+  padding: 0.5rem 0.7rem;
 }
 
 .admin-users-head h2 {
@@ -1075,16 +1215,6 @@ watch(() => props.active, (active) => {
   width: auto;
   min-height: 2.35rem;
   flex: 0 0 auto;
-}
-
-.admin-segment-btn:last-child {
-  border-right: 0;
-}
-
-.admin-segment-btn:hover:not(:disabled),
-.admin-segment-btn.active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--text-main);
 }
 
 .admin-table {
@@ -1225,6 +1355,74 @@ watch(() => props.active, (active) => {
   text-transform: uppercase;
 }
 
+.admin-user-action-cell {
+  min-width: 7.25rem;
+}
+
+.admin-user-actions {
+  position: relative;
+  display: inline-block;
+  overflow: visible;
+}
+
+.admin-action-trigger {
+  position: relative;
+}
+
+.admin-approval-dot {
+  position: absolute;
+  top: -0.3rem;
+  right: -0.3rem;
+  width: 0.58rem;
+  height: 0.58rem;
+  border: 2px solid var(--bg-card);
+  border-radius: 999px;
+  background: rgb(239, 68, 68);
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.22);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.admin-user-action-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  display: grid;
+  width: 10.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border-main);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--bg-card) 98%, transparent);
+  box-shadow: 0 16px 42px rgba(15, 23, 42, 0.24);
+  padding: 0.35rem;
+}
+
+.admin-user-action-menu button {
+  border: 0;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: var(--text-main);
+  font-size: var(--font-ui-sm);
+  font-weight: 850;
+  padding: 0.65rem 0.75rem;
+  text-align: left;
+}
+
+.admin-user-action-menu button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-main));
+}
+
+.admin-user-action-menu button.danger {
+  color: rgb(239, 68, 68);
+}
+
+.admin-danger-action {
+  border-color: rgba(239, 68, 68, 0.38) !important;
+  background: rgba(239, 68, 68, 0.13) !important;
+  color: rgb(239, 68, 68) !important;
+}
+
 .admin-empty {
   border: 1px dashed var(--border-main);
   border-radius: 1rem;
@@ -1260,6 +1458,16 @@ watch(() => props.active, (active) => {
 
 .admin-modal-close {
   min-width: 4.5rem;
+}
+
+.admin-approval-modal {
+  width: min(48rem, 100%);
+}
+
+.admin-approval-modal :deep(.admin-panel) {
+  margin-top: 1rem;
+  border-radius: 1rem;
+  box-shadow: none;
 }
 
 .admin-form-row {

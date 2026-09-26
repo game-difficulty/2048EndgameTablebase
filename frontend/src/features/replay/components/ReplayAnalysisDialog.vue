@@ -12,6 +12,12 @@
             <div class="mt-1 text-2xl font-black text-text-main">{{ $t('analysis.title') }}</div>
           </div>
           <div class="flex min-w-0 items-center gap-3">
+            <button
+              class="rounded-full border border-border-main bg-bg-main/80 px-3 py-1.5 ui-control font-black text-text-main"
+              @click="historyMode = !historyMode"
+            >
+              {{ historyMode ? $t('analysis.title') : (String(locale).startsWith('zh') ? '分析历史' : 'History') }}
+            </button>
             <span :class="[statusBadgeClass, 'badge-state-compact']" :title="statusBadgeText">{{ statusBadgeText }}</span>
             <button
               class="rounded-full border border-border-main bg-bg-main/80 px-3 py-1.5 ui-control font-black uppercase tracking-wider text-text-main transition-colors hover:border-accent/40 hover:text-accent"
@@ -22,7 +28,10 @@
           </div>
         </div>
 
-        <div class="analysis-dialog-body grid grid-cols-[minmax(340px,0.95fr)_minmax(0,1.05fr)] gap-5 p-6">
+        <div v-if="historyMode" class="p-6">
+          <AnalysisHistoryPanel :language="String(locale)" />
+        </div>
+        <div v-else class="analysis-dialog-body grid grid-cols-[minmax(340px,0.95fr)_minmax(0,1.05fr)] gap-5 p-6">
           <section class="rounded-[24px] border border-border-main/70 bg-bg-main/65 p-5 shadow-inner">
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.input.title') }}</div>
             <div class="mt-4 space-y-4">
@@ -165,6 +174,13 @@
                   <div class="min-w-0">
                     <div class="truncate ui-body font-black text-text-main" :title="entry.path">{{ entry.path }}</div>
                     <div v-if="entry.message" class="mt-0.5 truncate ui-caption font-black text-red-500/85" :title="userError(entry.message)">{{ userError(entry.message) }}</div>
+                    <div v-if="entry.artifacts?.length" class="mt-1 flex flex-wrap gap-1">
+                      <button v-for="artifact in entry.artifacts" :key="artifact.artifact_id" type="button"
+                        class="rounded-md border border-border-main px-2 py-1 ui-caption font-black text-text-main"
+                        @click="openAnalysisReplay(artifact.artifact_id)">
+                        {{ String(locale).startsWith('zh') ? '回放阶段' : 'Replay stage' }} {{ artifact.segment_index + 1 }} ↗
+                      </button>
+                    </div>
                   </div>
                   <div
                     class="badge-state"
@@ -187,11 +203,12 @@
 </template>
 
 <script setup>
-import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import UiSelect from '../../../components/UiSelect.vue';
+import AnalysisHistoryPanel from '../../../components/AnalysisHistoryPanel.vue';
 import { downloadResponse, pickBrowserFiles, postMultipart } from '../../../services/files/browserFiles';
 import { useAuthState } from '../../../services/auth/authState';
 import { emitTokenBalanceUpdated } from '../../../services/auth/authEvents';
@@ -215,7 +232,7 @@ const props = defineProps({
 
 defineEmits(['close']);
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const { requireAuth } = useAuthState();
 
 const wsStatus = ref('disconnected');
@@ -243,6 +260,7 @@ const listScrollTop = ref(0);
 const analysisError = ref('');
 const isDownloading = ref(false);
 const activeJobId = ref('');
+const historyMode = ref(false);
 
 let client = null;
 let pollTimer = null;
@@ -291,8 +309,22 @@ const normalizedEntries = computed(() =>
     path: entry.filename || entry.path,
     status: entry.status,
     message: entry.message || '',
+    artifacts: entry.artifacts || [],
   }))
 );
+
+async function openAnalysisReplay(artifactId) {
+  try {
+    const response = await fetch(getBackendUrl(`/api/analysis/replays/${encodeURIComponent(artifactId)}/open-link`), {
+      method: 'POST', credentials: 'include', headers: authHeaders({ Accept: 'application/json' }),
+    });
+    if (!response.ok) throw new Error(String(response.status));
+    const data = await response.json();
+    window.open(data.url, '_blank', 'noopener');
+  } catch {
+    analysisError.value = String(locale.value).startsWith('zh') ? '回放暂时无法打开。' : 'The replay cannot be opened right now.';
+  }
+}
 const visibleCount = computed(() => Math.ceil(LIST_VIEWPORT_HEIGHT / LIST_ITEM_HEIGHT) + LIST_OVERSCAN * 2);
 const startIndex = computed(() =>
   Math.max(0, Math.floor(listScrollTop.value / LIST_ITEM_HEIGHT) - LIST_OVERSCAN)
@@ -353,6 +385,10 @@ const markTargetSelection = () => {
 };
 
 const applyContext = (context) => {
+  if (context?.analysisFile instanceof File) {
+    selectedFiles.value = [context.analysisFile];
+    pathsInput.value = context.analysisFile.name;
+  }
   const nextPattern = String(context?.pattern || '').trim();
   const nextTarget = String(context?.target || '').trim();
   if (nextPattern) {

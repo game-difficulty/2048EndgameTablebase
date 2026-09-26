@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { LiveBoardPlayback, LIVE_PLAYBACK_MAX_DELAY, LIVE_PLAYBACK_MAX_FRAMES } from '../src/live/content/liveBoardPlayback.js';
+import { LiveBoardPlayback, LIVE_PLAYBACK_BASE_INTERVAL } from '../src/live/content/liveBoardPlayback.js';
 import { emptyMultiState, receiveMultiJson, receiveMultiBatch, syncMultiFrames } from '../src/live/content/multiLiveState.js';
 import { boardFrameRenderMode } from '../src/components/boardFrame.js';
 
@@ -20,7 +20,7 @@ test('batched moves remain continuous for the main board and drain without anoth
   player.enqueue(laneMoves,0);
   let board=initial.frames[0].toBoard;
   laneMoves.forEach(({frame},i)=>{
-    const painted=player.paint(i*16,'focus',0)[0];
+    const painted=player.paint(i*LIVE_PLAYBACK_BASE_INTERVAL,'focus',0)[0];
     assert.strictEqual(painted,frame);
     assert.equal(boardFrameRenderMode(board,painted),'animate');
     board=painted.toBoard;
@@ -30,36 +30,64 @@ test('batched moves remain continuous for the main board and drain without anoth
   assert.deepEqual(initial.slots[0].run.board,fixture.snapshot.lanes[0].run.board);
 });
 
-test('equal boards share the same cadence while focus previews drain on their own cadence',()=>{
+test('all layouts and lanes consume the same queue cadence',()=>{
+  const {initial,transitions}=decoded();
+  const focus=new LiveBoardPlayback(initial.frames), equal=new LiveBoardPlayback(initial.frames);
+  focus.enqueue(transitions,0);equal.enqueue(transitions,0);
+  for(let now=0;now<1000;now+=4) {
+    assert.deepEqual(focus.paint(now,'focus',0),equal.paint(now,'equal',0));
+    assert.deepEqual(focus.queues.map(q=>q.length),equal.queues.map(q=>q.length));
+  }
+  assert.equal(focus.pending,false);
+});
+
+test('long stalls and more than twelve moves preserve every queued frame',()=>{
   const {initial,transitions}=decoded();
   const player=new LiveBoardPlayback(initial.frames);
-  player.enqueue(transitions,0);
-  const first=player.paint(0,'equal',0);
-  assert.deepEqual(player.paint(16,'equal',0),first);
-  const second=player.paint(34,'equal',0);
-  for(let lane=0;lane<3;lane++)assert.notEqual(second[lane].revision,first[lane].revision);
-  player.sync(initial.frames);player.enqueue(transitions,0);
-  const focus=player.paint(0,'focus',0);
-  const main=player.paint(17,'focus',0);
-  assert.notEqual(main[0].revision,focus[0].revision);
-  assert.strictEqual(main[1],focus[1]);assert.strictEqual(main[2],focus[2]);
-  assert.equal(player.pending,true);
-  const previews=player.paint(68,'focus',0);
-  assert.notEqual(previews[1].revision,focus[1].revision);
+  const moves=Array.from({length:50},(_,i)=>({lane:0,frame:{...transitions[0].frame,revision:`ordered:${i}`}}));
+  player.enqueue(moves,0);
+  assert.equal(player.queues[0].length,50);
+  let now=5000,previous=initial.frames[0];const seen=[];
+  while(player.pending) {
+    const frame=player.paint(now)[0];
+    if(frame!==previous){seen.push(frame.revision);previous=frame;}
+    now+=player.pending?player.nextDelay(now)+0.001:0;
+    assert.ok(now<10000);
+  }
+  assert.deepEqual(seen,moves.map(m=>m.frame.revision));
+  assert.equal(previous.kind,'move');
 });
 
-test('overdue or excessive buffering jumps forward and never accumulates a long replay',()=>{
-  const {initial,next,transitions}=decoded();
-  const player=new LiveBoardPlayback(initial.frames);
-  player.enqueue(transitions,0);
-  const frames=player.paint(LIVE_PLAYBACK_MAX_DELAY+1,'equal',0);
+test('backlog accelerates gradually and returns gradually to normal cadence',()=>{
+  const {initial,transitions}=decoded();const player=new LiveBoardPlayback(initial.frames);
+  player.enqueue(Array.from({length:30},()=>transitions[0]));
+  let now=0;player.paint(now);
+  const first=player.intervals[0];
+  assert.ok(first<40 && first>20);
+  while(player.queues[0].length>3){now+=player.nextDelay(now)+0.001;player.paint(now);}
+  const fast=player.intervals[0];
+  now+=player.nextDelay(now)+0.001;player.paint(now);
+  assert.ok(player.intervals[0]>fast && player.intervals[0]<40);
+});
+
+test('three fast streams release in order without a growing backlog',()=>{
+  const {initial,transitions}=decoded();const player=new LiveBoardPlayback(initial.frames);
+  let produced=0,consumed=0,maxQueue=0,previous=[...initial.frames];
+  for(let now=0;now<10000;now++) {
+    if(now<8000 && now%18===0) {
+      player.enqueue([0,1,2].map(lane=>({lane,frame:{...transitions[0].frame,revision:`${lane}:${produced}`}})));
+      produced++;
+    }
+    const frames=player.paint(now);
+    for(let lane=0;lane<3;lane++)if(frames[lane]!==previous[lane]){consumed++;previous[lane]=frames[lane];}
+    maxQueue=Math.max(maxQueue,...player.queues.map(q=>q.length));
+  }
+  assert.equal(consumed,produced*3);
   assert.equal(player.pending,false);
-  frames.forEach((frame,lane)=>{assert.equal(frame.kind,'snapshot');assert.deepEqual(frame.toBoard,next.slots[lane].run.board);});
-  for(let i=0;i<1000;i++)player.enqueue([transitions[0]],i);
-  assert.ok(player.queues[0].length<=LIVE_PLAYBACK_MAX_FRAMES);
+  assert.ok(maxQueue<20,`backlog ${maxQueue}`);
 });
 
-test('snapshot, layout switch and single-lane termination discard only the intended buffered moves',()=>{
+test('explicit snapshot and lane replacement reset only the intended queues',()=>{
   const {initial,next,transitions}=decoded();
   const player=new LiveBoardPlayback(initial.frames);
   player.enqueue(transitions,0);

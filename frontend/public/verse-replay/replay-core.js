@@ -641,11 +641,12 @@
       if (ended) throw new ReplayFormatError('End 记录后仍有数据。');
       if (type < 128) {
         if (rawMoves.length >= 200000) throw new ReplayFormatError('回放不能超过 200000 步。');
+        const encodedDeltaMs = decodeUleb128(bytes, state, payloadEnd);
         rawMoves.push({
           direction: NEXT_DIRECTIONS[type & 3],
           spawnIndex: (type >>> 2) & 0x0f,
           spawnExponent: ((type >>> 6) & 1) + 1,
-          deltaMs: decodeUleb128(bytes, state, payloadEnd),
+          deltaMs: encodedDeltaMs === 0xffffffff ? null : encodedDeltaMs,
         });
       } else if (type === 130) {
         if (width !== 4 || height !== 4 || rawMoves.length || hasCheckpoint || initialCount !== 0 || state.offset + 10 > payloadEnd) {

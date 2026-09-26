@@ -261,6 +261,20 @@ def refresh_leaderboard(board_key: str, *, force: bool = False, now: datetime | 
     definition = BOARD_BY_KEY.get(str(board_key or ""))
     if definition is None:
         raise KeyError(board_key)
+    if definition.key in GAMER_WEEKLY_BOARDS:
+        from backend.leaderboards.rolling_gamer import ensure_backfill
+        from backend import rolling_leaderboards as rolling
+        with auth_db() as db:
+            if (force or not db.execute("SELECT 1 FROM rolling_meta WHERE key='gamer_rolling_v1'").fetchone()
+                    or rolling.due(db, definition.key, now)):
+                db.execute('BEGIN IMMEDIATE')
+            ensure_backfill(db, now)
+            if force:
+                rolling.rebuild(db, definition.key, now)
+            else:
+                rolling.maintain(db, definition.key, now)
+            return db.execute("SELECT COUNT(*) FROM rolling_board_entries WHERE board_key=?",
+                              (definition.key,)).fetchone()[0]
     with _REFRESH_LOCK:
         with auth_db() as db:
             return _refresh_definition(db, definition, force=force, now=now)
@@ -271,6 +285,8 @@ def refresh_due_leaderboards(*, force: bool = False, now: datetime | None = None
     with _REFRESH_LOCK:
         with auth_db() as db:
             for definition in BOARD_DEFINITIONS:
+                if definition.key in GAMER_WEEKLY_BOARDS:
+                    continue
                 count = _refresh_definition(db, definition, force=force, now=now)
                 if count is not None:
                     refreshed[definition.key] = count
@@ -302,6 +318,9 @@ def leaderboard_payload(board_key: str, *, limit: int = LEADERBOARD_LIMIT) -> di
     definition = BOARD_BY_KEY.get(str(board_key or ""))
     if definition is None:
         raise KeyError(board_key)
+    if definition.key in GAMER_WEEKLY_BOARDS:
+        from backend.leaderboards.rolling_gamer import payload
+        return payload(definition.key, limit=limit)
     refresh_due_leaderboards()
     with auth_db() as db:
         snapshot = db.execute(

@@ -611,9 +611,10 @@ class GamerRankedServiceTests(unittest.TestCase):
         self.assertEqual(verified["status"], "verified")
         with auth_db() as db:
             score_row = db.execute(
-                "SELECT replay_id FROM gamer_high_scores WHERE user_id = ?",
+                "SELECT replay_id,record_blob FROM gamer_high_scores WHERE user_id = ?",
                 (self.user_id,),
             ).fetchone()
+            self.assertEqual(score_row['record_blob'], '')
         replay = public_replay(score_row["replay_id"])
         self.assertEqual(replay["record_blob"], record)
         board = leaderboard_payload("gamer_high_score")
@@ -623,6 +624,25 @@ class GamerRankedServiceTests(unittest.TestCase):
         weekly = leaderboard_payload("gamer_high_score_weekly")
         self.assertEqual(weekly["entries"][0]["score"], score)
         self.assertEqual(weekly["entries"][0]["replay_id"], score_row["replay_id"])
+
+    def test_after_cutover_keeps_rolling_replay_without_new_calendar_row(self):
+        with auth_db() as db:
+            db.execute("""UPDATE token_reward_state SET value=?
+                WHERE key='rolling_first_boundary'""",
+                ((datetime.now(timezone.utc)-timedelta(days=7)).isoformat(),))
+        run = create_ranked_run(user_id=self.user_id, request_id='rolling-only',
+                                ip_address='127.0.0.1', lease_token=LEASE_TOKEN)
+        record, score, final_board = _completed_random_game(run['seed_hex'])
+        submit_ranked_run(run_id=run['run_id'], user_id=self.user_id,
+                          score=score, final_board_codes=final_board,
+                          record_encoding=record, ip_address='127.0.0.1',
+                          lease_token=run['lease_token'])
+        self.assertTrue(process_one_pending_run())
+        with auth_db() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM gamer_weekly_high_scores").fetchone()[0], 0)
+        weekly = leaderboard_payload('gamer_high_score_weekly')
+        self.assertEqual(weekly['entries'][0]['score'], score)
+        self.assertEqual(public_replay(weekly['entries'][0]['replay_id'])['record_blob'], record)
 
     def test_personal_best_candidate_bypasses_rolling_submission_limit(self):
         self._insert_recent_submissions()
@@ -741,8 +761,9 @@ class GamerRankedServiceTests(unittest.TestCase):
         all_time = leaderboard_payload("gamer_high_score")
         weekly = leaderboard_payload("gamer_high_score_weekly")
         self.assertEqual(all_time["entries"][0]["score"], 999999)
-        self.assertEqual(weekly["entries"][0]["score"], score)
-        self.assertEqual(public_replay(weekly["entries"][0]["replay_id"])["record_blob"], record)
+        # The rolling 168-hour board includes the recent all-time PB too.
+        self.assertEqual(weekly["entries"][0]["score"], 999999)
+        self.assertEqual(public_replay(weekly["entries"][0]["replay_id"])["record_blob"], 'old-record')
 
     def test_replay_retention_keeps_only_the_highest_scores_per_board(self):
         now = datetime.now(timezone.utc).isoformat()

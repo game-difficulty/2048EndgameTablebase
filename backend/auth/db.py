@@ -258,6 +258,14 @@ def init_auth_db() -> None:
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS user_preferences (
+              user_id INTEGER PRIMARY KEY,
+              preferences_json TEXT NOT NULL DEFAULT '{}',
+              revision INTEGER NOT NULL DEFAULT 1,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS user_profile_change_events (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               user_id INTEGER NOT NULL,
@@ -268,6 +276,13 @@ def init_auth_db() -> None:
               user_agent TEXT,
               created_at TEXT NOT NULL,
               FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS profile_change_reviews (
+              event_id INTEGER PRIMARY KEY REFERENCES user_profile_change_events(id),
+              status TEXT NOT NULL DEFAULT 'pending',
+              reviewed_by INTEGER REFERENCES users(id),
+              reviewed_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS token_ledger (
@@ -767,6 +782,12 @@ def init_auth_db() -> None:
 
         from backend.token_rewards import init_schema as init_reward_schema
         init_reward_schema(db)
+        from backend.rolling_leaderboards import init_schema as init_rolling_schema
+        init_rolling_schema(db)
+        db.execute("""CREATE TABLE IF NOT EXISTS gamer_rolling_replays (
+            run_id TEXT PRIMARY KEY, replay_id TEXT NOT NULL UNIQUE,
+            compressed_record BLOB NOT NULL
+        )""")
 
         now = _iso_now()
         # Paid-balance rewards are not proof of sponsorship for legacy backfill.

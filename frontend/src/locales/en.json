@@ -315,7 +315,7 @@
       },
       "periods": {
         "all": "All Time",
-        "week": "This Week"
+        "week": "Last 7 days"
       },
       "empty": "No verified scores are available for this leaderboard.",
       "loadFailed": "Failed to load the leaderboard.",
@@ -647,7 +647,14 @@
         "recharge": "**Recharge**: CNY 9.9 for **100,000**; CNY 99 for **2,000,000**. Credited after admin confirmation.",
         "lucky": "**Live lucky bags**: 32K has a 5,000 pool, with **300–1,000** per winner; 65K has a 20,000 pool, with **1,000–3,000** per winner. Up to 10 winners per bag; **stay in the room for the draw**. Pools need not be fully distributed.",
         "envelope": "**Live red envelopes**: claim gifts from viewers. Each envelope contains **1,000–50,000** split into **5–20 shares**; your reward depends on your claim.",
-        "weekly": "**Weekly Gamer rankings**: **high-score places 1–5** earn **10,000 / 8,000 / 5,000 / 3,000 / 2,000**; **adversarial** places earn **5,000 / 4,000 / 3,000 / 2,000 / 1,000**. Settled each Monday (UTC+8) after score verification. **You can earn from both boards**.",
+        "weekly": "**Last 7 days weekly rewards**: Verified scores from the preceding 168 hours are frozen every Monday at **08:00 Beijing time**. Each player's best run counts on each board. Players may earn rewards on multiple boards; the amounts are listed below.",
+        "weeklyTable": {
+          "rank": "Place",
+          "main": "Main general",
+          "adversarial": "Adversarial",
+          "play4": "Play 4×4",
+          "playOther": "Play 3×4 / 3×3 / 2×4"
+        },
         "trophy": "**Minigame trophies**: Bronze / Silver / Gold / Grand earn **2,000 / 3,000 / 5,000 / 10,000**, **once per game, difficulty and tier**. **Higher tiers include unclaimed lower tiers**: a direct Grand earns **20,000**. Verified results only; existing verified trophies receive a one-time credit too."
       },
       "costs": {
@@ -691,6 +698,11 @@
     "subtitle": "Monitor user count, recent service activity, and look up accounts by email, username, or ID.",
     "refresh": "Refresh",
     "empty": "No data",
+    "tabs": {
+      "label": "Admin query type",
+      "users": "User lookup",
+      "approvals": "Approval transactions"
+    },
     "summary": {
       "usersTotal": "Total users",
       "usersActive": "Active users",
@@ -722,6 +734,7 @@
       "tierAll": "All",
       "tierSupporter": "Supporters",
       "tierFree": "Free",
+      "tierPending": "Pending approval",
       "pagination": "{start}-{end} / {total}, page {page} of {page_count}",
       "prevPage": "Previous",
       "nextPage": "Next"
@@ -745,6 +758,20 @@
       "updated": "Tokens updated.",
       "updateFailed": "Failed to adjust tokens.",
       "defaultReason": "Manual WeChat sponsor confirmation"
+    },
+    "actions": {
+      "open": "Actions",
+      "approvals": "Approvals",
+      "disable": "Disable account",
+      "enable": "Enable account",
+      "accountStatus": "Account status",
+      "disableTitle": "Disable account",
+      "enableTitle": "Enable account",
+      "disableHint": "This immediately revokes the user's sessions and temporarily removes them from live rankings. Historical data is preserved.",
+      "enableHint": "This allows the user to sign in again and restores live ranking records that are still eligible.",
+      "confirmDisable": "Disable account",
+      "confirmEnable": "Enable account",
+      "statusFailed": "Failed to update account status."
     },
     "entitlements": {
       "supporter": "Supporter"
@@ -1131,12 +1158,12 @@
         "description": "Personal bests played entirely at difficulty 100."
       },
       "gamer_high_score_weekly": {
-        "title": "Weekly High Scores",
-        "description": "This week's personal bests in general mode."
+        "title": "Last 7 Days High Scores",
+        "description": "Personal bests in general mode during the last 168 hours."
       },
       "gamer_adversarial_weekly": {
-        "title": "Weekly Adversarial High Scores",
-        "description": "This week's personal bests played entirely at difficulty 100."
+        "title": "Last 7 Days Adversarial High Scores",
+        "description": "Personal bests played entirely at difficulty 100 during the last 168 hours."
       },
       "minigames": {
         "title": "Minigames",

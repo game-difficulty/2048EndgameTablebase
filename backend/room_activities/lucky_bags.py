@@ -46,7 +46,17 @@ def create(run_id, milestone, now=None, room_id='ai-classic'):
                            room_id=room_id, now=now, milestone=milestone)
 
 
-def create_activity(trigger_key, reward_spec, *, room_id, now=None, milestone=0):
+def create_human(run_id, milestone, now=None, room_id=''):
+    """Create one verified reward per Play run, even if it changes live rooms."""
+    if not room_id or milestone not in RULES:
+        raise ValueError('invalid_human_milestone')
+    pool, minimum, maximum = RULES[milestone]
+    return create_activity('human:' + str(run_id),
+        dict(pool=pool, minimum=minimum, maximum=maximum), room_id=room_id,
+        now=now, milestone=milestone, namespace=False)
+
+
+def create_activity(trigger_key, reward_spec, *, room_id, now=None, milestone=0, namespace=True):
     """Reusable idempotent room giveaway; no AI run or board threshold is required."""
     pool, minimum, maximum = (reward_spec[key] for key in ('pool','minimum','maximum'))
     if any(type(value) is not int for value in (pool,minimum,maximum)) or not 0 < minimum <= maximum <= pool or pool < MAX_WINNERS*minimum:
@@ -55,7 +65,7 @@ def create_activity(trigger_key, reward_spec, *, room_id, now=None, milestone=0)
         raise ValueError('invalid_activity_trigger')
     run_id = trigger_key
     # Namespace the retained legacy unique key without rebuilding award/FK tables.
-    if room_id != 'ai-classic':
+    if namespace and room_id != 'ai-classic':
         run_id = room_id + ':' + run_id
     now = time.time() if now is None else now
     with auth_db() as db:

@@ -105,3 +105,22 @@ export async function fetchLatestReplay({ requestId }) {
     },
   );
 }
+
+export async function fetchAnalysisReplay({ artifactId, token = '' }) {
+  const suffix = token ? `?token=${encodeURIComponent(token)}` : '';
+  return requestWithTransportRetry(
+    getBackendUrl(`/api/analysis/replays/${encodeURIComponent(artifactId)}${suffix}`),
+    { method: 'GET', credentials: 'include', headers: authHeaders({ Accept: 'application/octet-stream' }) },
+    async (response) => {
+      if (!response.ok) await handleProtectedResponseError(response, 'Analysis replay request failed');
+      return {
+        buffer: await response.arrayBuffer(),
+        filename: filenameFromHeaders(response.headers, 'analysis-stage.rpl'),
+        pattern: response.headers.get('x-replay-pattern') || '',
+        source: response.headers.get('x-replay-source') || 'Analysis history',
+        useVariant: response.headers.get('x-replay-variant') === '1',
+        maxBytes: 16 * 1024 * 1024,
+      };
+    },
+  );
+}

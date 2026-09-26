@@ -9,7 +9,7 @@ from .codec import to_planes, from_planes
 from backend.gamer_ranked.prng import Xoshiro128StarStar
 
 VARIANTS = {"4x4": (4, 4), "3x4": (3, 4), "2x4": (2, 4), "3x3": (3, 3)}
-THRESHOLDS = {"4x4": 360000, "3x4": 36000, "2x4": 4000, "3x3": 7200}
+THRESHOLDS = {"4x4": 800000, "3x4": 70000, "2x4": 5000, "3x3": 10000}
 RESTART_THRESHOLDS = {"4x4": 10000, "3x4": 2500, "2x4": 500, "3x3": 1000}
 NODES = {variant: [2 ** exponent for exponent in range(5, 32)] for variant in VARIANTS}
 EVENT = struct.Struct("<BI")
@@ -63,6 +63,7 @@ def initial(run_id, variant, seed):
     spawn(board, rng)
     spawn(board, rng)
     return {"board": board, "rng": rng.state, "score": 0, "seq": 0, "elapsed": 0,
+            "fourCount": board.count(4), "spawnCount": 2,
             "nodes": {}, "first_over": None,
             "hash": hashlib.sha256(f"HPR1|{run_id}|{variant}|{seed}".encode()).hexdigest()}
 
@@ -71,7 +72,7 @@ def game_over(board, rows, cols):
     return all(move(board, rows, cols, d)[0] == board for d in range(4))
 
 
-def advance(state, variant, data, threshold=None):
+def advance(state, variant, data, threshold=None, observer=None):
     if len(data) % EVENT.size or len(data) > MAX_BYTES:
         raise ValueError("invalid_binary_length")
     state = json.loads(json.dumps(state))
@@ -90,6 +91,9 @@ def advance(state, variant, data, threshold=None):
         state["board"] = board
         state["score"] += score
         state["seq"] += 1
+        if "spawnCount" in state:
+            state["spawnCount"] += 1
+            state["fourCount"] += int(value == 4)
         if threshold is not None and state["score"] > threshold and state["first_over"] is None:
             state["first_over"] = state["seq"]
         state["elapsed"] += delta
@@ -97,6 +101,8 @@ def advance(state, variant, data, threshold=None):
         for tile in NODES[variant]:
             if tile in board and str(tile) not in state["nodes"]:
                 state["nodes"][str(tile)] = {"seq": state["seq"], "elapsed": state["elapsed"]}
+        if observer is not None:
+            observer(state)
     state["rng"] = rng.state
     return state
 

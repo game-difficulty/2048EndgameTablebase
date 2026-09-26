@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="赌赢爆笑">
+<ellipse cx="64" cy="118" rx="44" ry="4" fill="#162239" opacity=".15"/>
+<g class="coin coin-left"><circle cx="14" cy="30" r="10" fill="#e0aa40" stroke="#aa782d" stroke-width="2"/><circle cx="14" cy="29" r="6.5" fill="#f9d878" stroke="#fff1b5" stroke-width="1.5"/><path d="M14 25v8" stroke="#b88734" stroke-width="2"/></g>
+<g class="coin coin-right"><circle cx="113" cy="22" r="10" fill="#e0aa40" stroke="#aa782d" stroke-width="2"/><circle cx="113" cy="21" r="6.5" fill="#f9d878" stroke="#fff1b5" stroke-width="1.5"/><path d="M113 17v8" stroke="#b88734" stroke-width="2"/></g>
+<g class="face"><path d="M108 61c0 28-17 47-44 47S20 89 20 61s17-44 44-44 44 16 44 44Z" fill="#d79635" stroke="#ac762e" stroke-width="2.5"/><ellipse cx="64" cy="59" rx="44" ry="43" fill="#f4c35d"/><path d="M29 40q8-16 25-17" fill="none" stroke="#ffe4a1" stroke-width="5" stroke-linecap="round"/><ellipse cx="35" cy="70" rx="9" ry="5" fill="#e89464" opacity=".65"/><ellipse cx="93" cy="70" rx="9" ry="5" fill="#e89464" opacity=".65"/>
+ <path d="M34 47q7-6 15-5m30 0q8-1 15 5" fill="none" stroke="#805034" stroke-width="3" stroke-linecap="round"/>
+ <path d="m35 55 13 6-13 5m58-11-13 6 13 5" fill="none" stroke="#705039" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+ <path d="M42 73q22 6 44 0-2 26-22 26T42 73Z" fill="#7b4238" stroke="#704232" stroke-width="2"/><path d="M45 75q19 4 38 0l-4 9H49Z" fill="#fff8dd"/><path d="M53 95q11-14 22 0-11 7-22 0Z" fill="#e58678"/>
+ <path d="M29 67q-13 9-7 13 8 4 7-13Z" fill="#77c9e0"/><path d="M100 66q13 9 7 13-8 4-7-13Z" fill="#77c9e0"/>
+</g>
+<g class="hands"><path d="m24 102 7-11q3-4 6 0l3 8 4-4q5-3 7 2l-1 12-10 9Z" fill="#f7ca6d" stroke="#b98539" stroke-width="2.5"/><path d="m104 102-7-11q-3-4-6 0l-3 8-4-4q-5-3-7 2l1 12 10 9Z" fill="#f7ca6d" stroke="#b98539" stroke-width="2.5"/></g>
+<g class="spark" fill="#f4ce74" stroke="#bd873c" stroke-width="1"><path d="m8 56 3 6 6 2-6 2-3 6-2-6-6-2 6-2Z"/><path d="m115 51 2 5 6 2-6 2-2 5-2-5-6-2 6-2Z"/></g>
+</svg>

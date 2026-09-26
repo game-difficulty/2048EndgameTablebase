@@ -1,6 +1,5 @@
-// Natural endings always upload. Other endings upload only strictly above the
-// threshold assigned to that game, including when revisiting older local saves.
+// Every ended signed-in game is retained. Visibility is decided by the
+// display threshold captured by the server when the run was created.
 export function needsReplayUpload(run) {
-  return !!run && !run.guest && !!run.reason && !run.archived
-    && (run.reason === 'game_over' || run.score > run.threshold);
+  return !!run && !run.guest && !!run.reason && !run.archived;
 }

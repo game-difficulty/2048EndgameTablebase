@@ -24,7 +24,7 @@ test('iii has inline motion for all senders without a ceremony', () => {
   assert.equal(giftPrice({base_units:111000,global_multiplier_units:1000},1),111000);
 });
 test('only designated gifts animate, with supporter checks independent of rarity', () => {
-  for (const gift_id of ['button','tea','whale','moai','chicken','serious','rip']) {
+  for (const gift_id of ['button','tea','whale','moai','chicken','serious','rip','bad-four','dealer-fault','cry-loss','laugh-win']) {
     assert.equal(giftAnimation(gift('a', { gift_id })), null);
     for (const supporter_level of [1,2]) assert.equal(giftAnimation(gift('a', { gift_id, actor: { supporter_level } })), 'supporter');
   }

@@ -323,8 +323,9 @@ database. Only the head can be claimed. Its clock starts on activation, stays on
 screen for at least 15 seconds even if exhausted, and expires at 60 seconds.
 Unclaimed shares return to the sender automatically, including after disconnects
 or a server restart. A queued envelope gets its own full minute when activated.
-The sender cannot claim their own envelope; each other logged-in viewer with a
-fresh room heartbeat can claim once. No AI publisher connection is required.
+The sender can claim their own envelope just like any other logged-in viewer with
+a fresh room heartbeat: one share per person, first come, first served. The sender
+has no reserved share. No AI publisher connection is required.
 
 Random mode samples a uniform positive integer composition and shuffles it using
 the system CSPRNG, giving every claim position the same expectation. Allocations
@@ -384,7 +385,7 @@ in session storage. Multiple active cards stack without changing the content
 rectangle. The permanent prediction entry in the gift strip remains available.
 The prediction dock card only appears during the connected/live opening window.
 The red envelope card only appears while shares are claimable (not expired,
-exhausted, the sender's own envelope, or already claimed by this viewer). Its
+exhausted, queued, or already claimed by this viewer), including for the sender. Its
 chat message still opens the result after the dock card disappears.
 
 `tools/live_pacing.py` derives a shuffled three-lane delay profile from each fresh
@@ -416,3 +417,70 @@ Before production: verify guest issuance behind the new host, HTTPS login/logout
 two simultaneous viewers, publisher disconnect/reconnect, process restart, natural
 death/restart, replay from history, short/long native searches, and local disk impact.
 Use a separate development database and publisher token for smoke tests.
+
+## Side-bet real-time rewards and chat announcements (2026-09-24)
+
+Persisted target facts now credit permanent Tokens immediately. The 65k tier pays
+principal + 8× reward; 65k+32k upgrades the cumulative return to principal + 50×,
+crediting only the difference. Batch settlement skips side stakes already paid.
+A later technical void retains earned rewards/principal and refunds unpaid side
+stakes and highest-score stakes. Historical settled batches are never replayed.
+
+`room_prediction_announcements` is a transactional outbox committed with target
+facts, wallet ledger entries and cumulative side-bet results. Each room/batch/AI
+gets at most one announcement per tier, and none without side-bet participants.
+`RoomActivities` delivers these as `prediction_reward` chat events; they are not
+gift effects or content-specific overlays. HTTP history restores recent events
+after reconnect/restart; stable event IDs deduplicate retries in the message list.
+
+Payloads contain the AI name, tier, up to three usernames, recipient count and
+cumulative credited `total_units` (including principal) across all recipients.
+First committed side-stake request order determines name order; top-ups neither
+add recipients nor move their position. The UI renders names as escaped text and
+uses “Alice、Bob、Carol…等 6 人共获得 … Token” when there are over three recipients.
+
+Verified: 46 prediction/batch/multi-stream backend tests, 9 room tests run separately,
+19 frontend tests and production build; local browser verified both tiers, immediate
+balance updates, aggregated amounts, refresh history and duplicate suppression.
+The combined run exposed an existing timing race in the room FIFO fixture (1970
+timestamps vs its real-time maintenance task); the isolated room suite passed.
+
+Deploy only the three affected backend modules and live frontend, retaining the
+main-site entry and compatibility loader. Back up auth/live DBs before startup.
+After real-time payouts commit, roll forward if necessary; do not restore old
+batch-only settlement code or roll back monetary databases.
+
+## Queue-based playback release (2026-09-24)
+
+LiveBoardPlayback retains every queued transition during normal foreground playback.
+The former 180ms timeout and 12-frame snapshot shortcuts are removed. All three lanes
+use the same queue-depth rule regardless of layout: the base interval is 40ms for
+up to three queued moves; deeper queues lower the target interval progressively to
+a 4ms timer floor. Each release moves the interval 25% toward its target, so acceleration
+and recovery are gradual. Each timer callback releases at most one move per lane;
+there is no accumulated-time burst after a stalled browser task.
+
+MultiAiContent schedules the next release with a timer instead of restricting queue
+consumption to layout-dependent display frame rates. Main-screen and layout switches,
+including automatic leader changes, retain queues; lane-end messages no longer discard
+the lane's final buffered moves. Explicit snapshots, lane replacement and visibility
+resynchronization still reset the appropriate playback state. Worker timing, packets,
+bandwidth and board animation settings are unchanged. Twenty-four playback, multi-board
+and PiP tests pass, including a sustained three-lane 18ms input simulation.
+
+## Live palette fallback (2026-09-25)
+
+The live palette now supplies non-black defaults for every supported exponent,
+including distinct purple/indigo/teal/green milestone colors for 4096–65536.
+Missing or invalid individual shared-theme entries fall back independently;
+unresolved CSS variables are not accepted as colors. Valid explicit custom colors,
+including intentionally chosen black, remain supported. Cookie access restrictions
+and malformed cookie data both select the built-in palette instead of interrupting
+live initialization. Boards, milestone/history badges and canvas PiP use the same
+resolved palette. Eight palette/PiP tests and the production build pass.
+
+Follow-up: reject an entirely black shared palette, which matches the main-site
+36-entry initialization placeholder. Both cookie reads/writes and live palette
+selection guard against this case. Individual black entries in a varied custom
+palette remain valid. Existing placeholder cookies need no manual clearing.
+

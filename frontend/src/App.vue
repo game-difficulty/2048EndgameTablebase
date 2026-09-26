@@ -394,9 +394,9 @@
 </template>
 
 <script setup>
-import { userError } from './services/errors/userError.js';
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from './services/errors/userError.js';
 
 import {
   KEYBOARD_OWNERS,
@@ -429,6 +429,7 @@ import SponsorDialog from './features/billing/SponsorDialog.vue';
 import ReplayAnalysisDialog from './features/replay/components/ReplayAnalysisDialog.vue';
 import { queueTrainerPracticeJump } from './features/trainer/services/trainerPracticeJump';
 import { useAuthState } from './services/auth/authState';
+import { activateAccountPreferences } from './services/preferences/accountPreferences';
 
 const GamerView = defineAsyncComponent(() => import('./features/gamer/pages/GamerPage.vue'));
 const TrainerView = defineAsyncComponent(() => import('./features/trainer/pages/TrainerPage.vue'));
@@ -453,6 +454,7 @@ const DisplayNameEditorDialog = defineAsyncComponent(() => import('./features/au
 
 const { t } = useI18n();
 const {
+  ready: authReady,
   user: authUser,
   currentActor,
   dialogOpen: authDialogOpen,
@@ -464,6 +466,9 @@ const {
   ensureGuestSession,
   logout,
 } = useAuthState();
+watch([authReady, () => authUser.value?.id ?? null], ([ready, userId]) => {
+  if (ready) void activateAccountPreferences(userId);
+}, { immediate: true });
 const analysisDialogOpen = ref(false);
 const analysisDialogContext = ref({});
 const globalErrorDialog = ref({
@@ -630,7 +635,8 @@ const accountDisplayName = computed(() => authUser.value?.display_name || authUs
 const canOpenAdmin = computed(() => {
   const email = String(authUser.value?.email || '').trim().toLowerCase();
   const displayName = String(authUser.value?.display_name || '').trim().toLowerCase();
-  return email === 'assweeass@163.com' || displayName === 'user0';
+  return email === 'assweeass@163.com' || displayName === 'user0' ||
+    (window.location.hostname === '127.0.0.1' && email === 'human-preview@localhost.invalid');
 });
 const hasSupporterPresentation = computed(() => (
   authUser.value?.entitlements?.tier === 'supporter' || canOpenAdmin.value
@@ -1214,6 +1220,26 @@ onMounted(async () => {
   }
   if (initialParams.get('tab') === 'battle' || initialParams.has('room')) {
     openTab(TAB_IDS.BATTLE);
+  }
+  const humanAnalysisToken = initialParams.get('humanAnalysis');
+  if (initialParams.get('tab') === 'replay' || humanAnalysisToken) openTab(TAB_IDS.REPLAY);
+  if (humanAnalysisToken && window.opener) {
+    const sender = window.opener;
+    const receiveHumanAnalysis = (event) => {
+      if (event.origin !== window.location.origin || event.source !== sender ||
+          event.data?.type !== 'human-analysis-data' || event.data?.token !== humanAnalysisToken) return;
+      const { text, filename } = event.data;
+      if (typeof text !== 'string' || text.length > 5000000 || typeof filename !== 'string') return;
+      window.removeEventListener('message', receiveHumanAnalysis);
+      openAnalysisDialog({ analysisFile: new File([text], filename, { type: 'text/plain' }) });
+      sender.postMessage({ type: 'human-analysis-loaded', token: humanAnalysisToken }, window.location.origin);
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('humanAnalysis');
+      window.history.replaceState(window.history.state, '', cleanUrl);
+    };
+    window.addEventListener('message', receiveHumanAnalysis);
+    sender.postMessage({ type: 'human-analysis-ready', token: humanAnalysisToken }, window.location.origin);
+    window.setTimeout(() => window.removeEventListener('message', receiveHumanAnalysis), 30000);
   }
   refreshAuth().then((nextUser) => {
     if (nextUser) {

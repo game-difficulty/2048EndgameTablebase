@@ -21,7 +21,8 @@
     <strong class="ceremony-caption">{{ name }}</strong>
   </div>
   <span v-else :class="['gift-motion', `motion-${id}`]" aria-hidden="true">
-    <IiiGiftArtwork v-if="id === 'iii'" animated />
+    <ReactionGiftArtwork v-if="reactionGifts.has(id)" :id="id" animated />
+    <IiiGiftArtwork v-else-if="id === 'iii'" animated />
     <img v-else-if="id === 'rip'" src="/live-gifts/rip-motion.gif" width="240" height="100" alt="" />
     <svg v-else-if="id === 'moai'" viewBox="0 0 64 64" class="moai-cutout-motion">
       <defs><filter :id="matteId" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">
@@ -47,8 +48,9 @@ import { Crown } from '@lucide/vue';
 import { useId } from 'vue';
 import GiftIcon from './GiftIcon.vue';
 import IiiGiftArtwork from './IiiGiftArtwork.vue';
+import ReactionGiftArtwork from './ReactionGiftArtwork.vue';
 import ChickenGiftMotion from './ChickenGiftMotion.vue';
-import { giftAsset } from './giftArtwork.js';
+import { giftAsset, reactionGifts } from './giftArtwork.js';
 defineProps({ id: String, name: String, ceremony: Boolean });
 // Remove the animated source's white matte without replacing or retiming its frames.
 const matteId = `gift-matte-${useId()}`;

@@ -23,6 +23,7 @@ DEFAULT_REPLAY_UPLOAD_BYTES = 500 * 1024
 DEFAULT_ANALYSIS_UPLOAD_BYTES = 500 * 1024
 DEFAULT_UPLOAD_TTL_SECONDS = 6 * 60 * 60
 SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+UNSAFE_DISPLAY_FILENAME_RE = re.compile(r"[\x00-\x1f\x7f/\\\\]+")
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,17 @@ def sanitize_download_filename(filename: str, fallback: str = "download.bin") ->
     raw_name = Path(str(filename or "")).name.strip()
     safe_name = SAFE_FILENAME_RE.sub("_", raw_name).strip("._")
     return safe_name or fallback
+
+
+def sanitize_display_filename(filename: str, fallback: str = "download.bin") -> str:
+    """Keep Unicode display names while removing path and control characters."""
+    safe_name = UNSAFE_DISPLAY_FILENAME_RE.sub("_", str(filename or "")).strip(" .")
+    if not safe_name:
+        return fallback
+    # Browser and proxy header limits matter more than the local filesystem here.
+    while len(safe_name.encode("utf-8")) > 200:
+        safe_name = safe_name[:-1]
+    return safe_name.strip(" .") or fallback
 
 
 def normalize_extensions(extensions: Iterable[str] | None) -> set[str]:
@@ -258,6 +270,30 @@ def get_upload_record(upload_id: str, user_id: int | None = None) -> UploadRecor
     return record
 
 
+def delete_upload(upload_id: str, user_id: int | None = None) -> bool:
+    """Delete one registered upload after its consuming task reaches a terminal state."""
+    key = str(upload_id or "")
+    record = UPLOAD_REGISTRY.get(key)
+    if record is not None and user_id is not None and record.user_id is not None:
+        if int(record.user_id) != int(user_id):
+            return False
+    path = record.path if record is not None else None
+    with auth_db() as db:
+        row = db.execute("SELECT user_id,path FROM uploads WHERE upload_id=?", (key,)).fetchone()
+        if row is not None:
+            if user_id is not None and int(row["user_id"]) != int(user_id):
+                return False
+            path = Path(row["path"])
+            db.execute("DELETE FROM uploads WHERE upload_id=?", (key,))
+    UPLOAD_REGISTRY.pop(key, None)
+    if path is not None:
+        try:
+            resolve_within_root(path, get_upload_root()).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+    return record is not None or path is not None
+
+
 def register_download_path(
     path: Path,
     *,
@@ -303,6 +339,7 @@ def build_file_download_response(
     filename: str | None = None,
     media_type: str = "application/octet-stream",
     root: Path | None = None,
+    preserve_unicode_filename: bool = False,
 ) -> FileResponse:
     resolved = resolve_within_root(Path(path), root)
     if not resolved.exists() or not resolved.is_file():
@@ -310,7 +347,9 @@ def build_file_download_response(
     return FileResponse(
         resolved,
         media_type=media_type,
-        filename=sanitize_download_filename(filename or resolved.name),
+        filename=(sanitize_display_filename(filename or resolved.name)
+                  if preserve_unicode_filename
+                  else sanitize_download_filename(filename or resolved.name)),
     )
 
 

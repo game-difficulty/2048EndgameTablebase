@@ -32,7 +32,7 @@ class Hub:
     def __init__(self,content):
         self.content=content;self.room=content.room;self.store=content.store
         self.control=dict(enabled=True,revision=0)
-        self.events=[];self.activities=RoomActivities(self);self.activity_lock=self.activities.lock
+        self.events=[];self.chat=[];self.activities=RoomActivities(self);self.activity_lock=self.activities.lock
     def broadcast(self,data):self.events.append(data)
     def snapshot(self):return dict(type='snapshot',**self.content.snapshot())
     async def publisher_joined(self):pass

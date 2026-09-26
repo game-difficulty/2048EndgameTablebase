@@ -10,6 +10,8 @@ from Config import category_info, pattern_32k_tiles_map, pattern_catalog
 
 from .remote_workers.config import configured_remote_tables
 from .remote_workers.registry import remote_worker_registry
+from .remote_workers.internal_bridge import proxy_enabled, proxy_online_tables
+from .remote_workers.errors import RemoteTablebaseError
 from .quota.config import MULTIPLIER_UNIT, table_multiplier_units
 
 
@@ -97,7 +99,13 @@ def _iter_local_entries() -> list[dict[str, Any]]:
 
 
 def _iter_remote_entries(*, online_only: bool) -> list[dict[str, Any]]:
-    online_tables = remote_worker_registry.online_tables()
+    if proxy_enabled():
+        try:
+            online_tables = proxy_online_tables()
+        except RemoteTablebaseError:
+            online_tables = set()
+    else:
+        online_tables = remote_worker_registry.online_tables()
     entries: list[dict[str, Any]] = []
     for full_pattern, raw_entry in configured_remote_tables().items():
         online = full_pattern in online_tables

@@ -102,6 +102,9 @@ def _verify_token(token: str, *, kind: str, now: datetime) -> dict[str, Any]:
         encoded_payload, encoded_signature = str(token or "").strip().split(".", 1)
         payload_bytes = _b64url_decode(encoded_payload)
         signature = _b64url_decode(encoded_signature)
+        if (_b64url_encode(payload_bytes) != encoded_payload
+                or _b64url_encode(signature) != encoded_signature):
+            raise RunTokenError("invalid_token")
         expected = hmac.new(_token_secret(), payload_bytes, hashlib.sha256).digest()
         if not hmac.compare_digest(signature, expected):
             raise RunTokenError("invalid_token")

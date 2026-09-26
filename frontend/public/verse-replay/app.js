@@ -525,6 +525,19 @@
       }
       return;
     }
+    const humanId = new URLSearchParams(window.location.search).get('human-run');
+    if (humanId) {
+      elements.fileName.textContent = t('正在载入对局回放…');
+      try {
+        const response = await fetch(`/api/human/replays/` + encodeURIComponent(humanId), { credentials: 'include' });
+        if (!response.ok) throw new Error(`HTTP ` + response.status);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        await installReplay(() => decodeReplayBytes(bytes), t('2048Verse 继承对局'), bytes);
+      } catch (error) {
+        showError(t(`无法载入对局回放：` + window.ReplayI18n.requestError(error)));
+      }
+      return;
+    }
     const replayId = new URLSearchParams(window.location.search).get('ranked');
     if (!replayId) return;
     elements.fileName.textContent = t('正在载入已验证对局…');

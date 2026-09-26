@@ -16,6 +16,8 @@ class RoomDefinition:
     protocol: str = 'classic-step-v1'
     publish_token_env: str = ''
     milestone_rewards: bool = False
+    dynamic: bool = False
+    metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,47}', self.id):
@@ -35,7 +37,8 @@ class RoomDefinition:
                     path='/rooms/' + self.id, api_base='/api/live/rooms/' + self.id,
                     participants=[dict(id=n.lower(),name=n,lane=i) for i,n in enumerate(('Lume','Clari','Vero'))] if self.content_kind=='classic-multi-ai' else [],
                     capabilities=dict(gifts=True, red_envelopes=True, lucky_bags=self.milestone_rewards,
-                                      predictions=self.content_kind=='classic-multi-ai'))
+                                      predictions=self.content_kind=='classic-multi-ai'),
+                    **self.metadata)
 
 
 DEFAULT_ROOM = RoomDefinition(

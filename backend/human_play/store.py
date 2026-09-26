@@ -42,6 +42,10 @@ def init_db():
             created REAL NOT NULL, ended REAL, writer TEXT NOT NULL, epoch INTEGER NOT NULL DEFAULT 1,
             permit_until REAL NOT NULL DEFAULT 0, monitored INTEGER NOT NULL DEFAULT 0,
             state TEXT NOT NULL, archive BLOB,
+            display_threshold INTEGER NOT NULL DEFAULT 0,
+            visible INTEGER NOT NULL DEFAULT 1,
+            has_replay INTEGER NOT NULL DEFAULT 1,
+            single_rating REAL, single_rating_version INTEGER,
             UNIQUE(user_id, browser, request_id)
         );
         CREATE UNIQUE INDEX IF NOT EXISTS human_active_slot
@@ -91,8 +95,54 @@ def init_db():
         # HPR/gzip already carries CRC32 and length; reviews replay the entire game.
         # Drop only the redundant archive digest, keeping anti-rollback prefix hashes.
         columns = {row["name"] for row in db.execute("PRAGMA table_info(human_runs)")}
+        if "display_threshold" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN display_threshold INTEGER NOT NULL DEFAULT 0")
+        if "visible" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
+        if "has_replay" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN has_replay INTEGER NOT NULL DEFAULT 1")
+        if "source" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN source TEXT NOT NULL DEFAULT 'native'")
+        db.execute("""CREATE TABLE IF NOT EXISTS human_external_claims (
+            id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, provider TEXT NOT NULL,
+            username TEXT NOT NULL, username_key TEXT NOT NULL,
+            status TEXT NOT NULL, requested REAL NOT NULL, updated REAL NOT NULL,
+            approved_by INTEGER, approved_at REAL, proof_note TEXT NOT NULL DEFAULT '',
+            error TEXT NOT NULL DEFAULT '', counts TEXT NOT NULL DEFAULT '{}'
+        )""")
+        db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS human_external_claim_user
+            ON human_external_claims(provider,user_id)
+            WHERE status NOT IN ('rejected','cancelled')""")
+        db.execute("""CREATE UNIQUE INDEX IF NOT EXISTS human_external_claim_name
+            ON human_external_claims(provider,username_key)
+            WHERE status IN ('approved','importing','complete')""")
+        db.execute("""CREATE INDEX IF NOT EXISTS human_external_claim_status_updated
+            ON human_external_claims(status,updated DESC)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS human_external_audit (
+            id INTEGER PRIMARY KEY, claim_id INTEGER NOT NULL,
+            operator_id INTEGER, action TEXT NOT NULL, note TEXT NOT NULL,
+            created REAL NOT NULL
+        )""")
+        db.execute("""CREATE INDEX IF NOT EXISTS human_external_run_source
+            ON human_runs(source,user_id,variant,ended) WHERE source!='native'""")
         if "archive_hash" in columns:
             db.execute("ALTER TABLE human_runs DROP COLUMN archive_hash")
+        db.execute("""CREATE TABLE IF NOT EXISTS human_player_settings (
+            user_id INTEGER PRIMARY KEY,
+            display_thresholds TEXT NOT NULL DEFAULT '{}'
+        )""")
+        from backend.rolling_leaderboards import init_schema as init_rolling_schema
+        init_rolling_schema(db)
+        from .manual_archive import init_schema as init_manual_archive_schema
+        init_manual_archive_schema(db)
+        from .rating import init_schema as init_rating_schema
+        init_rating_schema(db)
+        from .analysis_summary import init_schema as init_analysis_summary_schema
+        init_analysis_summary_schema(db)
+        from .statistics import init_schema as init_statistics_schema
+        init_statistics_schema(db)
+        from .leaderboards import init_schema as init_full_leaderboards_schema
+        init_full_leaderboards_schema(db)
     from .traffic import initialize
     initialize()
 

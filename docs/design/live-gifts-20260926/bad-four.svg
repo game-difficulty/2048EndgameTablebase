@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="坏4">
+<ellipse cx="64" cy="116" rx="37" ry="5" fill="#162239" opacity=".15"/>
+<g class="body">
+ <path d="M29 37 22 10q20 6 24 23M84 31q7-17 24-21l-8 30" fill="#de5963" stroke="#923f50" stroke-width="3" stroke-linejoin="round"/>
+ <path d="m27 17 5 15 7-1m62-14-8 15 7 1" fill="#ffaea0"/>
+ <rect x="20" y="31" width="89" height="81" rx="16" fill="#b1834e" stroke="#806044" stroke-width="3"/>
+ <rect x="20" y="25" width="89" height="81" rx="16" fill="#ebc994" stroke="#ac824f" stroke-width="2.5"/>
+ <path d="M24 79q39 16 81-6v18q0 12-13 12H36q-12 0-12-12Z" fill="#d9ae76"/>
+ <path d="M29 47V39q0-5 6-5h15" stroke="#fff3d9" stroke-width="4" stroke-linecap="round" fill="none"/>
+ <path d="m38 45 10 4m31 0 11-5" stroke="#73503b" stroke-width="3" stroke-linecap="round"/>
+ <text x="65" y="87" text-anchor="middle" font-family="Arial,sans-serif" font-weight="900" font-size="55" fill="#725035">4</text>
+ <path d="M82 91q7 6 13-2" stroke="#8d423b" stroke-width="3" fill="none" stroke-linecap="round"/>
+</g>
+<g class="anger" stroke="#d65d65" stroke-width="3.5" fill="none" stroke-linecap="round"><path d="M109 50v7h7m-7 14v-7h7"/></g>
+</svg>

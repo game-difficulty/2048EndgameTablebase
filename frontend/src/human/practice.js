@@ -1,5 +1,22 @@
 // TrainerPage/useTrainerSession semantics, generalized to rectangular human boards.
 export const PRACTICE_PALETTE = [0, ...Array.from({ length: 15 }, (_, i) => 2 ** (i + 1))];
+export function createPracticeMoveReminder(limit = 40) {
+  const warnedOrigins = new Set();
+  let origin = null;
+  let moves = 0;
+  return {
+    get moves() { return moves; },
+    start(key) { origin = key; moves = 0; },
+    restore(count) { moves = count; },
+    reset() { moves = 0; },
+    moved() {
+      moves += 1;
+      if (moves <= limit || warnedOrigins.has(origin)) return false;
+      warnedOrigins.add(origin);
+      return true;
+    },
+  };
+}
 export function practiceCellValue(current, selected, button, pending = false) {
   if (pending) return current === 0 ? (button === 2 ? 4 : 2) : current;
   if (selected === null) return current;

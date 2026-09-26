@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import os
+import re
 import time
 
 import uvicorn
@@ -48,15 +49,21 @@ from backend.live.routes import router as live_router, start_rooms, stop_rooms
 from backend.battle.service import shutdown as shutdown_battle_service
 from backend.battle.service import startup as startup_battle_service
 from backend.cloud_analysis_jobs import (
+    AnalysisQueueFull,
+    analysis_download_filename,
     analysis_job_payload,
+    check_analysis_capacity,
     cleanup_expired_jobs,
     create_analysis_job,
     get_analysis_job,
+    start_analysis_worker,
 )
+from backend.analysis_history import cleanup_artifacts, router as analysis_history_router
 from backend.cloud_files import (
     allowed_extensions_for_kind,
     build_file_download_response,
     cleanup_expired_uploads,
+    delete_upload,
     get_download_root,
     get_max_upload_bytes_for_kind,
     get_download_record,
@@ -75,10 +82,11 @@ from backend.quota.routes import router as quota_router
 from backend.quota.service import (
     cancel_reservation,
     get_token_balance,
-    reserve_operation_tokens,
+    reserve_operation_tokens_many,
 )
 from backend.replay_routes import router as replay_router
 from backend.remote_workers import remote_worker_registry
+from backend.remote_workers.internal_bridge import router as internal_tablebase_router
 CLOUD_MODE = is_cloud_mode()
 
 from backend.handlers.analysis import handle_analysis_action
@@ -203,6 +211,16 @@ async def _token_reward_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def _analysis_storage_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(cleanup_expired_jobs)
+            await asyncio.to_thread(cleanup_artifacts)
+        except Exception:
+            logger.exception("Analysis storage maintenance failed")
+        await asyncio.sleep(300)
+
+
 async def _gamer_validation_loop() -> None:
     next_cleanup = 0.0
     while True:
@@ -228,12 +246,15 @@ async def app_lifespan(_app: FastAPI):
     SingletonConfig()
     init_auth_db()
     init_human_play_db()
+    from backend.human_play.verse_history import start_worker as start_verse_worker
+    start_verse_worker()
     await start_rooms()
     await startup_battle_service()
     prepare_gamer_validation_queue()
     prepare_minigame_validation_queue()
     cleanup_expired_uploads()
     cleanup_expired_jobs()
+    start_analysis_worker()
     start_preload_thread()
     remote_worker_registry.add_availability_listener(
         _broadcast_tablebase_catalog_update
@@ -243,6 +264,7 @@ async def app_lifespan(_app: FastAPI):
     gamer_validation_task = asyncio.create_task(_gamer_validation_loop())
     minigame_validation_task = asyncio.create_task(_minigame_validation_loop())
     token_reward_task = asyncio.create_task(_token_reward_loop())
+    analysis_storage_task = asyncio.create_task(_analysis_storage_loop())
     try:
         yield
     finally:
@@ -252,6 +274,7 @@ async def app_lifespan(_app: FastAPI):
         gamer_validation_task.cancel()
         minigame_validation_task.cancel()
         token_reward_task.cancel()
+        analysis_storage_task.cancel()
         try:
             await leaderboard_refresh_task
         except asyncio.CancelledError:
@@ -267,6 +290,10 @@ async def app_lifespan(_app: FastAPI):
         await asyncio.to_thread(close_minigame_verifier)
         try:
             await token_reward_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await analysis_storage_task
         except asyncio.CancelledError:
             pass
         remote_worker_registry.remove_availability_listener(
@@ -290,6 +317,8 @@ app.include_router(minigame_rankings_router)
 app.include_router(profile_router)
 app.include_router(gamer_ranked_router)
 app.include_router(human_play_router)
+app.include_router(analysis_history_router)
+app.include_router(internal_tablebase_router)
 app.include_router(battle_router)
 app.include_router(live_router)
 
@@ -928,6 +957,7 @@ async def create_analysis_job_route(
                     "message": "The selected tablebase is temporarily unavailable.",
                 },
             )
+        check_analysis_capacity(int(user["id"]), len(files))
         for upload in files:
             saved = await save_upload_file(
                 upload,
@@ -942,15 +972,11 @@ async def create_analysis_job_route(
                     session_id=int(user["session_id"]),
                 )
             )
-        for record in uploads:
-            reservations.append(
-                reserve_operation_tokens(
-                    user_id=int(user["id"]),
-                    session_id=int(user["session_id"]),
-                    operation_key="analysis_per_replay",
-                    full_pattern=full_pattern,
-                )
-            )
+        reservations = reserve_operation_tokens_many(
+            user_id=int(user["id"]), session_id=int(user["session_id"]),
+            operation_key="analysis_per_replay",
+            full_patterns=[full_pattern] * len(uploads),
+        )
         job = create_analysis_job(
             uploads=uploads,
             pattern=normalized_pattern,
@@ -973,6 +999,10 @@ async def create_analysis_job_route(
         for reservation in reservations:
             cancel_reservation(reservation, reason="analysis_job_not_created")
         raise HTTPException(status_code=402, detail=exc.payload) from exc
+    except AnalysisQueueFull as exc:
+        for reservation in reservations:
+            cancel_reservation(reservation, reason="analysis_job_not_created")
+        raise HTTPException(status_code=429, detail={"code": str(exc)}, headers={"Retry-After": "10"}) from exc
     except ValueError as exc:
         for reservation in reservations:
             cancel_reservation(reservation, reason="analysis_job_not_created")
@@ -982,6 +1012,10 @@ async def create_analysis_job_route(
             for reservation in reservations:
                 cancel_reservation(reservation, reason="analysis_job_not_created")
         raise
+    finally:
+        if not job_started:
+            for upload_record in uploads:
+                delete_upload(upload_record.upload_id, int(user["id"]))
     return {
         "job_id": job.job_id,
         "total": job.total,
@@ -1005,9 +1039,10 @@ async def download_analysis_job(job_id: str, user: dict = Depends(require_user))
             raise HTTPException(status_code=409, detail="Analysis job is not finished.")
         return build_file_download_response(
             job.zip_path,
-            filename=job.zip_path.name,
+            filename=analysis_download_filename(job, user),
             media_type="application/zip",
             root=get_download_root(),
+            preserve_unicode_filename=True,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Analysis job not found.") from exc
@@ -1064,6 +1099,24 @@ if os.path.exists(frontend_guides_path):
     )
 
 if os.path.exists(frontend_dist_path):
+    @app.get('/lobby', include_in_schema=False)
+    @app.get('/lobby/', include_in_schema=False)
+    def live_lobby_page():
+        return FileResponse(os.path.join(frontend_dist_path, 'live', 'index.html'), headers={'Cache-Control': 'no-cache'})
+
+    @app.get('/rooms/{room_id}', include_in_schema=False)
+    @app.get('/rooms/{room_id}/', include_in_schema=False)
+    def live_room_page(room_id: str):
+        if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,47}', room_id):
+            raise HTTPException(status_code=404)
+        return FileResponse(os.path.join(frontend_dist_path, 'live', 'index.html'), headers={'Cache-Control': 'no-cache'})
+
+    @app.get('/user/{username:path}', include_in_schema=False)
+    def human_player_page(username: str):
+        if not username or '/' in username:
+            raise HTTPException(status_code=404)
+        return FileResponse(os.path.join(frontend_dist_path, 'human', 'index.html'), headers={'Cache-Control': 'no-cache'})
+
     app.mount(
         "/",
         CacheControlledStaticFiles(

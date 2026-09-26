@@ -27,5 +27,9 @@
   "live_gift_rip": 16,
   "live_gift_tea": 16,
   "live_gift_chicken": 16,
-  "live_gift_serious": 16
+  "live_gift_serious": 16,
+  "live_gift_bad-four": 44,
+  "live_gift_dealer-fault": 44,
+  "live_gift_cry-loss": 44,
+  "live_gift_laugh-win": 66
 }

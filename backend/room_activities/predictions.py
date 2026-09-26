@@ -52,6 +52,13 @@ def init_schema():
                 market_id TEXT NOT NULL REFERENCES room_prediction_markets(id),
                 option_id TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('reached','missed')),
                 PRIMARY KEY(market_id,option_id));
+            CREATE TABLE IF NOT EXISTS room_prediction_announcements (
+                id TEXT PRIMARY KEY, room_id TEXT NOT NULL, market_id TEXT NOT NULL,
+                option_id TEXT NOT NULL, tier INTEGER NOT NULL, event_json TEXT NOT NULL,
+                announced INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(market_id,option_id,tier));
+            CREATE INDEX IF NOT EXISTS prediction_announcement_room
+                ON room_prediction_announcements(room_id,announced);
         ''')
         # Additive migration retains historical outcomes/settlements unchanged.
         db.execute('BEGIN IMMEDIATE')
@@ -79,7 +86,7 @@ def close(room_id, market_id):
                    (market_id, room_id))
 
 
-def record_targets(room_id, market_id, outcomes):
+def record_targets(room_id, market_id, outcomes, now=None):
     """Only trusted, persisted content facts enter this bridge, never client claims."""
     with auth_db() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -100,6 +107,62 @@ def record_targets(room_id, market_id, outcomes):
             db.execute('''INSERT INTO room_prediction_target_outcomes(market_id,option_id,outcome,combo_reached)
                 VALUES(?,?,?,?) ON CONFLICT(market_id,option_id)
                 DO UPDATE SET combo_reached=MAX(combo_reached,excluded.combo_reached)''', (market_id,option,base,combo))
+        # Facts, wallet credits, cumulative results and the chat outbox commit together.
+        at = time.time() if now is None else now
+        for option, outcome in _target_outcomes(db, market_id).items():
+            if outcome in ('reached', 'reached_combo'):
+                _award_target_tier(db, room_id, market_id, market, option, TARGET_REWARD, at)
+                if outcome == 'reached_combo':
+                    _award_target_tier(db, room_id, market_id, market, option, BONUS_REWARD, at)
+
+
+def _award_target_tier(db, room_id, market_id, market, option, reward, now):
+    event_id = f'prediction-reward:{market_id}:{option}:{reward}'
+    if db.execute('SELECT 1 FROM room_prediction_announcements WHERE id=?', (event_id,)).fetchone():
+        return
+    # Request rowids preserve the first committed side-bet order, including legacy bets.
+    stakes = db.execute('''SELECT s.*,u.display_name,
+        (SELECT MIN(r.rowid) FROM room_prediction_target_requests r
+         WHERE r.market_id=s.market_id AND r.user_id=s.user_id) AS first_request
+        FROM room_prediction_target_stakes s JOIN users u ON u.id=s.user_id
+        WHERE s.market_id=? AND s.option_id=? ORDER BY first_request,s.user_id''', (market_id,option)).fetchall()
+    if not stakes:
+        return
+    stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    for stake in stakes:
+        uid, units = stake['user_id'], stake['units']
+        previous = db.execute('SELECT principal,profit,refund FROM room_prediction_target_settlements WHERE market_id=? AND user_id=?',
+                              (market_id,uid)).fetchone()
+        paid = sum(previous) if previous else 0
+        delta = units * (reward + 1) - paid
+        if delta > 0:
+            _credit(db,uid,delta,'room_prediction_target_settlement',event_id,
+                    dict(room_id=room_id,market_id=market_id,option_id=option,reward_multiplier=reward,
+                         principal=units,profit=units*reward,refund=0,loss=0),stamp)
+            db.execute('''INSERT INTO room_prediction_target_settlements VALUES(?,?,?,?,0,0)
+                ON CONFLICT(market_id,user_id) DO UPDATE SET principal=excluded.principal,profit=excluded.profit,
+                refund=0,loss=0''', (market_id,uid,units,units*reward))
+    player = next(p for p in json.loads(market['options']) if p['id'] == option)
+    event = dict(type='prediction_reward',id=event_id,at=now,market_id=market_id,option_id=option,
+                 player_name=player['name'],tier='65k+32k' if reward == BONUS_REWARD else '65k',
+                 names=[s['display_name'] for s in stakes[:3]],recipient_count=len(stakes),
+                 total_units=sum(s['units'] for s in stakes)*(reward+1))
+    db.execute('INSERT INTO room_prediction_announcements VALUES(?,?,?,?,?,?,0)',
+               (event_id,room_id,market_id,option,reward,json.dumps(event,ensure_ascii=False)))
+
+
+def announcement_events(room_id, pending=False):
+    with auth_db() as db:
+        rows = db.execute('SELECT event_json FROM room_prediction_announcements WHERE room_id=? '
+                          + ('AND announced=0 ORDER BY rowid LIMIT 100' if pending else 'ORDER BY rowid DESC LIMIT 100'), (room_id,))
+        events = [json.loads(row['event_json']) for row in rows]
+        return events if pending else list(reversed(events))
+
+
+def announcements_delivered(room_id, ids):
+    with auth_db() as db:
+        db.executemany('UPDATE room_prediction_announcements SET announced=1 WHERE room_id=? AND id=?',
+                       [(room_id,event_id) for event_id in ids])
 
 
 def _target_outcomes(db, market_id):
@@ -219,6 +282,11 @@ def settle(room_id, market_id, winners=(), void=False, now=None):
         outcomes = _target_outcomes(db, market_id)
         for stake in db.execute('SELECT * FROM room_prediction_target_stakes WHERE market_id=?', (market_id,)).fetchall():
             uid, units = stake['user_id'], stake['units']
+            # A milestone already returned principal and paid its reward in real time.
+            # Do not pay again at batch end or claw back earned rewards on a later void.
+            if db.execute('SELECT 1 FROM room_prediction_target_settlements WHERE market_id=? AND user_id=?',
+                          (market_id,uid)).fetchone():
+                continue
             outcome = outcomes.get(stake['option_id'])
             reward = BONUS_REWARD if outcome == 'reached_combo' else TARGET_REWARD if outcome == 'reached' else 0
             if void:

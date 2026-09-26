@@ -5,7 +5,8 @@ export const referenceArtwork = Object.freeze({
   button: 'button', tea: 'tea', chicken: 'chicken', serious: 'serious',
 });
 export const ceremonyGifts = new Set(['final', '2048', 'crown', 'legend']);
-const supporterMotion = new Set(['button', 'whale', 'moai', 'tea', 'chicken', 'serious', 'rip']);
+export const reactionGifts = new Set(['bad-four', 'dealer-fault', 'cry-loss', 'laugh-win']);
+const supporterMotion = new Set([...reactionGifts, 'button', 'whale', 'moai', 'tea', 'chicken', 'serious', 'rip']);
 export function giftAnimation(event) {
   if (event?.type !== 'gift') return null;
   if (event.gift_id === 'iii') return 'inline';

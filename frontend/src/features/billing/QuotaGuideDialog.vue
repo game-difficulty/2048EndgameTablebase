@@ -226,7 +226,7 @@ watch(
 
 <style scoped>
 .quota-guide-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 320;
   display: flex;

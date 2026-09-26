@@ -61,6 +61,7 @@ def _parse_iso(value: str) -> datetime:
 
 
 def normalize_chat_content(value: Any) -> str:
+    from backend.chat_moderation import blocked
     content = unicodedata.normalize("NFC", str(value or "")).strip()
     if not content:
         raise BattleServiceError("CHAT_EMPTY", "Chat message cannot be empty.")
@@ -79,6 +80,8 @@ def normalize_chat_content(value: Any) -> str:
             "CHAT_TOO_LARGE",
             "Chat message is too large.",
         )
+    if blocked(content):
+        raise BattleServiceError('CHAT_INVALID_CONTENT', 'Message contains blocked content.')
     return content
 
 

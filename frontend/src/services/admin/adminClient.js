@@ -27,6 +27,31 @@ async function requestJson(path, { method = 'GET', body } = {}) {
 }
 
 export const adminClient = {
+  profileReviews: (page = 1, status = 'pending') => requestJson(`/api/admin/profile-reviews?page=${page}&status=${status}`),
+  reviewProfile: (id, action) => requestJson(`/api/admin/profile-reviews/${id}`, { method: 'POST', body: { action } }),
+  verseClaims: (userId = null) => requestJson('/api/admin/verse-claims'
+    + (userId ? `?user_id=${encodeURIComponent(userId)}` : '')),
+  decideVerseClaim: (id, approved, note) => requestJson(
+    `/api/admin/verse-claims/` + encodeURIComponent(id) + '/decision',
+    { method: 'POST', body: { approved, note } },
+  ),
+  retryVerseClaim: (id, note) => requestJson('/api/admin/verse-claims/' + encodeURIComponent(id) + '/retry',
+    { method: 'POST', body: { note } }),
+  revokeVerseClaim: (id, note) => requestJson('/api/admin/verse-claims/' + encodeURIComponent(id) + '/revoke',
+    { method: 'POST', body: { note } }),
+  archiveApplications: (userId = null) => requestJson('/api/admin/archive-applications'
+    + (userId ? `?user_id=${encodeURIComponent(userId)}` : '')),
+  approvalTransactions: ({ q = '', kind = 'all', stage = 'all', page = 1, pageSize = 30 } = {}) => {
+    const params = new URLSearchParams({ kind, stage, page: String(page), page_size: String(pageSize) });
+    if (q) params.set('q', q);
+    return requestJson(`/api/admin/approval-transactions?${params.toString()}`);
+  },
+  decideArchiveApplication: (id, approved, note) => requestJson(
+    `/api/admin/archive-applications/${encodeURIComponent(id)}/decision`,
+    { method: 'POST', body: { approved, note } }),
+  revokeArchiveApplication: (id, note) => requestJson(
+    `/api/admin/archive-applications/${encodeURIComponent(id)}/revoke`,
+    { method: 'POST', body: { note } }),
   liveStatus: () => requestJson('/api/admin/live'),
   setLiveEnabled: (enabled) => requestJson('/api/admin/live', { method: 'POST', body: { enabled } }),
   overview: ({
@@ -49,5 +74,9 @@ export const adminClient = {
   adjustUserTokens: (userId, payload) => requestJson(`/api/admin/users/${encodeURIComponent(userId)}/tokens`, {
     method: 'POST',
     body: payload,
+  }),
+  updateUserStatus: (userId, status) => requestJson(`/api/admin/users/${encodeURIComponent(userId)}/status`, {
+    method: 'POST',
+    body: { status },
   }),
 };

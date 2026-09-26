@@ -10,7 +10,10 @@ export function exportCurrentReplay(run, events) {
   board.forEach((tile, i) => { if (tile) bytes.push(i | (tile === 4 ? 16 : 0)); });
   for (const [code, delta] of events) {
     if (!Number.isInteger(code) || code < 0 || code >= 128 || !Number.isInteger(delta) || delta < 0 || delta > 0xffffffff) throw new Error('invalid_local_replay');
-    bytes.push(code, ...encodeUleb128(delta));
+    // 0xffffffff is the RPL1 sentinel for an unknown duration. Older local
+    // saves may contain it from the former clamp; keep them exportable as the
+    // largest exact duration rather than silently decoding them as unknown.
+    bytes.push(code, ...encodeUleb128(Math.min(delta, 0xfffffffe)));
   }
   bytes.push(132); // End of this snapshot; the original game may still be active.
   const checksum = crc32(bytes);

@@ -10,7 +10,7 @@ const root = new URL('../', import.meta.url);
 const dist = new URL('../dist/', import.meta.url);
 const compatRoot = 'html[data-css-compat="ready"]';
 
-export function mainCssFiles(manifest) {
+export function entryCssFiles(manifest, entryName) {
   const seen = new Set();
   const files = new Set();
   function visit(key) {
@@ -22,9 +22,13 @@ export function mainCssFiles(manifest) {
     for (const css of entry.css || []) files.add(css);
     for (const dependency of entry.dynamicImports || []) visit(dependency);
   }
-  visit('index.html');
+  visit(entryName);
   const rank = (file) => file.includes('/style-') ? 0 : file.includes('/main-') ? 1 : 2;
   return [...files].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+export function mainCssFiles(manifest) {
+  return entryCssFiles(manifest, 'index.html');
 }
 
 function replaceRuntimeColorMix(value) {
@@ -82,14 +86,8 @@ function scopeToCompat(css) {
   });
 }
 
-export async function buildRenderCompat() {
-  const manifest = JSON.parse(await readFile(new URL('.vite/manifest.json', dist), 'utf8'));
-  const files = mainCssFiles(manifest);
-  if (!files.length || !files.some((file) => file.includes('/style-'))) {
-    throw new Error('Main CSS was not found in the Vite manifest');
-  }
+async function buildEntryCompat(files, structuralFallback) {
   const sources = await Promise.all(files.map((file) => readFile(new URL(file, dist), 'utf8')));
-  const structuralFallback = await readFile(new URL('public/compat/render-compat.css', root), 'utf8');
   const css = postcss.parse(sources.join('\n'));
   lowerRegisteredProperties(css);
   const flattened = await postcss([cascadeLayers()]).process(css, { from: undefined });
@@ -117,11 +115,31 @@ export async function buildRenderCompat() {
   const destination = new URL('compat/', dist);
   await mkdir(destination, { recursive: true });
   await writeFile(new URL(filename, destination), cssText);
-  const htmlFile = new URL('index.html', dist);
-  const html = await readFile(htmlFile, 'utf8');
-  const marker = '<script src="/compat/render-compat.js?v=2"></script>';
-  if (!html.includes(marker)) throw new Error('Main HTML compatibility loader was not found');
-  await writeFile(htmlFile, html.replace(marker,
-    `<script>window.__RENDER_COMPAT_CSS_URL__="/compat/${filename}";</script>\n    ${marker}`));
-  return { filename, files };
+  return { filename, files, cssText };
+}
+
+export async function buildRenderCompat() {
+  const manifest = JSON.parse(await readFile(new URL('.vite/manifest.json', dist), 'utf8'));
+  const structuralFallback = await readFile(new URL('public/compat/render-compat.css', root), 'utf8');
+  const entries = [
+    { name: 'index.html', marker: '<script src="/compat/render-compat.js?v=2"></script>', files: mainCssFiles(manifest) },
+    { name: 'human/index.html', marker: '<script src="/compat/render-compat.js?v=3"></script>', files: entryCssFiles(manifest, 'human/index.html') },
+  ];
+  if (!entries[0].files.length || !entries[0].files.some((file) => file.includes('/style-'))) {
+    throw new Error('Main CSS was not found in the Vite manifest');
+  }
+  if (!entries[1].files.length || !entries[1].files.some((file) => file.includes('/human-'))) {
+    throw new Error('Play CSS was not found in the Vite manifest');
+  }
+  for (const entry of entries) {
+    const built = await buildEntryCompat(entry.files, structuralFallback);
+    entry.filename = built.filename;
+    entry.cssText = built.cssText;
+    const htmlFile = new URL(entry.name, dist);
+    const html = await readFile(htmlFile, 'utf8');
+    if (!html.includes(entry.marker)) throw new Error(`${entry.name} compatibility loader was not found`);
+    await writeFile(htmlFile, html.replace(entry.marker,
+      `<script>window.__RENDER_COMPAT_CSS_URL__="/compat/${entry.filename}";</script>\n    ${entry.marker}`));
+  }
+  return { filename: entries[0].filename, files: entries[0].files, entries };
 }

@@ -60,6 +60,12 @@ class SharedLoginTests(unittest.TestCase):
         with self.client.websocket_connect('wss://live.2048tables.online/test-auth') as ws:
             self.assertEqual(ws.receive_json(),{'id':1})
 
+    def test_main_login_is_available_on_play_subdomain(self):
+        self.login()
+        response = self.client.get('https://play.2048tables.online/api/auth/me')
+        self.assertTrue(response.json()['authenticated'])
+        self.assertEqual(response.json()['user']['id'], 1)
+
     def test_shared_identity_wins_over_old_live_cookie_and_bearer(self):
         a,b=self.sessions[0][0],self.sessions[1][0]
         headers={'cookie':f'tb_session={b}; tb_shared_session={a}','authorization':f'Bearer {b}'}

@@ -89,9 +89,9 @@
 </template>
 
 <script setup>
-import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import AccountAvatar from '../../auth/AccountAvatar.vue';
 import { fetchLeaderboard } from '../../leaderboards/services/leaderboardClient';
@@ -165,10 +165,7 @@ const openReplay = (replayId) => {
   window.open(`/verse-replay/?ranked=${encodeURIComponent(replayId)}`, '_blank', 'noopener');
 };
 const openFullLeaderboard = () => {
-  const boardKey = selectedMode.value === 'adversarial'
-    ? 'gamer_adversarial'
-    : 'gamer_high_score';
-  emit('navigate-tab', 'LeaderboardsView', { boardKey });
+  emit('navigate-tab', 'LeaderboardsView', { boardKey: selectedBoardKey.value });
 };
 
 watch(selectedBoardKey, () => {

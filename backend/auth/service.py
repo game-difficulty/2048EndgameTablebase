@@ -796,6 +796,68 @@ def deactivate_account(
             (now, now, user_id),
         )
         _revoke_user_sessions(db, user_id)
+        from backend.leaderboards.rolling_gamer import ensure_backfill as gamer_backfill
+        gamer_backfill(db)
+        from backend import rolling_leaderboards as rolling
+        for candidate in db.execute("""SELECT run_id FROM rolling_candidates
+            WHERE user_id=? AND active=1""", (user_id,)).fetchall():
+            rolling.revoke(db, candidate['run_id'], refresh=False)
+        for board in ('gamer_high_score_weekly', 'gamer_adversarial_weekly'):
+            rolling.refresh_user(db, board, user_id)
+    from backend.human_play.store import database as human_database, db_path as human_db_path
+    if not human_db_path().is_file():
+        return
+    with human_database() as db:
+        db.execute('BEGIN IMMEDIATE')
+        from backend.human_play.rolling import ensure_backfill as human_backfill
+        human_backfill(db)
+        from backend import rolling_leaderboards as rolling
+        for candidate in db.execute("""SELECT run_id FROM rolling_candidates
+            WHERE user_id=? AND active=1""", (user_id,)).fetchall():
+            rolling.revoke(db, candidate['run_id'], refresh=False)
+        for variant in ('4x4', '3x4', '3x3', '2x4'):
+            rolling.refresh_user(db, variant, user_id)
+
+
+def set_account_status_for_admin(*, user_id: int, status: str) -> None:
+    """Temporarily disable or re-enable an account while preserving verified records."""
+    target_status = str(status or "").strip().lower()
+    if target_status not in {"active", "disabled"}:
+        raise ValueError("Invalid account status.")
+    with auth_db() as db:
+        user = db.execute("SELECT id,status FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if user is None:
+            raise FileNotFoundError("User not found.")
+        if user["status"] != target_status:
+            now = iso()
+            db.execute(
+                """UPDATE users SET status=?,deactivated_at=?,updated_at=? WHERE id=?""",
+                (target_status, now if target_status == "disabled" else None, now, int(user_id)),
+            )
+            if target_status == "disabled":
+                _revoke_user_sessions(db, int(user_id))
+        from backend.leaderboards.rolling_gamer import ensure_backfill as gamer_backfill
+        gamer_backfill(db)
+        from backend import rolling_leaderboards as rolling
+        for board in ("gamer_high_score_weekly", "gamer_adversarial_weekly"):
+            if target_status == "disabled":
+                rolling.suspend_user(db, board, int(user_id))
+            else:
+                rolling.refresh_user(db, board, int(user_id))
+
+    from backend.human_play.store import database as human_database, db_path as human_db_path
+    if not human_db_path().is_file():
+        return
+    with human_database() as db:
+        db.execute("BEGIN IMMEDIATE")
+        from backend.human_play.rolling import ensure_backfill as human_backfill
+        human_backfill(db)
+        from backend import rolling_leaderboards as rolling
+        for variant in ("4x4", "3x4", "3x3", "2x4"):
+            if target_status == "disabled":
+                rolling.suspend_user(db, variant, int(user_id))
+            else:
+                rolling.refresh_user(db, variant, int(user_id))
 
 
 def authenticate_session_identity(token: str | None) -> dict[str, Any] | None:

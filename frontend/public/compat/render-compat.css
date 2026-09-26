@@ -126,3 +126,15 @@ html[data-css-compat="ready"] .security-dialog { background:var(--bg-main); }
 html[data-css-compat="ready"] .tool-palette-grid { display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:.375rem; }
 html[data-css-compat="ready"] .tool-palette-grid > .palette-btn { width:100%;height:2.6rem;min-width:0; }
 html[data-css-compat="ready"] .trainer-page--dock-right .tool-palette-grid > .palette-btn { height:1.45rem; }
+
+/* Play layout fallback for engines without Grid subgrid or aspect-ratio. */
+html[data-css-compat="ready"] .game-column { grid-template-rows:auto 72px 40px auto auto; }
+html[data-css-compat="ready"] .timing-panel,
+html[data-css-compat="ready"] .ranking-panel { grid-template-rows:72px 40px minmax(0,var(--board-height,500px)) auto; }
+html[data-css-compat="ready"] .human-board .tile { aspect-ratio:auto; }
+html[data-css-compat="ready"] .human-board .tile::before { content:"";display:block;width:0;padding-top:100%; }
+
+/* Dynamic viewport units are intentionally replaced in compatibility mode. */
+html[data-css-compat="ready"] .modal { max-height:90vh; }
+html[data-css-compat="ready"] .analysis-poster-dialog { max-height:95vh; }
+html[data-css-compat="ready"] .human-account-control .account-popover { max-height:calc(100vh - 4.5rem); }

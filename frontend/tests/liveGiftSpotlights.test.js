@@ -27,6 +27,19 @@ test('combo updates and retries do not restart or replay the spotlight', () => {
   assert.equal(events.active.key, 'new-combo');
 });
 
+test('all four reaction gifts use the shared spotlight duration and queue for regular users', () => {
+  const events = new GiftSpotlights();
+  const ids = ['bad-four', 'dealer-fault', 'cry-loss', 'laugh-win'];
+  ids.forEach(gift_id => events.receive(event(gift_id, { gift_id }), 1000));
+  ids.forEach((gift_id, index) => {
+    const now = 1000 + index * SPOTLIGHT_DURATION;
+    events.tick(now);
+    assert.equal(events.active.gift_id, gift_id);
+    assert.equal(events.active.until, now + 4400);
+    assert.equal(events.active.actor.supporter_level, 0);
+  });
+});
+
 test('spotlights serialize and expire without unbounded queues or stale replay', () => {
   const events = new GiftSpotlights();
   events.receive(event('stale'), 40000);

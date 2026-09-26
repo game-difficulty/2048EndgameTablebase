@@ -649,6 +649,52 @@ def reserve_operation_tokens(
     )
 
 
+def reserve_operation_tokens_many(
+    *, user_id: int, session_id: int | None, operation_key: str,
+    full_patterns: list[str], expected_total_units: int | None = None,
+) -> list[TokenReservation | None]:
+    """Reserve a multi-item analysis batch in one transaction or not at all."""
+    if not full_patterns:
+        return []
+    base_units = operation_cost_units(operation_key)
+    pricing = resolve_pricing_snapshot()
+    multipliers = [table_multiplier_units(pattern) for pattern in full_patterns]
+    costs = [(multiplier, apply_pricing_multipliers(base_units, multiplier, pricing.global_multiplier_units))
+             for multiplier in multipliers]
+    if expected_total_units is not None and sum(units for _, units in costs) != expected_total_units:
+        raise ValueError("analysis_price_changed")
+    reservations: list[TokenReservation | None] = []
+    with auth_db() as db:
+        db.execute("BEGIN IMMEDIATE")
+        for full_pattern, (multiplier_units, units) in zip(full_patterns, costs):
+            if units <= 0:
+                reservations.append(None)
+                continue
+            before, after, bonus_spent, paid_spent = _subtract_from_account(
+                db, user_id=int(user_id), required_units=units)
+            ledger_id = _insert_ledger(
+                db, user_id=int(user_id), session_id=session_id, event_type="reserve",
+                operation_key=operation_key, table_pattern=str(full_pattern),
+                table_multiplier_units=multiplier_units,
+                global_multiplier_units=pricing.global_multiplier_units,
+                pricing_policy_key=pricing.policy_key, base_cost_units=base_units,
+                final_cost_units=units, bonus_delta_units=-bonus_spent,
+                paid_delta_units=-paid_spent, balance_before_units=_balance_units(before),
+                balance_after_units=_balance_units(after),
+                metadata={"reserved_bonus_units": bonus_spent, "reserved_paid_units": paid_spent},
+            )
+            reservations.append(TokenReservation(
+                ledger_id=ledger_id, user_id=int(user_id), session_id=session_id,
+                operation_key=operation_key, table_pattern=str(full_pattern),
+                table_multiplier_units=multiplier_units,
+                global_multiplier_units=pricing.global_multiplier_units,
+                pricing_policy_key=pricing.policy_key, base_cost_units=base_units,
+                reserved_units=units, reserved_bonus_units=bonus_spent,
+                reserved_paid_units=paid_spent,
+            ))
+    return reservations
+
+
 def finalize_reservation(
     reservation: TokenReservation | None,
     *,

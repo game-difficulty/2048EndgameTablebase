@@ -78,6 +78,13 @@ test('verse viewer decodes ranked 2048next records', () => {
   )));
 });
 
+test('RPL1 unknown timing sentinel stays unknown in the replay viewer', () => {
+  const replay = decodeReplayText('REPLAY_v1RPL_B64_UlBMMUQAAgABP/////8PhCucGRo=');
+  assert.equal(replay.moveCount, 1);
+  assert.equal(replay.steps[0].deltaMs, null);
+  assert.equal(replay.unknownTimings, 1);
+});
+
 test('verse viewer decodes 13-byte state VRS records', () => {
   const initial = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   const afterLeft = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];

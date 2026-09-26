@@ -2,8 +2,8 @@ import { authHeaders } from '../services/auth/sessionTokenStore.js';
 import { eventBytes } from './engine.js';
 import { decodeReceipt, uploadBody } from './wire.js';
 
-export async function request(path, { body, method = 'GET', headers = {}, binary = false, keepalive = false } = {}) {
-  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 8000);
+export async function request(path, { body, method = 'GET', headers = {}, binary = false, keepalive = false, timeoutMs = 8000 } = {}) {
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, { credentials: 'include', cache: 'no-store', method, keepalive,
       headers: authHeaders({ ...(path.startsWith('/api/human/runs/') ? { 'X-Human-Protocol': '2' } : {}),

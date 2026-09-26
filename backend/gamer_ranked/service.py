@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import binascii
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -379,12 +380,14 @@ def _qualifies_for_priority_submission(
     if all_time_cutoff is None or score > all_time_cutoff:
         return True
 
-    weekly_cutoff = _top_100_cutoff(
-        db,
-        board_key=board_key,
-        week_start=_week_start_iso(submitted_at),
-    )
-    return weekly_cutoff is None or score > weekly_cutoff
+    from backend import rolling_leaderboards as rolling
+    from backend.leaderboards.rolling_gamer import ensure_backfill
+    ensure_backfill(db)
+    rolling.maintain(db, WEEKLY_BOARD_KEYS[board_key])
+    row = db.execute("""SELECT c.score FROM rolling_board_entries e
+        JOIN rolling_candidates c ON c.run_id=e.run_id
+        WHERE e.board_key=? AND e.position=100""", (WEEKLY_BOARD_KEYS[board_key],)).fetchone()
+    return row is None or score > row['score']
 
 
 def submit_ranked_run(
@@ -678,11 +681,16 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
     replay_id = str(uuid.uuid4())
     final_board = json.dumps(game.final_board_codes, separators=(",", ":"))
     achieved_at = str(run["submitted_at"] or now)
+    compressed_rolling_replay = gzip.compress(
+        str(run['pending_record']).encode('utf-8'), compresslevel=6, mtime=0)
     week_start = _week_start_iso(achieved_at)
     improved_all_time = False
     improved_weekly = False
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        from backend import rolling_leaderboards as rolling
+        from backend.leaderboards.rolling_gamer import ensure_backfill
+        ensure_backfill(db)
         existing = db.execute(
             "SELECT score FROM gamer_high_scores WHERE user_id = ? AND board_key = ?",
             (int(run["user_id"]), game.board_key),
@@ -709,12 +717,16 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
                 (
                     int(run["user_id"]), game.board_key, game.score, game.max_tile,
                     game.move_count, int(game.used_ai), final_board,
-                    str(run["pending_record"]), replay_id, str(run["run_id"]),
+                    '', replay_id, str(run["run_id"]),
                     achieved_at, now,
                 ),
             )
             improved_all_time = True
 
+        first_rolling = datetime.fromisoformat(db.execute("""SELECT value FROM token_reward_state
+            WHERE key='rolling_first_boundary'""").fetchone()[0])
+        legacy_last_end = first_rolling - timedelta(days=7, hours=8)
+        calendar_awards_open = datetime.fromisoformat(week_start) < legacy_last_end
         weekly_existing = db.execute(
             """
             SELECT score
@@ -722,8 +734,8 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
             WHERE user_id = ? AND board_key = ? AND week_start = ?
             """,
             (int(run["user_id"]), game.board_key, week_start),
-        ).fetchone()
-        if weekly_existing is None or game.score > int(weekly_existing["score"]):
+        ).fetchone() if calendar_awards_open else None
+        if calendar_awards_open and (weekly_existing is None or game.score > int(weekly_existing["score"])):
             db.execute(
                 """
                 INSERT INTO gamer_weekly_high_scores
@@ -745,13 +757,26 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
                 (
                     int(run["user_id"]), game.board_key, week_start, game.score,
                     game.max_tile, game.move_count, int(game.used_ai), final_board,
-                    str(run["pending_record"]), replay_id, str(run["run_id"]),
+                    '', replay_id, str(run["run_id"]),
                     achieved_at, now,
                 ),
             )
             improved_weekly = True
 
-        improved = improved_all_time or improved_weekly
+        rolling.add(db, board_key=WEEKLY_BOARD_KEYS[game.board_key],
+                    run_id=str(run['run_id']), user_id=int(run['user_id']),
+                    score=game.score, max_tile=game.max_tile,
+                    move_count=game.move_count, used_ai=game.used_ai,
+                    has_replay=True, replay_id=replay_id, achieved_at=achieved_at,
+                    eligible_at=achieved_at)
+        db.execute("""INSERT INTO gamer_rolling_replays(run_id,replay_id,compressed_record)
+            VALUES(?,?,?)""", (str(run['run_id']), replay_id,
+                          compressed_rolling_replay))
+        rolling_best = db.execute("""SELECT run_id FROM rolling_player_best
+            WHERE board_key=? AND user_id=?""",
+            (WEEKLY_BOARD_KEYS[game.board_key], int(run['user_id']))).fetchone()
+        improved = improved_all_time or improved_weekly or (
+            rolling_best is not None and rolling_best['run_id'] == str(run['run_id']))
         db.execute(
             """
             UPDATE gamer_ranked_runs
@@ -773,8 +798,6 @@ def _store_validated(run: dict[str, Any], game: ValidatedGame) -> bool:
         prune_ranked_replays()
         if improved_all_time:
             refresh_leaderboard(game.board_key, force=True)
-        if improved_weekly:
-            refresh_leaderboard(WEEKLY_BOARD_KEYS[game.board_key], force=True)
     return improved
 
 
@@ -818,6 +841,17 @@ def public_replay(replay_id: str) -> dict[str, Any]:
             """,
             (replay_id, replay_id),
         ).fetchone()
+        if row is None or not row['record_blob']:
+            row = db.execute("""SELECT r.compressed_record,c.score,c.max_tile,c.move_count,
+                    c.used_ai,substr(c.board_key,1,length(c.board_key)-7) AS board_key,
+                    u.display_name FROM gamer_rolling_replays r
+                JOIN rolling_candidates c ON c.run_id=r.run_id
+                JOIN users u ON u.id=c.user_id
+                WHERE r.replay_id=? AND u.status='active'""", (replay_id,)).fetchone()
+            if row is not None:
+                result = dict(row)
+                result['record_blob'] = gzip.decompress(result.pop('compressed_record')).decode('utf-8')
+                return result
     if row is None:
         raise LookupError("replay_not_found")
     return dict(row)

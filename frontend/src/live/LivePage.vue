@@ -5,6 +5,7 @@
         ><Radio :size="24" /><strong>2048 <span>LIVE</span></strong></a
       >
       <nav>
+        <a href="/lobby">{{ t('直播大厅', 'Live lobby') }}</a>
         <a class="room-address" :href="room.path">{{ room.title[lang] || room.title.en }}</a>
         <RoomPipControls ref="roomPip" :get-surface="() => roomStage?.element()" :get-frame="() => content?.getPipFrame?.()"
           :lang="lang" :title="room.title[lang] || room.title.en" @active="setPipActive" @surface="setSurfaceDetached" />
@@ -47,7 +48,7 @@
         </template>
       </RoomActivities>
       </div>
-      <section class="history-stats-strip">
+      <section v-if="room.content_kind !== 'human-play'" class="history-stats-strip">
         <label class="stats-range">
           <span>{{ t('统计范围', 'STATISTICS') }}</span>
           <UiSelect
@@ -228,6 +229,7 @@ import { provideGiftClient } from '../features/gifts/context.js';
 import { useI18n } from 'vue-i18n';
 import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
+import { isRoomEndedEvent } from './roomLifecycle.js';
 import { canConnectLive, backgroundExpired } from './pipPolicy.js';
 import RoomStage from './RoomStage.vue';
 import RoomPipControls from './pip/RoomPipControls.vue';
@@ -239,6 +241,7 @@ function setSurfaceDetached(detached) {
 }
 
 const props = defineProps({ room: { type: Object, required: true } });
+const emit = defineEmits(['room-ended']);
 useLiveLayoutScale();
 const room = props.room;
 const contentComponent = contentRegistry[room.content_kind];
@@ -293,6 +296,7 @@ let socket,
   noticeTimer,
   stopped = false,
   failures = 0;
+let roomEnded = false;
 const format = (n) =>
   Number(n || 0).toLocaleString(lang.value === "zh" ? "zh-CN" : "en-US");
 const showNotice = (text) => {
@@ -355,7 +359,10 @@ async function receive(event) {
   let data;
   try { data = JSON.parse(event.data); }
   catch { event.target?.close(); return; }
-  if (data.type === "snapshot") {
+  if (data.type === 'room_ended') {
+    if (isRoomEndedEvent(data, room.id)) endRoom();
+  }
+  else if (data.type === "snapshot") {
     if (data.room_id !== room.id || data.protocol !== room.protocol) { socket?.close(); return; }
     try { installSnapshot(data); } catch { socket?.close(); return; }
     synchronized.value = true;
@@ -388,6 +395,32 @@ async function receive(event) {
     await appendChat(data);
   } else {
     try { content.value?.receive(data); } catch { socket?.close(); }
+  }
+}
+
+function endRoom() {
+  if (roomEnded) return;
+  roomEnded = true;
+  stopped = true;
+  clearTimeout(retry);
+  clearInterval(ping);
+  socket?.close();
+  emit('room-ended');
+}
+
+async function reconnectOrEndRoom() {
+  if (stopped || roomEnded || !canConnectLive(document.hidden, pipActive.value)) return;
+  if (room.dynamic) {
+    try {
+      const response = await fetch(room.api_base, { cache: 'no-store' });
+      if (response.status === 404) { endRoom(); return; }
+    } catch { /* A network failure remains eligible for normal reconnection. */ }
+  }
+  if (!stopped && !roomEnded && canConnectLive(document.hidden, pipActive.value)) {
+    retry = setTimeout(
+      connect,
+      Math.min(15000, 1000 * 2 ** failures++) + Math.random() * 300,
+    );
   }
 }
 async function appendChat(data) {
@@ -430,11 +463,7 @@ function connect() {
     connected.value = false;
     synchronized.value = false;
     clearInterval(ping);
-    if (!stopped && canConnectLive(document.hidden, pipActive.value))
-      retry = setTimeout(
-        connect,
-        Math.min(15000, 1000 * 2 ** failures++) + Math.random() * 300,
-      );
+    void reconnectOrEndRoom();
   };
 }
 async function ensureActor() {
@@ -457,6 +486,8 @@ async function sendChat() {
             "发言太快了，请稍后再聊。",
             "Please slow down and try again shortly.",
           )
+        : e.status === 400
+          ? t("消息未通过内容检查，请修改后重试。", "Message blocked by content rules. Please edit it and try again.")
         : t("发送失败，请稍后重试。", "Message not sent. Please try again."),
     );
   } finally {

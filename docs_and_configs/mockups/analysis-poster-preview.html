@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>分析展示图 · 样式预览</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 22px; background: #131018; color: #eee6ef;
+      font: 14px "Clear Sans", "Microsoft YaHei", Arial, sans-serif; }
+    .toolbar { max-width: 1180px; margin: 0 auto 16px; display: flex; align-items: center;
+      gap: 12px; flex-wrap: wrap; }
+    .toolbar strong { margin-right: auto; }
+    .toolbar button, .toolbar select { border: 1px solid #625469; background: #2d2633;
+      color: inherit; border-radius: 5px; padding: 8px 12px; font: inherit; cursor: pointer; }
+    .toolbar button:hover, .toolbar select:hover { border-color: #d6a8df; }
+    .note { max-width: 1180px; margin: 12px auto 0; color: #b9aabc; }
+    canvas { display: block; width: min(100%, 1180px); height: auto; margin: 0 auto;
+      box-shadow: 0 20px 45px #0009; }
+  </style>
+</head>
+<body>
+  <div class="toolbar"><strong>分析展示图 · 视觉样稿</strong>
+    <label>棋盘 <select id="variant"><option>4x4</option><option>3x4</option><option>2x4</option><option>3x3</option></select></label>
+    <label>语言 <select id="language"><option value="zh">中文</option><option value="en">English</option></select></label>
+    <label>评级 <select id="grade"><option>SSS</option><option>SS</option><option>S</option><option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option><option value="">待评级</option></select></label>
+    <label>成绩 <select id="standing"><option value="rank">个人 #4</option><option value="pb">NEW BEST</option></select></label>
+    <button id="download" type="button">下载样图 PNG</button>
+  </div>
+  <canvas id="poster" width="2360" height="1640"></canvas>
+  <p class="note">示例数据仅用于核对排版和配色。正式等级与评级公式尚未确定。</p>
+  <script type="module">
+    import { drawAnalysisPoster } from '../../frontend/src/human/analysisPoster.js';
+    const boards = {
+      '4x4': [32768, 16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 2],
+      '3x4': [8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4],
+      '2x4': [1024, 512, 256, 128, 64, 32, 16, 8],
+      '3x3': [2048, 1024, 512, 256, 128, 64, 32, 16, 8],
+    };
+    const loadImage = src => new Promise(resolve => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => resolve(null);
+      image.src = src;
+    });
+    const [qr, qrBackdrop] = await Promise.all([
+      loadImage('../../frontend/public/human/play-qr-art.webp?v=9'),
+      loadImage('../../frontend/public/human/play-qr-backdrop.webp?v=9'),
+    ]);
+    const canvas = document.getElementById('poster');
+    async function render() {
+      const variant = document.getElementById('variant').value;
+      await drawAnalysisPoster({ canvas, qrImage: qr, qrBackdropImage: qrBackdrop,
+        language: document.getElementById('language').value,
+        data: {
+          name: 'Aurora', pattern: 'free10', target: '512', goalTile: 32768,
+          grade: document.getElementById('grade').value, sample: true,
+          run: { variant, board: boards[variant], score: 1358260,
+            ended_at: Date.parse('2026-09-24T00:10:00+08:00') / 1000,
+            personal_rank: 4,
+            pb: document.getElementById('standing').value === 'pb'
+              ? { new_best: true, previous_best: 1270420, delta: 87840 }
+              : { new_best: false, previous_best: 0, delta: 0 } },
+          aggregate: { stage_count: 3, total_moves: 2847, max_combo: 248,
+            mean_goodness_of_fit: .8342,
+            performance_counts: { 'Perfect!': 942, 'Excellent!': 88, 'Nice try!': 32,
+              'Not bad!': 11, 'Mistake!': 6, 'Blunder!': 2, 'Terrible!': 1 } },
+        },
+      });
+    }
+    document.getElementById('variant').addEventListener('change', render);
+    document.getElementById('language').addEventListener('change', render);
+    document.getElementById('grade').addEventListener('change', render);
+    document.getElementById('standing').addEventListener('change', render);
+    document.getElementById('download').addEventListener('click', () => canvas.toBlob(blob => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a'); anchor.href = url;
+      anchor.download = 'analysis-poster-style-preview.png'; anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, 'image/png'));
+    await render();
+  </script>
+</body>
+</html>

@@ -24,6 +24,7 @@
   if (!supports('color', 'color-mix(in srgb, red, blue)')) reasons.push('color-mix');
   if (!supports('color', 'oklch(50% 0.1 120)')) reasons.push('oklch');
   if (!supports('aspect-ratio', '1 / 1')) reasons.push('aspect-ratio');
+  if (!supports('grid-template-rows', 'subgrid')) reasons.push('subgrid');
   if (!css || !css.registerProperty) reasons.push('registered-properties');
   root.setAttribute('data-css-compat', reasons.length ? 'loading' : 'modern');
   window.__RENDER_COMPAT__ = { mode: reasons.length ? 'compat' : 'modern', reasons: reasons };
@@ -34,13 +35,13 @@
   window.__loadRenderCompatFallback = function () {
     var link = document.createElement('link');
     link.rel = 'stylesheet';
-    link.href = '/compat/render-compat.css?v=2';
+    link.href = '/compat/render-compat.css?v=3';
     link.onload = function () { root.setAttribute('data-css-compat', 'ready'); };
     link.onerror = function () { root.setAttribute('data-css-compat', 'failed'); };
     document.head.appendChild(link);
   };
   if (!window.__RENDER_COMPAT_CSS_URL__) {
-    document.write('<link id="render-compat-css" rel="stylesheet" href="/compat/render-compat.css?v=2" onload="document.documentElement.setAttribute(\'data-css-compat\',\'ready\')" onerror="document.documentElement.setAttribute(\'data-css-compat\',\'failed\')">');
+    document.write('<link id="render-compat-css" rel="stylesheet" href="/compat/render-compat.css?v=3" onload="document.documentElement.setAttribute(\'data-css-compat\',\'ready\')" onerror="document.documentElement.setAttribute(\'data-css-compat\',\'failed\')">');
     return;
   }
   document.write('<link id="render-compat-css" rel="stylesheet" href="' + window.__RENDER_COMPAT_CSS_URL__ + '" onload="document.documentElement.setAttribute(\'data-css-compat\',\'ready\')" onerror="window.__loadRenderCompatFallback()">');

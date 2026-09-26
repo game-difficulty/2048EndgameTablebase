@@ -49,7 +49,7 @@ const batchCaption = computed(() => {
   if (batch.phase === 'settling') return t('正在结算', 'Settling');
   return batch.transition ? t('过渡批 · 下一批开放下注', 'Transition · Betting starts next batch') : t('同批对局', 'Synchronized batch');
 });
-let pending = state.value, raf = null, timer, lastPaint = 0;
+let pending = state.value, playbackTimer = null, timer;
 const playback = new LiveBoardPlayback(pending.frames);
 function placement(lane) {
   if (view.value.layout === 'equal') return '';
@@ -57,23 +57,19 @@ function placement(lane) {
   return lane === state.value.slots.find(s => s.lane !== view.value.selectedLane).lane ? 'preview-one' : 'preview-two';
 }
 function render(time = performance.now(), force = false) {
-  raf = null;
+  if (playbackTimer !== null) clearTimeout(playbackTimer);
+  playbackTimer = null;
   if (!force && document.hidden) return;
-  if (!force && time - lastPaint < (view.value.layout === 'equal' ? 1000 / 30 : 16)) {
-    raf = requestAnimationFrame(render); return;
-  }
-  lastPaint = time;
   const nextView = followMain(view.value, pending.slots);
-  const switched = nextView.selectedLane !== view.value.selectedLane;
   view.value = nextView;
-  if (force || switched) {
+  if (force) {
     pending = syncMultiFrames(pending);
     playback.sync(pending.frames);
   }
-  const frames = playback.paint(time, view.value.layout, view.value.selectedLane);
+  const frames = playback.paint(time);
   state.value = { ...pending, frames };
   // Drain a packet's remaining steps even when no further network message arrives.
-  if (playback.pending) raf = requestAnimationFrame(render);
+  if (playback.pending) playbackTimer = setTimeout(() => render(), playback.nextDelay(performance.now()));
 }
 function schedule() {
   if (document.hidden) {
@@ -83,7 +79,7 @@ function schedule() {
     state.value = pending;
     return;
   } // PiP follows current logical state without queuing move animations.
-  if (raf === null) raf = requestAnimationFrame(render);
+  if (playbackTimer === null) playbackTimer = setTimeout(() => render(), 0);
 }
 function receive(data) {
   if (data instanceof ArrayBuffer) {
@@ -97,19 +93,19 @@ function receive(data) {
     pending = receiveMultiJson(pending, data);
     if (firstSnapshot) view.value = followMain(view.value, pending.slots, true);
     if (data.type === 'snapshot') playback.sync(pending.frames);
-    else if (data.type === 'lane_start' || data.type === 'lane_end') playback.sync(pending.frames, [data.slot.lane]);
+    else if (data.type === 'lane_start') playback.sync(pending.frames, [data.slot.lane]);
     if (data.history !== undefined) history.value?.receive(data);
     if (data.best != null) best.value = data.best;
   }
   schedule();
 }
 function resume() {
-  if (raf !== null) cancelAnimationFrame(raf);
+  if (playbackTimer !== null) clearTimeout(playbackTimer);
   pending = syncMultiFrames(pending); render(performance.now(), true);
 }
-function select(lane) { view.value = selectMain(view.value, lane); resume(); }
-function setLayout(layout) { view.value = changeLayout(view.value, layout, pending.slots); resume(); }
-function setMode(mode) { view.value = changeMainMode(view.value, mode, pending.slots); resume(); }
+function select(lane) { view.value = selectMain(view.value, lane); render(); }
+function setLayout(layout) { view.value = changeLayout(view.value, layout, pending.slots); render(); }
+function setMode(mode) { view.value = changeMainMode(view.value, mode, pending.slots); render(); }
 function getPipFrame() {
   const selection = followMain(view.value, pending.slots);
   return boardPipFrame({slots:pending.slots,selectedLane:selection.selectedLane,layout:selection.layout,
@@ -117,7 +113,7 @@ function getPipFrame() {
 }
 defineExpose({ receive, resume, getPipFrame });
 onMounted(() => { timer = setInterval(() => { now.value = Date.now()+serverOffset; }, 500); });
-onUnmounted(() => { clearInterval(timer); if (raf !== null) cancelAnimationFrame(raf); });
+onUnmounted(() => { clearInterval(timer); if (playbackTimer !== null) clearTimeout(playbackTimer); });
 </script>
 <style scoped>
 .multi-content { width:100%;height:100%;min-width:0;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;padding:12px;overflow:hidden; }

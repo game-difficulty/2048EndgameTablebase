@@ -26,43 +26,45 @@
           <div class="truncate text-[0.72rem] font-bold text-text-secondary">{{ authUser.email }}</div>
         </div>
       </div>
-      <div class="mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
-        <div class="flex items-center justify-between gap-3">
+      <div class="account-token-panel mt-4 grid gap-2 rounded-xl border border-border-main bg-bg-main/55 p-3">
+        <div class="account-token-row flex items-center justify-between gap-3">
           <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.bonusTokens') }}</span>
           <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.bonus) }}</span>
         </div>
-        <div class="flex items-center justify-between gap-3">
+        <div class="account-token-row flex items-center justify-between gap-3">
           <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.paidTokens') }}</span>
           <span class="ui-caption font-black text-text-main">{{ formatTokens(authUser.token_balance?.paid) }}</span>
         </div>
-        <div class="flex items-center justify-between gap-3 border-t border-border-main pt-2">
+        <div class="account-token-row account-token-total flex items-center justify-between gap-3 border-t border-border-main pt-2">
           <span class="ui-caption font-black text-text-secondary">{{ $t('auth.account.totalTokens') }}</span>
           <span class="ui-body font-black text-accent">{{ formatTokens(authUser.token_balance?.total) }}</span>
         </div>
       </div>
-      <button
-        type="button"
-        class="action-btn-small mt-4 w-full justify-center"
-        @click="$emit('quota')"
-      >
-        {{ $t('billing.quotaGuide.open') }}
-      </button>
-      <button
-        type="button"
-        class="action-btn-small mt-2 w-full justify-center"
-        @click="$emit('sponsor')"
-      >
-        {{ $t('billing.open') }}
-      </button>
+      <div class="account-primary-actions">
+        <button
+          type="button"
+          class="account-quota-button action-btn-small mt-4 w-full justify-center"
+          @click="$emit('quota')"
+        >
+          {{ $t('billing.quotaGuide.open') }}
+        </button>
+        <button
+          type="button"
+          class="account-sponsor-button action-btn-small mt-2 w-full justify-center"
+          @click="$emit('sponsor')"
+        >
+          {{ $t('billing.open') }}
+        </button>
+      </div>
       <button
         v-if="canOpenAdmin"
         type="button"
-        class="action-btn-small mt-2 w-full justify-center"
+        class="account-admin-button action-btn-small mt-2 w-full justify-center"
         @click="$emit('admin')"
       >
         {{ $t('admin.open') }}
       </button>
-      <div class="mt-2 grid grid-cols-2 gap-2">
+      <div class="account-security-actions mt-2 grid grid-cols-2 gap-2">
         <button type="button" class="action-btn-small justify-center" @click="$emit('security', 'changePassword')">
           {{ $t('auth.account.changePassword') }}
         </button>
@@ -70,7 +72,7 @@
           {{ $t('auth.account.deactivateAccount') }}
         </button>
       </div>
-      <button type="button" class="action-btn-small mt-2 w-full justify-center" @click="$emit('logout')">
+      <button type="button" class="account-logout-button action-btn-small mt-2 w-full justify-center" @click="$emit('logout')">
         {{ $t('auth.actions.logout') }}
       </button>
     </div>
@@ -86,7 +88,7 @@ const formatTokens = value => {
 };
 </script>
 <style scoped>
-.account-popover { background:linear-gradient(var(--bg-card),var(--bg-card)),var(--bg-main);max-height:calc(100dvh - 4.5rem);overflow-y:auto; }
+.account-popover { background:linear-gradient(var(--bg-card),var(--bg-card)),var(--bg-main);max-height:calc(100vh - 4.5rem);max-height:calc(100dvh - 4.5rem);overflow-y:auto; }
 .account-menu-head {
   display: flex;
   align-items: flex-start;
@@ -121,5 +123,9 @@ const formatTokens = value => {
   color: var(--text-secondary);
   font-size: 0.72rem;
   opacity: 0.7;
+}
+
+.account-primary-actions {
+  display: contents;
 }
 </style>

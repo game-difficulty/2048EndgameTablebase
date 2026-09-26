@@ -1,6 +1,7 @@
 <template>
   <span :class="['gift-icon', `gift-${id}`]" aria-hidden="true">
-    <IiiGiftArtwork v-if="id === 'iii'" />
+    <ReactionGiftArtwork v-if="reactionGifts.has(id)" :id="id" />
+    <IiiGiftArtwork v-else-if="id === 'iii'" />
     <img v-else-if="referenceArtwork[id]" :src="giftAsset(referenceArtwork[id])" alt="" loading="lazy" decoding="async" width="64" height="64" />
     <component v-else-if="legacy[id]" :is="legacy[id]" :size="size" :stroke-width="1.8" />
     <svg v-else viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -90,8 +91,9 @@
 <script setup>
 import { computed } from 'vue';
 import IiiGiftArtwork from './IiiGiftArtwork.vue';
+import ReactionGiftArtwork from './ReactionGiftArtwork.vue';
 import { Coffee, PartyPopper, Sparkles, Combine } from '@lucide/vue';
-import { referenceArtwork, giftAsset } from './giftArtwork.js';
+import { referenceArtwork, giftAsset, reactionGifts } from './giftArtwork.js';
 const props = defineProps({ id: String, size: { type: Number, default: 28 } });
 const legacy = { coffee: Coffee, fireworks: PartyPopper, brilliant: Sparkles, merge: Combine };
 const tileText = computed(() => ({ two: '2', four: '4', '2048': '2048', crown: '32768', legend: '65536', final: '1024' })[props.id] || '?');

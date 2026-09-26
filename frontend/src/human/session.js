@@ -22,12 +22,15 @@ const now = (() => { const wall = Date.now(); const start = performance.now(); r
 export function useHumanSession(user, policies) {
   const run = shallowRef(null); const variant = ref('4x4'); const gate = ref('loading');
   const transition = shallowRef(null);
-  const busy = ref(false); const error = ref(''); const archiveNotice = ref(''); const savedSeq = ref(0);
+  const busy = ref(false); const moveBusy = ref(false);
+  const error = ref(''); const archiveNotice = ref(''); const savedSeq = ref(0);
   const archiveFailures = shallowRef([]), reportedArchiveFailures = new Set();
   let browser = ''; const writer = crypto.randomUUID(); let release; let events = [];
   let permitEnd = 0; let lastUpload = 0; let lastContact = 0; let timer; let disposed = false; let missingId = null;
   let pendingVisibilityCheck = false;
   let stateQueue = Promise.resolve(), networkJob = null, generation = 0;
+  let currentMove = Promise.resolve();
+  const waitForMove = () => currentMove;
   let connectionGraceEnd = 0, uploadBackoff = 0;
   const sameSession = context => !disposed && context.generation === generation && run.value?.id === context.id;
   const contextNow = () => ({ id: run.value?.id, generation });
@@ -235,10 +238,12 @@ export function useHumanSession(user, policies) {
       descriptor = { run_id: crypto.randomUUID(), seed, threshold: Number.MAX_SAFE_INTEGER, epoch: 1 };
     }
     const hash = await engine.initialHash(descriptor.run_id, variant.value, descriptor.seed);
-    const value = { ...engine.initialState(descriptor.run_id, variant.value, descriptor.seed),
+    const initial = engine.initialState(descriptor.run_id, variant.value, descriptor.seed);
+    const value = { ...initial,
       id: descriptor.run_id, variant: variant.value, userId: account(), browser, seed: descriptor.seed,
       initialHash: hash, hash, threshold: descriptor.threshold, epoch: descriptor.epoch, writer: pending.writer,
-      guest: !user.value, monitored: false, serverSeq: 0, firstMoveAt: null, lastActionAt: null, nodesVersion: 1 };
+      guest: !user.value, monitored: false, serverSeq: 0, firstMoveAt: null, lastActionAt: null, nodesVersion: 1,
+      fourCount: initial.board.filter(value => value === 4).length, spawnCount: 2 };
     events = []; await save(value); await storage.meta(`slot:${slot()}`, value.id); await storage.meta(key, null);
     missingId = null; gate.value = 'ready'; error.value = '';
     if (user.value && pending.writer !== writer) {
@@ -261,6 +266,11 @@ export function useHumanSession(user, policies) {
       if (local) {
         run.value = local; events = await storage.readEvents(local.id); savedSeq.value = local.seq;
         if (events.length !== local.seq) throw new Error('local_storage_failed');
+        if (!Number.isInteger(local.fourCount) || !Number.isInteger(local.spawnCount)) {
+          const initial = engine.initialState(local.id, local.variant, local.seed);
+          const fourCount = initial.board.filter(value => value === 4).length + events.filter(event => !!(event[0] & 64)).length;
+          await save({ ...local, fourCount, spawnCount: 2 + events.length });
+        }
         if (local.nodesVersion !== 1) {
           // Recover newly displayed early milestones from this browser's own replay only.
           // Never replace board, score, sequence or RNG with server-side state.
@@ -290,22 +300,33 @@ export function useHumanSession(user, policies) {
   async function play(direction) {
     if (busy.value || gate.value !== 'ready' || !run.value || run.value.reason || document.hidden) return;
     if (high() && (performance.now() >= Math.max(permitEnd, connectionGraceEnd) || !navigator.onLine)) { offline(); return; }
+    let finishMove;
+    currentMove = new Promise(resolve => { finishMove = resolve; });
+    moveBusy.value = true;
     busy.value = true;
     const context = contextNow();
     try {
       await inStateQueue(async () => {
         if (!sameSession(context) || gate.value !== 'ready') return;
-        const stamp = now(); const delta = run.value.seq ? Math.max(0, Math.min(0xffffffff, stamp - run.value.lastActionAt)) : 0;
+        // RPL1 reserves 0xffffffff for an unknown timing, so the largest exact
+        // interval is one millisecond smaller.
+        const stamp = now(); const delta = run.value.seq ? Math.max(0, Math.min(0xfffffffe, stamp - run.value.lastActionAt)) : 0;
         const next = engine.nextMove(run.value, direction, delta);
         if (!next) return;
         next.event.push(await engine.eventHash(run.value.hash, next.event));
         next.state.hash = next.event[2]; next.state.lastActionAt = stamp;
+        next.state.fourCount = (run.value.fourCount || 0) + ((next.event[0] & 64) ? 1 : 0);
+        next.state.spawnCount = (run.value.spawnCount || 2) + 1;
         next.state.firstMoveAt ||= stamp;
         if (!high() && high(next.state)) {
           next.state.firstOverSeq = next.state.seq;
           connectionGraceEnd = navigator.onLine ? performance.now() + 8000 : 0;
         }
-        await commit(next.state, next.event); events.push(next.event);
+        // The live publisher watches run.seq. Append first so the matching
+        // event is already present when that reactive update is delivered.
+        events.push(next.event);
+        try { await commit(next.state, next.event); }
+        catch (error) { events.pop(); throw error; }
         if (engine.isOver(run.value.board, variant.value)) {
           await commit({ ...run.value, reason: 'game_over' }); gate.value = 'ended';
         }
@@ -314,7 +335,7 @@ export function useHumanSession(user, policies) {
       if (gate.value !== 'storage') recordError(e);
       if (run.value && engine.isOver(run.value.board, run.value.variant)) notifyArchiveFailure({ ...run.value, reason: 'game_over' });
     }
-    finally { busy.value = false; }
+    finally { busy.value = false; moveBusy.value = false; finishMove(); }
     if (!sameSession(context)) return;
     if (run.value.reason) void flushArchives();
     else if (high() && !navigator.onLine) offline();
@@ -387,16 +408,30 @@ export function useHumanSession(user, policies) {
     } else if (high() && !run.value?.reason) retry();
   }
   function start() {
+    disposed = false;
+    if (timer) clearInterval(timer);
+    window.removeEventListener('offline', offline); window.removeEventListener('online', online);
+    document.removeEventListener('visibilitychange', visibility);
     timer = setInterval(tick, 500);
     window.addEventListener('offline', offline); window.addEventListener('online', online);
     document.addEventListener('visibilitychange', visibility);
   }
+  function liveCheckpoint() {
+    if (!run.value || run.value.reason || run.value.guest || high()) return;
+    const snapshot = { ...run.value }, frozenEvents = events.slice();
+    if (![32768, 65536].some(value => snapshot.nodes?.[value]?.seq === snapshot.seq)) return;
+    const status = { seq: snapshot.serverSeq || 0, epoch: snapshot.epoch };
+    return background(context => synchronize(context, 'live', snapshot, frozenEvents, status));
+  }
   function stop() {
+    if (disposed) return;
     disposed = true; generation += 1; clearInterval(timer); release?.();
+    timer = null; release = null;
     window.removeEventListener('offline', offline); window.removeEventListener('online', online);
     document.removeEventListener('visibilitychange', visibility);
   }
-  return { run, variant, gate, busy, error, archiveNotice, archiveFailures, dismissArchiveFailure, failedReplayEvents, savedSeq, transition, activate, play, retry, restart,
-    pause, resume, start, stop, flushArchives, high, now,
-    getEvents: () => events.map(e => [...e]), getPolicy: policy };
+  return { run, variant, gate, busy, moveBusy, waitForMove, error, archiveNotice, archiveFailures, dismissArchiveFailure, failedReplayEvents, savedSeq, transition, activate, play, retry, restart,
+    pause, resume, start, stop, flushArchives, high, now, liveCheckpoint,
+    getEvents: () => events.map(e => [...e]), getPolicy: policy,
+    liveContext: () => ({ browser, writer, run: run.value ? { ...run.value } : null }) };
 }

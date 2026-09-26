@@ -20,6 +20,7 @@ mock.module('../src/human/storage.js', { namedExports: {
     return [...f.runs.values()].filter(r => r.reason && !r.archived).map(copy);
   },
   saveRun: async (run, { event, expectedSeq } = {}) => {
+    if (event && f.saveHold) { const pending = f.saveHold; f.saveHold = null; pending.entered.resolve(); await pending.promise; }
     if (event) {
       assert.equal(f.runs.get(run.id)?.seq, expectedSeq);
       const events = f.events.get(run.id) || []; events.push(copy(event)); f.events.set(run.id, events);
@@ -97,6 +98,28 @@ async function move(session) {
 async function cross(session) {
   while (session.run.value.score <= f.threshold) await move(session);
 }
+
+test('move saving stays guarded without marking page controls as a long operation', async t => {
+  const s = await setup(t);
+  const pending = { ...deferred(), entered: deferred() };
+  f.saveHold = pending;
+  const direction = [3, 2, 1, 0].find(d => engine.nextMove(s.run.value, d, 1));
+  const play = s.play(direction);
+  await pending.entered.promise;
+  assert.equal(s.busy.value, true);
+  assert.equal(s.moveBusy.value, true);
+  let moveSaved = false;
+  void s.waitForMove().then(() => { moveSaved = true; });
+  await settle();
+  assert.equal(moveSaved, false);
+  pending.resolve();
+  await play;
+  await s.waitForMove();
+  assert.equal(moveSaved, true);
+  assert.equal(s.busy.value, false);
+  assert.equal(s.moveBusy.value, false);
+  assert.equal(s.run.value.seq, 1);
+});
 
 test('first checkpoint is frozen; delayed receipt preserves newer moves and local events', async t => {
   const s = await setup(t), pending = hold('monitor');
@@ -273,23 +296,23 @@ test('high-score restart upload failures remain silent, including subsequent off
   assert.equal(s.archiveFailures.value.length, 0);
 });
 
-test('low-score restarts stay local and historical retry makes no status or upload requests', async t => {
+test('low-score restarts are also archived', async t => {
   const s = await setup(t, 1000000); await move(s);
   const old = s.run.value.id, recorded = copy(f.events.get(old));
   f.requests.length = 0;
   await s.restart(); await settle(); await s.flushArchives();
-  assert.deepEqual(f.requests, []);
+  assert.ok(f.requests.includes('seal'));
   assert.deepEqual(f.events.get(old), recorded);
   assert.equal(f.runs.get(old).reason, 'restarted');
-  assert.equal(f.runs.get(old).archived, undefined);
+  assert.equal(f.runs.get(old).archived, true);
   assert.equal(s.archiveNotice.value, '');
 });
 
-for (const [variant, threshold] of [['4x4', 360000], ['3x4', 36000], ['3x3', 7200], ['2x4', 4000]]) {
-  test(`${variant} non-natural archives require strictly greater than the high-score threshold`, () => {
+for (const [variant, threshold] of [['4x4', 800000], ['3x4', 70000], ['3x3', 10000], ['2x4', 5000]]) {
+  test(`${variant} uploads every ended signed-in game`, () => {
     for (const reason of ['restarted', 'abandoned', 'interrupted']) {
       for (const score of [0, threshold - 1, threshold, threshold + 1]) {
-        assert.equal(needsReplayUpload({ variant, reason, score, threshold }), score > threshold);
+        assert.equal(needsReplayUpload({ variant, reason, score, threshold }), true);
       }
     }
     assert.equal(needsReplayUpload({ variant, reason: 'game_over', score: 0, threshold }), true);

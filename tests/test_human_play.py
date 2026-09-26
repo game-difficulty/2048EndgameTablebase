@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,7 +14,7 @@ from fastapi.testclient import TestClient
 from backend.auth.db import init_auth_db, auth_db
 from backend.auth.service import create_session, iso
 from backend.gamer_ranked.prng import Xoshiro128StarStar
-from backend.human_play import admin, engine, service
+from backend.human_play import admin, engine, rating, service, statistics
 from backend.human_play.store import init_db, database
 from backend.human_play.routes import router
 
@@ -80,6 +81,167 @@ class HumanPlayTests(unittest.TestCase):
         self.assertEqual(moved, [4,4,0,0, 0,0,0,0, 8,0,0,0]); self.assertEqual(score,16)
         self.assertEqual(engine.move([32768,32768,0,0,0,0,0,0],2,4,3)[0][0],65536)
 
+    def test_default_high_score_monitoring_thresholds(self):
+        self.assertEqual(engine.THRESHOLDS, {
+            '4x4': 800000,
+            '3x4': 70000,
+            '2x4': 5000,
+            '3x3': 10000,
+        })
+
+    def test_single_game_rating_formulas(self):
+        self.assertAlmostEqual(rating.single_rating('4x4', [65536]), 3000)
+        self.assertAlmostEqual(rating.single_rating('3x4', [8192]), 3032.5)
+        self.assertAlmostEqual(rating.single_rating('3x3', [4096]), 4132)
+        self.assertAlmostEqual(rating.single_rating('2x4', [2048, 256, 32, 16, 8, 4]), 5884.03234099934)
+
+    def test_all_variant_top_ratings_apply_formula_after_averaging_board_sums(self):
+        board_sums = [1024, 4096]
+        mean_sum = sum(board_sums) / len(board_sums)
+        for variant in engine.VARIANTS:
+            self.assertAlmostEqual(
+                rating.top_rating(variant, board_sums),
+                rating.rating_from_board_sum(variant, mean_sum),
+            )
+        self.assertNotAlmostEqual(
+            rating.top_rating('4x4', board_sums),
+            sum(rating.rating_from_board_sum('4x4', value) for value in board_sums) / 2,
+        )
+
+    def test_rating_summary_rates_average_board_sum_and_updates_ranks(self):
+        for _ in range(2):
+            run = self.new('2x4')
+            raw, _, _ = self.records(run)
+            self.send(run, raw)
+        best = service.best_ten(1, 1, '2x4')
+        self.assertEqual(best['rating_games'], 2)
+        self.assertAlmostEqual(best['rating'], rating.top_rating(
+            '2x4', (sum(row['board']) for row in best['entries'])))
+        self.assertAlmostEqual(rating.top_rating('4x4', [65284, 61388, 49128, 49128,
+            45040, 44558, 40024, 37016, 36124, 32776]), 2713.5789452247955)
+        self.assertEqual((best['pb_rank'], best['ra_rank']), (1, 1))
+
+        other = service.create(2, OTHER_BROWSER, '2x4', 'rating-other-00000001', WRITER)
+        raw, _, _ = self.records(other)
+        service.submit(2, OTHER_BROWSER, other['run_id'], action='seal', writer=WRITER,
+            epoch=other['epoch'], start=0,
+            prefix_hash=engine.initial(other['run_id'], '2x4', other['seed'])['hash'],
+            local_seq=len(raw) // 5, data=raw, reason='game_over')
+        first = service.best_ten(1, 1, '2x4')
+        second = service.best_ten(2, 2, '2x4')
+        self.assertEqual(first['pb_rank'], 1 + int(second['pb_score'] > first['pb_score']))
+        self.assertEqual(first['ra_rank'], 1 + int(second['rating'] > first['rating']))
+        self.assertEqual(second['pb_rank'], 1 + int(first['pb_score'] > second['pb_score']))
+        self.assertEqual(second['ra_rank'], 1 + int(first['rating'] > second['rating']))
+
+    def test_player_statistics_are_persisted_without_replay_reads(self):
+        run = self.new('2x4')
+        raw, state, _ = self.records(run)
+        self.send(run, raw)
+        result = service.player_statistics(1, '2x4')
+        summary = result['summaries']['2x4']
+        self.assertEqual((summary['game_count'], summary['pb_score']), (1, state['score']))
+        self.assertIsNone(summary['b10_score'])
+        self.assertEqual(len(result['series']), 1)
+        response = self.client.get('/api/human/users/Player%201/statistics?variant=2x4')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['summaries']['2x4']['game_count'], 1)
+        self.assertEqual(response.headers['cache-control'], 'private, max-age=30')
+        with database() as db:
+            db.set_authorizer(lambda op, _arg1, column, *_:
+                sqlite3.SQLITE_DENY if op == sqlite3.SQLITE_READ and column == 'archive' else sqlite3.SQLITE_OK)
+            statistics.payload(db, 1, '2x4')
+
+    def test_statistic_feature_masks_and_32k_stage_tracker(self):
+        self.assertEqual(statistics.feature_mask('3x3', [2,4,8,16,32,64,128,256,512]) & 1, 1)
+        self.assertEqual(statistics.feature_mask('2x4', [2,4,8,16,32,64,128,512]) & 4, 4)
+        tracker = statistics.Rate32kTracker('4x4')
+        tracker.observe({'board':[16384,16384,8192,8192,4096,4096] + [0] * 10})
+        tracker.observe({'board':[32768,16384,8192] + [0] * 13})
+        self.assertEqual(tracker.result(), (2, 3, 1))
+
+    def test_extended_terminal_achievement_masks_and_order(self):
+        self.assertEqual(
+            [key for key, _label in statistics.FEATURES['2x4']],
+            ['full', 'tile_512', 'second_full', '512_256', 'third_full'],
+        )
+
+        second_2x4 = statistics.feature_mask(
+            '2x4', [2, 4, 8, 16, 32, 64, 128, 512])
+        third_2x4 = statistics.feature_mask(
+            '2x4', [2, 4, 8, 16, 32, 64, 256, 512])
+        self.assertEqual(second_2x4, (1 << 1) | (1 << 2))
+        self.assertEqual(third_2x4, (1 << 1) | (1 << 3) | (1 << 4))
+
+        third_3x3 = statistics.feature_mask(
+            '3x3', [2, 4, 8, 16, 32, 64, 128, 512, 1024])
+        self.assertEqual(third_3x3, (1 << 1) | (1 << 3) | (1 << 4))
+
+        deep_3x4 = statistics.feature_mask(
+            '3x4', [4096, 2048, 1024, 512, 256, 128] + [0] * 6)
+        self.assertEqual(deep_3x4, (1 << 6) - 1)
+
+    def test_32k_rate_uses_terminal_achievement_levels(self):
+        def totals(level_counts):
+            passed = total = 0
+            for reached in range(6):
+                exact = level_counts[reached] - (level_counts[reached + 1]
+                                                  if reached < 5 else 0)
+                mask = (1 << 1) | sum(1 << index for index in range(2, 2 + reached))
+                row_passed, row_total = statistics.rate32k_fact(mask)
+                passed += exact * row_passed
+                total += exact * row_total
+            return passed, total
+
+        self.assertEqual(totals([49, 22, 11, 7, 3, 0]), (43, 92))
+        examples = [
+            ([13, 8, 7, 5, 5, 4], .7632),
+            ([31, 24, 19, 14, 8, 7], .7500),
+            ([53, 36, 26, 21, 16, 10], .7171),
+            ([22, 6, 4, 3, 1, 1], .4167),
+            ([56, 37, 24, 17, 11, 9], .6759),
+        ]
+        for counts, expected in examples:
+            passed, total = totals(counts)
+            self.assertAlmostEqual(passed / total, expected, places=4)
+
+    def test_32k_rate_progress_is_persisted_by_eligible_game_index(self):
+        run = self.new('4x4')
+        board = [32768, 16384, 8192, 4096, 2048] + [0] * 11
+        state = engine.initial(run['run_id'], '4x4', run['seed'])
+        state.update({'board': board, 'score': 700000})
+        with database() as db:
+            db.execute("""UPDATE human_runs SET status='sealed',ended=?,reason='game_over',state=?
+                WHERE id=?""", (1234.0, json.dumps(state), run['run_id']))
+            statistics.upsert_fact(db, {'id': run['run_id'], 'user_id': 1,
+                'variant': '4x4', 'ended': 1234.0}, board, 700000, (4, 5, 1))
+            statistics.rebuild_player(db, 1, '4x4')
+            result = statistics.payload(db, 1, '4x4')
+        self.assertEqual(result['rate_32k_series_total'], 0)
+        with database() as db:
+            db.execute("""UPDATE human_player_rate32k_series SET game_index=10
+                WHERE user_id=1""")
+            result = statistics.payload(db, 1, '4x4')
+        self.assertEqual(result['rate_32k_series_total'], 1)
+        self.assertEqual(result['rate_32k_series'][0]['game_index'], 10)
+        self.assertEqual((result['rate_32k_series'][0]['passed'],
+                          result['rate_32k_series'][0]['total']), (4, 5))
+        self.assertAlmostEqual(result['rate_32k_series'][0]['value'], .8)
+
+    def test_rating_cache_rebuilds_from_sealed_state_without_replay_blob(self):
+        run = self.new('2x4')
+        raw, _, _ = self.records(run)
+        self.send(run, raw)
+        expected = service.best_ten(1, 1, '2x4')['rating']
+        with database() as db:
+            db.execute("UPDATE human_runs SET single_rating=NULL WHERE id=?", (run['run_id'],))
+            db.execute('DROP TABLE human_player_ratings')
+        init_db()
+        restored = service.best_ten(1, 1, '2x4')
+        self.assertAlmostEqual(restored['rating'], expected)
+        self.assertAlmostEqual(restored['entries'][0]['single_rating'], expected)
+        self.assertEqual(restored['ra_rank'], 1)
+
     def test_four_slots_and_other_browser_are_independent(self):
         ids = {self.new(v)['run_id'] for v in engine.VARIANTS}
         ids.add(self.new('4x4', OTHER_BROWSER)['run_id']); self.assertEqual(len(ids),5)
@@ -105,14 +267,88 @@ class HumanPlayTests(unittest.TestCase):
         binary = gzip.decompress(archive); self.assertEqual(binary[:4],b'HPR2')
         self.assertEqual(engine.parse_replay(binary)[1],raw)
         self.assertEqual(service.leaderboard('2x4')['entries'][0]['score'],state['score'])
+        self.assertEqual(service.leaderboard('2x4', viewer_id=1)['me']['score'], state['score'])
+        self.assertIsNone(service.leaderboard('2x4', viewer_id=2)['me'])
+        self.assertEqual(service.leaderboard('2x4', 'week')['entries'][0]['score'], state['score'])
+        self.assertEqual(service.leaderboard('2x4', 'week', viewer_id=1)['me']['rank'], 1)
+        self.assertEqual(self.client.get('/api/human/leaderboards?variant=2x4').json()['me']['user_id'], 1)
+        with database() as db:
+            candidate = db.execute("""SELECT achieved_at,eligible_at FROM rolling_candidates
+                WHERE run_id=?""", (run['run_id'],)).fetchone()
+            self.assertGreaterEqual(candidate['eligible_at'], candidate['achieved_at'])
 
-    def test_restarted_history_is_private_and_retained(self):
+    def test_restarted_history_is_visible_and_retained_at_default_zero_threshold(self):
         run = self.new(); raw,_,_ = self.records(run,count=3)
         self.send(run,raw,reason='restarted')
         self.assertEqual(len(service.history(1,1)['entries']),1)
-        self.assertEqual(len(service.history(1,2)['entries']),0)
-        with self.assertRaisesRegex(service.RunError,'replay_not_found'): service.replay(run['run_id'],2)
+        self.assertEqual(len(service.history(1,2)['entries']),1)
+        self.assertTrue(service.replay(run['run_id'],2))
         self.assertEqual(service.leaderboard('4x4')['entries'],[])
+
+    def test_display_threshold_is_fixed_when_run_starts(self):
+        service.save_player_settings(1, {key: 100 for key in engine.VARIANTS})
+        run = self.new('2x4')
+        service.save_player_settings(1, {key: 0 for key in engine.VARIANTS})
+        self.send(run, b'', reason='restarted')
+        with database() as db:
+            row = db.execute('SELECT display_threshold,visible,has_replay FROM human_runs WHERE id=?',
+                             (run['run_id'],)).fetchone()
+            self.assertEqual(tuple(row), (100, 0, 1))
+        self.assertEqual(service.history(1, 1)['entries'], [])
+        self.assertEqual(service.history(1, 2)['entries'], [])
+        self.assertEqual(service.best_ten(1, 1, '2x4')['entries'], [])
+        self.assertTrue(service.replay(run['run_id'], 1))
+        with self.assertRaisesRegex(service.RunError, 'replay_not_found'):
+            service.replay(run['run_id'], 2)
+
+    def test_named_profile_filters_and_best_ten_have_replay_flag(self):
+        run = self.new('3x3')
+        self.send(run, b'', reason='restarted')
+        run2 = self.new('2x4')
+        raw, state, _ = self.records(run2, count=3)
+        self.send(run2, raw, reason='restarted')
+        uid = service.player_id_for_name('Player 1')
+        self.assertEqual(uid, 1)
+        self.assertEqual([row['variant'] for row in service.history(uid, 2, variant='2x4')['entries']], ['2x4'])
+        self.assertEqual(service.history(uid, 2, variant='2x4')['entries'][0]['board'], state['board'])
+        self.assertEqual([row['variant'] for row in service.history(uid, 2, sort='score_desc')['entries']], ['2x4', '3x3'])
+        self.assertEqual(service.history(uid, 2, limit=1)['next_offset'], 1)
+        first_page = service.history(uid, 2, limit=1, page=1)
+        second_page = service.history(uid, 2, limit=1, page=2)
+        self.assertEqual((first_page['total'], first_page['page'], first_page['page_count']), (2, 1, 2))
+        self.assertEqual((second_page['page'], second_page['page_count']), (2, 2))
+        self.assertNotEqual(first_page['entries'][0]['id'], second_page['entries'][0]['id'])
+        self.assertEqual(service.best_ten(uid, 2, '2x4')['entries'], [])  # Unapproved restart is not ranked.
+        self.approve(run2, state)
+        best = service.best_ten(uid, 2, '2x4')['entries'][0]
+        self.assertEqual((best['score'], best['has_replay'], len(best['board'])), (state['score'], 1, 8))
+        initial_fours = engine.initial(run2['run_id'], '2x4', run2['seed'])['fourCount']
+        expected_fours = initial_fours + sum(bool(raw[i] & 64) for i in range(0, len(raw), 5))
+        self.assertAlmostEqual(best['four_spawn_rate'], expected_fours / (2 + state['seq']))
+        self.assertAlmostEqual(best['single_rating'], rating.single_rating('2x4', state['board']))
+        self.assertEqual(service.best_ten(uid, 2, '2x4')['ra_rank'], 1)
+        admin.review(run2['run_id'], approved=False, operator='site-owner', note='Approval revoked')
+        self.assertIsNone(service.best_ten(uid, 2, '2x4')['rating'])
+
+    def test_old_run_without_spawn_counters_still_seals(self):
+        run = self.new('2x4')
+        with database() as db:
+            row = db.execute('SELECT state FROM human_runs WHERE id=?', (run['run_id'],)).fetchone()
+            state = json.loads(row['state'])
+            state.pop('fourCount'); state.pop('spawnCount')
+            db.execute('UPDATE human_runs SET state=? WHERE id=?', (json.dumps(state), run['run_id']))
+        raw, final, _ = self.records(run, count=3)
+        self.send(run, raw, reason='restarted')
+        self.approve(run, final)
+        best = service.best_ten(1, 1, '2x4')['entries'][0]
+        self.assertIsNotNone(best['four_spawn_rate'])
+
+    def test_four_spawn_rate_is_derived_from_board_and_score(self):
+        self.assertEqual(service.four_spawn_rate([2, 2], 0), 0)
+        self.assertEqual(service.four_spawn_rate([4, 2], 0), .5)
+        self.assertEqual(service.four_spawn_rate([4], 4), 0)
+        self.assertIsNone(service.four_spawn_rate([3, 2], 0))
+        self.assertIsNone(service.four_spawn_rate([2, 2], 100))
 
     def approve(self, run, state):
         return admin.review(run['run_id'], approved=True, operator='site-owner', note='Lost local save; retained prefix reviewed',
@@ -145,8 +381,7 @@ class HumanPlayTests(unittest.TestCase):
         self.assertEqual(len(revoked['ranking_reviews']), 2)
         self.assertEqual(service.leaderboard('4x4')['entries'], [])
         self.assertEqual(service.history(1, 2)['bests'], {})
-        with self.assertRaisesRegex(service.RunError, 'replay_not_found'):
-            service.replay(run['run_id'], 2)
+        self.assertTrue(service.replay(run['run_id'], 2))
         self.assertEqual(gzip.decompress(service.replay(run['run_id'], 1)), binary)
 
     def test_manual_review_requires_unchanged_verified_evidence(self):
@@ -218,6 +453,43 @@ class HumanPlayTests(unittest.TestCase):
             self.send(run,raw[:-5],action='monitor')
         self.assertLessEqual(prior['score'],8)
         self.assertTrue(self.send(run,raw,action='monitor')['monitored'])
+
+    def test_successful_game_over_seal_compacts_periodic_chunks(self):
+        run = self.new(threshold=0)
+        raw, final, states = self.records(run)
+        crossing = final['first_over']
+        self.assertIsNotNone(crossing)
+        self.send(run, raw[:crossing * engine.EVENT.size], action='monitor')
+        with database() as db:
+            self.assertEqual(db.execute(
+                'SELECT count(*) FROM human_chunks WHERE run_id=?',
+                (run['run_id'],)).fetchone()[0], 1)
+        sealed = self.send(
+            run, raw[crossing * engine.EVENT.size:], action='seal',
+            reason='game_over', start=crossing, states=states,
+            local_seq=final['seq'])
+        self.assertEqual(sealed['status'], 'sealed')
+        with database() as db:
+            self.assertEqual(db.execute(
+                'SELECT count(*) FROM human_chunks WHERE run_id=?',
+                (run['run_id'],)).fetchone()[0], 0)
+        with self.assertRaisesRegex(service.RunError, 'run_sealed'):
+            self.send(run, b'', action='append', start=final['seq'],
+                      states=states, local_seq=final['seq'])
+
+    def test_offline_active_run_chunks_survive_age_and_database_restart(self):
+        run, _raw, state, _states, _result = self.monitored()
+        with database() as db:
+            db.execute('UPDATE human_runs SET created=0,permit_until=0 WHERE id=?',
+                       (run['run_id'],))
+            db.execute('UPDATE human_chunks SET received=0 WHERE run_id=?',
+                       (run['run_id'],))
+        init_db()
+        self.assertEqual(service.status(1, BROWSER, run['run_id'])['status'], 'active')
+        with database() as db:
+            self.assertEqual(db.execute(
+                'SELECT count(*) FROM human_chunks WHERE run_id=?',
+                (run['run_id'],)).fetchone()[0], 1)
 
     def test_cannot_skip_high_score_monitoring_and_submit_later(self):
         run = self.new('2x4',threshold=0); raw,_,_ = self.records(run)

@@ -5,8 +5,8 @@ let parseSequence = 0;
 let sharedWorker = null;
 const pendingParses = new Map();
 
-function parseSynchronously(buffer, markerThreshold) {
-  const replay = parseRplArrayBuffer(buffer);
+function parseSynchronously(buffer, markerThreshold, maxBytes) {
+  const replay = parseRplArrayBuffer(buffer, maxBytes ? { maxBytes } : undefined);
   return {
     replay,
     analysis: analyzeReplay(replay, markerThreshold),
@@ -14,9 +14,9 @@ function parseSynchronously(buffer, markerThreshold) {
   };
 }
 
-export function parseReplayAsync(buffer, markerThreshold = 1) {
+export function parseReplayAsync(buffer, markerThreshold = 1, maxBytes = undefined) {
   if (typeof Worker === 'undefined') {
-    return Promise.resolve(parseSynchronously(buffer, markerThreshold));
+    return Promise.resolve(parseSynchronously(buffer, markerThreshold, maxBytes));
   }
   const id = ++parseSequence;
   return new Promise((resolve, reject) => {
@@ -43,11 +43,11 @@ export function parseReplayAsync(buffer, markerThreshold = 1) {
         };
       }
       pendingParses.set(id, { resolve, reject });
-      sharedWorker.postMessage({ id, buffer, markerThreshold }, [buffer]);
+      sharedWorker.postMessage({ id, buffer, markerThreshold, maxBytes }, [buffer]);
     } catch (_error) {
       pendingParses.delete(id);
       try {
-        resolve(parseSynchronously(buffer, markerThreshold));
+        resolve(parseSynchronously(buffer, markerThreshold, maxBytes));
       } catch (error) {
         reject(error);
       }

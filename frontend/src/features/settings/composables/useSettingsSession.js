@@ -1,6 +1,7 @@
 import { ref, watch } from 'vue';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
+import { refreshAccountPreferences } from '../../../services/preferences/accountPreferences';
 
 export function useSettingsSession(activeRef) {
   const activeSubTab = ref('game');
@@ -29,6 +30,7 @@ export function useSettingsSession(activeRef) {
       if (isActive) {
         start();
         refreshSettings();
+        void refreshAccountPreferences();
       }
     },
     { immediate: true }

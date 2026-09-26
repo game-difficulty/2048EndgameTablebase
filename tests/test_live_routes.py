@@ -8,7 +8,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from backend.auth.principal import ActorRef
-from backend.auth.db import init_auth_db
+from backend.auth.db import auth_db, init_auth_db
 from backend.live import routes
 from backend.live.protocol import LiveRun
 from backend.gamer_ranked.rules import legal_moves
@@ -75,6 +75,20 @@ class LiveRouteTests(unittest.TestCase):
             state = self.client.get('/api/live/state').json()
             self.assertEqual(state['chat'][0]['text'],'<b>hello</b>')
             self.assertTrue(state['chat'][0]['guest'])
+
+    def test_chat_blocklist_and_disabled_user_history(self):
+        actor = ActorRef.from_guest({'guest_id': 'filter-test', 'display_name': 'Guest-test'})
+        with patch.object(routes, 'require_actor', return_value=actor):
+            response = self.client.post('/api/live/chat', json={'text': '出 售 雷 管'})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()['detail'], 'message_blocked')
+        with auth_db() as db:
+            db.execute("""INSERT INTO users(id,email,email_identity,password_hash,display_name,display_name_key,
+                role,status,created_at,updated_at) VALUES (1,'a@a.cn','a@a.cn','x','Alice','alice',
+                'user','disabled','2026-01-01','2026-01-01')""")
+        routes.hub.chat.append(dict(type='chat', id='disabled-chat', user_id=1, name='Alice', text='hidden'))
+        routes.hub.chat.append(dict(type='chat', id='guest-chat', name='Alice', guest=True, text='guest'))
+        self.assertEqual([item['text'] for item in self.client.get('/api/live/state').json()['chat']], ['guest'])
 
     def test_missing_replay_and_unauthenticated_chat(self):
         self.assertEqual(self.client.get('/api/live/replays/missing').status_code,404)

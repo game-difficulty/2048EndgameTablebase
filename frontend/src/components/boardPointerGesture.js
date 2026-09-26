@@ -15,12 +15,12 @@ export function boardSwipeThreshold(
   return Math.min(max, Math.max(min, size * ratio));
 }
 
-export function boardSwipeDirection(dx, dy, displaySize) {
+export function boardSwipeDirection(dx, dy, displaySize, thresholdOptions) {
   const horizontal = Number(dx) || 0;
   const vertical = Number(dy) || 0;
   const absX = Math.abs(horizontal);
   const absY = Math.abs(vertical);
-  if (Math.max(absX, absY) < boardSwipeThreshold(displaySize)) return null;
+  if (Math.max(absX, absY) < boardSwipeThreshold(displaySize, thresholdOptions)) return null;
   if (absX >= absY) return horizontal >= 0 ? 'right' : 'left';
   return vertical >= 0 ? 'down' : 'up';
 }

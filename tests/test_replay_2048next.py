@@ -41,6 +41,10 @@ def _fixture_replay() -> str:
     return REPLAY_PREFIX + base64.b64encode(payload).decode("ascii")
 
 
+def _fixture_binary_replay() -> bytes:
+    return base64.b64decode(_fixture_replay()[len(REPLAY_PREFIX) :])
+
+
 class Replay2048NextTests(unittest.TestCase):
     def test_codec_parses_envelope_and_records(self):
         replay = decode_2048next_replay(_fixture_replay())
@@ -75,6 +79,18 @@ class Replay2048NextTests(unittest.TestCase):
         self.assertEqual(record["f2"].tolist(), [2, 1])
         self.assertEqual(record["f3"].tolist(), [1, 1])
         self.assertEqual(record["f4"].tolist(), [3, 15])
+
+    def test_decoder_accepts_downloaded_binary_rpl1_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "downloaded.vrs"
+            path.write_bytes(_fixture_binary_replay())
+            decoder = ReplayDecoder(str(path), bm, vbm)
+            decoder.decode()
+
+        self.assertEqual(decoder.variant, "4x4")
+        self.assertEqual(len(decoder.record_list), 2)
+        self.assertEqual(decoder.record_list["f1"].tolist(), [0, 4])
+        self.assertEqual(decoder.record_list["f2"].tolist(), [2, 1])
 
     def test_codec_rejects_crc_mismatch(self):
         encoded = _fixture_replay()[len(REPLAY_PREFIX) :]

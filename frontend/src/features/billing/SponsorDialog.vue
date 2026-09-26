@@ -72,7 +72,7 @@ const formatTokens = (value) => Number(value || 0).toLocaleString(undefined, { m
 
 <style scoped>
 .sponsor-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 116;
   display: flex;

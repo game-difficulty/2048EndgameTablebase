@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 
-from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.auth.db import auth_db
@@ -29,9 +29,33 @@ from .storage import (
     process_avatar_bytes,
     resolve_avatar_key,
 )
+from .preferences import get_preferences, patch_preferences
 
 
 router = APIRouter(tags=["profile"])
+
+
+@router.get("/api/profile/preferences")
+async def read_preferences(request: Request, response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    return await asyncio.to_thread(get_preferences, require_user(request)["id"])
+
+
+@router.patch("/api/profile/preferences")
+async def save_preferences(request: Request, response: Response, payload: dict = Body(...)):
+    user_id = require_user(request)["id"]
+    response.headers["Cache-Control"] = "private, no-store"
+    if set(payload) - {"preferences", "only_if_missing"} or type(payload.get("only_if_missing", False)) is not bool:
+        raise HTTPException(422, detail="invalid_preferences")
+    try:
+        return await asyncio.to_thread(
+            patch_preferences, user_id, payload.get("preferences"),
+            only_if_missing=payload.get("only_if_missing", False),
+        )
+    except ValueError as exc:
+        raise HTTPException(422, detail="invalid_preferences") from exc
+
+
 _RATE_WINDOW_SECONDS = 60 * 60
 _RATE_LIMITS = {"avatar": 10, "display_name": 20}
 _rate_events: dict[tuple[str, int, str], deque[float]] = defaultdict(deque)

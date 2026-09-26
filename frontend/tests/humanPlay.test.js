@@ -1,9 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { move, VARIANTS, DIRECTIONS, initialState, nextMove, initialHash, eventHash, buildReplay, eventBytes, randomSpawn } from '../src/human/engine.js';
-import { practiceCellValue, practiceBoardHex, parsePracticeHex, nodeTime } from '../src/human/practice.js';
+import { createPracticeMoveReminder, practiceCellValue, practiceBoardHex, parsePracticeHex, nodeTime } from '../src/human/practice.js';
 import { humanBoardFrame, paddedBoard } from '../src/human/boardAnimation.js';
+import { createTerminalOverlay, TERMINAL_OVERLAY_DELAY_MS } from '../src/human/terminalOverlay.js';
 const seed = '00000001000000020000000300000004';
+
+test('terminal overlay waits two seconds and stays dismissed for that game', () => {
+  let visible = false, scheduled = null, cleared = 0;
+  const overlay = createTerminalOverlay({
+    setTimer(callback, delay) { scheduled = { callback, delay }; return 7; },
+    clearTimer() { cleared += 1; },
+    onVisible(value) { visible = value; },
+  });
+  overlay.update('run-one', true);
+  assert.equal(visible, false);
+  assert.equal(scheduled.delay, TERMINAL_OVERLAY_DELAY_MS);
+  scheduled.callback();
+  assert.equal(visible, true);
+  overlay.dismiss('run-one');
+  assert.equal(visible, false);
+  scheduled = null;
+  overlay.update('run-one', true);
+  assert.equal(scheduled, null);
+  overlay.update('run-two', true);
+  assert.equal(scheduled.delay, 2000);
+  overlay.update('run-two', false);
+  assert.equal(visible, false);
+  assert.ok(cleared >= 1);
+  overlay.dispose();
+});
 
 test('rectangular animation frames preserve source positions, merge destinations and spawn', () => {
   for (const [rows, cols] of Object.values(VARIANTS)) {
@@ -53,6 +79,21 @@ test('position codes preserve main-site order and rectangular cell counts', () =
   assert.equal(parsePracticeHex('100000000',8),null);
   assert.equal(parsePracticeHex('hjkl',8),null);
   assert.equal(practiceBoardHex([65536,2]),'');
+});
+test('practice reminder fires after 40 moves once per source position, even after undo and reset', () => {
+  const reminder = createPracticeMoveReminder();
+  reminder.start('game:one:10');
+  for (let i = 0; i < 40; i++) assert.equal(reminder.moved(), false);
+  assert.equal(reminder.moves, 40);
+  assert.equal(reminder.moved(), true);
+  reminder.restore(40);
+  assert.equal(reminder.moved(), false);
+  reminder.reset();
+  assert.equal(reminder.moves, 0);
+  for (let i = 0; i < 41; i++) assert.equal(reminder.moved(), false);
+  reminder.start('game:one:11');
+  for (let i = 0; i < 40; i++) assert.equal(reminder.moved(), false);
+  assert.equal(reminder.moved(), true);
 });
 test('node times match replay precision and minute/hour rollover', () => {
   assert.equal(nodeTime(437),'0.437');assert.equal(nodeTime(60188),'1:00.188');assert.equal(nodeTime(3601234),'1:00:01.234');

@@ -3,6 +3,9 @@
     <section class="modal human-analysis-dialog" role="dialog" aria-modal="true" :aria-label="label('对局分析', 'Game analysis')" @keydown.esc="$emit('close')">
       <button class="modal-close" :aria-label="label('关闭', 'Close')" @click="$emit('close')">×</button>
       <h2>{{ label('对局分析', 'Game analysis') }}</h2>
+      <button type="button" @click="historyMode = !historyMode">{{ historyMode ? label('返回本局分析', 'Back to this game') : label('分析历史', 'Analysis history') }}</button>
+      <AnalysisHistoryPanel v-if="historyMode" :language="language" />
+      <template v-else>
       <p v-if="loading" role="status">{{ label('正在读取可用定式…', 'Loading available formations…') }}</p>
       <div v-else-if="error && !options" class="error-text" role="alert">{{ error }} <button @click="load">{{ label('重试', 'Retry') }}</button></div>
       <template v-else-if="options">
@@ -60,6 +63,9 @@
           <div v-for="(entry, index) in job.items || []" :key="index" class="analysis-result-row">
             <span>{{ entry.pattern }} · {{ entry.target }}<small v-if="entry.message" class="error-text">{{ serverErrorText(entry.message, language) }}</small></span>
             <span class="analysis-result-actions"><span>{{ { queued: label('等待中', 'Queued'), running: label('分析中', 'Running'), done: label('完成', 'Done'), failed: label('失败', 'Failed') }[entry.status] }}</span>
+              <button v-for="artifact in entry.artifacts || []" :key="artifact.artifact_id" @click="openAnalysisReplay(artifact.artifact_id)">
+                {{ label('回放阶段', 'Replay stage') }} {{ artifact.segment_index + 1 }} ↗
+              </button>
               <button v-if="entry.status === 'done' && entry.poster_eligible && entry.summary_id" @click="showPoster(entry.summary_id)">{{ label('生成展示图', 'Make result card') }}</button>
               <small v-else-if="entry.status === 'done'" class="muted">{{ label('暂不可出图', 'No result card') }}</small></span>
           </div>
@@ -69,6 +75,7 @@
             <button v-if="job.status === 'finished' || job.status === 'failed'" @click="reset">{{ label('重新选择', 'New analysis') }}</button>
           </div>
         </template>
+      </template>
       </template>
     </section>
   </div>
@@ -84,6 +91,7 @@ import { json } from './client.js';
 import { language } from './i18n.js';
 import { loadLastAnalysisSelection, saveLastAnalysisSelection } from './analysisSelectionHistory.js';
 import HumanAnalysisPosterDialog from './HumanAnalysisPosterDialog.vue';
+import AnalysisHistoryPanel from '../components/AnalysisHistoryPanel.vue';
 
 const props = defineProps({ runId: { type: String, required: true }, player: { type: Object, default: null } });
 defineEmits(['close']);
@@ -91,6 +99,7 @@ const options = ref(null), loading = ref(false), busy = ref(false), error = ref(
 const patternCategory = ref(''), pattern = ref(''), target = ref(''), selected = ref([]), lastSelection = ref([]);
 const quote = ref(null), job = ref(null), requestId = ref('');
 const summaries = ref([]), summaryError = ref(''), posterSummaryId = ref(null);
+const historyMode = ref(false);
 const label = (zh, en) => language.value === 'en' ? en : zh;
 const formatTokenBalance = value => {
   const number = Number(value);
@@ -235,6 +244,12 @@ async function submit() {
     sessionStorage.removeItem(`human-analysis-pending:${props.runId}`); poll(data.job_id);
   } catch (e) { error.value = failure(e); if (e.status === 409) invalidateQuote(); }
   finally { busy.value = false; }
+}
+async function openAnalysisReplay(artifactId) {
+  try {
+    const data = await json(`/api/analysis/replays/${encodeURIComponent(artifactId)}/open-link`, { method: 'POST' });
+    window.open(data.url, '_blank', 'noopener');
+  } catch { error.value = label('回放暂时无法打开。', 'The replay cannot be opened right now.'); }
 }
 function reset() { sessionStorage.removeItem(`human-analysis:${props.runId}`); job.value = null; selected.value = []; invalidateQuote(); error.value = ''; }
 onUnmounted(() => { generation += 1; clearInterval(timer); });

@@ -23,6 +23,8 @@ def get_run(db, run_id):
     row = db.execute("SELECT * FROM human_runs WHERE id=?", (run_id,)).fetchone()
     if not row:
         raise RunError("run_not_found", 404)
+    if row["source"] != "native":
+        raise RunError("native_run_required", 400)
     return dict(row)
 
 
@@ -59,6 +61,9 @@ def verified_events(db, run):
             received = chunk["received"]
         raw = bytes(raw_buffer)
     full = engine.advance(engine.initial(run["id"], run["variant"], run["seed"]), run["variant"], raw, run["threshold"])
+    if 'spawnCount' not in state:
+        full.pop('spawnCount', None)
+        full.pop('fourCount', None)
     if full != state:
         raise ValueError("archive_validation_mismatch")
     if not full["seq"]:
@@ -88,22 +93,46 @@ def review(run_id, *, approved, operator, note, expected_seq=None, expected_hash
     if approved and run["status"] != "sealed":
         end_reason = run["reason"] or "interrupted"
         archive = gzip.compress(engine.replay_bytes({**run, 'reason': end_reason}, raw, version=2), compresslevel=6, mtime=0)
+    rate = None
+    if approved:
+        from . import statistics
+        tracker = statistics.Rate32kTracker(run["variant"])
+        initial = engine.initial(run["id"], run["variant"], run["seed"])
+        tracker.observe(initial)
+        engine.advance(initial, run["variant"], raw, run["threshold"],
+                       observer=tracker.observe)
+        rate = tracker.result()
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
         if get_run(db, run_id) != run:
             raise RunError("review_progress_changed")
+        from . import rating, statistics
         if approved:
             if archive is not None:
-                db.execute("""UPDATE human_runs SET status='sealed',reason=?,ended=?,archive=?,permit_until=0
-                    WHERE id=?""", (end_reason, received, archive, run_id))
+                db.execute("""UPDATE human_runs SET status='sealed',reason=?,ended=?,archive=?,permit_until=0,
+                    visible=?,has_replay=1,single_rating=?,single_rating_version=? WHERE id=?""", (end_reason, received, archive,
+                    int(state['score'] >= run['display_threshold']),
+                    rating.single_rating(run['variant'], state['board']), rating.RATING_VERSION, run_id))
                 db.execute("DELETE FROM human_chunks WHERE run_id=?", (run_id,))
             db.execute("""INSERT OR REPLACE INTO human_rank_approvals
                 (run_id,operator,note,created,seq,prefix_hash) VALUES(?,?,?,?,?,?)""",
                 (run_id, operator.strip(), note.strip(), time.time(), state["seq"], state["hash"]))
+            final = db.execute("SELECT visible,ended FROM human_runs WHERE id=?", (run_id,)).fetchone()
+            statistics.upsert_fact(db, {**run, "ended": final["ended"]},
+                                   state["board"], state["score"], rate)
+            if final['visible']:
+                from . import rolling
+                rolling.add_run(db, run_id, time.time())
         else:
             if not db.execute("SELECT 1 FROM human_rank_approvals WHERE run_id=?", (run_id,)).fetchone():
                 raise RunError("no_manual_approval")
             db.execute("DELETE FROM human_rank_approvals WHERE run_id=?", (run_id,))
+            from . import rolling
+            rolling.revoke_run(db, run_id)
+        rating.refresh_player(db, run['user_id'], run['variant'])
+        statistics.rebuild_player(db, run['user_id'], run['variant'])
+        from . import leaderboards
+        leaderboards.refresh_run(db, run_id)
         db.execute("""INSERT INTO human_rank_reviews
             (run_id,approved,operator,note,created,seq,prefix_hash) VALUES(?,?,?,?,?,?,?)""",
             (run_id, int(approved), operator.strip(), note.strip(), time.time(), state["seq"], state["hash"]))

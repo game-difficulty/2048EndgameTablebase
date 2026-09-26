@@ -158,7 +158,7 @@ def _insert_change_event(
     user_agent: str,
     created_at: str,
 ) -> None:
-    db.execute(
+    cursor = db.execute(
         """
         INSERT INTO user_profile_change_events
         (user_id, change_type, old_value, new_value, ip_address, user_agent, created_at)
@@ -174,6 +174,8 @@ def _insert_change_event(
             created_at,
         ),
     )
+    if change_type in {'avatar', 'display_name'}:
+        db.execute('INSERT INTO profile_change_reviews(event_id) VALUES (?)', (cursor.lastrowid,))
 
 
 def update_display_name(

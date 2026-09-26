@@ -66,9 +66,30 @@ class RedEnvelopeTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as error:self.send(now=200,body={**body,'count':6})
         self.assertEqual(error.exception.detail,'red_request_conflict')
 
-    def test_same_user_concurrent_claim_and_own_rejection(self):
+    def test_sender_concurrent_claim_is_paid_once_and_remaining_refunds(self):
+        bag=self.send(body={**self.body(),'mode':'equal'})
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results=list(pool.map(lambda _:red.claim(bag['id'],1,now=101),range(12)))
+        self.assertEqual({item['award'] for item in results},{200})
+        self.assertEqual(self.paid(1),99200000)
+        self.assertEqual(red.detail(bag['id'],1,now=101)['claimed'],1)
+        red.tick(now=160)
+        self.assertEqual(self.paid(1),100000000)
+        self.assertEqual(red.detail(bag['id'],1,now=160)['refunded'],800)
+        self.assertEqual(red.claim(bag['id'],1,now=500)['award'],200)
+        self.assertEqual(self.paid(1),100000000)
+
+    def test_sender_has_no_reserved_share_and_cannot_claim_queued_or_expired(self):
         bag=self.send()
-        with self.assertRaises(HTTPException):red.claim(bag['id'],1,now=101)
+        for uid in range(2,7):self.assertGreater(red.claim(bag['id'],uid,now=101)['award'],0)
+        self.assertEqual(red.claim(bag['id'],1,now=102)['award'],0)
+        second=self.send(uid=2,now=103)
+        self.assertEqual(red.claim(second['id'],2,now=104)['award'],0)
+        red.tick(now=115)
+        self.assertEqual(red.claim(second['id'],2,now=175)['award'],0)
+
+    def test_same_viewer_concurrent_claim(self):
+        bag=self.send()
         with ThreadPoolExecutor(max_workers=8) as pool:
             awards=list(pool.map(lambda _:red.claim(bag['id'],2,now=101)['award'],range(12)))
         self.assertEqual(len(set(awards)),1)
@@ -82,7 +103,7 @@ class RedEnvelopeTests(unittest.TestCase):
         self.assertEqual(second['status'],'queued')
         self.assertEqual(red.claim(second['id'],3,now=102)['award'],0)
         with ThreadPoolExecutor(max_workers=12) as pool:
-            results=list(pool.map(lambda uid:red.claim(bag['id'],uid,now=102),range(2,26)))
+            results=list(pool.map(lambda uid:red.claim(bag['id'],uid,now=102),range(1,26)))
         self.assertEqual(sum(item['award']>0 for item in results),5)
         self.assertEqual(sum(item['award'] for item in results),1000)
         self.assertEqual(red.tick(now=114.999)['active']['id'],bag['id'])
@@ -182,7 +203,10 @@ class RedEnvelopeTests(unittest.TestCase):
                     bag=response.json()
                     self.assertEqual(len(hub.chat),1)
                     self.assertEqual(hub.red_state['active']['id'],bag['id'])
-                    self.assertEqual(client.post('/api/live/red-envelopes/'+bag['id']+'/claim').json()['detail'],'red_own')
+                    claimed=client.post('/api/live/red-envelopes/'+bag['id']+'/claim')
+                    self.assertEqual(claimed.status_code,200)
+                    self.assertGreater(claimed.json()['award'],0)
+                    self.assertEqual(hub.red_state['active']['claimed'],1)
                 with patch.object(routes,'current_user_from_request',return_value=None):
                     response=client.get('/api/live/red-envelopes/'+bag['id'])
                     self.assertEqual(response.headers['cache-control'],'no-store')

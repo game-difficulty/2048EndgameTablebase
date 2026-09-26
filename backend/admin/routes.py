@@ -5,10 +5,11 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from backend.auth.db import auth_db
 from backend.auth.dependencies import require_user
-from backend.auth.service import iso, normalize_email, utcnow
+from backend.auth.service import iso, normalize_email, set_account_status_for_admin, utcnow
 from backend.quota.service import adjust_paid_tokens_for_admin
 from backend.remote_workers.registry import remote_worker_registry
 
@@ -16,6 +17,29 @@ from backend.remote_workers.registry import remote_worker_registry
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 DEFAULT_ALLOWED_IDENTITIES = ("user0", "assweeass@163.com")
+
+
+@router.get('/profile-reviews')
+def profile_reviews(request: Request, page: int = Query(1, ge=1), status: str = Query('pending', pattern='^(pending|reviewed|revoked|superseded|all)$')):
+    _require_admin(request)
+    from backend.profile.reviews import list_reviews
+    return list_reviews(page, status)
+
+
+class ProfileReviewAction(BaseModel):
+    action: str = Field(pattern='^(keep|revoke)$')
+
+
+@router.post('/profile-reviews/{event_id}')
+def review_profile(event_id: int, payload: ProfileReviewAction, request: Request):
+    user = _require_admin(request)
+    from backend.live.routes import same_origin
+    same_origin(request.headers)
+    from backend.profile.reviews import decide_review
+    try:
+        return decide_review(event_id, payload.action, int(user['id']))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get('/live')
@@ -81,6 +105,159 @@ def _require_admin(request: Request) -> dict[str, Any]:
     raise HTTPException(status_code=403, detail="Admin access required.")
 
 
+class VerseDecision(BaseModel):
+    approved: bool
+    note: str = Field(default="", max_length=1000)
+
+
+class VerseAction(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+class ArchiveDecision(BaseModel):
+    approved: bool
+    note: str = Field(min_length=1, max_length=1000)
+
+
+@router.get("/verse-claims")
+def verse_claims(request: Request, user_id: int | None = Query(None, ge=1)):
+    _require_admin(request)
+    from backend.human_play.verse_history import pending_claims
+    return {"claims": pending_claims(user_id)}
+
+
+@router.post("/verse-claims/{claim_id}/decision")
+def verse_claim_decision(claim_id: int, payload: VerseDecision, request: Request):
+    from backend.human_play.routes import same_origin
+    from backend.human_play import verse_history
+    from backend.human_play.service import RunError
+    user = _require_admin(request)
+    same_origin(request)
+    try:
+        claim = verse_history.decide_claim(claim_id, user["id"], payload.approved, payload.note)
+    except RunError as exc:
+        raise HTTPException(exc.status, exc.code) from exc
+    if payload.approved:
+        verse_history.start_worker()
+    return {"claim": claim}
+
+
+@router.post("/verse-claims/{claim_id}/retry")
+def verse_claim_retry(claim_id: int, payload: VerseAction, request: Request):
+    from backend.human_play.routes import same_origin
+    from backend.human_play import verse_history
+    from backend.human_play.service import RunError
+    user = _require_admin(request)
+    same_origin(request)
+    try:
+        claim = verse_history.retry_claim(claim_id, user["id"], payload.note)
+    except RunError as exc:
+        raise HTTPException(exc.status, exc.code) from exc
+    verse_history.start_worker()
+    return {"claim": claim}
+
+
+@router.post("/verse-claims/{claim_id}/revoke")
+def verse_claim_revoke(claim_id: int, payload: VerseAction, request: Request):
+    from backend.human_play.routes import same_origin
+    from backend.human_play import verse_history
+    from backend.human_play.service import RunError
+    user = _require_admin(request)
+    same_origin(request)
+    try:
+        return {"claim": verse_history.revoke_claim(claim_id, user["id"], payload.note)}
+    except RunError as exc:
+        raise HTTPException(exc.status, exc.code) from exc
+
+
+@router.get('/archive-applications')
+def archive_applications(request: Request, user_id: int | None = Query(None, ge=1)):
+    _require_admin(request)
+    from backend.human_play.manual_archive import pending
+    return {"applications": pending(user_id)}
+
+
+def _approval_identity_matches(query: str) -> list[int]:
+    normalized = str(query or "").strip().lower()
+    if not normalized:
+        return []
+    like = f"%{normalized}%"
+    with auth_db() as db:
+        return [int(row["id"]) for row in db.execute(
+            """SELECT id FROM users
+               WHERE lower(email) LIKE ? OR lower(COALESCE(display_name,'')) LIKE ?
+               ORDER BY id DESC LIMIT 200""",
+            (like, like),
+        ).fetchall()]
+
+
+def _approval_users(user_ids: set[int]) -> dict[int, dict[str, Any]]:
+    if not user_ids:
+        return {}
+    placeholders = ",".join("?" for _ in user_ids)
+    with auth_db() as db:
+        rows = db.execute(
+            f"SELECT id,email,display_name,status FROM users WHERE id IN ({placeholders})",
+            tuple(sorted(user_ids)),
+        ).fetchall()
+    return {int(row["id"]): dict(row) for row in rows}
+
+
+@router.get('/approval-transactions')
+def approval_transactions(
+    request: Request,
+    q: str = Query('', max_length=120),
+    kind: str = Query('all', max_length=20),
+    stage: str = Query('all', max_length=20),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+):
+    _require_admin(request)
+    from backend.human_play.approval_transactions import list_transactions
+    result = list_transactions(
+        query=q,
+        kind=kind,
+        stage=stage,
+        page=page,
+        page_size=page_size,
+        identity_user_ids=_approval_identity_matches(q),
+    )
+    identities = _approval_users({int(item['user_id']) for item in result['transactions']})
+    operators = _approval_users({int(item['operator_id']) for item in result['transactions'] if item['operator_id']})
+    for item in result['transactions']:
+        item['user'] = identities.get(int(item['user_id']))
+        item['operator'] = operators.get(int(item['operator_id'])) if item['operator_id'] else None
+    return result
+
+
+@router.post('/archive-applications/{application_id}/decision')
+def archive_application_decision(application_id: int, payload: ArchiveDecision, request: Request):
+    from backend.human_play.routes import same_origin
+    from backend.human_play import manual_archive
+    from backend.human_play.service import RunError
+    user = _require_admin(request)
+    same_origin(request)
+    try:
+        return {"application": manual_archive.decide(
+            application_id, user['id'], payload.approved, payload.note)}
+    except RunError as exc:
+        raise HTTPException(exc.status, exc.code) from exc
+
+
+@router.post('/archive-applications/{application_id}/revoke')
+def archive_application_revoke(application_id: int, payload: VerseAction, request: Request):
+    from backend.human_play.routes import same_origin
+    from backend.human_play import manual_archive
+    from backend.human_play.service import RunError
+    user = _require_admin(request)
+    same_origin(request)
+    try:
+        return {"application": manual_archive.revoke(
+            application_id, user['id'], payload.note)}
+    except RunError as exc:
+        raise HTTPException(exc.status, exc.code) from exc
+
+
 def _token_value(units: int | float | None) -> float:
     return round(float(units or 0) / 1000, 3)
 
@@ -128,7 +305,7 @@ def _daily_token_activity(db, days: int) -> list[dict[str, Any]]:
     return rows
 
 
-def _user_payload(row) -> dict[str, Any]:
+def _user_payload(row, *, pending_approval: bool = False) -> dict[str, Any]:
     bonus_units = int(row["bonus_balance_units"] or 0)
     paid_units = int(row["paid_balance_units"] or 0)
     entitlement_tier = str(row["entitlement_tier"] or "free")
@@ -138,6 +315,7 @@ def _user_payload(row) -> dict[str, Any]:
         "display_name": row["display_name"] or "",
         "role": row["role"],
         "status": row["status"],
+        "pending_approval": bool(pending_approval),
         "registered_with_invite": bool(row["registered_with_invite"]),
         "created_at": row["created_at"],
         "last_login_at": row["last_login_at"],
@@ -166,11 +344,13 @@ def _query_users(
     page: int,
     page_size: int,
     tier: str = "all",
+    pending_approval_user_ids: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     normalized_query = str(q or "").strip().lower()
     normalized_tier = str(tier or "all").strip().lower()
-    if normalized_tier not in {"all", "supporter", "free"}:
+    if normalized_tier not in {"all", "supporter", "free", "pending"}:
         normalized_tier = "all"
+    approval_ids = {int(item) for item in (pending_approval_user_ids or set())}
     params: list[Any] = []
     where_parts: list[str] = []
     if normalized_query:
@@ -185,9 +365,16 @@ def _query_users(
         )
         like = f"%{normalized_query}%"
         params.extend([like, like, normalized_query])
-    if normalized_tier != "all":
+    if normalized_tier in {"supporter", "free"}:
         where_parts.append("COALESCE(user_entitlements.tier, 'free') = ?")
         params.append(normalized_tier)
+    elif normalized_tier == "pending":
+        if approval_ids:
+            placeholders = ",".join("?" for _item in approval_ids)
+            where_parts.append(f"users.id IN ({placeholders})")
+            params.extend(sorted(approval_ids))
+        else:
+            where_parts.append("1 = 0")
     where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     total = _scalar(
         db,
@@ -237,7 +424,7 @@ def _query_users(
         """,
         tuple(query_params),
     ).fetchall()
-    return [_user_payload(row) for row in rows], {
+    return [_user_payload(row, pending_approval=int(row["id"]) in approval_ids) for row in rows], {
         "page": resolved_page,
         "page_size": resolved_page_size,
         "total": total,
@@ -293,6 +480,9 @@ async def admin_overview(
     cutoff_24h = iso(now - timedelta(days=1))
     cutoff_7d = iso(now - timedelta(days=7))
     active_session_cutoff = iso(now)
+    from backend.human_play.verse_history import pending_approval_user_ids
+    from backend.human_play.manual_archive import pending_approval_user_ids as archive_pending_user_ids
+    approval_user_ids = pending_approval_user_ids() | archive_pending_user_ids()
 
     with auth_db() as db:
         summary = {
@@ -327,8 +517,11 @@ async def admin_overview(
                 )
             ),
         }
-        recent_users, _recent_users_page = _query_users(db, "", page=1, page_size=8)
-        users, users_page = _query_users(db, q, page=page, page_size=page_size, tier=tier)
+        recent_users, _recent_users_page = _query_users(
+            db, "", page=1, page_size=8, pending_approval_user_ids=approval_user_ids)
+        users, users_page = _query_users(
+            db, q, page=page, page_size=page_size, tier=tier,
+            pending_approval_user_ids=approval_user_ids)
         token_activity = _daily_token_activity(db, 14)
 
     return {
@@ -370,3 +563,25 @@ async def admin_adjust_user_tokens(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
     return {"user": user, "adjustment": adjustment}
+
+
+class UserStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(active|disabled)$")
+
+
+@router.post("/users/{user_id}/status")
+def admin_update_user_status(user_id: int, payload: UserStatusUpdate, request: Request):
+    admin_user = _require_admin(request)
+    if int(admin_user["id"]) == int(user_id):
+        raise HTTPException(status_code=400, detail="You cannot change your own account status.")
+    try:
+        set_account_status_for_admin(user_id=int(user_id), status=payload.status)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="User not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with auth_db() as db:
+        user = _get_user_payload_by_id(db, int(user_id))
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"user": user}

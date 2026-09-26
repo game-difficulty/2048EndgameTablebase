@@ -2,9 +2,9 @@ import { analyzeReplay } from './replayAnalysis.js';
 import { parseRplArrayBuffer } from './rplParser.js';
 
 self.onmessage = (event) => {
-  const { id, buffer, markerThreshold } = event.data || {};
+  const { id, buffer, markerThreshold, maxBytes } = event.data || {};
   try {
-    const replay = parseRplArrayBuffer(buffer);
+    const replay = parseRplArrayBuffer(buffer, maxBytes ? { maxBytes } : undefined);
     const analysis = analyzeReplay(replay, markerThreshold);
     self.postMessage(
       { id, ok: true, replay, analysis, rawBuffer: buffer },

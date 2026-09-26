@@ -17,8 +17,9 @@ from . import gifts, audience, lucky_bags, red_envelopes
 from backend.auth.dependencies import current_guest_from_websocket
 from backend.auth.principal import ActorRef
 from .store import week_bounds
-from .rooms import DEFAULT_ROOM, DEFAULT_ROOM_ID, ROOMS
+from .rooms import DEFAULT_ROOM, DEFAULT_ROOM_ID, ROOMS, RoomDefinition
 from .content import create_content
+from . import human_rooms
 from backend.room_activities import predictions
 from backend.room_activities.runtime import RoomActivities
 
@@ -77,6 +78,7 @@ class LiveHub:
         self.control_supported = False
         self.control_ack = None
         self.summary_week = None
+        self.room_ended_notified = False
         self.red_lock = asyncio.Lock()
         self.red_state = dict(active=None, queued=0)
         self.red_task = None
@@ -119,7 +121,8 @@ class LiveHub:
             [item for item in self.chat if item.get('type') != 'entrance'] + list(entrances.values()),
             maxlen=100,
         )
-        history = [*self.chat, *await asyncio.to_thread(red_envelopes.events, room_id=self.room.id)]
+        history = [*self.chat, *await asyncio.to_thread(red_envelopes.events, room_id=self.room.id),
+                   *await asyncio.to_thread(predictions.announcement_events, self.room.id)]
         self.chat = deque(sorted(history, key=lambda item: item['at'])[-100:], maxlen=100)
         await self.content.start()
         if hasattr(self.content, 'batch'):
@@ -298,9 +301,12 @@ class LiveHub:
 
     def lucky_present(self, deadline):
         now = time.time()
-        return {uid for ws, uid in self.viewer_users.items()
+        present = {uid for ws, uid in self.viewer_users.items()
                 if ws in self.viewer_times and self.viewer_times[ws][0] <= deadline
                 and self.viewer_times[ws][1] >= now - 35}
+        if self.room.content_kind == 'human-play':
+            present.discard(int(self.room.metadata.get('owner_user_id', -1)))
+        return present
 
     async def refresh_lucky(self):
         self.lucky_bags = await asyncio.to_thread(lucky_bags.listing, room_id=self.room.id)
@@ -312,7 +318,8 @@ class LiveHub:
             reached = self.content.reached_milestones() if self.room.milestone_rewards else set()
             new = reached - self.lucky_seen
             for run_id, value in sorted(new):
-                await asyncio.to_thread(lucky_bags.create, run_id, value, room_id=self.room.id)
+                creator = lucky_bags.create_human if self.room.content_kind == 'human-play' else lucky_bags.create
+                await asyncio.to_thread(creator, run_id, value, room_id=self.room.id)
             self.lucky_seen = reached
             if new:
                 await self.refresh_lucky()
@@ -399,18 +406,115 @@ class LiveHub:
 hub = LiveHub()
 
 room_hubs = {}
+dynamic_hubs = {}
+dynamic_task = None
+
+
+def _human_definition(data):
+    name = data.get('display_name') or 'Player'
+    return RoomDefinition(
+        id=data['room_id'], title={'zh': f'{name} 的直播', 'en': f'{name}\'s stream'},
+        description={'zh': f"{data['variant']} 玩家实时对局",
+                     'en': f"Live {data['variant']} player game"},
+        content_kind='human-play', protocol='human-play-v1',
+        milestone_rewards=True, dynamic=True,
+        metadata={'variant': data['variant'], 'owner_user_id': data['owner_user_id'],
+                  'run_id': data['run_id'], 'generation': int(data['generation']),
+                  'streamer': {'display_name': name, 'avatar_url': data.get('avatar_url')},
+                  'started_at': data['started_at']},
+    )
+
+
+def _dynamic_hub(room_id):
+    data = human_rooms.room(room_id)
+    if not data:
+        raise HTTPException(404, 'room_not_found')
+    runtime = dynamic_hubs.get(room_id)
+    if (runtime and runtime.room.metadata.get('variant') == data['variant']
+            and runtime.room.metadata.get('run_id') == data['run_id']
+            and int(runtime.room.metadata.get('generation', 0)) == int(data['generation'])):
+        # Name/avatar changes do not create a new run generation. Refresh the
+        # mutable presentation payload while preserving viewers and activities.
+        current = _human_definition(data)
+        runtime.room.title.clear(); runtime.room.title.update(current.title)
+        runtime.room.description.clear(); runtime.room.description.update(current.description)
+        runtime.room.metadata.clear(); runtime.room.metadata.update(current.metadata)
+        return runtime
+    if runtime and (runtime.producer or runtime.viewers):
+        # A run switch changes the generation; the old publisher must reconnect.
+        if runtime.producer:
+            asyncio.create_task(runtime.producer.close(code=1012))
+    runtime = LiveHub(_human_definition(data))
+    # Dynamic rooms share the auth database and retain paid/social state across
+    # a live-service restart without allocating a per-room replay database.
+    runtime.lucky_bags = lucky_bags.listing(room_id=room_id)
+    runtime.gift_history.extend(gifts.recent_events(runtime.room.target))
+    for event in runtime.gift_history:
+        runtime.append_gift_chat(event)
+    dynamic_hubs[room_id] = runtime
+    return runtime
 
 
 def resolve_hub(connection=None):
     room_id = connection.path_params.get('room_id', DEFAULT_ROOM_ID) if connection is not None else DEFAULT_ROOM_ID
     if room_id == DEFAULT_ROOM_ID:
         return hub
-    if room_id not in ROOMS or room_id not in room_hubs:
-        raise HTTPException(404, 'room_not_found')
-    return room_hubs[room_id]
+    if room_id in ROOMS and room_id in room_hubs:
+        return room_hubs[room_id]
+    return _dynamic_hub(room_id)
+
+
+async def _reconcile_dynamic_room(room_id, runtime, data, now):
+    if not data:
+        if not runtime.room_ended_notified:
+            runtime.room_ended_notified = True
+            runtime.broadcast(dict(type='room_ended', room_id=room_id,
+                                   reason='room_ended'))
+        if runtime.producer:
+            with contextlib.suppress(Exception):
+                await runtime.producer.close(code=1008)
+        if not runtime.viewers:
+            dynamic_hubs.pop(room_id, None)
+        return
+    if runtime.producer and now - runtime.last_seen >= 20:
+        with contextlib.suppress(Exception):
+            await runtime.producer.close(code=1013)
+    if int(now) % 5 == 0:
+        runtime.broadcast(dict(type='presence', online=runtime.control_status()['online'],
+            paused=False, viewers=len(runtime.audience.identities())))
+
+
+async def dynamic_maintenance():
+    cursor = 0
+    last_expiry = 0.0
+    while True:
+        await asyncio.sleep(1)
+        items = list(dynamic_hubs.items())
+        now = time.monotonic()
+        if now - last_expiry >= 15:
+            await asyncio.to_thread(human_rooms.expire_stale,
+                stale_after=float(os.environ.get('HUMAN_LIVE_RECOVERY_SECONDS', '90')))
+            last_expiry = now
+        active = {item['room_id']: item for item in await asyncio.to_thread(human_rooms.active_rooms)}
+        for room_id, runtime in items:
+            await _reconcile_dynamic_room(room_id, runtime, active.get(room_id), now)
+        if items:
+            # Recovery/activity work is deliberately staggered across dynamic rooms.
+            _, runtime = items[cursor % len(items)]
+            cursor += 1
+            try:
+                if hasattr(runtime.content, 'verify_pending_milestones'):
+                    await runtime.content.verify_pending_milestones()
+                await runtime.drain_gifts()
+                await runtime.refresh_red()
+                await runtime.tick_lucky()
+            except Exception:
+                logging.getLogger(__name__).exception('Dynamic room reconciliation delayed')
 
 
 async def start_rooms():
+    global dynamic_task
+    human_rooms.init_schema()
     await hub.start()
     try:
         for room_id, definition in ROOMS.items():
@@ -418,12 +522,24 @@ async def start_rooms():
                 runtime = LiveHub(definition)
                 room_hubs[room_id] = runtime
                 await runtime.start()
+        dynamic_task = asyncio.create_task(dynamic_maintenance())
     except BaseException:
         await stop_rooms()
         raise
 
 
 async def stop_rooms():
+    global dynamic_task
+    if dynamic_task:
+        dynamic_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await dynamic_task
+        dynamic_task = None
+    for runtime in [*dynamic_hubs.values()]:
+        if runtime.producer:
+            with contextlib.suppress(Exception):
+                await runtime.producer.close(code=1012)
+    dynamic_hubs.clear()
     for runtime in [*room_hubs.values(), hub]:
         await runtime.stop()
     room_hubs.clear()
@@ -431,14 +547,45 @@ async def stop_rooms():
 
 @router.get('/rooms')
 async def list_rooms():
-    return {'rooms': [room.public() for room in ROOMS.values()]}
+    dynamic = [_human_definition(item).public() for item in human_rooms.active_rooms()]
+    return {'rooms': [room.public() for room in ROOMS.values()] + dynamic}
+
+
+@router.get('/lobby')
+async def lobby(response: Response):
+    response.headers['Cache-Control'] = 'public, max-age=5, stale-while-revalidate=5'
+    entries = []
+    for runtime in [hub, *room_hubs.values(), *dynamic_hubs.values()]:
+        snapshot = runtime.snapshot()
+        if not snapshot.get('online'):
+            continue
+        run = snapshot.get('run')
+        if not run and snapshot.get('lanes'):
+            running = [item.get('run') for item in snapshot['lanes'] if item.get('run')]
+            run = max(running, key=lambda item: item.get('score', 0), default=None)
+        entries.append({
+            'id': runtime.room.id, 'path': '/rooms/' + runtime.room.id,
+            'title': runtime.room.title, 'content_kind': runtime.room.content_kind,
+            'streamer': runtime.room.metadata.get('streamer'),
+            'variant': (run or {}).get('variant', runtime.room.metadata.get('variant', '4x4')),
+            'board': (run or {}).get('board'), 'score': (run or {}).get('score', 0),
+            'appearance': (run or {}).get('appearance'),
+            'max_tile': max((run or {}).get('board') or [0]),
+            'seq': (run or {}).get('seq', 0), 'viewers': len(runtime.audience.identities()),
+            'started_at': (run or {}).get('started_at', runtime.room.metadata.get('started_at')),
+        })
+    entries.sort(key=lambda item: (-item['viewers'], -item['score'], item['id']))
+    return {'rooms': entries, 'generated_at': time.time()}
 
 
 @router.get('/rooms/{room_id}')
 async def room_detail(room_id: str):
-    if room_id not in ROOMS:
+    if room_id in ROOMS:
+        return ROOMS[room_id].public()
+    data = human_rooms.room(room_id)
+    if not data:
         raise HTTPException(404, 'room_not_found')
-    return ROOMS[room_id].public()
+    return _human_definition(data).public()
 
 
 def same_origin(headers):
@@ -453,7 +600,9 @@ def same_origin(headers):
 @router.get('/state')
 async def state(request: Request, stats_range: str = Query('all')):
     hub = resolve_hub(request)
-    return {**hub.snapshot(), **await asyncio.to_thread(hub.store.summary, stats_range), 'likes': hub.like_total, 'chat': list(hub.chat),
+    from backend.chat_moderation import visible_messages
+    history = await asyncio.to_thread(visible_messages, list(hub.chat))
+    return {**hub.snapshot(), **await asyncio.to_thread(hub.store.summary, stats_range), 'likes': hub.like_total, 'chat': history,
             'music_url': os.environ.get('LIVE_MUSIC_URL', ''), 'gifts': list(hub.gift_history)}
 
 
@@ -670,11 +819,14 @@ async def chat(request: Request):
         raise HTTPException(400, 'invalid_message')
     hub.limit(('chat-ip', client_ip(request)), 20)
     hub.limit(('chat', actor.actor_key), 5)
+    from backend.chat_moderation import blocked
+    if blocked(content):
+        raise HTTPException(400, 'message_blocked')
     user = current_user_from_request(request) if actor.is_user else None
     identity = await asyncio.to_thread(gifts.public_actor, user) if user else dict(
         name=actor.display_name, avatar_url=None, supporter=False, supporter_level=0)
     message = dict(type='chat', id=str(time.time_ns()), text=content, at=time.time(),
-                   **identity, guest=actor.is_guest)
+                   **identity, guest=actor.is_guest, user_id=actor.user_id if actor.is_user else None)
     hub.chat.append(message)
     hub.broadcast(message)
     if hub.snapshot()['online']:
@@ -720,7 +872,9 @@ async def watch(ws: WebSocket):
     except HTTPException:
         await ws.close(code=1008)
         return
-    if len(hub.viewers) >= int(os.environ.get('LIVE_MAX_VIEWERS', '200')):
+    total_viewers = len(routes_viewers())
+    if (len(hub.viewers) >= int(os.environ.get('LIVE_MAX_VIEWERS', '200'))
+            or total_viewers >= int(os.environ.get('LIVE_MAX_TOTAL_VIEWERS', '120'))):
         await ws.close(code=1013)
         return
     await ws.accept()
@@ -796,3 +950,30 @@ async def publish(ws: WebSocket):
         await ws.close(code=1008)
         return
     await hub.content.publish(ws, hub)
+
+
+def routes_viewers():
+    return [viewer for runtime in [hub, *room_hubs.values(), *dynamic_hubs.values()]
+            for viewer in runtime.viewers]
+
+
+@router.websocket('/rooms/{room_id}/human-publish')
+async def human_publish(ws: WebSocket):
+    hub = resolve_hub(ws)
+    if hub.room.content_kind != 'human-play':
+        await ws.close(code=1008)
+        return
+    origin = ws.headers.get('origin', '')
+    allowed = {value.rstrip('/') for value in os.environ.get(
+        'HUMAN_LIVE_ALLOWED_ORIGINS',
+        'https://play.2048tables.online,http://127.0.0.1:8765,http://localhost:8765').split(',') if value}
+    if origin not in allowed:
+        await ws.close(code=1008)
+        return
+    user = None
+    with contextlib.suppress(Exception):
+        user = await asyncio.to_thread(current_user_from_websocket, ws)
+    if not user or int(user['id']) != int(hub.room.metadata.get('owner_user_id', -1)):
+        await ws.close(code=1008)
+        return
+    await hub.content.publish(ws, hub, user)

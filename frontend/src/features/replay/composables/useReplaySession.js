@@ -20,6 +20,7 @@ import { MAX_RPL_BYTES } from '../engine/rplParser';
 import {
   authorizeLocalReplayLoad,
   createReplayRequestId,
+  fetchAnalysisReplay,
   fetchLatestReplay,
 } from '../services/replayClient';
 import { restoreLocalTesterReplay } from '../services/localTesterReplayStore';
@@ -330,7 +331,7 @@ export function useReplaySession(activeRef, emit) {
   };
 
   const installReplay = async (buffer, replayMetadata, { step = 0, persist = true } = {}) => {
-    const parsed = await parseReplayAsync(buffer, sliderThreshold.value);
+    const parsed = await parseReplayAsync(buffer, sliderThreshold.value, replayMetadata.maxBytes);
     controller = new ReplayController({
       replay: parsed.replay,
       analysis: parsed.analysis,
@@ -565,12 +566,37 @@ export function useReplaySession(activeRef, emit) {
     }
   };
 
+  const loadAnalysisReplayFromLocation = async () => {
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/u, ''));
+    const artifactId = fragment.get('analysisReplay');
+    if (!artifactId) return false;
+    loadingReplay.value = true;
+    replayStatus.value = t('replay.status.loading');
+    try {
+      const replay = await fetchAnalysisReplay({ artifactId, token: fragment.get('token') || '' });
+      await installReplay(replay.buffer, replay, { step: 0, persist: true });
+      fragment.delete('token');
+      const clean = new URL(window.location.href);
+      clean.hash = fragment.toString();
+      window.history.replaceState(window.history.state, '', clean);
+      return true;
+    } catch (error) {
+      console.error('Failed to load analysis replay', error);
+      loadError.value = formatLoadError(error);
+      replayStatus.value = loadError.value || '';
+      return true;
+    } finally {
+      loadingReplay.value = false;
+    }
+  };
+
   onMounted(async () => {
     window.addEventListener('keydown', handleKeyDown, true);
     window.addEventListener(REPLAY_TRANSFER_EVENT, handleReplayTransfer);
     document.addEventListener('click', closeMenuOnClick);
     const loadLatest = activeRef?.value && consumePendingLatestReplayLoad();
-    await restorePreviousReplay();
+    const analysisReplayHandled = await loadAnalysisReplayFromLocation();
+    if (!analysisReplayHandled) await restorePreviousReplay();
     if (loadLatest) requestLatestReplayLoad();
   });
   onUnmounted(() => {

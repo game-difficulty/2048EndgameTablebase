@@ -152,8 +152,6 @@ def claim(envelope_id, uid, now=None, room_id='ai-classic'):
         old = db.execute('SELECT amount FROM live_red_claims WHERE envelope_id=? AND user_id=?', (envelope_id, uid)).fetchone()
         if old:
             return dict(_public(row, now), award=old[0])
-        if uid == row['sender_id']:
-            raise HTTPException(409, 'red_own')
         if _public(row, now)['status'] != 'active':
             return dict(_public(row, now), award=0)
         award = json.loads(row['shares_json'])[row['claimed']]

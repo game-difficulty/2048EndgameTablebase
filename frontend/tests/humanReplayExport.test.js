@@ -28,12 +28,12 @@ for (const variant of Object.keys(VARIANTS)) {
     assert.equal(exported.binary[6], 2); assert.equal(exported.binary[9], events[0][0]);
   });
 }
-test('zero-move games and maximum millisecond deltas preserve exact state and timing', () => {
+test('zero-move games and maximum representable millisecond deltas preserve exact state and timing', () => {
   const run = { ...initialState('empty', '4x4', seed), id: 'empty', variant: '4x4', seed };
   assert.equal(decodeReplayText(exportCurrentReplay(run, []).text).moveCount, 0);
-  const next = [0, 1, 2, 3].map(d => nextMove(run, d, 0xffffffff)).find(Boolean);
+  const next = [0, 1, 2, 3].map(d => nextMove(run, d, 0xfffffffe)).find(Boolean);
   const result = decodeReplayBytes(exportCurrentReplay(next.state, [next.event]).binary);
-  assert.equal(result.knownTimeMs, 0xffffffff);
+  assert.equal(result.knownTimeMs, 0xfffffffe);
 });
 test('snapshot sequence mismatch is rejected and the 200k-step encoding fits viewer limits', () => {
   const run = { ...initialState('limit', '4x4', seed), id: 'limit', variant: '4x4', seed };

@@ -78,7 +78,8 @@ class CapacityTests(unittest.TestCase):
             self.assertIn('2x4', service.personal_bests(1)['bests'])
             item = service.leaderboard('2x4')['entries'][0]
             self.assertNotIn('nodes', item)
-            self.assertEqual(set(item), {'id', 'user_id', 'score', 'max_tile', 'rank', 'display_name'})
+            self.assertEqual(set(item), {'id', 'user_id', 'score', 'max_tile', 'rank',
+                                         'display_name', 'source', 'has_replay'})
             service.status(1, BROWSER, run['run_id'])
 
     def test_top_ten_limit_and_independent_bests(self):

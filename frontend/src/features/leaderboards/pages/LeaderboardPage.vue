@@ -140,9 +140,9 @@
 </template>
 
 <script setup>
-import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import AccountAvatar from '../../auth/AccountAvatar.vue';
 import MinigameLeaderboardView from '../../minigames/components/MinigameLeaderboardView.vue';
@@ -156,16 +156,7 @@ const props = defineProps({
   requestedDifficulty: { type: Number, default: 1 },
 });
 const { locale, t } = useI18n();
-const hiddenPageBoards = new Set([
-  'gamer_high_score_weekly',
-  'gamer_adversarial_weekly',
-]);
-const normalizePageBoardKey = (key) => {
-  const normalized = String(key || '');
-  if (normalized === 'gamer_high_score_weekly') return 'gamer_high_score';
-  if (normalized === 'gamer_adversarial_weekly') return 'gamer_adversarial';
-  return normalized;
-};
+const normalizePageBoardKey = (key) => String(key || '');
 const boards = ref([]);
 const selectedKey = ref(normalizePageBoardKey(props.requestedKey) || 'supporters');
 const boardData = ref(null);
@@ -278,9 +269,7 @@ const initialize = async () => {
   error.value = '';
   try {
     const payload = await fetchLeaderboardCatalog();
-    boards.value = Array.isArray(payload?.boards)
-      ? payload.boards.filter((board) => !hiddenPageBoards.has(board.key))
-      : [];
+    boards.value = Array.isArray(payload?.boards) ? payload.boards : [];
     if (!boards.value.some((board) => board.key === selectedKey.value)) {
       selectedKey.value = boards.value[0]?.key || 'supporters';
     }

@@ -1,7 +1,7 @@
 <template>
   <div
     v-if="open"
-    class="fixed inset-0 z-[122] flex items-center justify-center bg-slate-950/42 p-6 backdrop-blur-sm"
+    class="security-dialog-overlay"
     @click.self="$emit('close')"
   >
     <section class="security-dialog">
@@ -99,9 +99,9 @@
 </template>
 
 <script setup>
-import { userError } from '../../services/errors/userError.js';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../services/errors/userError.js';
 
 import { authClient } from '../../services/auth/authClient';
 
@@ -273,6 +273,18 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.security-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 422;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(2, 6, 23, 0.42);
+  backdrop-filter: blur(4px);
+}
+
 .security-dialog {
   width: min(34rem, calc(100vw - 3rem));
   border: 1px solid var(--border-main);

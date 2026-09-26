@@ -6,7 +6,9 @@ import { precompress } from './scripts/precompress.mjs'
 import { buildRelease } from './scripts/build-release.mjs'
 
 function liveRoomEntry(req, res, next) {
-  if (/^\/(?:live\/)?rooms\//.test(req.url || '')) req.url = '/live/index.html';
+  if (/^\/(?:live\/)?rooms\//.test(req.url || '') || /^\/lobby\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/live/index.html';
+  if (/^\/user\/[^/?#]+\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/human/index.html';
+  if (/^\/leaderboard\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/human/index.html';
   next();
 }
 

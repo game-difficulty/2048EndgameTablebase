@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import re
 from collections import defaultdict
@@ -12,6 +13,7 @@ import Config
 import engine_core.VBoardMover as vbm
 from backend.replay_2048next import (
     MoveRecord as Replay2048NextMove,
+    REPLAY_PREFIX as REPLAY_2048NEXT_PREFIX,
     UndoRecord as Replay2048NextUndo,
     decode_2048next_replay,
     is_2048next_replay,
@@ -92,6 +94,15 @@ class ReplayDecoder:
     def read_replay(self):
         with open(self.filepath, "rb") as file:
             raw_data = file.read()
+
+        # Downloaded play-site replays use the RPL1 binary payload directly,
+        # while the analyzer historically only recognized its Base64 text
+        # envelope.  Let both forms share the same validated decoder.  Without
+        # this branch raw RPL1 bytes fell through to the legacy character
+        # decoder, leaving bogus/uninitialized move rows and eventually raising
+        # an unrelated "tuple index out of range" while mapping a move code.
+        if raw_data.startswith(b"RPL1"):
+            return REPLAY_2048NEXT_PREFIX + base64.b64encode(raw_data).decode("ascii")
 
         dt = np.dtype([("f0", "uint64"), ("f1", "uint32"), ("f2", "uint8")])
         item_size = dt.itemsize
@@ -504,6 +515,8 @@ class Analyzer:
         self.rec_step_count = 0
         self.log_difficulty = 0.0
         self.prev_expected_success_rate = None
+        self.segment_summaries: list[dict] = []
+        self.segment_start_index = 0
 
     @staticmethod
     def _safe_report_stem(filename: str) -> str:
@@ -574,23 +587,39 @@ class Analyzer:
 
     def generate_reports(self) -> None:
         self._preload_remote_analysis()
+        end_index = len(self.record_list)
         for i in range(len(self.record_list)):
-            is_endgame, large_tile_changed = self.analyze_one_step(i)
+            is_endgame = self.analyze_one_step(i)
             if is_endgame is None:
                 self.write_error(
                     "Table path not found, please make sure you have calculated the required table\n"
                     "and that it is working properly in the practice module."
                 )
+                end_index = i
                 break
-            if large_tile_changed:
-                if len(self.text_list) > 100:
-                    self.write_analysis(i)
-                self.save_rec_to_file(i)
-                self.clear_analysis()
 
-        if len(self.text_list) > 100:
-            self.write_analysis(len(self.record_list))
-        self.save_rec_to_file(len(self.record_list))
+        self._flush_segment(end_index, end_index)
+
+    def _flush_segment(self, report_step: int, end_index: int) -> None:
+        report = self.write_analysis(report_step) if len(self.text_list) > 100 else None
+        replay = self.save_rec_to_file(report_step)
+        if report is not None or replay is not None:
+            self.segment_summaries.append({
+                "start_index": self.segment_start_index,
+                "end_index": end_index,
+                "total_moves": end_index - self.segment_start_index,
+                "evaluated_moves": self.step_count,
+                "goodness_of_fit": float(self.goodness_of_fit),
+                "max_combo": self.max_combo,
+                "performance_counts": {
+                    label.replace("**", ""): count
+                    for label, count in self.performance_stats.items()
+                },
+                "report_file": os.path.basename(report) if report else None,
+                "replay_file": os.path.basename(replay) if replay else None,
+                "replay_path": os.path.abspath(replay) if replay else None,
+            })
+        self.segment_start_index = end_index
         self.clear_analysis()
 
     def _preload_remote_analysis(self) -> None:
@@ -751,7 +780,7 @@ class Analyzer:
         self.prev_expected_success_rate = move_result
         return True
 
-    def analyze_one_step(self, i: int) -> tuple[bool | None, bool]:
+    def analyze_one_step(self, i: int) -> bool | None:
         board_encoded, _, move_encoded, new_tile, spawn_position = self.record_list[i]
         board = self.bm.decode_board(board_encoded)
 
@@ -760,17 +789,21 @@ class Analyzer:
         elif self.check_nth_largest(board_encoded):
             masked_board = self.mask_large_tiles(board.copy())
         else:
-            return False, True
+            self._flush_segment(i, i)
+            self.segment_start_index = i + 1
+            self.large_tile_sum = 0
+            return False
 
         large_tile_sum = masked_board.sum() - board.sum()
         large_tile_changed = large_tile_sum != self.large_tile_sum
         self.large_tile_sum = large_tile_sum
+        if large_tile_changed:
+            self._flush_segment(i, i)
 
         move = ("", "Left", "Right", "Up", "Down")[move_encoded]
-        is_endgame = self._analyze_one_step(
+        return self._analyze_one_step(
             board, masked_board, move, new_tile, spawn_position
         )
-        return is_endgame, large_tile_changed
 
     def write_error(self, text: str) -> None:
         filename = self.full_pattern + "_error"
@@ -778,7 +811,7 @@ class Analyzer:
         with open(target_file_path, "a", encoding="utf-8") as file:
             file.write(text + "\n")
 
-    def write_analysis(self, step: int) -> None:
+    def write_analysis(self, step: int) -> str:
         filename = (
             self.full_pattern
             + "_"
@@ -818,6 +851,7 @@ class Analyzer:
             for evaluation, count in self.performance_stats.items():
                 file.write(f"{evaluation}: {count}\n")
             file.write(self.tr("End of analysis"))
+        return target_file_path
 
     @staticmethod
     def evaluation_of_performance(loss) -> str:
@@ -857,10 +891,10 @@ class Analyzer:
         flags = int(REPLAY_FORCED_FLAG) if forced else 0
         return np.uint8((flags | (a << 5) | (b << 1) | c) & 0xFF)
 
-    def save_rec_to_file(self, step: int) -> None:
+    def save_rec_to_file(self, step: int) -> str | None:
         rec_step_count = self.rec_step_count
         if self.full_pattern is None or rec_step_count < 2:
-            return
+            return None
 
         filename = (
             self.full_pattern
@@ -882,6 +916,7 @@ class Analyzer:
                 terminal_board = transition["next_board_encoded"]
         self.record[rec_step_count] = replay_sentinel(terminal_board)
         self.record[: rec_step_count + 1].tofile(target_file_path)
+        return target_file_path
 
 
 def count_32ks(board):

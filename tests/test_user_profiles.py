@@ -18,6 +18,7 @@ from backend.profile.service import (
     update_display_name,
 )
 from backend.profile.storage import process_avatar_bytes
+from backend.profile.reviews import list_reviews, decide_review
 
 
 class UserProfileTests(unittest.TestCase):
@@ -75,6 +76,42 @@ class UserProfileTests(unittest.TestCase):
         output = io.BytesIO()
         Image.new("RGB", (320, 180), color).save(output, format="PNG")
         return output.getvalue()
+
+    def test_new_profile_changes_are_reviewable_and_reset_keeps_cooldown(self) -> None:
+        user_id = self._create_user('ReviewTarget')
+        self.assertTrue(update_display_name(user_id, 'ChangedName'))
+        reviews = list_reviews()
+        name_event = next(item for item in reviews['items'] if item['change_type'] == 'display_name')
+        self.assertTrue(name_event['is_current'])
+        self.assertEqual(decide_review(name_event['id'], 'revoke', user_id)['status'], 'revoked')
+        with auth_db() as db:
+            self.assertEqual(db.execute('SELECT display_name FROM users WHERE id=?', (user_id,)).fetchone()[0], f'User{user_id}')
+            self.assertIsNotNone(db.execute('SELECT display_name_changed_at FROM user_profiles WHERE user_id=?', (user_id,)).fetchone()[0])
+
+        avatar = process_avatar_bytes(self._image_bytes((12, 34, 56)))
+        self.assertTrue(update_avatar(user_id, avatar))
+        avatar_event = next(item for item in list_reviews()['items'] if item['change_type'] == 'avatar')
+        self.assertTrue(avatar_event['is_current'])
+        self.assertEqual(decide_review(avatar_event['id'], 'keep', user_id)['status'], 'reviewed')
+        self.assertEqual(decide_review(avatar_event['id'], 'revoke', user_id)['status'], 'revoked')
+        with auth_db() as db:
+            profile = db.execute('SELECT avatar_key, avatar_changed_at FROM user_profiles WHERE user_id=?', (user_id,)).fetchone()
+            self.assertIsNone(profile['avatar_key'])
+            self.assertIsNotNone(profile['avatar_changed_at'])
+
+    def test_old_review_cannot_revoke_a_later_avatar(self) -> None:
+        user_id = self._create_user('AvatarVersions')
+        self.assertTrue(update_avatar(user_id, process_avatar_bytes(self._image_bytes((1, 2, 3)))))
+        old_event = list_reviews()['items'][0]['id']
+        with auth_db() as db:
+            db.execute('UPDATE user_profiles SET avatar_changed_at=? WHERE user_id=?',
+                       ((datetime.now(timezone.utc) - timedelta(days=31)).isoformat(), user_id))
+        self.assertTrue(update_avatar(user_id, process_avatar_bytes(self._image_bytes((4, 5, 6)))))
+        with auth_db() as db:
+            current = db.execute('SELECT avatar_key FROM user_profiles WHERE user_id=?', (user_id,)).fetchone()[0]
+        self.assertEqual(decide_review(old_event, 'revoke', user_id)['status'], 'superseded')
+        with auth_db() as db:
+            self.assertEqual(db.execute('SELECT avatar_key FROM user_profiles WHERE user_id=?', (user_id,)).fetchone()[0], current)
 
     def test_display_name_is_unique_and_starts_independent_cooldown(self) -> None:
         alice = self._create_user("Alice")

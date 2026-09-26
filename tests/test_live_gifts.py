@@ -61,6 +61,43 @@ class LiveGiftTests(unittest.TestCase):
         self.assertEqual(event['combo_count'], 1)
         self.assertFalse(event['bulk_effect'])
 
+    def test_reaction_gifts_prices_delivery_and_bulk_spotlight(self):
+        before = get_token_balance(1)
+        total = 0
+        for gift_id, price in [('bad-four', 44), ('dealer-fault', 44),
+                               ('cry-loss', 44), ('laugh-win', 66)]:
+            request = self.request(gift_id, 100)
+            self.assertEqual(request['expected_cost_units'], price * 100 * 1000)
+            result = gifts.send(self.user, request, True)
+            self.assertEqual(result, gifts.send(self.user, request, True))
+            event = gifts.pending_events()[-1]['event']
+            self.assertEqual(event['gift_id'], gift_id)
+            self.assertEqual(event['tier'], 1)
+            self.assertEqual(event['combo_count'], 100)
+            self.assertTrue(event['bulk_effect'])
+            total += price * 100
+        after = get_token_balance(1)
+        self.assertEqual(before['bonus'] + before['paid'] - after['bonus'] - after['paid'], total)
+        self.assertEqual(len(gifts.pending_events()), 4)
+
+    def test_reaction_gifts_cross_100_once_for_regular_users_and_retrigger_in_new_combo(self):
+        user = {**self.user, 'role': 'user'}
+        for gift_id in ['bad-four', 'dealer-fault', 'cry-loss', 'laugh-win']:
+            gifts.send(user, self.request(gift_id, 99), True)
+            request = self.request(gift_id, 1)
+            first = gifts.send(user, request, True)
+            self.assertEqual(first, gifts.send(user, request, True))
+            gifts.send(user, self.request(gift_id, 1), True)
+            events = [item['event'] for item in gifts.pending_events() if item['event']['gift_id'] == gift_id]
+            self.assertEqual([event['combo_count'] for event in events], [99, 100, 101])
+            self.assertEqual([event['bulk_effect'] for event in events], [False, True, False])
+            self.assertTrue(all(event['actor']['supporter_level'] == 0 for event in events))
+            with auth_db() as db:
+                db.execute('UPDATE live_gift_orders SET created_at=created_at-6 WHERE gift_id=?', (gift_id,))
+            later = gifts.send(user, self.request(gift_id, 100), True)
+            self.assertNotEqual(first['combo_id'], later['combo_id'])
+            self.assertTrue(gifts.pending_events()[-1]['event']['bulk_effect'])
+
     def test_bulk_effect_crosses_100_once_per_combo_without_supporter_requirement(self):
         user = {**self.user, 'role': 'user'}
         gifts.send(user, self.request('rip', 99), True)
@@ -167,7 +204,8 @@ class LiveGiftTests(unittest.TestCase):
                         crown=32768, final=1024, legend=65536, knowledge=16, button=16,
                         whale=16, moai=10, meaning=16, rip=16, tea=16, chicken=16,
                         serious=16)
-        expected.update({'666': 66, '2048': 2048, 'iii': 111})
+        expected.update({'666': 66, '2048': 2048, 'iii': 111,
+                         'bad-four': 44, 'dealer-fault': 44, 'cry-loss': 44, 'laugh-win': 66})
         self.assertEqual({item['id']: item['totals'][0] // 1000 for item in gifts.catalogue()[0]['gifts']}, expected)
         gifts.send(self.user, self.request('dealer', 4), True)
         self.assertEqual(get_token_balance(1)['bonus'], 0)
