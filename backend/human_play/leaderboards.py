@@ -89,7 +89,7 @@ def _analysis_values(db, summary_id: int, summary: dict) -> dict | None:
         r.variant,r.ended,r.state,EXISTS(SELECT 1 FROM human_runs
             WHERE id=s.run_id AND status='sealed' AND {RANKABLE_SQL}) AS rankable
         FROM human_analysis_summaries s JOIN human_runs r ON r.id=s.run_id
-        WHERE s.id=?""", (summary_id,)).fetchone()
+        WHERE s.id=? AND s.listed=1 AND s.admitted=1""", (summary_id,)).fetchone()
     if not row:
         return None
     run = summary.get("run") or {}

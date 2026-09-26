@@ -19,17 +19,39 @@ from .analysis_summary import get_summary, list_summaries
 from .store import database
 
 
-def _run_metadata(run_id: str, user_id: int) -> dict:
+def _subject(user_id: int, *, allow_missing: bool = False) -> dict:
+    from backend.profile.service import public_profile
+    with auth_db() as db:
+        row = db.execute("SELECT id,display_name,status FROM users WHERE id=?", (int(user_id),)).fetchone()
+        if not row and allow_missing:
+            return {"id": int(user_id), "display_name": "玩家", "avatar_url": None}
+        if not row or row["status"] != "active":
+            raise service.RunError("analysis_run_not_found", 404)
+        profile = public_profile(int(user_id), db=db)
+    return {"id": int(user_id), "display_name": row["display_name"] or "玩家",
+            "avatar_url": profile.get("avatar_url")}
+
+
+def _listing_enabled(user_id: int) -> bool:
+    from backend.profile.preferences import get_preferences
+    return bool(get_preferences(int(user_id))["preferences"].get("share_play_analysis", True))
+
+
+def _run_metadata(run_id: str, _viewer_id: int | None = None) -> dict:
+    from .service import RANKABLE_SQL
     with database() as db:
-        row = db.execute("""SELECT id,variant,state,reason,ended,has_replay,source FROM human_runs
-            WHERE id=? AND user_id=? AND status='sealed' AND visible=1 AND archive IS NOT NULL""",
-            (run_id, user_id)).fetchone()
-    if not row or not row["has_replay"]:
+        row = db.execute(f"""SELECT id,user_id,variant,state,reason,ended,has_replay,source,
+            visible,({RANKABLE_SQL}) AS rankable FROM human_runs
+            WHERE id=? AND status='sealed' AND archive IS NOT NULL""",
+            (run_id,)).fetchone()
+    if (not row or not row["visible"] or not row["has_replay"]
+            or (int(row["user_id"]) != int(_viewer_id or -1) and not row["rankable"])):
         raise service.RunError("analysis_run_not_found", 404)
     state = json.loads(row["state"])
     return {"id": row["id"], "variant": row["variant"], "score": state["score"],
             "moves": state["seq"], "reason": row["reason"], "ended_at": row["ended"],
-            "source": row["source"]}
+            "source": row["source"],
+            "subject": _subject(row["user_id"], allow_missing=int(row["user_id"]) == int(_viewer_id or -1))}
 
 
 def _compatible(pattern: str, variant: str) -> bool:
@@ -153,7 +175,8 @@ def create(run_id: str, user_id: int, session_id: int | None, items: list[dict],
         # Only the worker input is materialized; clients never download and upload the archive.
         with database() as db:
             row = db.execute("""SELECT archive FROM human_runs WHERE id=? AND user_id=?
-                AND status='sealed' AND visible=1 AND archive IS NOT NULL""", (run_id, user_id)).fetchone()
+                AND status='sealed' AND visible=1 AND archive IS NOT NULL""",
+                (run_id, run["subject"]["id"])).fetchone()
         if not row:
             raise service.RunError("analysis_run_not_found", 404)
         if run["source"] in {"verse", "manual"}:
@@ -172,8 +195,13 @@ def create(run_id: str, user_id: int, session_id: int | None, items: list[dict],
             if str(exc) == "analysis_price_changed":
                 raise service.RunError("analysis_price_changed", 409) from exc
             raise
-        work_items = [AnalysisWorkItem(path, f"{run_id}.vrs", item["pattern"], item["target"], reservations[index], run_id)
-                      for index, item in enumerate(valid)]
+        listing_snapshot = _listing_enabled(run["subject"]["id"])
+        work_items = [AnalysisWorkItem(
+            path=path, filename=f"{run_id}.vrs", pattern=item["pattern"], target=item["target"],
+            reservation=reservations[index], source_run_id=run_id,
+            subject_user_id=run["subject"]["id"], listing_snapshot=listing_snapshot,
+            source_ended_at=run["ended_at"],
+        ) for index, item in enumerate(valid)]
         job = create_analysis_job(work_items=work_items, user_id=user_id, session_id=session_id)
         path.unlink(missing_ok=True)
         _finish_request(user_id, request_id, job.job_id)

@@ -91,11 +91,12 @@ async function renderPoster() {
   drawing.value = true;
   try {
     const [qrImage, qrBackdropImage] = await getQrAssets();
-    if (!avatarPromise) avatarPromise = loadImage(props.player?.profile?.avatar_url);
+    const subject = data.subject || props.player;
+    if (!avatarPromise) avatarPromise = loadImage(subject?.avatar_url || subject?.profile?.avatar_url);
     const avatarImage = await avatarPromise;
     if (serial !== renderSerial || summary.value !== data) return;
     await drawAnalysisPoster({ canvas: target,
-      data: { name: props.player?.display_name || 'Player', pattern: data.pattern,
+      data: { name: subject?.display_name || 'Player', pattern: data.pattern,
         target: data.target, goalTile: data.goal_tile, run: data.run,
         aggregate: data.aggregate, grade: data.grade || null },
       qrImage, qrBackdropImage, avatarImage, tilePalette: tilePalette(), language: language.value });

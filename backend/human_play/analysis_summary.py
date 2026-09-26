@@ -5,15 +5,18 @@ import base64
 import json
 import math
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from engine_core.performance_evaluation import PERFORMANCE_PERFECT_LABEL
+from backend.auth.db import auth_db
 
 from .store import database
 from .verse_replay import PREFIX, UNKNOWN_TIMING_MS, _rpl1
 
 
 METRIC_VERSION = 1
+ANALYZER_VERSION = 1
 POSTER_GOALS = frozenset((16384, 32768, 65536))
 MAX_COUNTED_MOVE_MS = 20 * 60 * 1000
 
@@ -130,17 +133,34 @@ def init_schema(db) -> None:
         user_id INTEGER NOT NULL, pattern TEXT NOT NULL, target TEXT NOT NULL,
         metric_version INTEGER NOT NULL, job_id TEXT NOT NULL,
         aggregate_json TEXT NOT NULL, summary_json TEXT NOT NULL, created REAL NOT NULL,
+        analyzer_version INTEGER NOT NULL DEFAULT 1,
+        listed INTEGER NOT NULL DEFAULT 1,
+        admitted INTEGER NOT NULL DEFAULT 1,
+        final_score INTEGER NOT NULL DEFAULT 0,
+        first_listed_at REAL,
         UNIQUE(run_id,pattern,target,metric_version)
     )""")
     columns = {row["name"] for row in db.execute("PRAGMA table_info(human_analysis_summaries)")}
     if "aggregate_json" not in columns:
         db.execute("ALTER TABLE human_analysis_summaries ADD COLUMN aggregate_json TEXT NOT NULL DEFAULT '{}'")
+    if "analyzer_version" not in columns:
+        db.execute("ALTER TABLE human_analysis_summaries ADD COLUMN analyzer_version INTEGER NOT NULL DEFAULT 1")
+    if "listed" not in columns:
+        db.execute("ALTER TABLE human_analysis_summaries ADD COLUMN listed INTEGER NOT NULL DEFAULT 1")
+    if "admitted" not in columns:
+        db.execute("ALTER TABLE human_analysis_summaries ADD COLUMN admitted INTEGER NOT NULL DEFAULT 1")
+    if "final_score" not in columns:
+        db.execute("ALTER TABLE human_analysis_summaries ADD COLUMN final_score INTEGER NOT NULL DEFAULT 0")
+        db.execute("""UPDATE human_analysis_summaries SET final_score=COALESCE((
+            SELECT json_extract(state,'$.score') FROM human_runs WHERE id=human_analysis_summaries.run_id),0)""")
+    if "first_listed_at" not in columns:
+        db.execute("ALTER TABLE human_analysis_summaries ADD COLUMN first_listed_at REAL")
     db.execute("""CREATE INDEX IF NOT EXISTS human_analysis_summaries_user
         ON human_analysis_summaries(user_id,run_id)""")
 
 
 def save_summary(*, run_id: str, user_id: int, pattern: str, target: str,
-                 job_id: str, summary: dict) -> int:
+                 job_id: str, summary: dict, listed: bool = True) -> int:
     from .analysis_grade import GRADE_VERSION, grade_for_summary
     from .service import RANKABLE_SQL
     with database() as db:
@@ -173,15 +193,23 @@ def save_summary(*, run_id: str, user_id: int, pattern: str, target: str,
         summary["grade"] = grade_for_summary(
             variant=row["variant"], goal_tile=summary.get("goal_tile"),
             score=score, aggregate=summary["aggregate"])
+        now = time.time()
         db.execute("""INSERT INTO human_analysis_summaries
-            (run_id,user_id,pattern,target,metric_version,job_id,aggregate_json,summary_json,created)
-            VALUES(?,?,?,?,?,?,?,?,?)
+            (run_id,user_id,pattern,target,metric_version,job_id,aggregate_json,summary_json,created,
+             analyzer_version,listed,final_score,first_listed_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(run_id,pattern,target,metric_version) DO UPDATE SET
                 job_id=excluded.job_id,aggregate_json=excluded.aggregate_json,
-                summary_json=excluded.summary_json,created=excluded.created""",
+                summary_json=excluded.summary_json,created=excluded.created,
+                analyzer_version=excluded.analyzer_version,
+                listed=max(human_analysis_summaries.listed,excluded.listed),
+                first_listed_at=CASE WHEN human_analysis_summaries.first_listed_at IS NOT NULL
+                    THEN human_analysis_summaries.first_listed_at ELSE excluded.first_listed_at END,
+                final_score=excluded.final_score""",
             (run_id, user_id, pattern, target, METRIC_VERSION, job_id,
              json.dumps(summary["aggregate"], separators=(",", ":"), allow_nan=False),
-             json.dumps(summary, separators=(",", ":"), allow_nan=False), time.time()))
+             json.dumps(summary, separators=(",", ":"), allow_nan=False), now,
+             ANALYZER_VERSION, int(listed), score, now if listed else None))
         summary_id = db.execute("""SELECT id FROM human_analysis_summaries
             WHERE run_id=? AND pattern=? AND target=? AND metric_version=?""",
             (run_id, pattern, target, METRIC_VERSION)).fetchone()["id"]
@@ -190,35 +218,61 @@ def save_summary(*, run_id: str, user_id: int, pattern: str, target: str,
         return summary_id
 
 
-def list_summaries(run_id: str, user_id: int) -> list[dict]:
+def list_summaries(run_id: str, _viewer_id: int | None = None) -> list[dict]:
+    from .service import rankable_sql
     with database() as db:
         init_schema(db)
-        rows = db.execute("""SELECT s.id,s.pattern,s.target,s.metric_version,s.aggregate_json,s.created
+        source = db.execute("SELECT user_id FROM human_runs WHERE id=?", (run_id,)).fetchone()
+        owner_view = bool(source and _viewer_id is not None
+                          and int(source["user_id"]) == int(_viewer_id))
+        access = "r.visible=1" if owner_view else rankable_sql('r')
+        rows = db.execute(f"""SELECT s.id,s.pattern,s.target,s.metric_version,s.aggregate_json,s.created
             FROM human_analysis_summaries s JOIN human_runs r ON r.id=s.run_id
-            WHERE s.run_id=? AND s.user_id=? AND r.user_id=? AND r.status='sealed'
-                AND r.visible=1 AND r.archive IS NOT NULL AND r.has_replay=1
-            ORDER BY s.created DESC,s.id DESC""", (run_id, user_id, user_id)).fetchall()
+            WHERE s.run_id=? AND s.listed=1 AND s.admitted=1 AND r.status='sealed'
+                AND r.archive IS NOT NULL AND r.has_replay=1 AND {access}
+            ORDER BY s.created DESC,s.id DESC""", (run_id,)).fetchall()
     return [{"id": row["id"], "pattern": row["pattern"], "target": row["target"],
              "metric_version": row["metric_version"], "created": row["created"],
              "aggregate": json.loads(row["aggregate_json"])} for row in rows]
 
 
-def get_summary(summary_id: int, user_id: int) -> dict | None:
+def _viewer_has_live_job(job_id: str, viewer_id: int | None) -> bool:
+    """Allow the payer to inspect a non-listed result while its task output lives."""
+    if viewer_id is None:
+        return False
+    with auth_db() as db:
+        if not db.execute("""SELECT 1 FROM sqlite_master
+            WHERE type='table' AND name='analysis_jobs'""").fetchone():
+            return False
+        row = db.execute("""SELECT 1 FROM analysis_jobs
+            WHERE job_id=? AND user_id=? AND expires_at>?""",
+            (job_id, int(viewer_id), datetime.now(timezone.utc).isoformat())).fetchone()
+    return bool(row)
+
+
+def get_summary(summary_id: int, _viewer_id: int | None = None) -> dict | None:
     from .analysis_grade import GRADE_VERSION, grade_for_summary
+    from .service import rankable_sql
     with database() as db:
         init_schema(db)
-        row = db.execute("""SELECT s.id,s.run_id,s.pattern,s.target,s.created,s.summary_json
+        source = db.execute("""SELECT s.user_id,s.job_id FROM human_analysis_summaries s
+            WHERE s.id=?""", (summary_id,)).fetchone()
+        owner_view = bool(source and _viewer_id is not None
+                          and int(source["user_id"]) == int(_viewer_id))
+        live_job_view = bool(source and _viewer_has_live_job(source["job_id"], _viewer_id))
+        access = "r.visible=1" if owner_view else rankable_sql('r')
+        row = db.execute(f"""SELECT s.id,s.run_id,s.user_id,s.pattern,s.target,s.created,s.summary_json
             FROM human_analysis_summaries s JOIN human_runs r ON r.id=s.run_id
-            WHERE s.id=? AND s.user_id=? AND r.user_id=? AND r.status='sealed'
-                AND r.visible=1 AND r.archive IS NOT NULL AND r.has_replay=1""",
-            (summary_id, user_id, user_id)).fetchone()
+            WHERE s.id=? AND (? OR (s.listed=1 AND s.admitted=1)) AND r.status='sealed'
+                AND r.archive IS NOT NULL AND r.has_replay=1 AND {access}""",
+            (summary_id, int(live_job_view))).fetchone()
     if not row:
         return None
     summary = json.loads(row["summary_json"])
     run = summary.get("run") or {}
     with database() as db:
         run["personal_rank"] = _personal_rank(
-            db, user_id, run.get("variant", ""), row["run_id"])
+            db, row["user_id"], run.get("variant", ""), row["run_id"])
     if summary.get("grade_version") != GRADE_VERSION:
         # Older paid analyses can be graded from their durable small summary;
         # the full replay and tablebase do not need to be read again.
@@ -236,8 +290,55 @@ def get_summary(summary_id: int, user_id: int) -> dict | None:
                 SET aggregate_json=?,summary_json=? WHERE id=? AND user_id=?""",
                 (json.dumps(aggregate, separators=(",", ":"), allow_nan=False),
                  json.dumps(summary, separators=(",", ":"), allow_nan=False),
-                 summary_id, user_id))
+                 summary_id, row["user_id"]))
             from .leaderboards import upsert_analysis_summary
             upsert_analysis_summary(db, summary_id, summary)
+    from backend.profile.service import public_profile
+    with auth_db() as adb:
+        users_ready = adb.execute("""SELECT 1 FROM sqlite_master
+            WHERE type='table' AND name='users'""").fetchone()
+        owner = (adb.execute("SELECT id,display_name,status FROM users WHERE id=?",
+                             (row["user_id"],)).fetchone() if users_ready else None)
+        if not owner and _viewer_id is not None and int(_viewer_id) == int(row["user_id"]):
+            subject = {"id": row["user_id"], "display_name": "玩家", "avatar_url": None}
+        elif not owner or owner["status"] != "active":
+            return None
+        else:
+            profile = public_profile(row["user_id"], db=adb)
+            subject = {"id": row["user_id"], "display_name": owner["display_name"] or "玩家",
+                       "avatar_url": profile.get("avatar_url")}
     return {"id": row["id"], "run_id": row["run_id"], "pattern": row["pattern"],
-            "target": row["target"], "created": row["created"], **summary}
+            "target": row["target"], "created": row["created"], "subject": subject, **summary}
+
+
+def set_admitted(summary_ids: list[int] | set[int], admitted: bool) -> None:
+    ids = sorted({int(value) for value in summary_ids if value is not None})
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    with database() as db:
+        init_schema(db)
+        db.execute(f"UPDATE human_analysis_summaries SET admitted=? WHERE id IN ({placeholders})",
+                   (int(admitted), *ids))
+        rows = db.execute(f"SELECT id,summary_json FROM human_analysis_summaries WHERE id IN ({placeholders})",
+                          ids).fetchall()
+        from .leaderboards import upsert_analysis_summary
+        for row in rows:
+            upsert_analysis_summary(db, row["id"], json.loads(row["summary_json"]))
+
+
+def public_summary_available(summary_id: int) -> bool:
+    """Narrow authorization check for public stage-replay downloads."""
+    from .service import rankable_sql
+    with database() as db:
+        init_schema(db)
+        row = db.execute(f"""SELECT s.user_id FROM human_analysis_summaries s
+            JOIN human_runs r ON r.id=s.run_id
+            WHERE s.id=? AND s.listed=1 AND s.admitted=1 AND r.status='sealed'
+              AND r.archive IS NOT NULL AND r.has_replay=1 AND {rankable_sql('r')}""",
+            (int(summary_id),)).fetchone()
+    if not row:
+        return False
+    with auth_db() as db:
+        owner = db.execute("SELECT status FROM users WHERE id=?", (int(row["user_id"]),)).fetchone()
+    return bool(owner and owner["status"] == "active")

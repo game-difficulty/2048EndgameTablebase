@@ -3,14 +3,11 @@
     <section class="modal human-analysis-dialog" role="dialog" aria-modal="true" :aria-label="label('对局分析', 'Game analysis')" @keydown.esc="$emit('close')">
       <button class="modal-close" :aria-label="label('关闭', 'Close')" @click="$emit('close')">×</button>
       <h2>{{ label('对局分析', 'Game analysis') }}</h2>
-      <button type="button" @click="historyMode = !historyMode">{{ historyMode ? label('返回本局分析', 'Back to this game') : label('分析历史', 'Analysis history') }}</button>
-      <AnalysisHistoryPanel v-if="historyMode" :language="language" />
-      <template v-else>
       <p v-if="loading" role="status">{{ label('正在读取可用定式…', 'Loading available formations…') }}</p>
       <div v-else-if="error && !options" class="error-text" role="alert">{{ error }} <button @click="load">{{ label('重试', 'Retry') }}</button></div>
       <template v-else-if="options">
         <p v-if="error" class="error-text" role="alert">{{ error }}</p>
-        <p class="small muted">{{ options.run.variant }} · {{ options.run.score.toLocaleString() }} {{ label('分', 'points') }} · {{ options.run.moves.toLocaleString() }} {{ label('步', 'moves') }} · {{ endedAt }}</p>
+        <p class="small muted"><strong>{{ options.run.subject?.display_name }}</strong> · {{ options.run.variant }} · {{ options.run.score.toLocaleString() }} {{ label('分', 'points') }} · {{ options.run.moves.toLocaleString() }} {{ label('步', 'moves') }} · {{ endedAt }}</p>
         <template v-if="!job">
           <div v-if="summaries.length" class="analysis-summaries">
             <h3>{{ label('已完成的定式分析', 'Completed formation analyses') }}</h3>
@@ -67,7 +64,8 @@
                 {{ label('回放阶段', 'Replay stage') }} {{ artifact.segment_index + 1 }} ↗
               </button>
               <button v-if="entry.status === 'done' && entry.poster_eligible && entry.summary_id" @click="showPoster(entry.summary_id)">{{ label('生成展示图', 'Make result card') }}</button>
-              <small v-else-if="entry.status === 'done'" class="muted">{{ label('暂不可出图', 'No result card') }}</small></span>
+              <small v-else-if="entry.status === 'done'" class="muted">{{ label('暂不可出图', 'No result card') }}</small>
+              <small v-if="entry.status === 'done' && !entry.library_admitted" class="muted">{{ label('结果未收入公共分析库', 'Result not retained in the public library') }}</small></span>
           </div>
           <p v-if="job.message" class="error-text">{{ serverErrorText(job.message, language) }}</p>
           <div class="modal-actions">
@@ -76,11 +74,10 @@
           </div>
         </template>
       </template>
-      </template>
     </section>
   </div>
   <HumanAnalysisPosterDialog v-if="posterSummaryId" :run-id="runId" :entries="posterEntries"
-    :initial-summary-id="posterSummaryId" :player="player" @close="posterSummaryId = null" />
+    :initial-summary-id="posterSummaryId" :player="options?.run?.subject" @close="posterSummaryId = null" />
 </template>
 
 <script setup>
@@ -91,15 +88,13 @@ import { json } from './client.js';
 import { language } from './i18n.js';
 import { loadLastAnalysisSelection, saveLastAnalysisSelection } from './analysisSelectionHistory.js';
 import HumanAnalysisPosterDialog from './HumanAnalysisPosterDialog.vue';
-import AnalysisHistoryPanel from '../components/AnalysisHistoryPanel.vue';
 
-const props = defineProps({ runId: { type: String, required: true }, player: { type: Object, default: null } });
+const props = defineProps({ runId: { type: String, required: true } });
 defineEmits(['close']);
 const options = ref(null), loading = ref(false), busy = ref(false), error = ref('');
 const patternCategory = ref(''), pattern = ref(''), target = ref(''), selected = ref([]), lastSelection = ref([]);
 const quote = ref(null), job = ref(null), requestId = ref('');
 const summaries = ref([]), summaryError = ref(''), posterSummaryId = ref(null);
-const historyMode = ref(false);
 const label = (zh, en) => language.value === 'en' ? en : zh;
 const formatTokenBalance = value => {
   const number = Number(value);

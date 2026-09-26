@@ -17,17 +17,23 @@ PERMIT_SECONDS = 12
 RUN_COLUMNS = "id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,created,ended,writer,epoch,permit_until,monitored,state,display_threshold,visible,source"
 SUMMARY_COLUMNS = "id,user_id,variant,state,ended,reason,eligibility,has_replay,source"
 HISTORY_COLUMNS = "id,variant,ended,reason,has_replay,source,json_extract(state,'$.score') AS score,json_extract(state,'$.board') AS board"
+def rankable_sql(alias: str = "") -> str:
+    """Return the shared public/rankable predicate, optionally table-qualified."""
+    prefix = f"{alias}." if alias else ""
+    return f"""{prefix}visible=1 AND {prefix}eligibility='eligible' AND (
+    ({prefix}source='native' AND ({prefix}reason='game_over' OR {prefix}id IN (SELECT run_id FROM human_rank_approvals)))
+    OR ({prefix}source='verse' AND {prefix}reason='imported' AND EXISTS (
+        SELECT 1 FROM human_external_claims c WHERE c.provider='verse'
+        AND c.status='complete' AND c.user_id={prefix}user_id
+        AND {prefix}browser='verse:' || c.id))
+    OR ({prefix}source='manual' AND {prefix}reason='imported' AND EXISTS (
+        SELECT 1 FROM human_archive_applications a WHERE a.run_id={prefix}id
+        AND a.status='approved' AND a.user_id={prefix}user_id)))"""
+
+
 # Used by rankings, public history, PBs and replay access alike.
 PUBLIC_SQL = "visible=1 AND eligibility='eligible'"
-RANKABLE_SQL = PUBLIC_SQL + """ AND (
-    (source='native' AND (reason='game_over' OR id IN (SELECT run_id FROM human_rank_approvals)))
-    OR (source='verse' AND reason='imported' AND EXISTS (
-        SELECT 1 FROM human_external_claims c WHERE c.provider='verse'
-        AND c.status='complete' AND c.user_id=human_runs.user_id
-        AND human_runs.browser='verse:' || c.id))
-    OR (source='manual' AND reason='imported' AND EXISTS (
-        SELECT 1 FROM human_archive_applications a WHERE a.run_id=human_runs.id
-        AND a.status='approved' AND a.user_id=human_runs.user_id)))"""
+RANKABLE_SQL = rankable_sql()
 
 
 def player_settings(user_id):

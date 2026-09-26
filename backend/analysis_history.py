@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from .auth.db import auth_db
-from .auth.dependencies import current_user_from_request, require_user
+from .auth.dependencies import client_ip, current_user_from_request, require_user
 from .auth.entitlements import SUPPORTER_TIER, ensure_user_entitlements
 from .cloud_files import get_upload_root
 from engine_core.replay_utils import REPLAY_DTYPE, validate_replay_array
@@ -34,8 +34,9 @@ MIN_FREE_BYTES = 4 * 1024**3
 OPEN_TOKEN_TTL_SECONDS = 60
 MAX_CONCURRENT_REPLAY_DOWNLOADS = 4
 REPLAY_DOWNLOADS_PER_MINUTE = 20
+DEFAULT_LIBRARY_TTL_SECONDS = 30 * 24 * 60 * 60
 _download_slots = BoundedSemaphore(MAX_CONCURRENT_REPLAY_DOWNLOADS)
-_download_windows: dict[int, deque[float]] = defaultdict(deque)
+_download_windows: dict[str, deque[float]] = defaultdict(deque)
 _download_lock = Lock()
 
 
@@ -58,6 +59,8 @@ def init_schema(db) -> None:
       done INTEGER NOT NULL DEFAULT 0,
       failed INTEGER NOT NULL DEFAULT 0,
       source_run_id TEXT,
+      subject_user_id INTEGER,
+      listing_snapshot INTEGER NOT NULL DEFAULT 1,
       metadata_json TEXT NOT NULL DEFAULT '{}',
       created_at REAL NOT NULL,
       completed_at REAL,
@@ -102,6 +105,12 @@ def init_schema(db) -> None:
       use_variant INTEGER NOT NULL DEFAULT 0,
       format_version INTEGER NOT NULL DEFAULT 1,
       created_at REAL NOT NULL,
+      summary_id INTEGER,
+      source_run_id TEXT,
+      subject_user_id INTEGER,
+      run_ended_at REAL,
+      expires_at REAL,
+      library_active INTEGER NOT NULL DEFAULT 0,
       deleted_at REAL,
       delete_reason TEXT,
       UNIQUE(history_item_id,segment_index),
@@ -110,6 +119,43 @@ def init_schema(db) -> None:
     CREATE INDEX IF NOT EXISTS analysis_replay_artifacts_active
       ON analysis_replay_artifacts(deleted_at,created_at,artifact_id);
     """)
+    job_columns = {row["name"] for row in db.execute("PRAGMA table_info(analysis_history_jobs)")}
+    if "subject_user_id" not in job_columns:
+        db.execute("ALTER TABLE analysis_history_jobs ADD COLUMN subject_user_id INTEGER")
+    if "listing_snapshot" not in job_columns:
+        db.execute("ALTER TABLE analysis_history_jobs ADD COLUMN listing_snapshot INTEGER NOT NULL DEFAULT 1")
+    artifact_columns = {row["name"] for row in db.execute("PRAGMA table_info(analysis_replay_artifacts)")}
+    needs_library_backfill = "summary_id" not in artifact_columns
+    for name, sql_type in (
+        ("summary_id", "INTEGER"), ("source_run_id", "TEXT"),
+        ("subject_user_id", "INTEGER"), ("run_ended_at", "REAL"),
+        ("expires_at", "REAL"),
+        ("library_active", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if name not in artifact_columns:
+            db.execute(f"ALTER TABLE analysis_replay_artifacts ADD COLUMN {name} {sql_type}")
+    db.execute("""CREATE INDEX IF NOT EXISTS analysis_replay_artifacts_library
+        ON analysis_replay_artifacts(summary_id,library_active,deleted_at,segment_index)""")
+    if needs_library_backfill:
+        # This migration can touch every historical artifact.  It must run once
+        # when the column is introduced, rather than on each API request.
+        db.execute("""UPDATE analysis_replay_artifacts SET
+            summary_id=(SELECT i.summary_id FROM analysis_history_items i
+                WHERE i.id=analysis_replay_artifacts.history_item_id),
+            source_run_id=(SELECT i.source_run_id FROM analysis_history_items i
+                WHERE i.id=analysis_replay_artifacts.history_item_id),
+            subject_user_id=(SELECT COALESCE(j.subject_user_id,j.user_id)
+                FROM analysis_history_items i JOIN analysis_history_jobs j ON j.job_id=i.job_id
+                WHERE i.id=analysis_replay_artifacts.history_item_id)
+            WHERE summary_id IS NULL AND EXISTS(SELECT 1 FROM analysis_history_items i
+                WHERE i.id=analysis_replay_artifacts.history_item_id AND i.summary_id IS NOT NULL)""")
+        db.execute("""UPDATE analysis_replay_artifacts AS current SET library_active=CASE
+            WHEN current.summary_id IS NOT NULL AND current.deleted_at IS NULL
+             AND current.history_item_id=(SELECT latest.history_item_id
+                FROM analysis_replay_artifacts latest
+                WHERE latest.summary_id=current.summary_id AND latest.deleted_at IS NULL
+                ORDER BY latest.created_at DESC,latest.artifact_id DESC LIMIT 1)
+            THEN 1 ELSE 0 END WHERE current.summary_id IS NOT NULL""")
 
 
 def register_job(job) -> None:
@@ -118,12 +164,17 @@ def register_job(job) -> None:
     now = float(job.created_at)
     with auth_db() as db:
         init_schema(db)
+        subject_ids = {item.subject_user_id for item in job.work_items if item.subject_user_id is not None}
+        listing_values = {bool(item.listing_snapshot) for item in job.work_items if item.source_run_id}
         db.execute("""INSERT OR IGNORE INTO analysis_history_jobs
-            (job_id,user_id,origin,status,total,done,failed,source_run_id,metadata_json,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (job_id,user_id,origin,status,total,done,failed,source_run_id,subject_user_id,
+             listing_snapshot,metadata_json,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (job.job_id, job.user_id, origin, "queued", job.total, 0, 0,
              next(iter(source_ids)) if len(source_ids) == 1 else None,
-             json.dumps({"version": 1}, separators=(",", ":")), now))
+             next(iter(subject_ids)) if len(subject_ids) == 1 else None,
+             int(next(iter(listing_values))) if len(listing_values) == 1 else 1,
+             json.dumps({"version": 2}, separators=(",", ":")), now))
         for index, item in enumerate(job.work_items):
             db.execute("""INSERT OR IGNORE INTO analysis_history_items
                 (job_id,work_index,source_run_id,source_filename,pattern,target,status)
@@ -231,7 +282,6 @@ def publish_segments(*, item_id: int, analyzer, pattern: str, target: str) -> li
         finally:
             temporary.unlink(missing_ok=True)
     set_item_status(item_id, "done", stage_count=len(published), variant=getattr(analyzer, "variant", None))
-    enforce_limits(analyzer_user_id(item_id))
     return published
 
 
@@ -243,6 +293,81 @@ def analyzer_user_id(item_id: int) -> int:
     if not row:
         raise ValueError("analysis_history_item_missing")
     return int(row["user_id"])
+
+
+def discard_item_artifacts(item_id: int | None, reason: str = "analysis_failed") -> int:
+    """Remove unpublished stage files without touching a prior canonical result."""
+    if not item_id:
+        return 0
+    removed = 0
+    with auth_db() as db:
+        init_schema(db)
+        rows = db.execute("""SELECT artifact_id,relative_path FROM analysis_replay_artifacts
+            WHERE history_item_id=? AND summary_id IS NULL AND deleted_at IS NULL""",
+            (int(item_id),)).fetchall()
+        for row in rows:
+            _delete_artifact(db, row, reason)
+            removed += 1
+    return removed
+
+
+def promote_library_artifacts(item_id: int | None, summary_id: int, *, source_run_id: str,
+                              subject_user_id: int, run_ended_at: float | None,
+                              listed: bool) -> bool:
+    """Atomically make one completed play analysis the canonical artifact set."""
+    if not item_id:
+        return False
+    root = artifact_root()
+    replaced = []
+    with auth_db() as db:
+        init_schema(db)
+        replaced = db.execute("""SELECT artifact_id,relative_path FROM analysis_replay_artifacts
+            WHERE summary_id=? AND library_active=1 AND history_item_id<>? AND deleted_at IS NULL""",
+            (int(summary_id), int(item_id))).fetchall()
+        now = time.time()
+        for row in replaced:
+            db.execute("""UPDATE analysis_replay_artifacts SET library_active=0,deleted_at=?,
+                delete_reason='superseded' WHERE artifact_id=?""", (now, row["artifact_id"]))
+        try:
+            ttl = max(3600, int(os.getenv("CLOUD_ANALYSIS_LIBRARY_TTL_SECONDS",
+                                         str(DEFAULT_LIBRARY_TTL_SECONDS))))
+        except ValueError:
+            ttl = DEFAULT_LIBRARY_TTL_SECONDS
+        db.execute("""UPDATE analysis_replay_artifacts SET summary_id=?,source_run_id=?,
+            subject_user_id=?,run_ended_at=?,expires_at=?,library_active=1
+            WHERE history_item_id=? AND deleted_at IS NULL""",
+            (int(summary_id), source_run_id, int(subject_user_id), run_ended_at,
+             now + ttl, int(item_id)))
+    for row in replaced:
+        try:
+            (root / row["relative_path"]).unlink(missing_ok=True)
+        except OSError:
+            pass
+    from .human_play.analysis_summary import set_admitted
+    set_admitted([summary_id], True)
+    enforce_limits(analyzer_user_id(int(item_id)))
+    with auth_db() as db:
+        init_schema(db)
+        retained = db.execute("""SELECT 1 FROM analysis_replay_artifacts
+            WHERE summary_id=? AND library_active=1 AND deleted_at IS NULL LIMIT 1""",
+            (int(summary_id),)).fetchone()
+    return bool(listed and retained)
+
+
+def library_artifacts(summary_ids: list[int] | set[int]) -> dict[int, list[dict]]:
+    ids = sorted({int(value) for value in summary_ids})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    with auth_db() as db:
+        init_schema(db)
+        rows = db.execute(f"""SELECT * FROM analysis_replay_artifacts
+            WHERE summary_id IN ({placeholders}) AND library_active=1
+            ORDER BY summary_id,segment_index""", ids).fetchall()
+    result: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        result[int(row["summary_id"])].append(_artifact_payload(row))
+    return dict(result)
 
 
 def _delete_artifact(db, row, reason: str) -> None:
@@ -262,13 +387,16 @@ def enforce_limits(user_id: int | None = None) -> int:
         if user_id is not None:
             entitlements = ensure_user_entitlements(db, int(user_id))
             limit = SUPPORTER_ARTIFACT_LIMIT if entitlements["tier"] == SUPPORTER_TIER else DEFAULT_USER_ARTIFACT_LIMIT
-            rows = db.execute("""SELECT a.artifact_id,a.relative_path FROM analysis_replay_artifacts a
+            rows = db.execute("""SELECT a.artifact_id,a.relative_path,a.summary_id FROM analysis_replay_artifacts a
                 JOIN analysis_history_items i ON i.id=a.history_item_id
                 JOIN analysis_history_jobs j ON j.job_id=i.job_id
                 WHERE j.user_id=? AND a.deleted_at IS NULL
                 ORDER BY a.created_at DESC,a.artifact_id DESC""", (int(user_id),)).fetchall()
+            pruned_summaries = set()
             for row in rows[limit:]:
                 _delete_artifact(db, row, "user_limit")
+                if row["summary_id"] is not None:
+                    pruned_summaries.add(int(row["summary_id"]))
                 removed += 1
         total = int(db.execute("""SELECT COALESCE(SUM(byte_size),0) FROM analysis_replay_artifacts
             WHERE deleted_at IS NULL""").fetchone()[0])
@@ -277,36 +405,108 @@ def enforce_limits(user_id: int | None = None) -> int:
         except OSError:
             free = MIN_FREE_BYTES
         if total > GLOBAL_ARTIFACT_BYTES or free < MIN_FREE_BYTES:
-            rows = db.execute("""SELECT artifact_id,relative_path,byte_size FROM analysis_replay_artifacts
-                WHERE deleted_at IS NULL ORDER BY created_at,artifact_id""").fetchall()
+            rows = db.execute("""SELECT artifact_id,relative_path,byte_size,summary_id FROM analysis_replay_artifacts
+                WHERE deleted_at IS NULL
+                ORDER BY COALESCE(run_ended_at,created_at),artifact_id""").fetchall()
+            global_pruned = set()
             for row in rows:
                 if total <= GLOBAL_ARTIFACT_BYTES and free >= MIN_FREE_BYTES:
                     break
                 _delete_artifact(db, row, "global_capacity")
+                if row["summary_id"] is not None:
+                    global_pruned.add(int(row["summary_id"]))
                 total -= int(row["byte_size"])
                 free += int(row["byte_size"])
                 removed += 1
+        else:
+            global_pruned = set()
+        if user_id is None:
+            pruned_summaries = set()
+    affected = set(pruned_summaries) | set(global_pruned)
+    if affected:
+        # A library result is never exposed with a partially-pruned stage set.
+        with auth_db() as db:
+            init_schema(db)
+            placeholders = ",".join("?" for _ in affected)
+            remaining = db.execute(f"""SELECT artifact_id,relative_path FROM analysis_replay_artifacts
+                WHERE summary_id IN ({placeholders}) AND deleted_at IS NULL""", sorted(affected)).fetchall()
+            for row in remaining:
+                _delete_artifact(db, row, "library_entry_pruned")
+                removed += 1
+        from .human_play.analysis_summary import set_admitted
+        set_admitted(affected, False)
     return removed
+
+
+def _backfill_library_run_times() -> None:
+    """Give pre-migration artifacts the source-game age used for eviction."""
+    with auth_db() as db:
+        init_schema(db)
+        rows = db.execute("""SELECT DISTINCT source_run_id FROM analysis_replay_artifacts
+            WHERE source_run_id IS NOT NULL AND run_ended_at IS NULL""").fetchall()
+    run_ids = [str(row["source_run_id"]) for row in rows]
+    if not run_ids:
+        return
+    from .human_play.store import database
+    ended_by_run: dict[str, float] = {}
+    with database() as human_db:
+        for offset in range(0, len(run_ids), 500):
+            batch = run_ids[offset:offset + 500]
+            placeholders = ",".join("?" for _ in batch)
+            for row in human_db.execute(
+                    f"SELECT id,ended FROM human_runs WHERE id IN ({placeholders})", batch):
+                if row["ended"] is not None:
+                    ended_by_run[str(row["id"])] = float(row["ended"])
+    if ended_by_run:
+        with auth_db() as db:
+            init_schema(db)
+            db.executemany("""UPDATE analysis_replay_artifacts SET run_ended_at=?
+                WHERE source_run_id=? AND run_ended_at IS NULL""",
+                [(ended, run_id) for run_id, ended in ended_by_run.items()])
 
 
 def cleanup_artifacts() -> int:
     """Reconcile missing files and enforce both capacity safety rails."""
+    _backfill_library_run_times()
     removed = 0
     root = artifact_root()
+    expired_summaries = set()
     with auth_db() as db:
         init_schema(db)
-        rows = db.execute("""SELECT artifact_id,relative_path FROM analysis_replay_artifacts
+        expired = db.execute("""SELECT artifact_id,relative_path,summary_id
+            FROM analysis_replay_artifacts WHERE deleted_at IS NULL AND library_active=1
+            AND expires_at IS NOT NULL AND expires_at<=?""", (time.time(),)).fetchall()
+        for row in expired:
+            _delete_artifact(db, row, "expired")
+            if row["summary_id"] is not None:
+                expired_summaries.add(int(row["summary_id"]))
+            removed += 1
+        rows = db.execute("""SELECT artifact_id,relative_path,summary_id FROM analysis_replay_artifacts
             WHERE deleted_at IS NULL""").fetchall()
         for row in rows:
             if not (root / row["relative_path"]).is_file():
                 db.execute("""UPDATE analysis_replay_artifacts SET deleted_at=?,delete_reason='missing'
                     WHERE artifact_id=?""", (time.time(), row["artifact_id"]))
+                if row["summary_id"] is not None:
+                    expired_summaries.add(int(row["summary_id"]))
                 removed += 1
         user_ids = [int(row[0]) for row in db.execute("""SELECT DISTINCT j.user_id
             FROM analysis_replay_artifacts a
             JOIN analysis_history_items i ON i.id=a.history_item_id
             JOIN analysis_history_jobs j ON j.job_id=i.job_id
             WHERE a.deleted_at IS NULL""").fetchall()]
+    if expired_summaries:
+        with auth_db() as db:
+            init_schema(db)
+            placeholders = ",".join("?" for _ in expired_summaries)
+            remaining = db.execute(f"""SELECT artifact_id,relative_path FROM analysis_replay_artifacts
+                WHERE summary_id IN ({placeholders}) AND deleted_at IS NULL""",
+                sorted(expired_summaries)).fetchall()
+            for row in remaining:
+                _delete_artifact(db, row, "library_entry_expired")
+                removed += 1
+        from .human_play.analysis_summary import set_admitted
+        set_admitted(expired_summaries, False)
     for current_user_id in user_ids:
         removed += enforce_limits(current_user_id)
     removed += enforce_limits(None)
@@ -314,13 +514,16 @@ def cleanup_artifacts() -> int:
 
 
 def _artifact_payload(row) -> dict:
-    active = row["deleted_at"] is None and (artifact_root() / row["relative_path"]).is_file()
+    active = (row["deleted_at"] is None
+              and (row["expires_at"] is None or float(row["expires_at"]) > time.time())
+              and (artifact_root() / row["relative_path"]).is_file())
     return {
         "artifact_id": row["artifact_id"], "segment_index": row["segment_index"],
         "source_start_index": row["source_start_index"], "source_end_index": row["source_end_index"],
         "replay_move_count": row["replay_move_count"], "evaluated_moves": row["evaluated_moves"],
         "goodness_of_fit": row["goodness_of_fit"], "max_combo": row["max_combo"],
         "pattern": row["pattern"], "target": row["target"], "variant": row["variant"],
+        "expires_at": row["expires_at"],
         "available": active, "deleted_reason": row["delete_reason"] if not active else None,
     }
 
@@ -414,17 +617,27 @@ def verify_open_token(token: str, artifact_id: str) -> int | None:
         return None
 
 
-def resolve_artifact(artifact_id: str, user_id: int):
+def _public_summary(summary_id: int | None) -> bool:
+    if summary_id is None:
+        return False
+    from .human_play.analysis_summary import public_summary_available
+    return public_summary_available(int(summary_id))
+
+
+def resolve_artifact(artifact_id: str, user_id: int | None):
     with auth_db() as db:
         init_schema(db)
         row = db.execute("""SELECT a.*,j.user_id,i.source_filename FROM analysis_replay_artifacts a
             JOIN analysis_history_items i ON i.id=a.history_item_id
             JOIN analysis_history_jobs j ON j.job_id=i.job_id
-            WHERE a.artifact_id=? AND j.user_id=?""", (artifact_id, int(user_id))).fetchone()
-    if not row:
+            WHERE a.artifact_id=?""", (artifact_id,)).fetchone()
+    if not row or not ((user_id is not None and int(row["user_id"]) == int(user_id))
+                       or (row["library_active"] and _public_summary(row["summary_id"]))):
         raise FileNotFoundError("analysis_replay_not_found")
     if row["deleted_at"] is not None:
         raise GoneError(row["delete_reason"] or "expired")
+    if row["expires_at"] is not None and float(row["expires_at"]) <= time.time():
+        raise GoneError("expired")
     path = (artifact_root() / row["relative_path"]).resolve()
     if artifact_root() not in path.parents or not path.is_file():
         raise GoneError("missing")
@@ -435,10 +648,10 @@ class GoneError(FileNotFoundError):
     pass
 
 
-def _claim_download(user_id: int) -> None:
+def _claim_download(identity: str) -> None:
     now = time.monotonic()
     with _download_lock:
-        window = _download_windows[int(user_id)]
+        window = _download_windows[str(identity)]
         while window and now - window[0] >= 60:
             window.popleft()
         if len(window) >= REPLAY_DOWNLOADS_PER_MINUTE:
@@ -463,6 +676,29 @@ def history_route(request: Request, limit: int = Query(20, ge=1, le=50), cursor:
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.get("/library")
+def library_route(limit: int = Query(20, ge=1, le=50), cursor: str = "",
+                  username: str = "", variant: str = "", pattern: str = "",
+                  target: str = "", source: str = ""):
+    from .human_play.analysis_library import list_entries
+    from .human_play.service import RunError
+    try:
+        return list_entries(limit=limit, cursor=cursor, username=username,
+                            variant=variant, pattern=pattern, target=target, source=source)
+    except RunError as exc:
+        raise HTTPException(exc.status, {"code": exc.code, **exc.details}) from exc
+
+
+@router.get("/library/{summary_id}")
+def library_detail_route(summary_id: int):
+    from .human_play.analysis_library import detail
+    from .human_play.service import RunError
+    try:
+        return detail(summary_id)
+    except RunError as exc:
+        raise HTTPException(exc.status, {"code": exc.code, **exc.details}) from exc
+
+
 @router.get("/history/{job_id}")
 def history_detail_route(job_id: str, request: Request):
     try:
@@ -474,12 +710,14 @@ def history_detail_route(job_id: str, request: Request):
 @router.get("/replays/{artifact_id}")
 def replay_route(artifact_id: str, request: Request, token: str = ""):
     user = current_user_from_request(request)
-    user_id = int(user["id"]) if user else verify_open_token(token, artifact_id)
+    token_user_id = verify_open_token(token, artifact_id) if token else None
+    user_id = int(user["id"]) if user else token_user_id
     if user_id is None:
         raise HTTPException(401, "Authentication required.")
-    _claim_download(user_id)
+    identity = f"user:{user_id}" if user_id else f"ip:{client_ip(request)}"
+    _claim_download(identity)
     try:
-        row, path = resolve_artifact(artifact_id, user_id)
+        row, path = resolve_artifact(artifact_id, user_id if user_id else None)
     except GoneError as exc:
         _release_download()
         raise HTTPException(410, {"code": "ANALYSIS_REPLAY_EXPIRED", "reason": str(exc)}) from exc
@@ -499,12 +737,13 @@ def replay_route(artifact_id: str, request: Request, token: str = ""):
 
 @router.post("/replays/{artifact_id}/open-link")
 def replay_open_link_route(artifact_id: str, request: Request):
-    user = require_user(request)
+    user = current_user_from_request(request)
+    user_id = int(user["id"]) if user else None
     try:
-        resolve_artifact(artifact_id, user["id"])
+        resolve_artifact(artifact_id, user_id)
     except GoneError as exc:
         raise HTTPException(410, {"code": "ANALYSIS_REPLAY_EXPIRED"}) from exc
     except FileNotFoundError as exc:
         raise HTTPException(404, "Analysis replay not found.") from exc
-    token = make_open_token(artifact_id, user["id"])
+    token = make_open_token(artifact_id, user_id or 0)
     return {"url": f"https://2048tables.online/?tab=replay#analysisReplay={artifact_id}&token={token}"}

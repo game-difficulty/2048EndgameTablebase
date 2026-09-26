@@ -16,6 +16,7 @@ THEME_NAMES = frozenset(json.loads(THEMES_PATH.read_text(encoding="utf-8")))
 BOOLEAN_KEYS = frozenset({
     "dark_mode", "use_custom_theme", "do_animation",
     "alwaysConfirmRestart", "showSpeed", "showFourPercent",
+    "share_play_analysis",
 })
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 ALLOWED_KEYS = BOOLEAN_KEYS | {

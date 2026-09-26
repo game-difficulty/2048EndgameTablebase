@@ -43,7 +43,7 @@
         </div>
         <div class="profile-history-actions">
           <button :disabled="!item.has_replay" :title="item.has_replay ? '' : t('无回放')" @click="$emit('replay',item)">{{ t('回放 ↗') }}</button>
-          <button v-if="isOwner" :disabled="!item.has_replay" :title="item.has_replay ? '' : t('无回放')" @click="$emit('analyze',item.id)">{{ t('回放分析 ↗') }}</button>
+          <button :disabled="!item.has_replay" :title="item.has_replay ? '' : t('无回放')" @click="$emit('analyze',item)">{{ t(isOwner ? '分析' : '帮 TA 分析') }}</button>
           <label v-if="isOwner && item.source === 'verse' && !item.has_replay" class="text-button">{{ t('补充回放') }}<input type="file" accept=".vrs,.txt" hidden @change="attachReplay(item,$event)"></label>
         </div>
       </div>

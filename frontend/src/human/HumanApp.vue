@@ -2,7 +2,7 @@
   <div class="human-shell">
     <header class="site-header" :class="{ 'with-metrics': view === 'game' && !practice && (playSettings.showSpeed || playSettings.showFourPercent) }">
       <a class="brand" href="/#game" :aria-label="t(&quot;2048 首页&quot;)" @click.prevent="goGame">2048</a>
-      <nav :aria-label="t(&quot;主导航&quot;)"><a href="/#game" :class="{ selected: view === 'game' }" @click.prevent="goGame">{{ t("对局") }}</a><a href="/leaderboard" :class="{ selected: view === 'leaderboard' }" @click.prevent="openFullLeaderboard">{{ t("排行榜") }}</a><button :disabled="!run || controlsBusy" @click="openReplayExport">{{ t("回放") }}</button><button v-if="user" :class="{ selected: view === 'profile' }" @click="openPlayer(user.display_name)">{{ t('个人主页') }}</button><button @click="modal = 'rules'">{{ t("规则") }}</button><button @click="modal = 'settings'">{{ t("设置") }}</button><a href="https://2048tables.online/" target="_blank" rel="noopener">{{ t('前往主站') }} ↗</a><button v-if="view === 'game' && timingHidden" @click="timingHidden = false">{{ t("显示节点") }}</button><button v-if="view === 'game' && rankingHidden" @click="rankingHidden = false">{{ t("显示排行") }}</button></nav>
+      <nav :aria-label="t(&quot;主导航&quot;)"><a href="/#game" :class="{ selected: view === 'game' }" @click.prevent="goGame">{{ t("对局") }}</a><a href="/leaderboard" :class="{ selected: view === 'leaderboard' }" @click.prevent="openFullLeaderboard">{{ t("排行榜") }}</a><a href="/analysis" :class="{ selected: view === 'analysis' }" @click.prevent="openAnalysisLibrary">{{ t('分析库') }}</a><button :disabled="!run || controlsBusy" @click="openReplayExport">{{ t("回放") }}</button><button v-if="user" :class="{ selected: view === 'profile' }" @click="openPlayer(user.display_name)">{{ t('个人主页') }}</button><button @click="modal = 'rules'">{{ t("规则") }}</button><button @click="modal = 'settings'">{{ t("设置") }}</button><a href="https://2048tables.online/" target="_blank" rel="noopener">{{ t('前往主站') }} ↗</a><button v-if="view === 'game' && timingHidden" @click="timingHidden = false">{{ t("显示节点") }}</button><button v-if="view === 'game' && rankingHidden" @click="rankingHidden = false">{{ t("显示排行") }}</button></nav>
       <div class="account-area"><span v-if="localPreview" class="local-badge">{{ t("本地预览") }}</span>
         <HumanAccountMenu v-if="user" :user="user" @saved="handleAccountSaved" @refresh="refreshIdentity" @logout="logout" />
         <button v-else class="account-button" @click="openAuthDialog('login')">{{ t("登录 / 注册") }}</button>
@@ -82,6 +82,9 @@
       <KeepAlive><PlayerProfile v-if="view === 'profile'" :username="profileName" :viewer="user" :play-settings="playSettings" @back="goGame" @update:play-settings="updatePlaySettings" @replay="openReplay" @analyze="openAnalysis" /></KeepAlive>
 
       <HumanLeaderboardPage v-if="view === 'leaderboard'" @back="goGame" @player="openPlayer" @replay="openReplay" />
+
+      <HumanAnalysisLibrary v-if="view === 'analysis'" :viewer="user" @back="goGame" @player="openPlayer" @replay="openReplay" @analyze="openAnalysis" />
+
     </main>
 
     <div v-if="modal" class="modal-backdrop" @click.self="closeModal"><section class="modal" role="dialog" aria-modal="true" :aria-label="t(modalTitle)" @keydown.esc="closeModal"><button class="modal-close" @click="closeModal" :aria-label="t(&quot;关闭&quot;)">×</button>
@@ -101,7 +104,7 @@
       <template v-else-if="modal === 'practice-restart'"><h2>{{ t("确定重置练习局面？") }}</h2><p>{{ t("当前练习会回到进入练习板时的局面。") }}</p><div class="modal-actions"><button ref="safeButton" class="primary" @click="closeModal">{{ t("继续练习") }}</button><button @click="closeModal(); resetPractice()">{{ t("重置练习") }}</button></div></template>
       <template v-else-if="modal === 'practice-reminder'"><h2>{{ t('当前是练习板') }}</h2><p>{{ t('你已在练习板走过 40 步。练习出数独立随机，不会计入正式对局。') }}</p><div class="modal-actions"><button class="primary" @click="closeModal(); returnToGame()">{{ t('返回正式局 →') }}</button><button ref="safeButton" @click="closeModal">{{ t('继续练习') }}</button></div></template>
     </section></div>
-    <HumanAnalysisDialog v-if="analysisRunId" :run-id="analysisRunId" :player="user" @close="analysisRunId = ''" />
+    <HumanAnalysisDialog v-if="analysisRunId" :run-id="analysisRunId" @close="analysisRunId = ''" />
     <Teleport to="body"><div v-if="authDialogOpen" class="human-auth-overlay" @keydown.esc="closeAuthDialog">
       <button class="human-auth-backdrop" type="button" :aria-label="t('关闭')" @click="closeAuthDialog" />
       <div class="human-auth-dialog"><button class="human-auth-close" type="button" :aria-label="t('关闭')" @click="closeAuthDialog">×</button><AuthPage :initial-mode="authDialogMode" @authenticated="handleAuthenticated" /><button v-if="localPreview" class="human-local-login" type="button" :disabled="authBusy" @click="localLogin">{{ t(authBusy ? '登录中…' : '使用本地体验账号') }}</button></div>
@@ -137,6 +140,7 @@ const HumanAccountMenu = defineAsyncComponent(() => import('./HumanAccountMenu.v
 const PlayerProfile = defineAsyncComponent(() => import('./PlayerProfile.vue'));
 const HumanLeaderboardPage = defineAsyncComponent(() => import('./HumanLeaderboardPage.vue'));
 const HumanAnalysisDialog = defineAsyncComponent(() => import('./HumanAnalysisDialog.vue'));
+const HumanAnalysisLibrary = defineAsyncComponent(() => import('./HumanAnalysisLibrary.vue'));
 
 const { themeName, themeNames, hide32k, darkMode, animationEnabled, paletteRevision, setDarkMode, chooseTheme, refresh: refreshAppearance } = useHumanAppearance();
 const { locale: sharedLocale } = useI18n();
@@ -159,6 +163,7 @@ function initialProfileName() {
 function initialView() {
   if (location.pathname.startsWith('/user/')) return 'profile';
   if (location.pathname === '/leaderboard' || location.pathname === '/leaderboard/') return 'leaderboard';
+  if (location.pathname === '/analysis' || location.pathname === '/analysis/') return 'analysis';
   return 'game';
 }
 const clock = ref(Date.now()), modal = ref(''), safeButton = ref(null), view = ref(initialView());
@@ -258,7 +263,7 @@ async function boot() {
     policies.value = nextPolicies; user.value = identity.user || null;
     void activateAccountPreferences(user.value?.id);
     localPreview.value = !!preview.local_preview;
-    if (location.pathname.startsWith('/user/') || location.pathname.startsWith('/leaderboard')) {
+    if (location.pathname.startsWith('/user/') || location.pathname.startsWith('/leaderboard') || location.pathname.startsWith('/analysis')) {
       await route();
     } else {
       await session.activate();
@@ -278,7 +283,7 @@ function closeAuthDialog() { authDialogOpen.value = false; }
 async function handleAuthenticated(nextUser) {
   user.value = nextUser; closeAuthDialog(); void activateAccountPreferences(nextUser?.id); practice.value = null;
   displayCache.clear();
-  if (!location.pathname.startsWith('/user/') && !location.pathname.startsWith('/leaderboard')) { await session.activate(); await Promise.all([loadBests(), loadBoard()]); }
+  if (!location.pathname.startsWith('/user/') && !location.pathname.startsWith('/leaderboard') && !location.pathname.startsWith('/analysis')) { await session.activate(); await Promise.all([loadBests(), loadBoard()]); }
 }
 function handleAccountSaved(nextUser) { if (nextUser) user.value = nextUser; }
 async function refreshIdentity() {
@@ -291,7 +296,7 @@ async function logout() {
   await authClient.logout().catch(() => {}); clearDeviceSession(); user.value = null; ownLeader.value = null; await activateAccountPreferences(null); bests.value = {}; practice.value = null;
   displayCache.clear();
   if (location.pathname.startsWith('/user/')) { await goGame(); return; }
-  if (location.pathname.startsWith('/leaderboard')) { await route(); return; }
+  if (location.pathname.startsWith('/leaderboard') || location.pathname.startsWith('/analysis')) { await route(); return; }
   await session.activate(); history.replaceState(null, '', '/#game'); view.value = 'game';
 }
 async function changeVariant(id) { if (id === variant.value) return; await session.waitForMove(); if (id === variant.value || busy.value) return; practice.value = null; await session.activate(id); }
@@ -317,6 +322,11 @@ async function loadBests(force = false) {
     }
     bests.value = merged;
   }
+}
+async function openAnalysisLibrary() {
+  await session.waitForMove();
+  if (location.pathname !== '/analysis') history.pushState(null, '', '/analysis');
+  view.value = 'analysis'; modal.value = '';
 }
 
 async function requestRestart() {
@@ -432,7 +442,10 @@ async function openReplay(item) {
   url.searchParams.set('lang', language.value);
   window.open(url.href, '_blank', 'noopener');
 }
-function openAnalysis(id) { analysisRunId.value = id; }
+function openAnalysis(item) {
+  if (!user.value) { openAuthDialog('login'); return; }
+  analysisRunId.value = typeof item === 'string' ? item : item?.id || item?.run_id || '';
+}
 function openLocalReplay() {
   if (!run.value) return;
   try {
@@ -454,6 +467,8 @@ async function route() {
     catch { view.value = 'game'; }
   } else if (location.pathname === '/leaderboard' || location.pathname === '/leaderboard/') {
     view.value = 'leaderboard';
+  } else if (location.pathname === '/analysis' || location.pathname === '/analysis/') {
+    view.value = 'analysis';
   } else if (path.startsWith('replay/')) {
     const id = decodeURIComponent(path.slice(7).split('?')[0]);
     const target = new URL('/verse-replay/', location.href);

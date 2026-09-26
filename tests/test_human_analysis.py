@@ -134,11 +134,131 @@ def test_stage_summary_is_persistent_but_hidden_run_stays_hidden_to_owner():
         assert get_summary(summary_id, 7)["segments"] == []
         assert get_summary(summary_id, 7)["run"]["pb"] == {
             "new_best": True, "previous_best": 400, "delta": 100}
-        assert list_summaries("summary-run", 8) == []
+        assert list_summaries("summary-run", 8)[0]["id"] == summary_id
         with database() as db:
             db.execute("UPDATE human_runs SET visible=0 WHERE id='summary-run'")
         assert list_summaries("summary-run", 7) == []
         assert get_summary(summary_id, 7) is None
+
+
+def test_public_run_can_be_analyzed_by_helper_but_result_belongs_to_owner():
+    from backend.human_play.analysis import _run_metadata
+    with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+        "CLOUD_AUTH_DB": str(Path(temp) / "auth.sqlite3"),
+        "HUMAN_PLAY_DB": str(Path(temp) / "human.sqlite3"),
+    }):
+        init_auth_db(); init_db()
+        with auth_db() as db:
+            for user_id, name in ((1, "Owner"), (2, "Helper")):
+                db.execute("""INSERT INTO users(id,email,password_hash,display_name,status,created_at,updated_at)
+                    VALUES(?,?, '!',?,'active','2026-01-01','2026-01-01')""",
+                    (user_id, f"{user_id}@example.invalid", name))
+        state = engine.initial("public-run", "4x4", SEED)
+        with database() as db:
+            db.execute("""INSERT INTO human_runs
+                (id,user_id,browser,variant,request_id,seed,threshold,status,created,ended,
+                 reason,writer,state,archive,visible,eligibility,has_replay)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("public-run", 1, "browser", "4x4", "request", SEED, 0, "sealed", 1, 2,
+                 "game_over", "writer", json.dumps(state), b"archive", 1, "eligible", 1))
+        metadata = _run_metadata("public-run", 2)
+        assert metadata["subject"]["id"] == 1
+        assert metadata["subject"]["display_name"] == "Owner"
+        with database() as db:
+            db.execute("UPDATE human_runs SET eligibility='ineligible' WHERE id='public-run'")
+        with pytest.raises(service.RunError, match="analysis_run_not_found"):
+            _run_metadata("public-run", 2)
+        assert _run_metadata("public-run", 1)["subject"]["id"] == 1
+
+
+def test_public_listing_is_monotonic_after_first_public_analysis():
+    with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+        "HUMAN_PLAY_DB": str(Path(temp) / "human.sqlite3"),
+    }):
+        init_db()
+        state = engine.initial("listed-run", "4x4", SEED)
+        with database() as db:
+            db.execute("""INSERT INTO human_runs
+                (id,user_id,browser,variant,request_id,seed,threshold,status,created,ended,
+                 reason,writer,state,archive,visible,eligibility,has_replay)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("listed-run", 7, "browser", "4x4", "request", SEED, 0, "sealed", 1, 2,
+                 "game_over", "writer", json.dumps(state), b"archive", 1, "eligible", 1))
+        summary = build_summary([], [])
+        summary_id = save_summary(run_id="listed-run", user_id=7, pattern="free10",
+                                  target="512", job_id="first", summary=summary, listed=True)
+        save_summary(run_id="listed-run", user_id=7, pattern="free10",
+                     target="512", job_id="second", summary=summary, listed=False)
+        with database() as db:
+            row = db.execute("SELECT listed,job_id FROM human_analysis_summaries WHERE id=?",
+                             (summary_id,)).fetchone()
+        assert dict(row) == {"listed": 1, "job_id": "second"}
+
+
+def test_unlisted_result_is_temporarily_visible_to_payer_only():
+    with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+        "CLOUD_AUTH_DB": str(Path(temp) / "auth.sqlite3"),
+        "HUMAN_PLAY_DB": str(Path(temp) / "human.sqlite3"),
+    }):
+        init_auth_db(); init_db()
+        with auth_db() as db:
+            for user_id, name in ((1, "Owner"), (2, "Helper"), (3, "Other")):
+                db.execute("""INSERT INTO users(id,email,password_hash,display_name,status,created_at,updated_at)
+                    VALUES(?,?, '!',?,'active','2026-01-01','2026-01-01')""",
+                    (user_id, f"{user_id}@example.invalid", name))
+            future = datetime.now(timezone.utc) + timedelta(hours=1)
+            db.execute("""INSERT INTO analysis_jobs
+                (job_id,user_id,pattern,target,status,total,done,failed,created_at,updated_at,expires_at)
+                VALUES('helper-job',2,'free10','512','finished',1,1,0,?,?,?)""",
+                (datetime.now(timezone.utc).isoformat(), datetime.now(timezone.utc).isoformat(),
+                 future.isoformat()))
+        state = engine.initial("private-result", "4x4", SEED)
+        with database() as db:
+            db.execute("""INSERT INTO human_runs
+                (id,user_id,browser,variant,request_id,seed,threshold,status,created,ended,
+                 reason,writer,state,archive,visible,eligibility,has_replay)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("private-result", 1, "browser", "4x4", "request", SEED, 0, "sealed", 1, 2,
+                 "game_over", "writer", json.dumps(state), b"archive", 1, "eligible", 1))
+        summary_id = save_summary(run_id="private-result", user_id=1, pattern="free10",
+                                  target="512", job_id="helper-job",
+                                  summary=build_summary([], []), listed=False)
+        assert get_summary(summary_id, 2)["subject"]["display_name"] == "Owner"
+        assert get_summary(summary_id, 3) is None
+        with auth_db() as db:
+            db.execute("UPDATE analysis_jobs SET expires_at='2000-01-01T00:00:00+00:00' WHERE job_id='helper-job'")
+        assert get_summary(summary_id, 2) is None
+
+
+def test_public_analysis_library_orders_by_game_time_not_rerun_time():
+    from backend.human_play.analysis_library import list_entries
+    with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+        "CLOUD_AUTH_DB": str(Path(temp) / "auth.sqlite3"),
+        "HUMAN_PLAY_DB": str(Path(temp) / "human.sqlite3"),
+    }):
+        init_auth_db(); init_db()
+        with auth_db() as db:
+            db.execute("""INSERT INTO users(id,email,password_hash,display_name,status,created_at,updated_at)
+                VALUES(1,'owner@example.invalid','!','Owner','active','2026-01-01','2026-01-01')""")
+        for run_id, ended, score in (("older", 10, 900), ("newer", 20, 800)):
+            state = engine.initial(run_id, "4x4", SEED); state["score"] = score
+            with database() as db:
+                db.execute("""INSERT INTO human_runs
+                    (id,user_id,browser,variant,request_id,seed,threshold,status,created,ended,
+                     reason,writer,state,archive,visible,eligibility,has_replay)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (run_id, 1, "browser", "4x4", f"request-{run_id}", SEED, 0, "sealed", 1,
+                     ended, "game_over", "writer", json.dumps(state), b"archive", 1, "eligible", 1))
+            save_summary(run_id=run_id, user_id=1, pattern="free10", target="512",
+                         job_id=f"job-{run_id}", summary=build_summary([], []), listed=True)
+        # A newer rerun timestamp for the older game must not affect discovery order.
+        save_summary(run_id="older", user_id=1, pattern="free10", target="512",
+                     job_id="rerun", summary=build_summary([], []), listed=True)
+        with patch("backend.analysis_history.library_artifacts", return_value={
+            1: [{"available": True}], 2: [{"available": True}],
+        }):
+            result = list_entries(limit=20)
+        assert [item["run_id"] for item in result["items"]] == ["newer", "older"]
 
 
 def test_result_grade_is_persisted_and_prior_summary_can_be_graded_without_reanalysis():

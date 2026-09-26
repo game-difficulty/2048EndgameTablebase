@@ -47,10 +47,11 @@ class AccountPreferenceTests(unittest.TestCase):
         self.assertEqual(first.status_code, 200)
         self.assertEqual(first.json()["revision"], 1)
         second = self.client.patch(self.url, headers=self.headers(), json={
-            "preferences": {"dark_mode": True}
+            "preferences": {"dark_mode": True, "share_play_analysis": False}
         }).json()
         self.assertEqual(second["preferences"], {
             "language": "zh", "theme": "Default", "showSpeed": True, "dark_mode": True,
+            "share_play_analysis": False,
         })
         self.assertEqual(self.client.get(self.url, headers=self.headers(1)).json(),
                          {"preferences": {}, "revision": 0})

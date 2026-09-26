@@ -39,6 +39,9 @@ class AnalysisWorkItem:
     source_run_id: str | None = None
     upload_id: str | None = None
     history_item_id: int | None = None
+    subject_user_id: int | None = None
+    listing_snapshot: bool = True
+    source_ended_at: float | None = None
 
 
 class AnalysisQueueFull(ValueError):
@@ -134,6 +137,9 @@ def _write_manifest(job: AnalysisJob) -> None:
                    "source_run_id": item.source_run_id,
                    "upload_id": item.upload_id,
                    "history_item_id": item.history_item_id,
+                   "subject_user_id": item.subject_user_id,
+                   "listing_snapshot": item.listing_snapshot,
+                   "source_ended_at": item.source_ended_at,
                    "reservation_id": getattr(item.reservation, "ledger_id", None)}
                   for item in job.work_items],
     }
@@ -148,8 +154,24 @@ def _load_job(job_id: str, *, restore_reservations: bool = True) -> AnalysisJob:
     items = [AnalysisWorkItem(
         Path(item["path"]), item["filename"], item["pattern"], item["target"],
         load_token_reservation(item.get("reservation_id")) if restore_reservations else None,
-        item.get("source_run_id"), item.get("upload_id"), item.get("history_item_id"))
+        item.get("source_run_id"), item.get("upload_id"), item.get("history_item_id"),
+        item.get("subject_user_id"), bool(item.get("listing_snapshot", True)),
+        item.get("source_ended_at"))
         for item in data["items"]]
+    missing_sources = {item.source_run_id for item in items
+                       if item.source_run_id and item.subject_user_id is None}
+    if missing_sources:
+        from .human_play.store import database
+        placeholders = ",".join("?" for _ in missing_sources)
+        with database() as db:
+            source_rows = db.execute(f"""SELECT id,user_id,ended FROM human_runs
+                WHERE id IN ({placeholders})""", sorted(missing_sources)).fetchall()
+        sources = {row["id"]: row for row in source_rows}
+        for item in items:
+            row = sources.get(item.source_run_id)
+            if row and item.subject_user_id is None:
+                item.subject_user_id = int(row["user_id"])
+                item.source_ended_at = row["ended"]
     job = AnalysisJob(
         job_id=data["job_id"], user_id=data["user_id"], session_id=data["session_id"],
         pattern=data["pattern"], target=data["target"], target_value=data["target_value"],
@@ -295,9 +317,11 @@ def _run_one_file(job: AnalysisJob, item: AnalysisWorkItem, index: int) -> tuple
     if item.source_run_id:
         from .human_play.store import database
         with database() as db:
-            still_visible = db.execute("""SELECT source,state,variant FROM human_runs WHERE id=? AND user_id=?
-                AND status='sealed' AND visible=1 AND archive IS NOT NULL""",
-                (item.source_run_id, job.user_id)).fetchone()
+            from .human_play.service import RANKABLE_SQL
+            still_visible = db.execute(f"""SELECT source,state,variant FROM human_runs WHERE id=? AND user_id=?
+                AND status='sealed' AND archive IS NOT NULL AND has_replay=1 AND visible=1
+                AND (?=? OR ({RANKABLE_SQL}))""",
+                (item.source_run_id, item.subject_user_id, job.user_id, item.subject_user_id)).fetchone()
         if not still_visible:
             raise AnalysisInputUnavailable("The archived game is no longer available for analysis.")
         source = still_visible["source"]
@@ -415,14 +439,25 @@ def _run_job(job_id: str) -> None:
                 if summary is not None:
                     from .human_play.analysis_summary import save_summary
                     entry["summary_id"] = save_summary(
-                        run_id=item.source_run_id, user_id=job.user_id,
+                        run_id=item.source_run_id, user_id=item.subject_user_id,
                         pattern=item.pattern, target=entry["target"],
-                        job_id=job.job_id, summary=summary)
+                        job_id=job.job_id, summary=summary,
+                        listed=bool(item.listing_snapshot))
+                    from .analysis_history import promote_library_artifacts
+                    entry["library_admitted"] = promote_library_artifacts(
+                        item.history_item_id, entry["summary_id"],
+                        source_run_id=item.source_run_id,
+                        subject_user_id=item.subject_user_id,
+                        run_ended_at=item.source_ended_at,
+                        listed=bool(item.listing_snapshot),
+                    )
                     entry["poster_eligible"] = summary["aggregate"]["poster_eligible"]
                     set_item_status(item.history_item_id, "done", stage_count=entry.get("stage_count", 0),
                                     summary_id=entry["summary_id"])
                 else:
                     set_item_status(item.history_item_id, "done", stage_count=entry.get("stage_count", 0))
+                    from .analysis_history import enforce_limits
+                    enforce_limits(job.user_id)
                 finalize_reservation(
                     reservation,
                     actual_operation_key="analysis_per_replay",
@@ -433,6 +468,8 @@ def _run_job(job_id: str) -> None:
             except AnalysisLeaseLost:
                 raise
             except AnalysisInputUnavailable as exc:
+                from .analysis_history import discard_item_artifacts
+                discard_item_artifacts(item.history_item_id)
                 cancel_reservation(reservation, reason="analysis_input_unavailable",
                                    metadata={"job_id": job.job_id, "filename": item.filename})
                 entry = {**_public_entry(path, "failed", str(exc)), "pattern": item.pattern, "target": item.target}
@@ -440,6 +477,8 @@ def _run_job(job_id: str) -> None:
                 failed_increment = 1
                 set_item_status(item.history_item_id, "failed", error_code="analysis_input_unavailable")
             except RemoteTablebaseError as exc:
+                from .analysis_history import discard_item_artifacts
+                discard_item_artifacts(item.history_item_id)
                 cancel_reservation(
                     reservation,
                     reason=exc.code.lower(),
@@ -452,6 +491,8 @@ def _run_job(job_id: str) -> None:
                 failed_increment = 1
                 set_item_status(item.history_item_id, "failed", error_code=exc.code.lower())
             except Exception as exc:
+                from .analysis_history import discard_item_artifacts
+                discard_item_artifacts(item.history_item_id)
                 finalize_reservation(
                     reservation,
                     actual_operation_key="analysis_per_replay",
@@ -490,6 +531,8 @@ def _run_job(job_id: str) -> None:
 
         with JOB_LOCK:
             _require_lease(job.job_id)
+            # ZIP remains a one-hour task result. The durable public library
+            # itself only registers compact stage replays.
             job.zip_path = _build_job_zip(job)
             _require_lease(job.job_id)
             job.status = "finished"
@@ -630,6 +673,7 @@ def analysis_job_payload(job: AnalysisJob) -> dict[str, Any]:
                    "message": job.entries[index].get("message", "") if index < len(job.entries) else "",
                    "summary_id": job.entries[index].get("summary_id") if index < len(job.entries) else None,
                    "artifacts": job.entries[index].get("artifacts", []) if index < len(job.entries) else [],
+                   "library_admitted": bool(job.entries[index].get("library_admitted")) if index < len(job.entries) else False,
                    "poster_eligible": bool(job.entries[index].get("poster_eligible")) if index < len(job.entries) else False}
                   for index, item in enumerate(job.work_items)],
         "message": job.error,

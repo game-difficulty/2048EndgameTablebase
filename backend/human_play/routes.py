@@ -109,15 +109,17 @@ def analysis_options(run_id: str, request: Request, response: Response):
 @router.get('/runs/{run_id}/analysis/summaries')
 def analysis_summaries(run_id: str, request: Request, response: Response):
     from . import analysis as replay_analysis
-    response.headers['Cache-Control'] = 'private, no-store'
-    return call(replay_analysis.summaries, run_id, require_user(request)['id'])
+    viewer = current_user_from_request(request)
+    response.headers['Cache-Control'] = 'private, no-store' if viewer else 'public, max-age=30'
+    return call(replay_analysis.summaries, run_id, viewer['id'] if viewer else None)
 
 
 @router.get('/analysis/summaries/{summary_id}')
 def analysis_summary(summary_id: int, request: Request, response: Response):
     from . import analysis as replay_analysis
-    response.headers['Cache-Control'] = 'private, no-store'
-    return call(replay_analysis.summary, summary_id, require_user(request)['id'])
+    viewer = current_user_from_request(request)
+    response.headers['Cache-Control'] = 'private, no-store' if viewer else 'public, max-age=30'
+    return call(replay_analysis.summary, summary_id, viewer['id'] if viewer else None)
 
 
 @router.post('/runs/{run_id}/analysis/quote')

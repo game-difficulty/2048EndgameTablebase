@@ -125,4 +125,10 @@ def leaderboard_page():
     return FileResponse(ROOT / 'frontend' / 'dist' / 'human' / 'index.html', headers={'Cache-Control': 'no-cache'})
 
 
+@app.get('/analysis', include_in_schema=False)
+@app.get('/analysis/', include_in_schema=False)
+def analysis_library_page():
+    return FileResponse(ROOT / 'frontend' / 'dist' / 'human' / 'index.html', headers={'Cache-Control': 'no-cache'})
+
+
 app.mount("/", CacheControlledStaticFiles(directory=ROOT / "frontend" / "dist", html=True, check_dir=False), name="human-preview")
