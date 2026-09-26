@@ -144,6 +144,7 @@
 <script setup>
 import { computed, nextTick, ref, toRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import { TAB_IDS } from '../../../app/tabRegistry';
 import UiSelect from '../../../components/UiSelect.vue';
@@ -327,7 +328,7 @@ const showSelectedDocument = async (documentId) => {
     refreshSearch();
   } catch (error) {
     console.error('Failed to load guide document.', error);
-    guideLoadError.value = error instanceof Error ? error.message : String(error);
+    guideLoadError.value = userError(error);
   } finally {
     guideLoading.value = false;
   }

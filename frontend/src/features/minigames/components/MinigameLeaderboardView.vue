@@ -115,6 +115,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import AccountAvatar from '../../auth/AccountAvatar.vue';
 import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
@@ -188,7 +189,7 @@ const loadBoard = async () => {
       : await fetchMinigameLeaderboard(selectedGameId.value, { difficulty: difficulty.value });
     if (serial === loadSerial) boardData.value = payload;
   } catch (loadError) {
-    if (serial === loadSerial) error.value = loadError?.message || t('minigames.leaderboard.loadFailed');
+    if (serial === loadSerial) error.value = userError(loadError, t('minigames.leaderboard.loadFailed'));
   } finally {
     if (serial === loadSerial) loading.value = false;
   }
@@ -206,7 +207,7 @@ const initialize = async () => {
     }
     await loadBoard();
   } catch (loadError) {
-    error.value = loadError?.message || t('minigames.leaderboard.loadFailed');
+    error.value = userError(loadError, t('minigames.leaderboard.loadFailed'));
   }
 };
 

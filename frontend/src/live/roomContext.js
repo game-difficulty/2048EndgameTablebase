@@ -9,7 +9,10 @@ export async function requestJson(path, body) {
       signal: controller.signal, credentials: 'same-origin', cache: 'no-store',
       ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     });
-    if (!response.ok) throw Object.assign(Error('request_failed'), { status: response.status });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw Object.assign(Error('request_failed'), { status: response.status, detail: payload.detail });
+    }
     return await response.json();
   } finally { clearTimeout(timeout); }
 }

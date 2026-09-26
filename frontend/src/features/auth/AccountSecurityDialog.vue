@@ -99,6 +99,7 @@
 </template>
 
 <script setup>
+import { userError } from '../../services/errors/userError.js';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -224,7 +225,7 @@ const sendDeactivateCode = async () => {
     showMessage(result.dev_code ? t('auth.messages.devCode', { code: result.dev_code }) : t('auth.messages.deactivateCodeSent'));
   } catch (error) {
     if (!applyServerCooldown(error)) {
-      showMessage(error.message || String(error), 'error');
+      showMessage(userError(error), 'error');
     }
   } finally {
     sendingCode.value = false;
@@ -251,7 +252,7 @@ const submit = async () => {
     showMessage(t('auth.messages.passwordChanged'));
     emit('success', result.user);
   } catch (error) {
-    showMessage(error.message || String(error), 'error');
+    showMessage(userError(error), 'error');
   } finally {
     submitting.value = false;
   }

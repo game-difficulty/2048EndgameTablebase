@@ -103,6 +103,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { authClient } from '../../services/auth/authClient';
+import { userError } from '../../services/errors/userError.js';
 
 const emit = defineEmits(['authenticated']);
 const props = defineProps({
@@ -300,7 +301,7 @@ const sendCode = async () => {
     showMessage(result.dev_code ? t('auth.messages.devCode', { code: result.dev_code }) : t('auth.messages.codeSent'));
   } catch (error) {
     if (!applyServerCooldown(error, 'register')) {
-      showMessage(error.message || String(error), 'error');
+      showMessage(userError(error), 'error');
     }
   } finally {
     sendingCode.value = false;
@@ -336,7 +337,7 @@ const submit = async () => {
     emit('authenticated', result.user);
   } catch (error) {
     if (!applyServerCooldown(error, mode.value === 'forgot' ? 'password_reset' : 'register')) {
-      showMessage(error.message || String(error), 'error');
+      showMessage(userError(error), 'error');
     }
   } finally {
     submitting.value = false;

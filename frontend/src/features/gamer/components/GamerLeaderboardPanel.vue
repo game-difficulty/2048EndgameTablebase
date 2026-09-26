@@ -89,6 +89,7 @@
 </template>
 
 <script setup>
+import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -152,7 +153,7 @@ const loadSelected = async (force = false) => {
     boardData.value = payload;
   } catch (loadError) {
     if (serial === requestSerial) {
-      error.value = loadError?.message || t('gamer.leaderboard.loadFailed');
+      error.value = userError(loadError, t('gamer.leaderboard.loadFailed'));
     }
   } finally {
     if (serial === requestSerial) loading.value = false;

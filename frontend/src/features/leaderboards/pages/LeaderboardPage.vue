@@ -140,6 +140,7 @@
 </template>
 
 <script setup>
+import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -247,7 +248,7 @@ const loadBoard = async (key) => {
     const payload = await fetchLeaderboard(key);
     if (serial === requestSerial) boardData.value = payload;
   } catch (loadError) {
-    if (serial === requestSerial) error.value = loadError?.message || t('leaderboards.loadFailed');
+    if (serial === requestSerial) error.value = userError(loadError, t('leaderboards.loadFailed'));
   } finally {
     if (serial === requestSerial) loading.value = false;
   }
@@ -284,7 +285,7 @@ const initialize = async () => {
       selectedKey.value = boards.value[0]?.key || 'supporters';
     }
   } catch (loadError) {
-    error.value = loadError?.message || t('leaderboards.loadFailed');
+    error.value = userError(loadError, t('leaderboards.loadFailed'));
     loading.value = false;
     return;
   }

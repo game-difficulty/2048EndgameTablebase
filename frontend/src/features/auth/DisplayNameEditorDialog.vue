@@ -49,6 +49,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../services/errors/userError.js';
 
 import { profileClient } from '../../services/auth/profileClient';
 
@@ -92,7 +93,7 @@ const translatedError = (error) => {
   if (code === 'PROFILE_CHANGE_COOLDOWN') return t('profile.errors.cooldown');
   if (code === 'PROFILE_RATE_LIMIT') return t('profile.errors.rateLimit');
   if (code === 'INVALID_PROFILE_UPDATE') return t('profile.errors.invalidName');
-  return error?.message || String(error);
+  return userError(error);
 };
 
 const submit = async () => {

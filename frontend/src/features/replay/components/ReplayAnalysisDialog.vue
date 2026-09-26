@@ -164,7 +164,7 @@
                 >
                   <div class="min-w-0">
                     <div class="truncate ui-body font-black text-text-main" :title="entry.path">{{ entry.path }}</div>
-                    <div v-if="entry.message" class="mt-0.5 truncate ui-caption font-black text-red-500/85" :title="entry.message">{{ entry.message }}</div>
+                    <div v-if="entry.message" class="mt-0.5 truncate ui-caption font-black text-red-500/85" :title="userError(entry.message)">{{ userError(entry.message) }}</div>
                   </div>
                   <div
                     class="badge-state"
@@ -187,6 +187,7 @@
 </template>
 
 <script setup>
+import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -459,7 +460,7 @@ const formatAnalysisError = (error, phase = '') => {
   if (error?.status === 409) {
     return t('analysis.errors.notReady');
   }
-  return String(error?.message || error || t('analysis.errors.generic'));
+  return userError(error, t('analysis.errors.generic'));
 };
 
 const readStoredAnalysisJob = () => {

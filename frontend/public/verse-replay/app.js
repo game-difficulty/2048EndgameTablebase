@@ -520,7 +520,7 @@
         const responseText = await response.text();
         await installReplay(() => decodeReplayText(responseText), t('AI 直播对局'), responseText);
       } catch (error) {
-        showError(t(`无法载入直播回放：${error?.message || '网络请求失败'}`));
+        showError(t(`无法载入直播回放：${window.ReplayI18n.requestError(error)}`));
         elements.fileName.textContent = t('直播回放载入失败');
       }
       return;
@@ -534,12 +534,12 @@
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload?.record_encoding) {
-        throw new Error(payload?.detail || `HTTP ${response.status}`);
+        throw Object.assign(new Error(typeof payload?.detail === 'string' ? payload.detail : `HTTP ${response.status}`), { status: response.status });
       }
       const source = t(`${payload.display_name || '排行榜对局'} · ${Number(payload.score || 0).toLocaleString('zh-CN')} 分`);
       await installReplay(() => decodeReplayText(payload.record_encoding), source, payload.record_encoding);
     } catch (error) {
-      showError(t(`无法载入排行榜对局：${error?.message || '网络请求失败'}`));
+      showError(t(`无法载入排行榜对局：${window.ReplayI18n.requestError(error)}`));
       elements.fileName.textContent = t('排行榜对局载入失败');
     }
   }

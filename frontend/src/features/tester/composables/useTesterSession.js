@@ -1,4 +1,5 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { userError } from '../../../services/errors/userError.js';
 
 import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAppSettingsStore } from '../../../app/useAppSettings';
@@ -1049,7 +1050,7 @@ export function useTesterSession(activeRef) {
           ? (String(appConfig.value?.language || '').toLowerCase().startsWith('zh')
             ? '所选定式暂不可用。'
             : 'The selected tablebase is temporarily unavailable.')
-          : (payload?.message || statusMessage.value);
+          : userError(payload);
       }
       return;
     }
@@ -1121,7 +1122,7 @@ export function useTesterSession(activeRef) {
       const retryBoard = currentBoardHex.value;
       const retryPattern = currentPatternDisplay.value;
       lookupPending.value = !Object.values(results.value).some((value) => typeof value === 'number');
-      statusMessage.value = message.data?.message || statusMessage.value;
+      statusMessage.value = userError({ ...message.data, code: 'TABLEBASE_BUSY' });
       queryRetryTimer = window.setTimeout(() => {
         queryRetryTimer = null;
         if (

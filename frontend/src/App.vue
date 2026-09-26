@@ -355,7 +355,7 @@
           <pre
             v-if="globalErrorExpanded"
             class="mt-3 max-h-[52vh] overflow-auto whitespace-pre-wrap break-words font-mono text-[0.78rem] leading-6 text-text-main"
-          >{{ globalErrorDialog.message }}</pre>
+          >{{ userError(globalErrorDialog.message) }}</pre>
         </div>
       </div>
     </div>
@@ -394,6 +394,7 @@
 </template>
 
 <script setup>
+import { userError } from './services/errors/userError.js';
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 

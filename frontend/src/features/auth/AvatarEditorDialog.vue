@@ -90,6 +90,7 @@
 <script setup>
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../services/errors/userError.js';
 
 import { profileClient } from '../../services/auth/profileClient';
 import AccountAvatar from './AccountAvatar.vue';
@@ -269,7 +270,7 @@ const translatedError = (error) => {
   if (code === 'AVATAR_UPLOAD_DISABLED') return t('profile.avatar.disabled');
   if (code === 'INVALID_AVATAR') return t('profile.errors.invalidAvatar');
   if (code === 'PROFILE_RATE_LIMIT') return t('profile.errors.rateLimit');
-  return error?.message || String(error);
+  return userError(error);
 };
 
 const saveAvatar = async () => {

@@ -192,6 +192,7 @@
 </template>
 
 <script setup>
+import { serverErrorText } from '../services/errors/serverErrorText.js';
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import {
   Radio,
@@ -501,11 +502,8 @@ async function login() {
     loginOpen.value = false;
     loginError.value = "";
     socket?.close();
-  } catch {
-    loginError.value = t(
-      "登录失败，请检查邮箱和密码。",
-      "Sign-in failed. Check your email and password.",
-    );
+  } catch (error) {
+    loginError.value = serverErrorText(error, lang.value);
   }
 }
 async function logout() {

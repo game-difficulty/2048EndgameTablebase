@@ -1,5 +1,6 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwnership';
 import { useAuthState } from '../../../services/auth/authState';
@@ -685,7 +686,7 @@ export function useMinigameSession(activeRef) {
       return true;
     } catch (error) {
       console.error('Minigame local action failed.', error);
-      showToast(error?.message || 'Minigame action failed.');
+      showToast(userError(error));
       return false;
     }
   };

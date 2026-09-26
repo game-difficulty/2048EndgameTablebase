@@ -388,6 +388,7 @@
 </template>
 
 <script setup>
+import { userError } from '../../../services/errors/userError.js';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -729,7 +730,7 @@ const submitTokenAdjust = async () => {
     tokenAdjust.value = {
       ...tokenAdjust.value,
       submitting: false,
-      error: requestError?.message || t('admin.tokens.updateFailed'),
+      error: userError(requestError, t('admin.tokens.updateFailed')),
     };
   }
 };
@@ -746,7 +747,7 @@ const refresh = async () => {
     });
     currentPage.value = Number(overview.value?.users_page?.page || currentPage.value);
   } catch (requestError) {
-    error.value = requestError?.message || t('admin.errors.loadFailed');
+    error.value = userError(requestError, t('admin.errors.loadFailed'));
   } finally {
     loading.value = false;
   }

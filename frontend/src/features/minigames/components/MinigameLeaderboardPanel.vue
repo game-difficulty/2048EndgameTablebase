@@ -72,6 +72,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { userError } from '../../../services/errors/userError.js';
 
 import AccountAvatar from '../../auth/AccountAvatar.vue';
 import { useAuthState } from '../../../services/auth/authState';
@@ -122,7 +123,7 @@ const loadBoard = async () => {
     });
     if (serial === requestSerial) boardData.value = payload;
   } catch (loadError) {
-    if (serial === requestSerial) error.value = loadError?.message || t('minigames.leaderboard.loadFailed');
+    if (serial === requestSerial) error.value = userError(loadError, t('minigames.leaderboard.loadFailed'));
   } finally {
     if (serial === requestSerial) loading.value = false;
   }

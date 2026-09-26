@@ -4,6 +4,7 @@
   const english = requested === 'en' || (requested !== 'zh' && !root.navigator.language.toLowerCase().startsWith('zh'));
   const messages = {
     '人类对局': 'Human game',
+    '正在载入对局回放…': 'Loading game replay…',
     '本地回放已失效，请从人类站重新打开。': 'This local replay is unavailable. Reopen it from the human game site.',
     '回放文件不能超过 2 MB。': 'Replay files must be no larger than 2 MB.',
     '回放不能超过 200000 步。': 'Replays cannot exceed 200,000 moves.',
@@ -65,7 +66,7 @@
     [/^(.+) · (\d+×\d+) · (.+) 步$/, (_, name, size, moves) => `${translate(name)} · ${size} · ${moves} moves`],
     [/^(.+) · ([\d,]+) 分$/, (_, name, score) => `${translate(name)} · ${score} points`],
     [/^含 (\d+) 个未知间隔；统一按 (\d+) ms 计入回放用时。秒表采用绝对时间基准，不累计页面渲染延迟。$/, (_, count, ms) => `${count} moves have no recorded timing; each is counted as ${ms} ms. The timer does not accumulate rendering delays.`],
-    [/^(回放格式错误|无法读取回放|无法载入直播回放|无法载入排行榜对局)：(.+)$/, (_, label, detail) => `${({ '无法载入直播回放':'Could not load livestream replay', '无法载入排行榜对局':'Could not load ranked game replay' })[label] || translate(label)}: ${translate(detail)}`],
+    [/^(回放格式错误|无法读取回放|无法载入直播回放|无法载入排行榜对局|无法载入对局回放)：(.+)$/, (_, label, detail) => `${({ '无法载入直播回放':'Could not load livestream replay', '无法载入排行榜对局':'Could not load ranked game replay', '无法载入对局回放':'Could not load game replay' })[label] || translate(label)}: ${translate(detail)}`],
     [/^第 (\d+) 条记录不是 3 个字符。$/, (_, n) => `Record ${n} must contain exactly 3 characters.`],
     [/^第 (\d+) 条记录含有不支持的字符（(.+)）。$/, (_, n, code) => `Record ${n} contains an unsupported character (${code}).`],
     [/^第 (\d+) 条记录的出生方块码 (.+) 无效。$/, (_, n, code) => `Record ${n} has an invalid spawn tile code: ${code}.`],
@@ -103,5 +104,20 @@
     const description = document.querySelector('meta[name=description]');
     description.content = translate(description.content);
   }
-  root.ReplayI18n = { translate, translatePage, english };
+  function requestError(error) {
+    const message = String(error?.message || '');
+    const status = Number(error?.status || /^HTTP (\d{3})$/.exec(message)?.[1]);
+    const known = {
+      401: ['请先登录后查看此回放。', 'Please sign in to view this replay.'],
+      403: ['没有查看此回放的权限。', 'You do not have permission to view this replay.'],
+      404: ['回放已过期或不存在。', 'This replay has expired or could not be found.'],
+      429: ['请求过于频繁，请稍后重试。', 'Too many requests. Please try again later.'],
+    };
+    if (known[status]) return known[status][english ? 1 : 0];
+    if (/failed to fetch|network|load failed/i.test(message)) return translate('网络请求失败');
+    if (status >= 400) return translate('暂时无法获取回放');
+    // Decoder messages already pass through the replay-specific translator.
+    return translate(message || '网络请求失败');
+  }
+  root.ReplayI18n = { translate, translatePage, requestError, english };
 })(window);
