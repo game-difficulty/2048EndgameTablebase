@@ -346,22 +346,6 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .variant-tag { font-weight: 700; }
 .verified { color: #a4c4a6; font-size: 12px; }
 .large-empty { padding: 44px 16px; text-align: center; color: var(--muted); }
-.replay-layout { display: grid; grid-template-columns: 230px minmax(0, 500px); gap: 20px; justify-content: center; }
-.replay-summary { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
-.replay-summary h2 { margin-bottom: 0; }
-.replay-summary p { margin: 0; font-size: 12px; }
-.replay-summary>span { font-size: 12px; }
-.large-number { font-size: 36px; font-variant-numeric: tabular-nums; }
-.replay-summary dl { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px; width: 100%; }
-.replay-summary dt { color: var(--muted); }
-.replay-summary dd { margin: 0; text-align: right; }
-.replay-summary button { width: 100%; font-size: 13px; }
-.replay-controls { display: flex; justify-content: center; gap: 6px; margin: 12px 0; }
-.replay-controls button { padding: 8px 16px; }
-.replay-controls select { font-size: 13px; }
-.replay-slider { width: 100%; padding: 0; }
-.replay-step-entry { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; margin-top: 12px; }
-.replay-step-entry input { width: 78px; padding: 6px; }
 /* Light mode keeps the same layout and tile palette, changing only page surfaces. */
 :root:not([data-theme="dark"]) {
   color-scheme: light; color: #655c53; background: #faf8ef;
@@ -470,11 +454,6 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .history-row>span:nth-of-type(3), .verified { display: none; }
   .history-row small { font-size: 10px; }
   .history-row button { font-size: 11px; }
-  .replay-layout { display: flex; flex-direction: column-reverse; gap: 20px; }
-  .replay-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .replay-summary h2, .replay-summary dl, .replay-summary p { grid-column: 1 / -1; }
-  .replay-controls { gap: 5px; }
-  .replay-controls button { padding: 8px 12px; }
   .site-footer { justify-content: space-between; margin-top: 20px; }
 }
 

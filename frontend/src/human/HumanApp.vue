@@ -41,7 +41,7 @@
                   <div class="gate-actions"><button v-if="['network', 'checking', 'other-tab', 'missing'].includes(gate)" class="primary" :disabled="busy" @click="gate === 'other-tab' || !run ? session.activate() : session.retry()">{{ t(busy ? '检查中…' : '重新检查') }}</button>
                     <button v-if="gate === 'paused'" class="primary" @click="session.resume()">{{ t("继续本局") }}</button>
                     <button v-if="gate === 'ended'" class="primary" @click="requestRestart">{{ t("开始新局") }}</button>
-                    <button v-if="gate === 'ended'" @click="openLocalReplay(0)">{{ t("回看本局") }}</button>
+                    <button v-if="gate === 'ended'" @click="openLocalReplay">{{ t("回看本局") }}</button>
                     <button v-if="['rejected','missing','storage'].includes(gate)" :disabled="busy" @click="requestRestart">{{ t("明确重开") }}</button>
                     <button v-if="run && ['network','rejected','paused','ended','checking'].includes(gate)" @click="openPractice">{{ t("去练习") }}</button>
                   </div>
@@ -82,10 +82,6 @@
       <KeepAlive><PlayerProfile v-if="view === 'profile'" :username="profileName" :viewer="user" :play-settings="playSettings" @back="goGame" @update:play-settings="updatePlaySettings" @replay="openReplay" @analyze="openAnalysis" /></KeepAlive>
 
       <HumanLeaderboardPage v-if="view === 'leaderboard'" @back="goGame" @player="openPlayer" @replay="openReplay" />
-
-      <section v-if="view === 'replay'" class="replay-view"><div class="section-top"><h1>{{ t("对局回放") }}</h1><a class="button-link" href="/#game" @click.prevent="goGame">{{ t("返回对局") }}</a></div><p v-if="replayError" class="notice danger">{{ t(replayError) }}</p>
-        <div v-if="replayData" class="replay-layout"><div class="panel replay-summary"><h2>{{ replayData.header.variant.replace('x',' × ') }}{{ t(" 回放") }}</h2><p>{{ t(localReplay ? '当前浏览器的本地记录' : '已封存对局 · 只读回放') }}</p><strong class="large-number">{{ number(replayState?.score || 0) }}</strong><span class="muted">{{ t("当前分数") }}</span><dl><dt>{{ t("当前步数") }}</dt><dd>{{ replayStep }} / {{ replayData.total }}</dd><dt>{{ t("节点用时") }}</dt><dd>{{ duration(replayState?.elapsed || 0) }}</dd><dt>{{ t("最终分数") }}</dt><dd>{{ number(replayData.final.score) }}</dd></dl><button class="primary" @click="practiceFromReplay">{{ t("从此步练习 ↗") }}</button><button v-if="replayBuffer" @click="downloadReplay">{{ t("下载二进制回放") }}</button><p class="small muted">{{ t("练习使用新的随机出数，") }}<br>{{ t("不会改变原局。") }}</p></div><div><HumanBoard :board="replayState.board" :transition="replayTransition" :rows="VARIANTS[replayData.header.variant][0]" :cols="VARIANTS[replayData.header.variant][1]" /><div class="replay-controls"><button @click="seekReplay(0)">|‹</button><button @click="seekReplay(replayStep - 1)">‹</button><button class="primary" @click="replayPlaying = !replayPlaying">{{ t(replayPlaying ? '暂停' : '播放') }}</button><button @click="seekReplay(replayStep + 1)">›</button><button @click="seekReplay(replayData.total)">›|</button><select v-model.number="replaySpeed" :aria-label="t(&quot;播放速度&quot;)"><option :value="1">1×</option><option :value="4">4×</option><option :value="16">16×</option></select></div><input class="replay-slider" type="range" :min="0" :max="replayData.total" :value="replayStep" :aria-label="t(&quot;回放步号&quot;)" @input="seekReplay(Number($event.target.value))"><div class="replay-step-entry"><label>{{ t("跳到第 ") }}<input type="number" :min="0" :max="replayData.total" :value="replayStep" @change="seekReplay(Number($event.target.value))">{{ t(" 步") }}</label><span class="small muted">{{ t("播放时折叠超过 2 秒的等待") }}</span></div></div></div>
-      </section>
     </main>
 
     <div v-if="modal" class="modal-backdrop" @click.self="closeModal"><section class="modal" role="dialog" aria-modal="true" :aria-label="t(modalTitle)" @keydown.esc="closeModal"><button class="modal-close" @click="closeModal" :aria-label="t(&quot;关闭&quot;)">×</button>
@@ -119,11 +115,11 @@ import { useI18n } from 'vue-i18n';
 import HumanBoard from './HumanBoard.vue';
 import { authClient } from '../services/auth/authClient.js';
 import { storeDeviceSession, clearDeviceSession } from '../services/auth/sessionTokenStore.js';
-import { json, request } from './client.js';
+import { json } from './client.js';
 import { useHumanSession } from './session.js';
 import { needsReplayUpload } from './archivePolicy.js';
 import { fitSingleLineText as vFitRankingName } from './fitSingleLineText.js';
-import { VARIANTS, DIRECTIONS, NODE_TILES, move, randomSpawn, isOver, clone, buildReplay, parseReplay } from './engine.js';
+import { VARIANTS, DIRECTIONS, NODE_TILES, move, randomSpawn, isOver, clone } from './engine.js';
 import { createLocalStorageStore } from '../services/storage/localStorageStore.js';
 import { activateAccountPreferences, preferenceSyncStatus, retryAccountPreferences, saveAccountPreferences } from '../services/preferences/accountPreferences.js';
 import { useHumanAppearance, tileStyle } from './appearance.js';
@@ -163,8 +159,6 @@ function initialProfileName() {
 function initialView() {
   if (location.pathname.startsWith('/user/')) return 'profile';
   if (location.pathname === '/leaderboard' || location.pathname === '/leaderboard/') return 'leaderboard';
-  const path = location.hash.slice(1);
-  if (path.startsWith('replay/') || path === 'local-replay') return 'replay';
   return 'game';
 }
 const clock = ref(Date.now()), modal = ref(''), safeButton = ref(null), view = ref(initialView());
@@ -237,9 +231,7 @@ onUnmounted(() => {
   boardObserver?.disconnect();
   if (boardResizeFallback) window.removeEventListener('resize', boardResizeFallback);
 });
-const replayData = shallowRef(null), replayState = shallowRef(null), replayStep = ref(0), replayPlaying = ref(false), replaySpeed = ref(1), replayError = ref(''), localReplay = ref(false);
-const replayTransition = shallowRef(null);
-let replayBuffer = null, replayId = '', replayTimeout, clockTimer, speedTimer, boardSerial = 0;
+let clockTimer, speedTimer, boardSerial = 0;
 const activePolicy = computed(() => policies.value?.variants.find(v => v.id === variant.value));
 const high = computed(() => !!session.high());
 const elapsed = computed(() => run.value?.reason ? run.value.elapsed : run.value?.firstMoveAt ? Math.max(run.value.elapsed, clock.value - run.value.firstMoveAt) : 0);
@@ -313,7 +305,7 @@ async function openFullLeaderboard() {
   await session.waitForMove();
   const path = `/leaderboard?type=score&variant=${encodeURIComponent(variant.value)}&period=${encodeURIComponent(period.value)}&page=1`;
   if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', path);
-  replayPlaying.value = false; view.value = 'leaderboard'; modal.value = '';
+  view.value = 'leaderboard'; modal.value = '';
 }
 async function loadBests(force = false) {
   const id = user.value?.id; if (!id) return;
@@ -430,68 +422,44 @@ async function viewCurrentReplay() {
 function openPlayer(name) {
   const path = `/user/${encodeURIComponent(name)}`;
   if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', path);
-  profileName.value = name; replayPlaying.value = false; view.value = 'profile'; modal.value = '';
+  profileName.value = name; view.value = 'profile'; modal.value = '';
 }
 async function openReplay(item) {
-  const id = typeof item === 'string' ? item : item.id;
-  if (['verse','manual'].includes(item?.source)) {
-    window.open('/verse-replay/?human-run=' + encodeURIComponent(id), '_blank', 'noopener');
-    return;
-  }
-  history.pushState(null, '', '/#replay/' + encodeURIComponent(id) + '?step=0');
-  await route();
+  const id = typeof item === 'string' ? item : item?.id || item?.run_id;
+  if (!id) return;
+  const url = new URL('/verse-replay/', location.href);
+  url.searchParams.set('human-run', id);
+  url.searchParams.set('lang', language.value);
+  window.open(url.href, '_blank', 'noopener');
 }
 function openAnalysis(id) { analysisRunId.value = id; }
-async function openLocalReplay(step) {
-  if (!run.value) return; replayPlaying.value = false; replayBuffer = null; localReplay.value = true; replayId = '';
-  replayData.value = buildReplay({ header: { run_id: run.value.id, variant: run.value.variant, seed: run.value.seed }, events: session.getEvents() });
-  view.value = 'replay'; seekReplay(step); location.hash = 'local-replay';
-}
-function seekReplay(step) {
-  if (!replayData.value || !Number.isFinite(step)) return;
-  const target = Math.max(0, Math.min(replayData.value.total, Math.trunc(step)));
-  const state = replayData.value.seek(target);
-  replayTransition.value = replayPlaying.value && replayState.value && target === replayStep.value + 1
-    ? { fromBoard: replayState.value.board, toBoard: state.board, direction: replayData.value.events[replayStep.value][0] & 3 } : null;
-  replayStep.value = target; replayState.value = state;
-  if (replayId) history.replaceState(null, '', `#replay/${replayId}?step=${replayStep.value}`);
-  if (replayStep.value === replayData.value.total) replayPlaying.value = false;
-}
-function schedulePlayback() {
-  clearTimeout(replayTimeout); if (!replayPlaying.value || !replayData.value) return;
-  const delta = replayData.value.events[replayStep.value]?.[1] || 100;
-  replayTimeout = setTimeout(() => { seekReplay(replayStep.value + 1); schedulePlayback(); }, Math.max(16, Math.min(2000, delta) / replaySpeed.value));
-}
-function practiceFromReplay() {
-  setPractice(replayState.value.board, replayData.value.header.variant, `replay:${replayData.value.header.run_id || replayId || replayData.value.header.variant}:${replayStep.value}:${replayState.value.board.join(',')}`);
-  history.pushState(null, '', '/#game'); view.value = 'game';
-}
-function downloadReplay() {
-  const url = URL.createObjectURL(new Blob([replayBuffer], { type: 'application/octet-stream' })); const link = document.createElement('a');
-  link.href = url; link.download = `${replayId}.hpr`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+function openLocalReplay() {
+  if (!run.value) return;
+  try {
+    const replay = exportCurrentReplay(run.value, session.getEvents());
+    void openReplayViewer(replay, language.value).catch(() => {
+      currentExport.value = replay;
+      exportNotice.value = '回放页面未能接收记录，请下载文件后在回放站打开。';
+      modal.value = 'replay-export';
+    });
+  } catch {
+    exportNotice.value = '无法读取当前回放，请重新进入本局后重试。';
+    modal.value = 'replay-export';
+  }
 }
 async function route() {
-  const path = location.hash.slice(1) || 'game'; replayPlaying.value = false;
+  const path = location.hash.slice(1) || 'game';
   if (location.pathname.startsWith('/user/')) {
     try { profileName.value = decodeURIComponent(location.pathname.slice(6).replace(/\/$/, '')); view.value = 'profile'; }
     catch { view.value = 'game'; }
   } else if (location.pathname === '/leaderboard' || location.pathname === '/leaderboard/') {
     view.value = 'leaderboard';
   } else if (path.startsWith('replay/')) {
-    view.value = 'replay'; replayError.value = ''; localReplay.value = false;
-    const [rawId, query] = path.slice(7).split('?');
-    const id = decodeURIComponent(rawId); const step = Number(new URLSearchParams(query).get('step') || 0);
-    try {
-      if (replayId !== id || !replayData.value || !replayBuffer) {
-        replayData.value = null; replayId = id;
-        replayBuffer = await (await request(`/api/human/replays/${encodeURIComponent(id)}`)).arrayBuffer();
-        replayData.value = buildReplay(parseReplay(replayBuffer));
-      }
-      seekReplay(step);
-    }
-    catch { replayError.value = '回放不存在、尚未封存，或你没有读取权限。'; }
+    const id = decodeURIComponent(path.slice(7).split('?')[0]);
+    const target = new URL('/verse-replay/', location.href);
+    target.searchParams.set('human-run', id); target.searchParams.set('lang', language.value);
+    location.replace(target.href); return;
   }
-  else if (path === 'local-replay' && replayData.value) view.value = 'replay';
   else await showGame();
 }
 async function showGame() {
@@ -535,7 +503,6 @@ watch(currentFailure, async failure => {
   }
 });
 watch(modal, async value => { if (['restart', 'practice-restart', 'practice-reminder'].includes(value)) { await nextTick(); safeButton.value?.focus(); } });
-watch([replayPlaying, replaySpeed], schedulePlayback);
 watch(() => practice.value?.board, board => { practiceHex.value = board ? practiceBoardHex(board) : ''; practiceError.value = ''; });
 watch(manualSpawn, enabled => {
   if (!enabled && practice.value?.pending) {
@@ -565,6 +532,6 @@ onMounted(() => {
   window.addEventListener('keydown', keydown); window.addEventListener('hashchange', scheduleRoute); window.addEventListener('popstate', scheduleRoute); window.addEventListener('pagehide', leavePage); window.addEventListener('pageshow', restorePage); window.addEventListener('focus', refreshAppearance); window.addEventListener('storage', refreshAppearance); window.addEventListener('human-preferences-changed', refreshAppearance); window.addEventListener('account-preferences-changed', refreshPlaySettings); document.addEventListener('visibilitychange', refreshVisibleAppearance); boot();
 });
 onUnmounted(() => {
-  terminalOverlay.dispose(); live.dispose(); session.stop(); clearInterval(clockTimer); clearInterval(speedTimer); clearTimeout(replayTimeout); window.removeEventListener('keydown', keydown); window.removeEventListener('hashchange', scheduleRoute); window.removeEventListener('popstate', scheduleRoute); window.removeEventListener('pagehide', leavePage); window.removeEventListener('pageshow', restorePage); window.removeEventListener('focus', refreshAppearance); window.removeEventListener('storage', refreshAppearance); window.removeEventListener('human-preferences-changed', refreshAppearance); window.removeEventListener('account-preferences-changed', refreshPlaySettings); document.removeEventListener('visibilitychange', refreshVisibleAppearance);
+  terminalOverlay.dispose(); live.dispose(); session.stop(); clearInterval(clockTimer); clearInterval(speedTimer); window.removeEventListener('keydown', keydown); window.removeEventListener('hashchange', scheduleRoute); window.removeEventListener('popstate', scheduleRoute); window.removeEventListener('pagehide', leavePage); window.removeEventListener('pageshow', restorePage); window.removeEventListener('focus', refreshAppearance); window.removeEventListener('storage', refreshAppearance); window.removeEventListener('human-preferences-changed', refreshAppearance); window.removeEventListener('account-preferences-changed', refreshPlaySettings); document.removeEventListener('visibilitychange', refreshVisibleAppearance);
 });
 </script>

@@ -4,6 +4,7 @@
   const english = requested === 'en' || (requested !== 'zh' && !root.navigator.language.toLowerCase().startsWith('zh'));
   const messages = {
     '人类对局': 'Human game',
+    '对局站归档': 'Play-site archive',
     '正在载入对局回放…': 'Loading game replay…',
     '本地回放已失效，请从人类站重新打开。': 'This local replay is unavailable. Reopen it from the human game site.',
     '回放文件不能超过 2 MB。': 'Replay files must be no larger than 2 MB.',

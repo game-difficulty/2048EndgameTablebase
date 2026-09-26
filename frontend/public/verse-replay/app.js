@@ -21,6 +21,7 @@
     board: document.querySelector('#board'),
     boardHexValue: document.querySelector('#board-hex-value'),
     boardPlaceholder: document.querySelector('#board-placeholder'),
+    viewerLayout: document.querySelector('.viewer-layout'),
     dropHint: document.querySelector('#drop-hint'),
     error: document.querySelector('#error-message'),
     fileInput: document.querySelector('#file-input'),
@@ -133,6 +134,7 @@
     elements.board.style.setProperty('--board-width', replay.width);
     elements.board.style.setProperty('--board-height', replay.height);
     elements.board.style.aspectRatio = `${replay.width} / ${replay.height}`;
+    elements.viewerLayout.style.setProperty('--board-aspect-ratio', replay.width / replay.height);
 
     for (let index = 0; index < replay.cellCount; index += 1) {
       const cell = document.createElement('div');
@@ -532,7 +534,7 @@
         const response = await fetch(`/api/human/replays/` + encodeURIComponent(humanId), { credentials: 'include' });
         if (!response.ok) throw new Error(`HTTP ` + response.status);
         const bytes = new Uint8Array(await response.arrayBuffer());
-        await installReplay(() => decodeReplayBytes(bytes), t('2048Verse 继承对局'), bytes);
+        await installReplay(() => decodeReplayBytes(bytes), t('对局站归档'), bytes);
       } catch (error) {
         showError(t(`无法载入对局回放：` + window.ReplayI18n.requestError(error)));
       }

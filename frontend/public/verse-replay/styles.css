@@ -195,9 +195,11 @@ h2 {
 }
 
 .viewer-layout {
+  --board-aspect-ratio: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 242px;
   grid-template-areas: "board timeline" "controls controls";
+  grid-template-rows: calc((min(96vw, 820px) - 256px) / var(--board-aspect-ratio)) auto;
   gap: 14px;
   align-items: stretch;
 }
@@ -395,9 +397,9 @@ h2 {
 .timeline-panel {
   grid-area: timeline;
   display: flex;
-  height: calc(min(96vw, 820px) - 256px);
+  height: 100%;
   min-height: 0;
-  max-height: calc(min(96vw, 820px) - 256px);
+  max-height: none;
   flex-direction: column;
   overflow: hidden;
   border-radius: 7px;
@@ -799,6 +801,7 @@ textarea {
   .viewer-layout {
     grid-template-areas: "board" "controls" "timeline";
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
   }
 
   .timeline-panel {
