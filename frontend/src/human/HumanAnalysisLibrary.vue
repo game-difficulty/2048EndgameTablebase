@@ -6,7 +6,7 @@
     </header>
     <form class="panel analysis-library-filters" @submit.prevent="search">
       <label>{{ t('玩家') }}<input v-model.trim="filters.username" maxlength="64" :placeholder="t('用户名')"></label>
-      <label>{{ t('模式') }}<select v-model="filters.variant"><option value="">{{ t('全部模式') }}</option><option v-for="item in variants" :key="item" :value="item">{{ item.replace('x',' × ') }}</option></select></label>
+      <label>{{ t('模式') }}<select v-model="filters.variant"><option v-for="item in variants" :key="item" :value="item">{{ item.replace('x',' × ') }}</option></select></label>
       <label>{{ t('定式') }}<input v-model.trim="filters.pattern" maxlength="80" :placeholder="t('全部定式')"></label>
       <label>{{ t('目标') }}<input v-model.trim="filters.target" maxlength="12" :placeholder="t('全部目标')"></label>
       <label>{{ t('来源') }}<select v-model="filters.source"><option value="">{{ t('全部来源') }}</option><option value="native">{{ t('本站') }}</option><option value="verse">2048Verse</option><option value="manual">{{ t('补录') }}</option></select></label>
@@ -35,9 +35,8 @@
                   <strong>{{ item.subject.display_name }}</strong>
                 </button></td>
                 <td><div class="analysis-library-result">
-                  <span class="variant-tag">{{ item.variant.replace('x',' × ') }}</span>
                   <button class="analysis-score-link" :title="t('查看原局')" @click="$emit('replay', item.run_id)">{{ number(item.score) }}</button>
-                  <small>{{ date(item.run_ended_at) }}</small><small>{{ sourceLabel(item.source) }}</small>
+                  <small>{{ date(item.run_ended_at) }}</small>
                 </div></td>
                 <td class="analysis-formation"><strong>{{ item.pattern }}</strong><span>{{ item.target }}</span></td>
                 <td><span class="analysis-grade">{{ item.grade || '—' }}</span></td>
@@ -70,7 +69,7 @@ import AnalysisStagePicker from './AnalysisStagePicker.vue';
 
 defineEmits(['back','player','replay']);
 const variants = ['4x4','3x4','3x3','2x4'];
-const filters = reactive({ username:'', variant:'', pattern:'', target:'', source:'' });
+const filters = reactive({ username:'', variant:'4x4', pattern:'', target:'', source:'' });
 const items = ref([]), loading = ref(false), error = ref(''), nextCursor = ref('');
 const cursors = ref(['']);
 const page = ref(0);
@@ -79,7 +78,6 @@ let detailRequest = 0, loadRequest = 0;
 const number = value => new Intl.NumberFormat(language.value === 'en' ? 'en-US' : 'zh-CN').format(Number(value) || 0);
 const date = value => value ? new Date(value * 1000).toLocaleString(language.value === 'en' ? 'en-US' : 'zh-CN') : '—';
 const percent = value => value != null && Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(1)}%` : '—';
-const sourceLabel = value => value === 'verse' ? '2048Verse' : value === 'manual' ? t('补录') : t('本站');
 async function load() {
   const request = ++loadRequest;
   ++detailRequest;

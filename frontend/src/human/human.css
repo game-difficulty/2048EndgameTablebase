@@ -664,7 +664,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .analysis-library-player img, .analysis-avatar-fallback { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; flex: 0 0 auto; }
 .analysis-avatar-fallback { display: grid; place-items: center; background: var(--button); }
 .analysis-library-player strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.analysis-library-result { display: grid; grid-template-columns: auto 1fr; gap: 5px 9px; align-items: center; white-space: nowrap; }
+.analysis-library-result { display: grid; grid-template-columns: 1fr; gap: 5px; align-items: center; white-space: nowrap; }
 .analysis-library-result small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
 .analysis-score-link { padding: 0; border: 0; color: var(--text); background: transparent; font-size: 18px; font-weight: 700; text-align: left; }
 .analysis-formation strong, .analysis-formation span { display: block; white-space: nowrap; }
