@@ -6,10 +6,10 @@
   >
     <input
       data-replay-slider-range="true"
-      :value="sliderValue"
       type="range"
       :min="0"
       :max="sliderMax"
+      :value="sliderValue"
       step="1"
       class="absolute inset-x-0 top-1/2 z-20 h-6 w-full -translate-y-1/2 cursor-pointer appearance-none bg-transparent opacity-0"
       :disabled="sliderMax <= 0"
