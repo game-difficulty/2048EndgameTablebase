@@ -44,6 +44,8 @@ def init_db():
             state TEXT NOT NULL, archive BLOB,
             display_threshold INTEGER NOT NULL DEFAULT 0,
             visible INTEGER NOT NULL DEFAULT 1,
+            deleted_by_user INTEGER NOT NULL DEFAULT 0,
+            deleted_by_user_at REAL,
             has_replay INTEGER NOT NULL DEFAULT 1,
             single_rating REAL, single_rating_version INTEGER,
             UNIQUE(user_id, browser, request_id)
@@ -99,6 +101,10 @@ def init_db():
             db.execute("ALTER TABLE human_runs ADD COLUMN display_threshold INTEGER NOT NULL DEFAULT 0")
         if "visible" not in columns:
             db.execute("ALTER TABLE human_runs ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
+        if "deleted_by_user" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN deleted_by_user INTEGER NOT NULL DEFAULT 0")
+        if "deleted_by_user_at" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN deleted_by_user_at REAL")
         if "has_replay" not in columns:
             db.execute("ALTER TABLE human_runs ADD COLUMN has_replay INTEGER NOT NULL DEFAULT 1")
         if "source" not in columns:

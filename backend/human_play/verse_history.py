@@ -412,7 +412,7 @@ def _import(claim_id: int) -> None:
         current = db.execute("SELECT status FROM human_external_claims WHERE id=?", (claim_id,)).fetchone()
         if not current or current["status"] != "importing":
             return
-        db.execute("""UPDATE human_runs SET visible=1 WHERE source='verse'
+        db.execute("""UPDATE human_runs SET visible=1 WHERE source='verse' AND deleted_by_user=0
             AND user_id=? AND browser=?""", (row["user_id"], browser))
         db.execute("""UPDATE human_external_claims SET status='complete',error='',
             counts=?,updated=? WHERE id=?""", (json.dumps(counts), time.time(), claim_id))

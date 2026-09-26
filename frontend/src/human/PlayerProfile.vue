@@ -45,6 +45,7 @@
           <button :disabled="!item.has_replay" :title="item.has_replay ? '' : t('无回放')" @click="$emit('replay',item)">{{ t('回放 ↗') }}</button>
           <button :disabled="!item.has_replay" :title="item.has_replay ? '' : t('无回放')" @click="$emit('analyze',item)">{{ t(isOwner ? '分析' : '帮 TA 分析') }}</button>
           <label v-if="isOwner && item.source === 'verse' && !item.has_replay" class="text-button">{{ t('补充回放') }}<input type="file" accept=".vrs,.txt" hidden @change="attachReplay(item,$event)"></label>
+          <button v-if="isOwner" type="button" class="history-delete-button" :title="t('删除记录')" :aria-label="`${t('删除记录')}：${number(item.score)} ${t('分')}`" @click="askDelete(item)"><Trash2 :size="16" aria-hidden="true" /></button>
         </div>
       </div>
       <nav v-if="historyTotal" class="history-pagination" :aria-label="t('历史记录分页')" :aria-busy="loading">
@@ -73,12 +74,22 @@
           </span>
         </div>
       </div>
+      <div v-if="deleteCandidate" class="modal-backdrop" @click.self="closeDeleteDialog" @keydown.esc="closeDeleteDialog">
+        <section class="modal history-delete-dialog" role="dialog" aria-modal="true" :aria-label="t('删除这局记录？')">
+          <button class="modal-close" type="button" :disabled="deletingId" :aria-label="t('关闭')" @click="closeDeleteDialog">×</button>
+          <h2>{{ t('删除这局记录？') }}</h2>
+          <p><strong>{{ deleteCandidate.variant.replace('x',' × ') }} · {{ number(deleteCandidate.score) }} {{ t('分') }}</strong><br>{{ date(deleteCandidate.ended_at) }}</p>
+          <p>{{ t('删除后，这局将从历史记录、排行榜、PB、B10 和个人统计中移除。服务器仍会保留对局及审核资料。') }}</p>
+          <div class="modal-actions"><button type="button" :disabled="deletingId" @click="closeDeleteDialog">{{ t('取消') }}</button><button type="button" class="history-delete-confirm" :disabled="deletingId" @click="deleteHistoryRun">{{ t(deletingId ? '删除中…' : '确认删除') }}</button></div>
+        </section>
+      </div>
     </Teleport>
   </section>
 </template>
 
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { Trash2 } from '@lucide/vue';
 import { json, request } from './client.js';
 import { t, language } from './i18n.js';
 import { tileStyle } from './appearance.js';
@@ -97,6 +108,7 @@ const currentPage = ref(1), pageSize = ref(20);
 const posterCanvas = ref(null), posterDark = ref(document.documentElement.dataset.theme === 'dark');
 const posterThemeVersion = ref(0);
 const preview = ref(null), previewElement = ref(null), previewPosition = ref({});
+const deleteCandidate = ref(null), deletingId = ref('');
 let previewTrigger = null;
 let historySerial = 0, bestSerial = 0, posterFrame = 0;
 const historyCache = new Map(), bestCache = new Map();
@@ -273,6 +285,19 @@ async function attachReplay(item,event) {
     historyCache.clear(); bestCache.clear();
     await Promise.all([loadHistory(true),loadBestTen(true)]);
   } catch(e) { error.value=e.code==='replay_result_mismatch'?'回放终盘或分数与继承记录不一致。':'回放补充失败，请检查文件后重试。'; }
+}
+function askDelete(item) { closePreview(); deleteCandidate.value = item; }
+function closeDeleteDialog() { if (!deletingId.value) deleteCandidate.value = null; }
+async function deleteHistoryRun() {
+  const item = deleteCandidate.value;
+  if (!item || deletingId.value) return;
+  deletingId.value = item.id; error.value = '';
+  try {
+    await json(`/api/human/runs/${encodeURIComponent(item.id)}/history`, { method:'DELETE' });
+    deleteCandidate.value = null; historyCache.clear(); bestCache.clear();
+    await Promise.all([loadHistory(true), loadBestTen(true)]);
+  } catch { error.value = '删除记录失败，请稍后重试。'; }
+  finally { deletingId.value = ''; }
 }
 watch(() => props.username, () => {closePreview();historyCache.clear();bestCache.clear();profile.value=null;entries.value=[];currentPage.value=1;loadHistory();loadBestTen();}, {immediate:true});
 watch([filterVariant,sort,pageSize], () => { currentPage.value=1; loadHistory(); });

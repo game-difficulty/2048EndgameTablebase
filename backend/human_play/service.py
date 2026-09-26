@@ -19,7 +19,9 @@ SUMMARY_COLUMNS = "id,user_id,variant,state,ended,reason,eligibility,has_replay,
 HISTORY_COLUMNS = "id,variant,ended,reason,has_replay,source,json_extract(state,'$.score') AS score,json_extract(state,'$.board') AS board"
 def rankable_sql(alias: str = "") -> str:
     """Return the shared public/rankable predicate, optionally table-qualified."""
-    prefix = f"{alias}." if alias else ""
+    # Keep the default qualified as well: the predicate contains correlated
+    # EXISTS clauses whose inner tables also have id/user_id columns.
+    prefix = f"{alias}." if alias else "human_runs."
     return f"""{prefix}visible=1 AND {prefix}eligibility='eligible' AND (
     ({prefix}source='native' AND ({prefix}reason='game_over' OR {prefix}id IN (SELECT run_id FROM human_rank_approvals)))
     OR ({prefix}source='verse' AND {prefix}reason='imported' AND EXISTS (
@@ -391,6 +393,29 @@ def history(user_id, viewer_id, before=None, limit=30, variant="all", sort="newe
                          "board": json.loads(r["board"])} for r in rows[:limit]],
             "next_offset": offset + limit if len(rows) > limit else None,
             "total": total, "page": page, "page_size": limit, "page_count": page_count}
+
+
+def delete_history_run(run_id: str, user_id: int) -> dict:
+    """Soft-delete one owned archived game and refresh every derived public view."""
+    with database() as db:
+        row = db.execute("""SELECT id,user_id,variant,status,visible,deleted_by_user,archive
+            FROM human_runs WHERE id=? AND user_id=? AND status='sealed'""",
+            (run_id, int(user_id))).fetchone()
+        if not row:
+            raise RunError("run_not_found", 404)
+        if row["deleted_by_user"]:
+            return {"run_id": run_id, "deleted": True, "already_deleted": True}
+        db.execute("""UPDATE human_runs SET visible=0,deleted_by_user=1,deleted_by_user_at=?
+            WHERE id=? AND user_id=? AND status='sealed'""", (time.time(), run_id, int(user_id)))
+
+        # Keep the archive and audit evidence, but immediately remove the score
+        # from every maintained projection which otherwise outlives the row flag.
+        from . import leaderboards, rating, rolling, statistics
+        rolling.revoke_run(db, run_id)
+        rating.refresh_player(db, int(user_id), row["variant"])
+        statistics.rebuild_player(db, int(user_id), row["variant"])
+        leaderboards.refresh_run(db, run_id)
+    return {"run_id": run_id, "deleted": True, "already_deleted": False}
 
 
 def best_ten(user_id, viewer_id, variant):

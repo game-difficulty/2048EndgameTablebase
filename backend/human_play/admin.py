@@ -110,7 +110,7 @@ def review(run_id, *, approved, operator, note, expected_seq=None, expected_hash
         if approved:
             if archive is not None:
                 db.execute("""UPDATE human_runs SET status='sealed',reason=?,ended=?,archive=?,permit_until=0,
-                    visible=?,has_replay=1,single_rating=?,single_rating_version=? WHERE id=?""", (end_reason, received, archive,
+                    visible=CASE WHEN deleted_by_user=1 THEN 0 ELSE ? END,has_replay=1,single_rating=?,single_rating_version=? WHERE id=?""", (end_reason, received, archive,
                     int(state['score'] >= run['display_threshold']),
                     rating.single_rating(run['variant'], state['board']), rating.RATING_VERSION, run_id))
                 db.execute("DELETE FROM human_chunks WHERE run_id=?", (run_id,))

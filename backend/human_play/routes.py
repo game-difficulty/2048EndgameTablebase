@@ -364,6 +364,13 @@ def player_history(username: str, request: Request, response: Response,
                 variant=variant, sort=sort, limit=page_size, page=page)
 
 
+@router.delete('/runs/{run_id}/history')
+def delete_player_history_run(run_id: str, request: Request, response: Response):
+    response.headers['Cache-Control'] = 'private, no-store'
+    user = require_user(request)
+    return call(service.delete_history_run, run_id, user['id'])
+
+
 @router.get('/users/{username}/best10')
 def player_best_ten(username: str, request: Request, response: Response, variant: str = '4x4'):
     response.headers['Cache-Control'] = 'private, no-store'

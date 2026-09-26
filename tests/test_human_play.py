@@ -330,6 +330,41 @@ class HumanPlayTests(unittest.TestCase):
         admin.review(run2['run_id'], approved=False, operator='site-owner', note='Approval revoked')
         self.assertIsNone(service.best_ten(uid, 2, '2x4')['rating'])
 
+    def test_owner_soft_delete_removes_game_from_all_player_results_but_keeps_archive(self):
+        run = self.new('2x4')
+        raw, state, _ = self.records(run, count=3)
+        self.send(run, raw, reason='restarted')
+        self.approve(run, state)
+        self.assertEqual(service.history(1, 1)['entries'][0]['id'], run['run_id'])
+        self.assertEqual(service.best_ten(1, 1, '2x4')['entries'][0]['id'], run['run_id'])
+        self.assertEqual(service.leaderboard('2x4')['entries'][0]['id'], run['run_id'])
+
+        with self.assertRaisesRegex(service.RunError, 'run_not_found'):
+            service.delete_history_run(run['run_id'], 2)
+        response = self.client.delete(f"/api/human/runs/{run['run_id']}/history")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            'run_id': run['run_id'], 'deleted': True, 'already_deleted': False})
+
+        with database() as db:
+            saved = db.execute("""SELECT visible,deleted_by_user,deleted_by_user_at,archive
+                FROM human_runs WHERE id=?""", (run['run_id'],)).fetchone()
+            self.assertEqual((saved['visible'], saved['deleted_by_user']), (0, 1))
+            self.assertIsNotNone(saved['deleted_by_user_at'])
+            self.assertIsNotNone(saved['archive'])
+            self.assertIsNone(db.execute("""SELECT 1 FROM human_player_ratings
+                WHERE user_id=1 AND variant='2x4'""").fetchone())
+            self.assertIsNone(db.execute("""SELECT 1 FROM human_player_statistics
+                WHERE user_id=1 AND variant='2x4'""").fetchone())
+        self.assertEqual(service.history(1, 1)['entries'], [])
+        self.assertEqual(service.best_ten(1, 1, '2x4')['entries'], [])
+        self.assertEqual(service.leaderboard('2x4')['entries'], [])
+        self.assertEqual(service.leaderboard('2x4', 'week')['entries'], [])
+        self.assertTrue(service.replay(run['run_id'], 1))
+        with self.assertRaisesRegex(service.RunError, 'replay_not_found'):
+            service.replay(run['run_id'], 2)
+        self.assertTrue(service.delete_history_run(run['run_id'], 1)['already_deleted'])
+
     def test_old_run_without_spawn_counters_still_seals(self):
         run = self.new('2x4')
         with database() as db:
