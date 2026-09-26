@@ -62,7 +62,11 @@ class PublicQuotaRulesTests(unittest.TestCase):
             row["full_pattern"]: row
             for row in rules["tablebase_thresholds"]
         }
-        self.assertEqual(len(thresholds), 30)
+        self.assertEqual(len(thresholds), 32)
+        self.assertEqual(thresholds["3x4free9_256"]["available_layers"], [[0, 157]])
+        self.assertEqual(thresholds["3x4free9_512"]["available_layers"], [[0, 274]])
+        self.assertEqual(thresholds["3x4free9_1024"]["available_layers"], [[0, 541]])
+        self.assertEqual(table_multiplier_units("3x4free9_1024"), 3_000)
         self.assertEqual(thresholds["free12_4096"]["available_layers"], [[955, 1045]])
         self.assertEqual(thresholds["free12_4096"]["threshold"], 0.05)
         self.assertEqual(thresholds["free12_4096"]["mode"], "absolute")

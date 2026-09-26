@@ -300,6 +300,9 @@ class RemoteCatalogTests(unittest.TestCase):
         self.assertEqual(
             set(tables),
             {
+                "3x4free9_256",
+                "3x4free9_512",
+                "3x4free9_1024",
                 "free11_512",
                 "free11_1024",
                 "free11_2048",

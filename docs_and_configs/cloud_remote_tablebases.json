@@ -4,6 +4,31 @@
       "worker_id": "home-main",
       "tables": [
         {
+          "pattern": "3x4free9",
+          "target": "256",
+          "full_pattern": "3x4free9_256",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "3x4free9",
+          "target": "512",
+          "full_pattern": "3x4free9_512",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "guest_available": true,
+          "resource_group": "disk-c"
+        },
+        {
+          "pattern": "3x4free9",
+          "target": "1024",
+          "full_pattern": "3x4free9_1024",
+          "dtype": "uint32",
+          "spawn_rate": 0.1,
+          "resource_group": "disk-c"
+        },
+        {
           "pattern": "free12",
           "target": "4096",
           "full_pattern": "free12_4096",

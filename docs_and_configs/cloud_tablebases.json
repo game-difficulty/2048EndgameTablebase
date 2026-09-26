@@ -72,13 +72,6 @@
       "spawn_rate": 0.1
     },
     {
-      "pattern": "3x4free9",
-      "target": "512",
-      "relative_path": "3x4free9_512",
-      "dtype": "uint32",
-      "spawn_rate": 0.1
-    },
-    {
       "pattern": "2x4",
       "target": "512",
       "relative_path": "2x4_512",

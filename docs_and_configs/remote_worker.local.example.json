@@ -27,6 +27,21 @@
   },
   "tables": [
     {
+      "table_id": "3x4free9_256", "pattern": "3x4free9", "target": "256",
+      "path": "C:/2048_tables/3x4free9-256", "dtype": "uint32", "spawn_rate": 0.1,
+      "resource_group": "disk-c", "concurrency": 1
+    },
+    {
+      "table_id": "3x4free9_512", "pattern": "3x4free9", "target": "512",
+      "path": "C:/2048_tables/3x4free9-512", "dtype": "uint32", "spawn_rate": 0.1,
+      "resource_group": "disk-c", "concurrency": 1
+    },
+    {
+      "table_id": "3x4free9_1024", "pattern": "3x4free9", "target": "1024",
+      "path": "C:/2048_tables/3x4free9-1k", "dtype": "uint32", "spawn_rate": 0.1,
+      "resource_group": "disk-c", "concurrency": 1
+    },
+    {
       "table_id": "4442ff_1024",
       "pattern": "4442ff",
       "target": "1024",

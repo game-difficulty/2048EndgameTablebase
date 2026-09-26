@@ -34,6 +34,23 @@ class GuestTablebaseCatalogTests(unittest.TestCase):
                 {"_provider": "remote", "_full_pattern": "L3_256"}
             )
         )
+        self.assertTrue(
+            tablebase_catalog._entry_guest_available(
+                {"_provider": "remote", "_full_pattern": "3x4free9_512", "guest_available": True}
+            )
+        )
+        self.assertFalse(
+            tablebase_catalog._entry_guest_available(
+                {"_provider": "remote", "_full_pattern": "free10_256", "guest_available": True}
+            )
+        )
+
+    def test_remote_guest_table_must_be_online(self) -> None:
+        entry = {"_provider": "remote", "_full_pattern": "3x4free9_512", "guest_available": True}
+        with patch.object(tablebase_catalog, "_iter_available_entries", return_value=[entry]):
+            self.assertTrue(tablebase_catalog.is_guest_tablebase_available("3x4free9_512"))
+        with patch.object(tablebase_catalog, "_iter_available_entries", return_value=[]):
+            self.assertFalse(tablebase_catalog.is_guest_tablebase_available("3x4free9_512"))
 
     def test_public_catalog_exposes_boolean_but_never_storage_metadata(self) -> None:
         entry = {

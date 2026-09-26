@@ -174,7 +174,10 @@ def _guest_max_multiplier_units() -> int:
 
 def _entry_guest_available(entry: dict[str, Any]) -> bool:
     return (
-        entry.get("_provider") == "local"
+        (
+            entry.get("_provider") == "local"
+            or (entry.get("_provider") == "remote" and entry.get("guest_available") is True)
+        )
         and table_multiplier_units(str(entry.get("_full_pattern") or ""))
         <= _guest_max_multiplier_units()
     )
@@ -187,7 +190,7 @@ def is_guest_tablebase_available(full_pattern: str) -> bool:
     return any(
         str(entry.get("_full_pattern") or "") == target
         and _entry_guest_available(entry)
-        for entry in _iter_local_entries()
+        for entry in _iter_available_entries()
     )
 
 
