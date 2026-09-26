@@ -16,20 +16,11 @@
         </button>
       </div>
       <div class="panel best-ten-panel">
-        <div class="table-title">
-          <div><span class="player-kicker">{{ bestVariant.replace('x', ' × ') }}</span><h2>BEST 10</h2></div>
-          <div class="best-poster-actions">
-            <div class="best-poster-layout-switch" role="group" :aria-label="t('展示图版式')">
-              <button type="button" :class="{ active: posterLayout === 'portrait' }" :aria-pressed="posterLayout === 'portrait'" @click="posterLayout = 'portrait'">{{ t('竖屏') }}</button>
-              <button type="button" :class="{ active: posterLayout === 'landscape' }" :aria-pressed="posterLayout === 'landscape'" @click="posterLayout = 'landscape'">{{ t('横屏') }}</button>
-            </div>
-            <button type="button" :disabled="!bestTen.length" @click="downloadPoster">{{ t('下载分享图') }}</button>
-          </div>
-        </div>
+        <div class="table-title"><div><span class="player-kicker">{{ bestVariant.replace('x', ' × ') }}</span><h2>BEST 10</h2></div><button :disabled="!bestTen.length" @click="downloadPoster">{{ t('下载分享图') }}</button></div>
         <div v-if="bestLoading" class="large-empty">{{ t('正在读取记录…') }}</div>
         <div v-else-if="!bestTen.length" class="large-empty">{{ t('此模式暂无可展示记录') }}</div>
         <div v-else class="best-poster-stage">
-          <canvas ref="posterCanvas" :class="['best-poster-canvas', `best-poster-canvas--${posterLayout}`]" :width="posterCanvasSize.width" :height="posterCanvasSize.height" role="img" :aria-label="t('Best 10 成绩海报')"></canvas>
+          <canvas ref="posterCanvas" class="best-poster-canvas" width="1600" height="2700" role="img" :aria-label="t('Best 10 成绩海报')"></canvas>
           <button v-for="(entry,index) in bestTen" v-show="entry.has_replay" :key="entry.id" type="button" class="best-poster-hit" :style="posterHitStyle(index)" :aria-label="`${t('查看回放')} B${index + 1}，${number(entry.score)} ${t('分')}`" @click="$emit('replay',entry)"></button>
         </div>
       </div>
@@ -93,8 +84,7 @@ import { t, language } from './i18n.js';
 import { tileStyle } from './appearance.js';
 import { getTileLabelStyle } from '../components/tileLabelStyle.js';
 import PlayerSettings from './PlayerSettings.vue';
-import { drawBestTenPoster, LANDSCAPE_POSTER_HEIGHT, LANDSCAPE_POSTER_WIDTH,
-  POSTER_HEIGHT, POSTER_WIDTH, posterCardBounds } from './bestTenPoster.js';
+import { drawBestTenPoster, POSTER_HEIGHT, POSTER_WIDTH, posterCardBounds } from './bestTenPoster.js';
 
 const props = defineProps({ username: String, viewer: Object, playSettings: Object });
 const PlayerStatistics = defineAsyncComponent(() => import('./PlayerStatistics.vue'));
@@ -103,7 +93,6 @@ const variants = ['4x4','3x4','2x4','3x3'];
 const profile = ref(null), entries = ref([]), bestTen = ref([]), bestMeta = ref(null), error = ref('');
 const loading = ref(false), bestLoading = ref(false), tab = ref('profile');
 const filterVariant = ref('4x4'), sort = ref('newest'), bestVariant = ref('4x4');
-const posterLayout = ref('portrait');
 const currentPage = ref(1), pageSize = ref(20);
 const posterCanvas = ref(null), posterDark = ref(document.documentElement.dataset.theme === 'dark');
 const posterThemeVersion = ref(0);
@@ -135,12 +124,6 @@ const paginationItems = computed(() => {
   return items;
 });
 const previewDims = computed(() => ({'4x4':[4,4],'3x4':[3,4],'2x4':[2,4],'3x3':[3,3]})[preview.value?.variant] || [4,4]);
-const posterLogicalSize = computed(() => posterLayout.value === 'landscape'
-  ? { width: LANDSCAPE_POSTER_WIDTH, height: LANDSCAPE_POSTER_HEIGHT }
-  : { width: POSTER_WIDTH, height: POSTER_HEIGHT });
-const posterCanvasSize = computed(() => posterLayout.value === 'landscape'
-  ? { width: 2700, height: 1600 }
-  : { width: 1600, height: 2700 });
 let themeObserver;
 onMounted(() => {
   themeObserver = new MutationObserver(() => {
@@ -161,10 +144,9 @@ function currentTilePalette() {
   return palette;
 }
 function posterHitStyle(index) {
-  const box = posterCardBounds(index, posterLayout.value);
-  const { width, height } = posterLogicalSize.value;
-  return { left: `${100 * box.x / width}%`, top: `${100 * box.y / height}%`,
-    width: `${100 * box.width / width}%`, height: `${100 * box.height / height}%` };
+  const box = posterCardBounds(index);
+  return { left: `${100 * box.x / POSTER_WIDTH}%`, top: `${100 * box.y / POSTER_HEIGHT}%`,
+    width: `${100 * box.width / POSTER_WIDTH}%`, height: `${100 * box.height / POSTER_HEIGHT}%` };
 }
 const number = value => new Intl.NumberFormat(language.value === 'zh' ? 'zh-CN' : 'en-US').format(value || 0);
 const date = seconds => seconds ? new Date(seconds * 1000).toLocaleString(language.value === 'zh' ? 'zh-CN' : 'en-US') : '';
@@ -261,13 +243,13 @@ async function renderPoster() {
     userId: profile.value?.player.id, variant: bestVariant.value, entries: bestTen.value,
     pbScore: bestMeta.value?.pb_score, pbRank: bestMeta.value?.pb_rank,
     rating: bestMeta.value?.rating, raRank: bestMeta.value?.ra_rank, dark: posterDark.value,
-    language: language.value, tilePalette: currentTilePalette(), layout: posterLayout.value });
+    language: language.value, tilePalette: currentTilePalette() });
 }
 function schedulePosterRender() {
   if (posterFrame || tab.value !== 'profile') return;
   posterFrame = requestAnimationFrame(() => { posterFrame = 0; void renderPoster(); });
 }
-watch([bestTen, bestVariant, () => profile.value?.player, posterDark, posterThemeVersion, language, posterLayout], schedulePosterRender, { flush: 'post' });
+watch([bestTen, bestVariant, () => profile.value?.player, posterDark, posterThemeVersion, language], schedulePosterRender, { flush: 'post' });
 watch(tab, value => { if (value === 'profile') schedulePosterRender(); }, { flush: 'post' });
 async function downloadPoster() {
   if (!bestTen.value.length) return;
@@ -278,7 +260,7 @@ async function downloadPoster() {
   const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
   if (!blob) { error.value = '无法生成分享图。'; return; }
   const url = URL.createObjectURL(blob);
-  const link = document.createElement('a'); link.download = `2048-${bestVariant.value}-best10-${posterLayout.value}.png`; link.href = url;
+  const link = document.createElement('a'); link.download = `2048-${bestVariant.value}-best10.png`; link.href = url;
   link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function attachReplay(item,event) {

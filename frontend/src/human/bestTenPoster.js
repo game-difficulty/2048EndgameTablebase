@@ -2,8 +2,6 @@
 // Coordinates follow the 1214 × 2048 reference, exported at 1600 × 2700.
 export const POSTER_WIDTH = 1214;
 export const POSTER_HEIGHT = 2048;
-export const LANDSCAPE_POSTER_WIDTH = 2048;
-export const LANDSCAPE_POSTER_HEIGHT = 1214;
 const FONT = '"Clear Sans", "Microsoft YaHei", Arial, sans-serif';
 const VARIANTS = { '4x4': [4, 4], '3x4': [3, 4], '2x4': [2, 4], '3x3': [3, 3] };
 const COPY = {
@@ -79,15 +77,7 @@ const fourRate = entry => {
   return '—';
 };
 
-export function posterCardBounds(index, layout = 'portrait') {
-  if (layout === 'landscape') {
-    if (index === 0) return { x: 32, y: 226, width: 780, height: 956 };
-    if (index < 1 || index > 9) return null;
-    if (index <= 2) return { x: 830 + (index - 1) * 602, y: 226, width: 584, height: 330 };
-    const position = index - 3;
-    return { x: 830 + (position % 4) * 300, y: position < 4 ? 574 : 887,
-      width: 286, height: 295 };
-  }
+export function posterCardBounds(index) {
   if (index === 0) return { x: 47, y: 245, width: 1121, height: 521 };
   if (index < 1 || index > 9) return null;
   const position = index - 1;
@@ -241,149 +231,15 @@ function closingCard(ctx, palette, copy) {
     palette.muted, { align: 'center', maxWidth: 445 });
 }
 
-function landscapeStatBox(ctx, x, accent, firstTitle, firstValue, secondTitle, secondValue, palette) {
-  const y = 43, w = 354, h = 132;
-  rounded(ctx, x + 4, y + 5, w, h, 16, palette.cardShadow);
-  rounded(ctx, x, y, w, h, 16, palette.stats);
-  rounded(ctx, x, y, 8, h, 4, accent);
-  line(ctx, x + w / 2, y + 14, x + w / 2, y + h - 14, palette.statsLine);
-  label(ctx, firstTitle, x + w * .25, y + 34, 16, palette.statsText, { align: 'center' });
-  label(ctx, firstValue, x + w * .25, y + 91, 29, palette.statsText, { align: 'center', maxWidth: w * .43 });
-  label(ctx, secondTitle, x + w * .75, y + 34, 16, palette.statsText, { align: 'center' });
-  label(ctx, secondValue, x + w * .75, y + 91, 29, palette.statsText, { align: 'center', maxWidth: w * .4 });
-}
-
-function landscapeHeader(ctx, { name, userId, variant, pbScore, pbRank, rating, raRank, entries, palette, copy }) {
-  rounded(ctx, 32, 29, 1984, 178, 18, palette.cardShadow);
-  rounded(ctx, 32, 24, 1984, 178, 18, palette.header);
-  label(ctx, name || copy.player, 64, 73, 42, palette.headerText, { maxWidth: 500 });
-  label(ctx, `${variant.replace('x', '×')} Best 10`, 64, 129, 28, palette.headerText, { maxWidth: 380 });
-  label(ctx, `ID ${userId || '—'}`, 64, 168, 17, palette.headerText, { weight: 400, maxWidth: 380 });
-  landscapeStatBox(ctx, 1234, palette.orange, 'PB', formatNumber(pbScore ?? entries[0]?.score),
-    copy.pbRank, pbRank == null ? '—' : `#${pbRank}`, palette);
-  landscapeStatBox(ctx, 1614, palette.mint, 'Rating', formatRating(rating),
-    copy.raRank, raRank == null ? '—' : `#${raRank}`, palette);
-}
-
-function landscapeFeaturedCard(ctx, entry, variant, palette, customTilePalette, copy) {
-  const b = posterCardBounds(0, 'landscape');
-  rounded(ctx, b.x, b.y + 7, b.width, b.height, 20, palette.goldShadow);
-  rounded(ctx, b.x, b.y, b.width, b.height, 20, palette.goldEdge);
-  rounded(ctx, b.x + 12, b.y + 12, b.width - 24, b.height - 25, 13, palette.card);
-  rounded(ctx, b.x + 28, b.y + 27, 184, 75, 16, palette.goldShadow);
-  rounded(ctx, b.x + 28, b.y + 25, 184, 73, 16, palette.gold);
-  crown(ctx, b.x + 41, b.y + 35, palette.crown);
-  label(ctx, 'B1', b.x + 141, b.y + 63, 43, palette.crown, { align: 'center' });
-  label(ctx, copy.finalScore, b.x + 249, b.y + 45, 19, palette.muted);
-  label(ctx, formatNumber(entry.score), b.x + 249, b.y + 81, 39, palette.text, { maxWidth: 485 });
-  board(ctx, entry.board, variant, { x: b.x + 60, y: b.y + 128, width: 660, height: 624 }, palette, customTilePalette);
-  [[copy.boardSum, formatNumber(boardSum(entry.board))], [copy.singleRating, formatRating(entry.single_rating)], [copy.fourRate, fourRate(entry)]]
-    .forEach(([key, value], index) => {
-      const x = b.x + 60 + index * 224;
-      label(ctx, key, x, b.y + 785, 17, palette.muted, { maxWidth: 205 });
-      label(ctx, value, x, b.y + 827, 26, palette.text, { maxWidth: 205 });
-    });
-  line(ctx, b.x + 60, b.y + 865, b.x + b.width - 60, b.y + 865, palette.cardLine, 2);
-  label(ctx, dateText(entry.ended), b.x + 60, b.y + 901, 18, palette.muted, { weight: 400 });
-  label(ctx, copy.footer, b.x + b.width - 60, b.y + 901, 13, palette.muted,
-    { align: 'right', weight: 400, maxWidth: 420 });
-}
-
-function landscapePodiumCard(ctx, entry, index, variant, palette, customTilePalette, copy) {
-  const b = posterCardBounds(index, 'landscape');
-  rounded(ctx, b.x + 2, b.y + 5, b.width, b.height, 14, palette.cardShadow);
-  rounded(ctx, b.x, b.y, b.width, b.height, 14, palette.cardLine);
-  rounded(ctx, b.x + 2, b.y + 2, b.width - 4, b.height - 4, 13, palette.card);
-  const rankColor = index === 1 ? palette.silver : index === 2 ? palette.bronze : palette.rank;
-  rounded(ctx, b.x + 15, b.y + 14, 76, 54, 11, rankColor);
-  label(ctx, `B${index + 1}`, b.x + 53, b.y + 41, 29, '#ffffff', { align: 'center', maxWidth: 69 });
-  if (!entry) {
-    label(ctx, copy.empty, b.x + b.width / 2, b.y + b.height / 2, 19, palette.muted, { align: 'center' });
-    return;
-  }
-  label(ctx, copy.finalScore, b.x + 108, b.y + 28, 14, palette.muted, { maxWidth: 190 });
-  label(ctx, formatNumber(entry.score), b.x + 108, b.y + 57, 23, palette.text, { maxWidth: 205 });
-  [[copy.boardSum, formatNumber(boardSum(entry.board))], [copy.singleRating, formatRating(entry.single_rating)], [copy.fourRate, fourRate(entry)]]
-    .forEach(([key, value], i) => {
-      const y = b.y + 129 + i * 39;
-      label(ctx, key, b.x + 24, y, 15, palette.muted, { maxWidth: 135 });
-      label(ctx, value, b.x + 304, y, 16, i === 0 ? palette.text : palette.muted,
-        { align: 'right', maxWidth: 126 });
-    });
-  line(ctx, b.x + 24, b.y + 274, b.x + 306, b.y + 274, palette.cardLine, 1.2);
-  label(ctx, dateText(entry.ended), b.x + 24, b.y + 302, 14, palette.muted, { weight: 400, maxWidth: 275 });
-  board(ctx, entry.board, variant, { x: b.x + 332, y: b.y + 82, width: 226, height: 226 }, palette, customTilePalette);
-}
-
-function landscapeCompactCard(ctx, entry, index, variant, palette, customTilePalette, copy) {
-  const b = posterCardBounds(index, 'landscape');
-  rounded(ctx, b.x + 2, b.y + 5, b.width, b.height, 13, palette.cardShadow);
-  rounded(ctx, b.x, b.y, b.width, b.height, 13, palette.cardLine);
-  rounded(ctx, b.x + 2, b.y + 2, b.width - 4, b.height - 4, 12, palette.card);
-  rounded(ctx, b.x + 13, b.y + 13, 58, 43, 10, palette.rank);
-  label(ctx, `B${index + 1}`, b.x + 42, b.y + 35, 22, '#ffffff', { align: 'center', maxWidth: 53 });
-  if (!entry) {
-    label(ctx, copy.empty, b.x + b.width / 2, b.y + b.height / 2, 17, palette.muted, { align: 'center' });
-    return;
-  }
-  label(ctx, copy.finalScore, b.x + 81, b.y + 24, 12, palette.muted, { maxWidth: 90 });
-  label(ctx, formatNumber(entry.score), b.x + 81, b.y + 47, 18, palette.text, { maxWidth: 130 });
-  [[copy.boardSum, formatNumber(boardSum(entry.board))], [copy.singleRating, formatRating(entry.single_rating)], [copy.fourRate, fourRate(entry)]]
-    .forEach(([key, value], i) => {
-      const y = b.y + 108 + i * 34;
-      label(ctx, key, b.x + 17, y, 12, palette.muted, { maxWidth: 78 });
-      label(ctx, value, b.x + 140, y, 13, i === 0 ? palette.text : palette.muted,
-        { align: 'right', maxWidth: 65 });
-    });
-  line(ctx, b.x + 17, b.y + 253, b.x + 142, b.y + 253, palette.cardLine, 1.1);
-  label(ctx, dateText(entry.ended), b.x + 17, b.y + 276, 11.5, palette.muted, { weight: 400, maxWidth: 128 });
-  board(ctx, entry.board, variant, { x: b.x + 154, y: b.y + 82, width: 117, height: 163 }, palette, customTilePalette);
-}
-
-function landscapeClosingCard(ctx, palette, copy) {
-  const x = 1730, y = 887, w = 286, h = 295;
-  rounded(ctx, x + 2, y + 5, w, h, 13, palette.cardShadow);
-  rounded(ctx, x, y, w, h, 13, palette.cardLine);
-  rounded(ctx, x + 2, y + 2, w - 4, h - 4, 12, palette.quote);
-  label(ctx, copy.quote1, x + w / 2, y + 82, 24, palette.muted, { align: 'center' });
-  label(ctx, copy.quote2, x + w / 2, y + 126, 17, palette.muted, { align: 'center', maxWidth: 250 });
-  line(ctx, x + w / 2 - 28, y + 169, x + w / 2 + 28, y + 169, palette.muted, 1.5);
-  label(ctx, '2 0 4 8', x + w / 2, y + 211, 16, palette.muted, { align: 'center' });
-  label(ctx, 'MORE THAN A GAME', x + w / 2, y + 244, 10.5, palette.muted, { align: 'center' });
-}
-
-function drawLandscape(ctx, options) {
-  const { name, userId, variant, entries, pbScore, pbRank, rating, raRank,
-    palette, copy, tilePalette } = options;
-  ctx.fillStyle = palette.page;
-  ctx.fillRect(0, 0, LANDSCAPE_POSTER_WIDTH, LANDSCAPE_POSTER_HEIGHT);
-  landscapeHeader(ctx, { name, userId, variant, pbScore, pbRank, rating, raRank, entries, palette, copy });
-  if (entries.length) landscapeFeaturedCard(ctx, entries[0], variant, palette, tilePalette, copy);
-  for (let index = 1; index <= 2; index++)
-    landscapePodiumCard(ctx, entries[index], index, variant, palette, tilePalette, copy);
-  for (let index = 3; index <= 9; index++)
-    landscapeCompactCard(ctx, entries[index], index, variant, palette, tilePalette, copy);
-  landscapeClosingCard(ctx, palette, copy);
-}
-
 export async function drawBestTenPoster({ canvas = document.createElement('canvas'), name, userId, variant,
-  entries, pbScore, pbRank, rating, raRank, dark = false, language = 'zh', tilePalette = null,
-  layout = 'portrait' }) {
+  entries, pbScore, pbRank, rating, raRank, dark = false, language = 'zh', tilePalette = null }) {
   await document.fonts.ready;
-  const landscape = layout === 'landscape';
-  canvas.width = landscape ? 2700 : 1600;
-  canvas.height = landscape ? 1600 : 2700;
+  canvas.width = 1600; canvas.height = 2700;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('canvas_unavailable');
-  ctx.scale(canvas.width / (landscape ? LANDSCAPE_POSTER_WIDTH : POSTER_WIDTH),
-    canvas.height / (landscape ? LANDSCAPE_POSTER_HEIGHT : POSTER_HEIGHT));
+  ctx.scale(1600 / POSTER_WIDTH, 2700 / POSTER_HEIGHT);
   const palette = dark ? palettes.dark : palettes.light;
   const copy = COPY[language] || COPY.zh;
-  if (landscape) {
-    drawLandscape(ctx, { name, userId, variant, entries, pbScore, pbRank, rating, raRank,
-      palette, copy, tilePalette });
-    return canvas;
-  }
   ctx.fillStyle = palette.page; ctx.fillRect(0, 0, POSTER_WIDTH, POSTER_HEIGHT);
   rounded(ctx, 47, 31, 1121, 208, 19, palette.cardShadow);
   rounded(ctx, 47, 25, 1121, 208, 19, palette.header);
