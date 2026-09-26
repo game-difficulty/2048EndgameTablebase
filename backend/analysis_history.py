@@ -746,4 +746,13 @@ def replay_open_link_route(artifact_id: str, request: Request):
     except FileNotFoundError as exc:
         raise HTTPException(404, "Analysis replay not found.") from exc
     token = make_open_token(artifact_id, user_id or 0)
-    return {"url": f"https://2048tables.online/?tab=replay#analysisReplay={artifact_id}&token={token}"}
+    # Keep a versioned document URL so browsers do not reuse an older cached
+    # replay page that predates the analysisReplay fragment bootstrap logic.
+    return {"url": analysis_replay_viewer_url(artifact_id, token)}
+
+
+def analysis_replay_viewer_url(artifact_id: str, token: str) -> str:
+    return (
+        "https://2048tables.online/?tab=replay&analysis_replay_v=2"
+        f"#analysisReplay={artifact_id}&token={token}"
+    )

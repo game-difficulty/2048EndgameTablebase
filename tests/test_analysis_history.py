@@ -7,7 +7,8 @@ from unittest.mock import patch
 import numpy as np
 
 from backend.analysis_history import (
-    artifact_root, enforce_limits, get_history, init_schema, publish_segments,
+    analysis_replay_viewer_url, artifact_root, enforce_limits, get_history, init_schema,
+    publish_segments,
 )
 from backend.auth.db import auth_db, init_auth_db
 from backend.cloud_files import SavedUpload, delete_upload, register_upload
@@ -97,3 +98,11 @@ def test_free_account_keeps_newest_fifty_replays(tmp_path):
             oldest = db.execute("SELECT delete_reason FROM analysis_replay_artifacts WHERE artifact_id='a0'").fetchone()[0]
         assert active == 50
         assert oldest == "user_limit"
+
+
+def test_analysis_replay_viewer_url_busts_cached_entry_document():
+    url = analysis_replay_viewer_url("artifact-id", "signed-token")
+    assert url == (
+        "https://2048tables.online/?tab=replay&analysis_replay_v=2"
+        "#analysisReplay=artifact-id&token=signed-token"
+    )
