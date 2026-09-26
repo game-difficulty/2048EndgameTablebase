@@ -57,15 +57,15 @@
           <p role="status">{{ statusLabel }} · {{ job.completed }} / {{ job.total }}</p>
           <progress :value="job.completed" :max="job.total" class="analysis-progress"></progress>
           <p v-if="job.current_file" class="small muted">{{ job.current_file }}</p>
-          <div v-for="(entry, index) in job.items || []" :key="index" class="analysis-result-row">
+          <div v-for="(entry, index) in job.items || []" :key="index" class="analysis-result-group">
+            <div class="analysis-result-row">
             <span>{{ entry.pattern }} · {{ entry.target }}<small v-if="entry.message" class="error-text">{{ serverErrorText(entry.message, language) }}</small></span>
             <span class="analysis-result-actions"><span>{{ { queued: label('等待中', 'Queued'), running: label('分析中', 'Running'), done: label('完成', 'Done'), failed: label('失败', 'Failed') }[entry.status] }}</span>
-              <button v-for="artifact in entry.artifacts || []" :key="artifact.artifact_id" @click="openAnalysisReplay(artifact.artifact_id)">
-                {{ label('回放阶段', 'Replay stage') }} {{ artifact.segment_index + 1 }} ↗
-              </button>
               <button v-if="entry.status === 'done' && entry.poster_eligible && entry.summary_id" @click="showPoster(entry.summary_id)">{{ label('生成展示图', 'Make result card') }}</button>
               <small v-else-if="entry.status === 'done'" class="muted">{{ label('暂不可出图', 'No result card') }}</small>
               <small v-if="entry.status === 'done' && !entry.library_admitted" class="muted">{{ label('结果未收入公共分析库', 'Result not retained in the public library') }}</small></span>
+            </div>
+            <AnalysisStagePicker v-if="entry.artifacts?.length" :artifacts="entry.artifacts" :busy="openingReplay" @open="openAnalysisReplay" />
           </div>
           <p v-if="job.message" class="error-text">{{ serverErrorText(job.message, language) }}</p>
           <div class="modal-actions">
@@ -88,12 +88,13 @@ import { json } from './client.js';
 import { language } from './i18n.js';
 import { loadLastAnalysisSelection, saveLastAnalysisSelection } from './analysisSelectionHistory.js';
 import HumanAnalysisPosterDialog from './HumanAnalysisPosterDialog.vue';
+import AnalysisStagePicker from './AnalysisStagePicker.vue';
 
 const props = defineProps({ runId: { type: String, required: true } });
 defineEmits(['close']);
 const options = ref(null), loading = ref(false), busy = ref(false), error = ref('');
 const patternCategory = ref(''), pattern = ref(''), target = ref(''), selected = ref([]), lastSelection = ref([]);
-const quote = ref(null), job = ref(null), requestId = ref('');
+const quote = ref(null), job = ref(null), requestId = ref(''), openingReplay = ref(false);
 const summaries = ref([]), summaryError = ref(''), posterSummaryId = ref(null);
 const label = (zh, en) => language.value === 'en' ? en : zh;
 const formatTokenBalance = value => {
@@ -241,10 +242,13 @@ async function submit() {
   finally { busy.value = false; }
 }
 async function openAnalysisReplay(artifactId) {
+  if (openingReplay.value) return;
+  openingReplay.value = true;
   try {
     const data = await json(`/api/analysis/replays/${encodeURIComponent(artifactId)}/open-link`, { method: 'POST' });
     window.open(data.url, '_blank', 'noopener');
   } catch { error.value = label('回放暂时无法打开。', 'The replay cannot be opened right now.'); }
+  finally { openingReplay.value = false; }
 }
 function reset() { sessionStorage.removeItem(`human-analysis:${props.runId}`); job.value = null; selected.value = []; invalidateQuote(); error.value = ''; }
 onUnmounted(() => { generation += 1; clearInterval(timer); });

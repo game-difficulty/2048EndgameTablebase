@@ -83,7 +83,7 @@
 
       <HumanLeaderboardPage v-if="view === 'leaderboard'" @back="goGame" @player="openPlayer" @replay="openReplay" />
 
-      <HumanAnalysisLibrary v-if="view === 'analysis'" :viewer="user" @back="goGame" @player="openPlayer" @replay="openReplay" @analyze="openAnalysis" />
+      <HumanAnalysisLibrary v-if="view === 'analysis'" @back="goGame" @player="openPlayer" @replay="openReplay" />
 
     </main>
 

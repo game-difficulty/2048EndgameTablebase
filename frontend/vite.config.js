@@ -9,6 +9,7 @@ function liveRoomEntry(req, res, next) {
   if (/^\/(?:live\/)?rooms\//.test(req.url || '') || /^\/lobby\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/live/index.html';
   if (/^\/user\/[^/?#]+\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/human/index.html';
   if (/^\/leaderboard\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/human/index.html';
+  if (/^\/analysis\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/human/index.html';
   next();
 }
 
