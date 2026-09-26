@@ -63,12 +63,46 @@ def test_publish_replay_and_keep_history_when_artifact_is_pruned(tmp_path):
         artifact_id = published[0]["artifact_id"]
         detail = get_history("job", 1)
         assert detail["items"][0]["artifacts"][0]["available"] is True
+        assert detail["items"][0]["artifacts"][0]["goodness_of_fit"] == 1.0
+        # Old manifests contain IDs and positions but no fit: polling must hydrate
+        # persisted metadata rather than requiring the player to pay for a rerun.
+        from backend.cloud_analysis_jobs import analysis_job_payload
+        job = SimpleNamespace(job_id="job", user_id=1, status="running", zip_path=None,
+            pattern="free10", target="512", completed=1, total=1, done=1, failed=0,
+            current_file="", error="", work_items=[SimpleNamespace(pattern="free10", target="512")],
+            entries=[{"status": "done", "artifacts": [{"artifact_id": artifact_id}]}])
+        payload = analysis_job_payload(job)
+        assert payload["items"][0]["artifacts"][0]["goodness_of_fit"] == 1.0
+        assert payload["entries"][0]["artifacts"][0]["goodness_of_fit"] == 1.0
+        assert "goodness_of_fit" not in job.entries[0]["artifacts"][0]
+
+        # The billed analyst differs from the game owner. Unicode names travel
+        # in an encoded header, and real zero fit must not be treated as missing.
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from urllib.parse import unquote
+        from backend.analysis_history import router
+        app = FastAPI(); app.include_router(router)
+        with auth_db() as db:
+            _user(db, 2)
+            db.execute("UPDATE users SET display_name='游戏/难度' WHERE id=2")
+            db.execute("UPDATE analysis_history_jobs SET subject_user_id=2 WHERE job_id='job'")
+        with TestClient(app) as client, patch("backend.analysis_history.current_user_from_request", return_value={"id": 1}):
+            for fit, expected in ((1.0, "100.0%"), (0.0, "0.0%"), (None, "—")):
+                with auth_db() as db:
+                    db.execute("UPDATE analysis_replay_artifacts SET goodness_of_fit=? WHERE artifact_id=?", (fit, artifact_id))
+                response = client.get(f"/api/analysis/replays/{artifact_id}")
+                assert response.status_code == 200
+                assert response.content == replay_path.read_bytes()
+                assert unquote(response.headers["X-Replay-Title"]) == f"游戏/难度 · free10-512 · {expected}"
+                assert analysis_job_payload(job)["items"][0]["artifacts"][0]["goodness_of_fit"] == fit
         with auth_db() as db:
             row = db.execute("SELECT relative_path FROM analysis_replay_artifacts WHERE artifact_id=?",
                              (artifact_id,)).fetchone()
         (artifact_root() / row["relative_path"]).unlink()
         detail = get_history("job", 1)
         assert detail["items"][0]["artifacts"][0]["available"] is False
+        assert analysis_job_payload(job)["items"][0]["artifacts"][0]["available"] is False
 
 
 def test_free_account_keeps_newest_fifty_replays(tmp_path):

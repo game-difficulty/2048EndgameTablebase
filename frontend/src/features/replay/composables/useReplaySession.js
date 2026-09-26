@@ -59,6 +59,7 @@ export function useReplaySession(activeRef, emit) {
   const replayStatus = ref('');
   const replayPattern = ref('');
   const replaySource = ref('');
+  const replayTitle = ref('');
   const replayUseVariant = ref(false);
   const currentStep = ref(0);
   const totalSteps = ref(0);
@@ -119,6 +120,7 @@ export function useReplaySession(activeRef, emit) {
   };
 
   const fileDisplay = computed(() => {
+    if (replayTitle.value) return replayTitle.value;
     if (replaySource.value) {
       const source = String(replaySource.value);
       const display = source.split(/[\\/]/u).pop() || source;
@@ -340,6 +342,7 @@ export function useReplaySession(activeRef, emit) {
       useVariant: replayMetadata.useVariant,
     });
     replayUseVariant.value = !!replayMetadata.useVariant;
+    replayTitle.value = replayMetadata.title || '';
     losses.value = Array.from(parsed.analysis.losses);
     summary.value = parsed.analysis.summary;
     performanceLabels.value = [...PERFORMANCE_LABELS];

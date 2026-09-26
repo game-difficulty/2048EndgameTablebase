@@ -113,11 +113,15 @@ export async function fetchAnalysisReplay({ artifactId, token = '' }) {
     { method: 'GET', credentials: 'include', headers: authHeaders({ Accept: 'application/octet-stream' }) },
     async (response) => {
       if (!response.ok) await handleProtectedResponseError(response, 'Analysis replay request failed');
+      let title = '';
+      try { title = decodeURIComponent(response.headers.get('x-replay-title') || ''); }
+      catch { /* Older or malformed metadata must not prevent replay loading. */ }
       return {
         buffer: await response.arrayBuffer(),
         filename: filenameFromHeaders(response.headers, 'analysis-stage.rpl'),
         pattern: response.headers.get('x-replay-pattern') || '',
         source: response.headers.get('x-replay-source') || 'Analysis history',
+        title,
         useVariant: response.headers.get('x-replay-variant') === '1',
         maxBytes: 16 * 1024 * 1024,
       };

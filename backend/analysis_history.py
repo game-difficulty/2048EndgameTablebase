@@ -14,6 +14,7 @@ from threading import BoundedSemaphore, Lock
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -528,6 +529,21 @@ def _artifact_payload(row) -> dict:
     }
 
 
+def job_artifacts(job_id: str, user_id: int) -> dict[int, list[dict]]:
+    """Read persisted stage metadata, including results from older job manifests."""
+    with auth_db() as db:
+        init_schema(db)
+        rows = db.execute("""SELECT a.*,i.work_index FROM analysis_replay_artifacts a
+            JOIN analysis_history_items i ON i.id=a.history_item_id
+            JOIN analysis_history_jobs j ON j.job_id=i.job_id
+            WHERE j.job_id=? AND j.user_id=? ORDER BY i.work_index,a.segment_index""",
+            (job_id, int(user_id))).fetchall()
+    result: dict[int, list[dict]] = defaultdict(list)
+    for row in rows:
+        result[row["work_index"]].append(_artifact_payload(row))
+    return result
+
+
 def list_history(user_id: int, *, limit: int = 20, cursor: str = "",
                  origin: str = "", status: str = "", variant: str = "",
                  pattern: str = "") -> dict:
@@ -627,9 +643,11 @@ def _public_summary(summary_id: int | None) -> bool:
 def resolve_artifact(artifact_id: str, user_id: int | None):
     with auth_db() as db:
         init_schema(db)
-        row = db.execute("""SELECT a.*,j.user_id,i.source_filename FROM analysis_replay_artifacts a
+        row = db.execute("""SELECT a.*,j.user_id,i.source_filename,u.display_name AS player_name
+            FROM analysis_replay_artifacts a
             JOIN analysis_history_items i ON i.id=a.history_item_id
             JOIN analysis_history_jobs j ON j.job_id=i.job_id
+            LEFT JOIN users u ON u.id=COALESCE(a.subject_user_id,j.subject_user_id)
             WHERE a.artifact_id=?""", (artifact_id,)).fetchone()
     if not row or not ((user_id is not None and int(row["user_id"]) == int(user_id))
                        or (row["library_active"] and _public_summary(row["summary_id"]))):
@@ -730,6 +748,12 @@ def replay_route(artifact_id: str, request: Request, token: str = ""):
     response.headers["X-Replay-Pattern"] = f"{row['pattern']}_{row['target']}"
     response.headers["X-Replay-Variant"] = "1" if row["use_variant"] else "0"
     response.headers["X-Replay-Source"] = "Analysis history"
+    fit = row["goodness_of_fit"]
+    title = " · ".join((row["player_name"] or row["source_filename"],
+                        f"{row['pattern']}-{row['target']}",
+                        f"{float(fit) * 100:.1f}%" if fit is not None else "—"))
+    # HTTP headers cannot contain Unicode usernames directly.
+    response.headers["X-Replay-Title"] = quote(title, safe="")
     from starlette.background import BackgroundTask
     response.background = BackgroundTask(_release_download)
     return response

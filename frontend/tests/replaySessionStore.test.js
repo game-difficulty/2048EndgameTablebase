@@ -12,14 +12,17 @@ test('analysis stage identity, bytes and progress survive a page reload', () => 
     // The worker transfers ownership; callers must persist the returned buffer.
     const parsedBytes = structuredClone(bytes, { transfer: [bytes] });
     assert.equal(saveReplaySource(bytes, { analysisArtifactId: 'stage-a' }), false);
-    assert.equal(saveReplaySource(parsedBytes, { analysisArtifactId: 'stage-a', filename: 'stage.rpl' }), true);
+    const title = '游戏/难度 · free10-256 · 98.1%';
+    assert.equal(saveReplaySource(parsedBytes, { analysisArtifactId: 'stage-a', filename: 'stage.rpl', title }), true);
     saveReplayPosition(42);
     const restored = restoreReplaySession();
     assert.equal(restored.analysisArtifactId, 'stage-a');
+    assert.equal(restored.title, title);
     assert.equal(restored.step, 42);
     assert.deepEqual(new Uint8Array(restored.buffer), new Uint8Array(parsedBytes));
     saveReplaySource(parsedBytes, { filename: 'ordinary.rpl' });
     assert.equal(restoreReplaySession().analysisArtifactId, '');
+    assert.equal(restoreReplaySession().title, '');
   } finally { delete globalThis.window; }
 });
 

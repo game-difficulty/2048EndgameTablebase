@@ -658,6 +658,10 @@ def get_analysis_job(job_id: str, user_id: int | None = None) -> AnalysisJob:
 
 
 def analysis_job_payload(job: AnalysisJob) -> dict[str, Any]:
+    from .analysis_history import job_artifacts
+    persisted_artifacts = job_artifacts(job.job_id, job.user_id) if job.entries else {}
+    entries = [{**entry, "artifacts": persisted_artifacts.get(index, entry.get("artifacts", []))}
+               for index, entry in enumerate(job.entries)]
     download_url = (
         f"/api/analysis/jobs/{job.job_id}/download"
         if job.status == "finished" and job.zip_path is not None
@@ -673,13 +677,13 @@ def analysis_job_payload(job: AnalysisJob) -> dict[str, Any]:
         "done": job.done,
         "failed": job.failed,
         "current_file": job.current_file,
-        "entries": job.entries[-8:],
+        "entries": entries[-8:],
         "items": [{"pattern": item.pattern, "target": item.target,
                    "status": job.entries[index]["status"] if index < len(job.entries)
                    else ("running" if job.status == "running" and index == job.completed else "queued"),
                    "message": job.entries[index].get("message", "") if index < len(job.entries) else "",
                    "summary_id": job.entries[index].get("summary_id") if index < len(job.entries) else None,
-                   "artifacts": job.entries[index].get("artifacts", []) if index < len(job.entries) else [],
+                   "artifacts": entries[index]["artifacts"] if index < len(entries) else [],
                    "library_admitted": bool(job.entries[index].get("library_admitted")) if index < len(job.entries) else False,
                    "poster_eligible": bool(job.entries[index].get("poster_eligible")) if index < len(job.entries) else False}
                   for index, item in enumerate(job.work_items)],
