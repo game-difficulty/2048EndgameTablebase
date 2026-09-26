@@ -119,6 +119,100 @@
     return text;
   }
 
+  function rotateLeft32(value, shift) {
+    return ((value << shift) | (value >>> (32 - shift))) >>> 0;
+  }
+
+  function seededInitialBoard(seed, cellCount) {
+    const normalizedSeed = String(seed || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{32}$/u.test(normalizedSeed)) {
+      throw new ReplayFormatError('本站回放的随机种子无效。');
+    }
+    let state = [0, 8, 16, 24].map((offset) => (
+      Number.parseInt(normalizedSeed.slice(offset, offset + 8), 16) >>> 0
+    ));
+    if (state.every((value) => value === 0)) {
+      throw new ReplayFormatError('本站回放的随机种子无效。');
+    }
+    const nextUint32 = () => {
+      let [s0, s1, s2, s3] = state;
+      const result = Math.imul(rotateLeft32(Math.imul(s1, 5) >>> 0, 7), 9) >>> 0;
+      const temporary = (s1 << 9) >>> 0;
+      s2 = (s2 ^ s0) >>> 0;
+      s3 = (s3 ^ s1) >>> 0;
+      s1 = (s1 ^ s2) >>> 0;
+      s0 = (s0 ^ s3) >>> 0;
+      s2 = (s2 ^ temporary) >>> 0;
+      s3 = rotateLeft32(s3, 11);
+      state = [s0, s1, s2, s3];
+      return result;
+    };
+    const board = new Uint8Array(cellCount);
+    for (let spawnNumber = 0; spawnNumber < 2; spawnNumber += 1) {
+      const empty = [];
+      for (let index = 0; index < board.length; index += 1) {
+        if (!board[index]) empty.push(index);
+      }
+      const position = empty[nextUint32() % empty.length];
+      board[position] = nextUint32() / 0x100000000 < 0.1 ? 2 : 1;
+    }
+    return board;
+  }
+
+  function decodeHumanReplayBytes(bytes) {
+    const magic = String.fromCharCode(...bytes.subarray(0, 4));
+    const version = magic === 'HPR2' ? 2 : 1;
+    if (bytes.length < 8) throw new ReplayFormatError('本站回放头不完整。');
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const headerSize = view.getUint32(4, true);
+    const bodyOffset = 8 + headerSize;
+    if (headerSize > 65536 || bodyOffset > bytes.length || (bytes.length - bodyOffset) % 5) {
+      throw new ReplayFormatError('本站回放长度无效。');
+    }
+    let header;
+    try {
+      header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, bodyOffset)));
+    } catch (_error) {
+      throw new ReplayFormatError('本站回放头无效。');
+    }
+    const dimensions = { '4x4': [4, 4], '3x4': [3, 4], '2x4': [2, 4], '3x3': [3, 3] }[header.variant];
+    if (header.version !== version || header.rules_version !== 1 || !dimensions) {
+      throw new ReplayFormatError('本站回放版本或棋盘尺寸不受支持。');
+    }
+    const [height, width] = dimensions;
+    const count = (bytes.length - bodyOffset) / 5;
+    if (count > 200000) throw new ReplayFormatError('回放不能超过 200000 步。');
+    const records = new Array(count);
+    for (let index = 0; index < count; index += 1) {
+      const codeOffset = version === 1 ? bodyOffset + index * 5 : bodyOffset + index;
+      const code = bytes[codeOffset];
+      const delta = version === 1
+        ? view.getUint32(codeOffset + 1, true)
+        : bytes[bodyOffset + count + index]
+          + bytes[bodyOffset + count * 2 + index] * 256
+          + bytes[bodyOffset + count * 3 + index] * 65536
+          + bytes[bodyOffset + count * 4 + index] * 16777216;
+      const spawnIndex = (code >>> 2) & 15;
+      if (code >= 128 || spawnIndex >= width * height) {
+        throw new ReplayFormatError(`第 ${index + 1} 步的本站回放记录无效。`);
+      }
+      records[index] = {
+        direction: NEXT_DIRECTIONS[code & 3],
+        spawnIndex,
+        spawnExponent: code & 64 ? 2 : 1,
+        deltaMs: delta,
+      };
+    }
+    return reconstructReplay({
+      width,
+      height,
+      mode: header.reason || 'human',
+      format: `hpr${version}`,
+      initialBoard: seededInitialBoard(header.seed, width * height),
+      records,
+    });
+  }
+
   function arraysEqual(left, right) {
     if (left.length !== right.length) return false;
     for (let index = 0; index < left.length; index += 1) {
@@ -489,7 +583,9 @@
     if (bytes.length > MAX_REPLAY_FILE_BYTES) {
       throw new ReplayFormatError('回放文件不能超过 2 MB。');
     }
-    if (bytes.length >= 4 && String.fromCharCode(...bytes.subarray(0, 4)) === 'RPL1') return buildDecodedRankedReplay(bytes);
+    const magic = bytes.length >= 4 ? String.fromCharCode(...bytes.subarray(0, 4)) : '';
+    if (magic === 'RPL1') return buildDecodedRankedReplay(bytes);
+    if (magic === 'HPR1' || magic === 'HPR2') return decodeHumanReplayBytes(bytes);
     if (looksLikeStateReplay(bytes)) return decodeStateReplayBytes(bytes);
     return buildDecodedReplay(bytesToLatin1(bytes));
   }

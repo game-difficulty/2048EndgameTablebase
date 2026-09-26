@@ -1,10 +1,55 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { initialState, nextMove } from '../src/human/engine.js';
 
 await import('../public/verse-replay/replay-core.js');
 
 const { decodeReplayBytes, decodeReplayText, moveBoard, snapshotToHex } = globalThis.ReplayCore;
+
+const humanSeed = '00000001000000020000000300000004';
+
+function humanReplayBytes(variant, version) {
+  let run = { ...initialState('viewer-test', variant, humanSeed), id: 'viewer-test', variant };
+  const events = [];
+  for (let index = 0; index < 40; index += 1) {
+    const next = [3, 2, 1, 0].map((direction) => nextMove(run, direction, index * 137)).find(Boolean);
+    if (!next) break;
+    events.push(next.event);
+    run = next.state;
+  }
+  const header = new TextEncoder().encode(JSON.stringify({
+    version,
+    rules_version: 1,
+    run_id: run.id,
+    variant,
+    seed: humanSeed,
+    reason: 'game_over',
+    started_at: 0,
+    timing: 'continuous-client-ms',
+  }));
+  const body = new Uint8Array(events.length * 5);
+  const bodyView = new DataView(body.buffer);
+  if (version === 1) {
+    events.forEach(([code, delta], index) => {
+      bodyView.setUint8(index * 5, code);
+      bodyView.setUint32(index * 5 + 1, delta, true);
+    });
+  } else {
+    events.forEach(([code, delta], index) => {
+      body[index] = code;
+      for (let plane = 0; plane < 4; plane += 1) {
+        body[events.length * (plane + 1) + index] = (delta >>> (plane * 8)) & 255;
+      }
+    });
+  }
+  const bytes = new Uint8Array(8 + header.length + body.length);
+  bytes.set(new TextEncoder().encode(`HPR${version}`));
+  new DataView(bytes.buffer).setUint32(4, header.length, true);
+  bytes.set(header, 8);
+  bytes.set(body, 8 + header.length);
+  return { bytes, run, events };
+}
 
 function packedBoard(exponents) {
   return exponents.reduce(
@@ -163,6 +208,22 @@ test('byte decoder keeps supporting textual Verse replay files', () => {
   assert.equal(replay.moveCount, 0);
   assert.deepEqual(Array.from(replay.getBoardAt(0).slice(0, 4)), [1, 1, 0, 0]);
 });
+
+for (const version of [1, 2]) {
+  test(`unified viewer decodes native HPR${version} 2x4 archives`, () => {
+    const { bytes, run, events } = humanReplayBytes('2x4', version);
+    const replay = decodeReplayBytes(bytes);
+    assert.equal(replay.format, `hpr${version}`);
+    assert.deepEqual([replay.height, replay.width], [2, 4]);
+    assert.equal(replay.moveCount, events.length);
+    assert.equal(replay.scores[events.length], run.score);
+    assert.equal(replay.knownTimeMs, run.elapsed);
+    assert.deepEqual(
+      Array.from(replay.getBoardAt(events.length), (exponent) => exponent ? 2 ** exponent : 0),
+      run.board,
+    );
+  });
+}
 
 test('Verse VRS fixtures use rows x columns for variant dimensions', () => {
   const fixtureDir = new URL('./fixtures/verse-replay/', import.meta.url);
