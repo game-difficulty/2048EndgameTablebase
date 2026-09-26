@@ -348,6 +348,7 @@ export function useReplaySession(activeRef, emit) {
       saveReplayPosition(currentStep.value);
       persistReplaySourceLater(parsed.rawBuffer, replayMetadata);
     }
+    return parsed.rawBuffer;
   };
 
   const handleReplayTransfer = async (event) => {
@@ -580,10 +581,10 @@ export function useReplaySession(activeRef, emit) {
       }
       const replay = await fetchAnalysisReplay({ artifactId, token: fragment.get('token') || '' });
       replay.analysisArtifactId = artifactId;
-      await installReplay(replay.buffer, replay, { step: 0, persist: false });
+      const rawBuffer = await installReplay(replay.buffer, replay, { step: 0, persist: false });
       saveReplayPosition(0);
       // Remove the credential only after the exact artifact is durable in this tab.
-      if (saveReplaySource(replay.buffer, replay)) fragment.delete('token');
+      if (saveReplaySource(rawBuffer, replay)) fragment.delete('token');
       const clean = new URL(window.location.href);
       clean.hash = fragment.toString();
       window.history.replaceState(window.history.state, '', clean);

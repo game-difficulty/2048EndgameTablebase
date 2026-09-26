@@ -9,13 +9,16 @@ test('analysis stage identity, bytes and progress survive a page reload', () => 
   } };
   try {
     const bytes = new Uint8Array([1, 2, 3]).buffer;
-    assert.equal(saveReplaySource(bytes, { analysisArtifactId: 'stage-a', filename: 'stage.rpl' }), true);
+    // The worker transfers ownership; callers must persist the returned buffer.
+    const parsedBytes = structuredClone(bytes, { transfer: [bytes] });
+    assert.equal(saveReplaySource(bytes, { analysisArtifactId: 'stage-a' }), false);
+    assert.equal(saveReplaySource(parsedBytes, { analysisArtifactId: 'stage-a', filename: 'stage.rpl' }), true);
     saveReplayPosition(42);
     const restored = restoreReplaySession();
     assert.equal(restored.analysisArtifactId, 'stage-a');
     assert.equal(restored.step, 42);
-    assert.deepEqual(new Uint8Array(restored.buffer), new Uint8Array(bytes));
-    saveReplaySource(bytes, { filename: 'ordinary.rpl' });
+    assert.deepEqual(new Uint8Array(restored.buffer), new Uint8Array(parsedBytes));
+    saveReplaySource(parsedBytes, { filename: 'ordinary.rpl' });
     assert.equal(restoreReplaySession().analysisArtifactId, '');
   } finally { delete globalThis.window; }
 });
