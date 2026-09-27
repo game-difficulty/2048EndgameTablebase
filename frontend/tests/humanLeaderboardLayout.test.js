@@ -10,6 +10,11 @@ test('full leaderboard rank numbers are excluded from browser page translation',
   assert.match(fullLeaderboardSource, /class="full-rank notranslate"[^>]*translate="no"[^>]*>\{\{ item\.rank \}\}/);
 });
 
+test('leaderboard player names are excluded from browser page translation', () => {
+  assert.match(fullLeaderboardSource, /class="full-player notranslate"[^>]*translate="no"/);
+  assert.equal((appSource.match(/class="rank-name notranslate" translate="no"/g) || []).length, 2);
+});
+
 test('game sidebar leaderboard shows only username and score while preserving links', () => {
   const sidebar = appSource.slice(
     appSource.indexOf('<div class="rank-list"'),
