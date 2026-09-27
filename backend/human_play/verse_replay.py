@@ -150,7 +150,12 @@ def inspect_replay(raw: bytes, expected_variant: str | None = None) -> dict:
     if raw.startswith(b"RPL1"):
         variant, board, moves = _rpl1(raw)
     else:
-        text = raw.decode("latin-1").strip()
+        try:
+            # Verse text exports are found both as their original single-byte
+            # alphabet and as UTF-8 text after being saved by a browser/editor.
+            text = raw.decode("utf-8-sig").strip()
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1").strip()
         if text.startswith(PREFIX):
             try:
                 variant, board, moves = _rpl1(base64.b64decode(text[len(PREFIX):], validate=True))

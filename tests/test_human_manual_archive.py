@@ -68,6 +68,12 @@ class ManualArchiveTests(unittest.TestCase):
         with database() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM human_archive_applications").fetchone()[0], 0)
 
+    def test_utf8_saved_verse_text_replay_is_accepted(self):
+        utf8_replay = self.replay.decode("latin-1").encode("utf-8")
+        application = manual_archive.submit(
+            1, "3x4", time.time(), 71356, "record.txt", utf8_replay)
+        self.assertEqual((application["status"], application["moves"]), ("pending", 3244))
+
     def test_rejection_is_audited_and_allows_a_new_application(self):
         first = manual_archive.submit(1, "3x4", time.time(), 71356, "one.vrs", self.replay)
         rejected = manual_archive.decide(first["id"], 99, False, "Insufficient evidence")
