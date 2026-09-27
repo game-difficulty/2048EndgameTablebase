@@ -1,5 +1,6 @@
 // TrainerPage/useTrainerSession semantics, generalized to rectangular human boards.
 export const PRACTICE_PALETTE = [0, ...Array.from({ length: 15 }, (_, i) => 2 ** (i + 1))];
+const PRACTICE_CODE_ALPHABET = '0123456789abcdefgh';
 export function createPracticeMoveReminder(limit = 40) {
   const warnedOrigins = new Set();
   let origin = null;
@@ -26,13 +27,22 @@ export function practiceCellValue(current, selected, button, pending = false) {
   return PRACTICE_PALETTE[(index + (button === 2 ? 1 : -1) + PRACTICE_PALETTE.length) % PRACTICE_PALETTE.length];
 }
 export function practiceBoardHex(board) {
-  if (board.some(value => value > 32768)) return '';
-  return board.map(value => value ? Math.log2(value).toString(16) : '0').join('');
+  const encoded = [];
+  for (const value of board) {
+    if (value === 0) { encoded.push('0'); continue; }
+    const exponent = Math.log2(value);
+    if (!Number.isInteger(exponent) || exponent < 1 || exponent >= PRACTICE_CODE_ALPHABET.length) return '';
+    encoded.push(PRACTICE_CODE_ALPHABET[exponent]);
+  }
+  return encoded.join('');
 }
 export function parsePracticeHex(text, cells) {
-  const hex = String(text).trim().replace(/^0x/i, '').toLowerCase();
-  if (!/^[0-9a-f]+$/.test(hex) || hex.length > cells) return null;
-  return [...hex.padStart(cells, '0')].map(char => char === '0' ? 0 : 2 ** parseInt(char, 16));
+  const code = String(text).trim().replace(/^0x/i, '').toLowerCase();
+  if (!/^[0-9a-h]+$/.test(code) || code.length > cells) return null;
+  return [...code.padStart(cells, '0')].map(char => {
+    const exponent = PRACTICE_CODE_ALPHABET.indexOf(char);
+    return exponent === 0 ? 0 : 2 ** exponent;
+  });
 }
 export function nodeTime(ms) {
   const value = Math.max(0, Math.round(ms));

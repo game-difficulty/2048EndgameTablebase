@@ -50,7 +50,7 @@
             </HumanBoard>
 
             <div class="game-details"><template v-if="practice">
-              <form class="practice-position" @submit.prevent="setPracticeBoard"><input v-model="practiceHex" :aria-label="t(&quot;练习局面编码&quot;)" :placeholder="t(displayBoard.some(v => v > 32768) ? '当前局面含大于 32k 的棋块，无法用短编码表示' : '输入局面编码')" autocomplete="off" spellcheck="false" @focus="$event.target.select()"><button type="submit">{{ t("设置局面") }}</button></form>
+              <form class="practice-position" @submit.prevent="setPracticeBoard"><input v-model="practiceHex" :aria-label="t(&quot;练习局面编码&quot;)" :placeholder="t(displayBoard.some(v => v > 131072) ? '当前局面含大于 131k 的棋块，无法用短编码表示' : '输入局面编码')" autocomplete="off" spellcheck="false" @focus="$event.target.select()"><button type="submit">{{ t("设置局面") }}</button></form>
               <p v-if="practiceError" class="error-text" role="alert">{{ t(practiceError) }}</p>
               <div class="practice-palette"><div class="palette-heading"><strong>{{ t("棋块调色盘") }}</strong><label><input v-model="hide32k" type="checkbox" @change="focusPracticeBoard">{{ t("隐藏 32k") }}</label><span class="palette-status" :style="selectedTile === null ? {} : tileStyle(selectedTile)">{{ t(selectedTile === null ? '浏览' : selectedTile === 0 ? '擦除' : selectedTile) }}</span></div>
                 <div class="palette-grid"><button v-for="value in PRACTICE_PALETTE" :key="value" type="button" :class="{ selected: selectedTile === value }" :style="tileStyle(value)" :aria-label="t(value ? `选择棋块 ${value}` : '擦除')" :aria-pressed="selectedTile === value" @click="togglePalette(value)"><span class="palette-label">{{ t(value === 0 ? '擦除' : value >= 1024 ? `${value / 1024}k` : value) }}</span></button></div>
@@ -360,7 +360,7 @@ function focusPracticeBoard() { nextTick(() => humanBoard.value?.$el?.focus()); 
 function setPracticeBoard() {
   if (!practice.value) return;
   const board = parsePracticeHex(practiceHex.value, practice.value.board.length);
-  if (!board) { practiceError.value = `请输入不超过 ${practice.value.board.length} 位的十六进制局面编码。`; return; }
+  if (!board) { practiceError.value = `请输入不超过 ${practice.value.board.length} 位、仅含 0–9 与 a–h 的局面编码。`; return; }
   rememberPractice(); selectedTile.value = null; practiceError.value = '';
   practiceTransition.value = null;
   practice.value = { ...practice.value, board, score: 0, pending: false };

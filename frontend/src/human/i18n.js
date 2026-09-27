@@ -140,7 +140,7 @@ const en = {
   '确定重置练习局面？':'Reset this practice position?', '当前练习会回到进入练习板时的局面。':'Practice will return to its starting position.',
   '当前是练习板':'You are on the practice board', '你已在练习板走过 40 步。练习出数独立随机，不会计入正式对局。':'You have made more than 40 moves on the practice board. Its tile spawns are independently random, and these moves do not count toward your ranked game.',
   '继续练习':'Keep practicing', '重置练习':'Reset practice', '尚无已验证成绩':'No verified scores yet', '访客练习':'Guest play', '正式对局':'Ranked game',
-  '新游戏':'New game', '检查中…':'Checking…', '重新检查':'Check again', '当前局面含大于 32k 的棋块，无法用短编码表示':'Tiles above 32k cannot be represented by a short position code',
+  '新游戏':'New game', '检查中…':'Checking…', '重新检查':'Check again', '当前局面含大于 131k 的棋块，无法用短编码表示':'Tiles above 131k cannot be represented by a short position code',
   '输入局面编码':'Enter position code', '浏览':'Browse', '擦除':'Erase', '选择棋块开始摆盘，再点一次回到浏览。':'Select a tile to edit. Select it again to browse.',
   '左键涂棋块 · 右键升一级 · 中键降一级':'Left: paint · Right: increase · Middle: decrease', '当前局面已无有效移动':'No moves available',
   '独立随机出数，原局保持不变':'Independent random tiles; original game unchanged', '当前为访客练习。登录后开始正式对局，保留战绩与回放。':'Guest play. Sign in for ranked games, stats and saved replays.',
@@ -171,7 +171,7 @@ const en = {
   '高分对局需要联网，连接恢复后可继续。':'High-score games require a connection. Play can resume when connected.', '连接暂不可用':'Connection unavailable', '空格':'empty',
   'Enter 重做 · Backspace 撤销':'Enter to redo · Backspace to undo',
   '选择棋块 {0}':'Select tile {0}', '第 {0} 行第 {1} 列，{2}':'Row {0}, column {1}, {2}', '{0} 行 {1} 列棋盘':'{0} rows × {1} columns',
-  '请输入不超过 {0} 位的十六进制局面编码。':'Enter a hexadecimal position code of at most {0} digits.',
+  '请输入不超过 {0} 位、仅含 0–9 与 a–h 的局面编码。':'Enter a position code of at most {0} characters using only 0–9 and a–h.',
   '超过 {0} 分后需保持联网，定期留档。四种变体各自保存。':'Above {0} points, stay online for periodic recording. Each variant is saved separately.',
   '{0} 分 · {1}':'{0} points · {1}', '历史回放仍在本地，待补传：{0}':'Replays are saved locally, awaiting upload: {0}',
 };

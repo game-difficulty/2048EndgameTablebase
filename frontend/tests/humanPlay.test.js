@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { move, VARIANTS, DIRECTIONS, initialState, nextMove, initialHash, eventHash, buildReplay, eventBytes, randomSpawn } from '../src/human/engine.js';
-import { createPracticeMoveReminder, practiceCellValue, practiceBoardHex, parsePracticeHex, nodeTime } from '../src/human/practice.js';
+import { PRACTICE_PALETTE, createPracticeMoveReminder, practiceCellValue, practiceBoardHex, parsePracticeHex, nodeTime } from '../src/human/practice.js';
 import { humanBoardFrame, paddedBoard } from '../src/human/boardAnimation.js';
 import { createTerminalOverlay, TERMINAL_OVERLAY_DELAY_MS } from '../src/human/terminalOverlay.js';
 const seed = '00000001000000020000000300000004';
@@ -83,10 +83,15 @@ test('position codes preserve main-site order and rectangular cell counts', () =
   const board=[0,4,4,8,32768,0,2,0];
   assert.equal(practiceBoardHex(board),'0223f010');
   assert.deepEqual(parsePracticeHex('0x0223f010',8),board);
+  assert.equal(practiceBoardHex([65536,131072]),'gh');
+  assert.deepEqual(parsePracticeHex('gh',2),[65536,131072]);
   assert.deepEqual(parsePracticeHex('1',8),[0,0,0,0,0,0,0,2]);
   assert.equal(parsePracticeHex('100000000',8),null);
   assert.equal(parsePracticeHex('hjkl',8),null);
-  assert.equal(practiceBoardHex([65536,2]),'');
+  assert.equal(parsePracticeHex('i',8),null);
+  assert.equal(practiceBoardHex([262144,2]),'');
+  assert.equal(PRACTICE_PALETTE.at(-1),32768);
+  assert.equal(PRACTICE_PALETTE.includes(65536),false);
 });
 test('practice reminder fires after 40 moves once per source position, even after undo and reset', () => {
   const reminder = createPracticeMoveReminder();
