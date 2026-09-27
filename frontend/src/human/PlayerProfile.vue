@@ -39,11 +39,11 @@
         <span class="variant-tag">{{ item.variant.replace('x',' × ') }}</span>
         <div class="profile-history-main">
           <div><strong>{{ number(item.score) }}</strong><small>{{ date(item.ended_at) }} <span v-if="item.source === 'verse'">· 2048Verse</span><span v-else-if="item.source === 'manual'">· {{ t('补录') }}</span></small></div>
-          <button type="button" :aria-expanded="preview?.id === item.id" aria-controls="history-board-preview" @click="togglePreview(item,$event)">{{ t('终盘预览') }}</button>
+          <button type="button" class="history-preview-button" :aria-expanded="preview?.id === item.id" aria-controls="history-board-preview" @click="togglePreview(item,$event)">{{ t('终盘预览') }}</button>
         </div>
         <div class="profile-history-actions">
-          <button :disabled="!item.has_replay" :title="item.has_replay ? '' : t('无回放')" @click="$emit('replay',item)">{{ t('回放 ↗') }}</button>
-          <button :disabled="!item.has_replay" :title="item.has_replay ? '' : t('无回放')" @click="$emit('analyze',item)">{{ t(isOwner ? '分析' : '帮 TA 分析') }}</button>
+          <button v-if="item.has_replay" @click="$emit('replay',item)">{{ t('回放 ↗') }}</button>
+          <button v-if="item.has_replay" @click="$emit('analyze',item)">{{ t(isOwner ? '分析' : '帮 TA 分析') }}</button>
           <label v-if="isOwner && item.source === 'verse' && !item.has_replay" class="text-button">{{ t('补充回放') }}<input type="file" accept=".vrs,.txt" hidden @change="attachReplay(item,$event)"></label>
           <button v-if="isOwner" type="button" class="history-delete-button" :title="t('删除记录')" :aria-label="`${t('删除记录')}：${number(item.score)} ${t('分')}`" @click="askDelete(item)"><Trash2 :size="16" aria-hidden="true" /></button>
         </div>

@@ -528,6 +528,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .profile-history-row button:disabled { opacity: .35; }
 .profile-history-main { display: flex; align-items: center; gap: 20px; min-width: 0; }
 .profile-history-main>div { min-width: 0; }
+.history-preview-button { white-space: nowrap; }
 .profile-history-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
 .profile-history-actions .history-delete-button { width: 32px; min-width: 32px; height: 32px; padding: 0; color: var(--muted); background: transparent; border: 1px solid transparent; }
 .profile-history-actions .history-delete-button:hover:not(:disabled),.profile-history-actions .history-delete-button:focus-visible { color: var(--danger); background: color-mix(in srgb,var(--danger) 10%,transparent); border-color: color-mix(in srgb,var(--danger) 38%,var(--line)); }
