@@ -72,6 +72,7 @@ class Writer(BaseModel):
 
 class PlayerSettings(BaseModel):
     display_thresholds: Dict[str, int]
+    timer_splits: Dict[str, list[str]] | None = None
 
 
 class HumanLiveControl(BaseModel):
@@ -348,7 +349,7 @@ async def archive_application_submit(request: Request, variant: str,
 
 @router.put('/me/settings')
 def save_player_settings(payload: PlayerSettings, request: Request):
-    return call(service.save_player_settings, require_user(request)['id'], payload.display_thresholds)
+    return call(service.save_player_settings, require_user(request)['id'], payload.display_thresholds, payload.timer_splits)
 
 
 @router.get('/users/{username}/history')

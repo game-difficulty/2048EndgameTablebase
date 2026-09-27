@@ -30,9 +30,17 @@ from .storage import (
     resolve_avatar_key,
 )
 from .preferences import get_preferences, patch_preferences
+from . import themes as saved_themes
 
 
 router = APIRouter(tags=["profile"])
+
+
+def _theme_call(function, *args):
+    try:
+        return function(*args)
+    except saved_themes.ThemeError as exc:
+        raise HTTPException(exc.status, detail=exc.code) from exc
 
 
 @router.get("/api/profile/preferences")
@@ -54,6 +62,41 @@ async def save_preferences(request: Request, response: Response, payload: dict =
         )
     except ValueError as exc:
         raise HTTPException(422, detail="invalid_preferences") from exc
+
+
+@router.get("/api/profile/themes")
+async def read_saved_themes(request: Request, response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    return await asyncio.to_thread(_theme_call, saved_themes.list_themes, require_user(request)["id"])
+
+
+@router.post("/api/profile/themes", status_code=201)
+async def create_saved_theme(request: Request, payload: dict = Body(...)):
+    if set(payload) != {"name", "theme"}:
+        raise HTTPException(422, detail="invalid_theme_file")
+    return await asyncio.to_thread(
+        _theme_call, saved_themes.create_theme, require_user(request)["id"], payload["name"], payload["theme"]
+    )
+
+
+@router.get("/api/profile/themes/{theme_id}")
+async def read_saved_theme(theme_id: int, request: Request, response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
+    return await asyncio.to_thread(_theme_call, saved_themes.get_theme, require_user(request)["id"], theme_id)
+
+
+@router.put("/api/profile/themes/{theme_id}")
+async def change_saved_theme(theme_id: int, request: Request, payload: dict = Body(...)):
+    if set(payload) != {"name", "theme"}:
+        raise HTTPException(422, detail="invalid_theme_file")
+    return await asyncio.to_thread(
+        _theme_call, saved_themes.update_theme, require_user(request)["id"], theme_id, payload["name"], payload["theme"]
+    )
+
+
+@router.delete("/api/profile/themes/{theme_id}", status_code=204)
+async def remove_saved_theme(theme_id: int, request: Request):
+    await asyncio.to_thread(_theme_call, saved_themes.delete_theme, require_user(request)["id"], theme_id)
 
 
 _RATE_WINDOW_SECONDS = 60 * 60

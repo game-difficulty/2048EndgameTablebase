@@ -8,7 +8,7 @@ import { ensureStoredLanguage } from './languagePreference.js';
 
 export const ACCOUNT_GLOBAL_KEYS = Object.freeze([
   'language', 'dark_mode', 'theme', 'use_custom_theme', 'custom_colors',
-  'font_size_factor', 'ui_scale', 'do_animation',
+  'font_size_factor', 'ui_scale', 'do_animation', 'saved_theme_id',
 ]);
 export const ACCOUNT_HUMAN_KEYS = Object.freeze([
   'alwaysConfirmRestart', 'showSpeed', 'showFourPercent',
@@ -50,6 +50,8 @@ function normalized(source) {
       const min = key === 'font_size_factor' ? 50 : 90;
       const max = key === 'font_size_factor' ? 150 : 125;
       if (Number.isInteger(value) && value >= min && value <= max && value % 5 === 0) result[key] = value;
+    } else if (key === 'saved_theme_id') {
+      if (Number.isInteger(value) && value >= 0) result[key] = value;
     } else if (key === 'custom_colors' && Array.isArray(value) && value.length > 0 && value.length <= 36) {
       const colors = Array.from({ length: 36 }, (_, index) => value[index] || palette[index] || '#000000');
       if (colors.every(color => typeof color === 'string' && /^#[\da-f]{6}$/i.test(color))) result[key] = colors;

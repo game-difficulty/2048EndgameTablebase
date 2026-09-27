@@ -26,8 +26,9 @@ function harness(initial = {}) {
     createWsClient: options => { transport = options; return { connect() {}, send() { return true; } }; },
     normalizeBCFamilyModulus: value => value,
     applyTileColors() {}, resolveTileColors: value => value, writeSharedTilePalette() {},
+    applyActiveSavedTheme() { return Promise.resolve(true); }, clearSavedThemeStyles() {},
     ACCOUNT_GLOBAL_KEYS: ['language', 'dark_mode', 'theme', 'use_custom_theme', 'custom_colors',
-      'font_size_factor', 'ui_scale', 'do_animation'],
+      'font_size_factor', 'ui_scale', 'do_animation', 'saved_theme_id'],
     saveAccountPreferences() {},
   };
   vm.createContext(context);

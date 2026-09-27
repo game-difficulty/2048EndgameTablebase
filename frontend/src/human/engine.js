@@ -79,9 +79,33 @@ export function nextMove(run, direction, delta, nodes = NODE_TILES) {
   const spawn = seededSpawn(moved.board, rng);
   const event = [direction | (spawn.index << 2) | (spawn.value === 4 ? 64 : 0), delta];
   const state = { ...run, board: moved.board, score: run.score + moved.score, rng: rng.exportState(),
-    seq: run.seq + 1, elapsed: run.elapsed + delta, nodes: { ...run.nodes } };
+    seq: run.seq + 1, elapsed: run.elapsed + delta, nodes: { ...run.nodes }, splitTimes: { ...(run.splitTimes || {}) } };
   for (const tile of nodes) if (state.board.includes(tile) && !state.nodes[tile]) state.nodes[tile] = { seq: state.seq, elapsed: state.elapsed };
+  if (Array.isArray(run.timerSplits)) {
+    for (const expression of run.timerSplits) if (!state.splitTimes[expression] && splitReached(state.board, expression)) state.splitTimes[expression] = { seq: state.seq, elapsed: state.elapsed };
+  }
   return { state, event };
+}
+
+function splitReached(board, expression) {
+  const requested = String(expression).split('+').map(Number); const counts = new Map();
+  board.forEach(value => counts.set(value, (counts.get(value) || 0) + 1));
+  for (const value of requested) {
+    if (counts.get(value)) counts.set(value, counts.get(value) - 1);
+    else if ([...counts].some(([tile, count]) => count > 0 && tile > value)) return true;
+    else return false;
+  }
+  return true;
+}
+
+export function rebuildTimerSplitTimes(runId, variant, seed, events, timerSplits) {
+  let state = { ...initialState(runId, variant, seed), variant, timerSplits, splitTimes: {} };
+  for (const event of events) {
+    const next = nextMove(state, event[0] & 3, event[1]);
+    if (!next || next.event[0] !== event[0]) throw new Error('invalid_replay_move');
+    state = next.state;
+  }
+  return state.splitTimes;
 }
 
 export function parseReplay(buffer) {

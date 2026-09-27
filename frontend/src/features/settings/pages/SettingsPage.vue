@@ -104,14 +104,14 @@
                   v-for="themeName in themes"
                   :key="themeName"
                   @click="setTheme(themeName)"
-                  :class="['px-3 py-1.5 rounded-md ui-control font-bold transition-all border', (config.theme === themeName && !config.use_custom_theme) ? 'surface-prominent text-white shadow-md' : 'bg-bg-main text-text-main border-border-main hover:border-accent/40']"
+                  :class="['px-3 py-1.5 rounded-md ui-control font-bold transition-all border', (config.theme === themeName && !config.use_custom_theme && !config.saved_theme_id) ? 'surface-prominent text-white shadow-md' : 'bg-bg-main text-text-main border-border-main hover:border-accent/40']"
                 >
                   {{ themeName }}
                 </button>
 
                 <button
                   @click="setCustomMode"
-                  :class="['px-3 py-1.5 rounded-md ui-control font-bold transition-all border', config.use_custom_theme ? 'surface-prominent text-white shadow-md' : 'bg-bg-main text-text-main border-border-main hover:border-accent/40']"
+                  :class="['px-3 py-1.5 rounded-md ui-control font-bold transition-all border', (config.use_custom_theme && !config.saved_theme_id) ? 'surface-prominent text-white shadow-md' : 'bg-bg-main text-text-main border-border-main hover:border-accent/40']"
                 >
                   {{ $t('settings.theme.custom_label') || 'Custom' }}
                 </button>

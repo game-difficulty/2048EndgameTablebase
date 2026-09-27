@@ -135,8 +135,12 @@ def init_db():
             db.execute("ALTER TABLE human_runs DROP COLUMN archive_hash")
         db.execute("""CREATE TABLE IF NOT EXISTS human_player_settings (
             user_id INTEGER PRIMARY KEY,
-            display_thresholds TEXT NOT NULL DEFAULT '{}'
+            display_thresholds TEXT NOT NULL DEFAULT '{}',
+            timer_splits TEXT NOT NULL DEFAULT '{}'
         )""")
+        settings_columns = {row[1] for row in db.execute("PRAGMA table_info(human_player_settings)")}
+        if "timer_splits" not in settings_columns:
+            db.execute("ALTER TABLE human_player_settings ADD COLUMN timer_splits TEXT NOT NULL DEFAULT '{}'")
         from backend.rolling_leaderboards import init_schema as init_rolling_schema
         init_rolling_schema(db)
         from .manual_archive import init_schema as init_manual_archive_schema

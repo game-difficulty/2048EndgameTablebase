@@ -13,12 +13,14 @@
       <label class="setting-line setting-checkbox"><strong>{{ t('重开确认') }}</strong><input type="checkbox" :checked="!!playSettings.alwaysConfirmRestart" @change="updatePlay({alwaysConfirmRestart:$event.target.checked})"></label>
       <label class="setting-line"><strong>{{ t('滑动灵敏度') }} <output>{{ playSettings.swipeSensitivity || 100 }}%</output></strong><input type="range" min="50" max="200" step="5" :value="playSettings.swipeSensitivity || 100" @input="updatePlay({swipeSensitivity:+$event.target.value})"></label>
       <div class="setting-line"><strong>{{ t('成绩展示阈值') }}</strong><p>{{ t('新局开始时固定展示阈值。所有正式对局仍会上传留存；低于阈值的记录不会显示在主页或榜单。') }}</p><div class="threshold-grid"><label v-for="variant in variants" :key="variant">{{ variant }} <input type="number" min="0" max="100000000" step="1" v-model.number="thresholds[variant]" @change="saveThresholds"></label></div><small v-if="thresholdError" role="alert">{{ t(thresholdError) }}</small></div>
+      <div class="setting-line timer-split-settings"><strong>{{ t('自定义计时节点') }}</strong><p>{{ t('每行一个节点，可使用 512+256。复合节点显示最后一个棋块并向右缩进；修改从下一局开始生效。') }}</p><div class="settings-options"><button v-for="variant in variants" :key="variant" type="button" :class="{active:timerVariant===variant}" @click="timerVariant=variant">{{ variant.replace('x',' × ') }}</button></div><textarea v-model="timerDrafts[timerVariant]" rows="12" spellcheck="false" :aria-label="t('自定义计时节点')"></textarea><div class="timer-split-actions"><small>{{ t('最多 32 行；每行最多 8 个棋块。') }}</small><button type="button" @click="saveTimerSettings">{{ t('保存计时节点') }}</button></div><small v-if="timerError" role="alert">{{ t(timerError) }}</small></div>
       <label class="setting-line setting-checkbox"><strong>{{ t('显示每秒输入／移动次数') }}</strong><input type="checkbox" :checked="!!playSettings.showSpeed" @change="updatePlay({showSpeed:$event.target.checked})"></label>
       <label class="setting-line setting-checkbox"><strong>{{ t('显示出 4 比例') }}</strong><input type="checkbox" :checked="!!playSettings.showFourPercent" @change="updatePlay({showFourPercent:$event.target.checked})"></label>
       <label class="setting-line setting-checkbox"><span><strong>{{ t('允许今后的对局分析公开展示') }}</strong><small>{{ t('关闭只影响以后首次生成的分析；已经公开的分析不会撤回。') }}</small></span><input type="checkbox" :checked="playSettings.share_play_analysis !== false" @change="updatePlay({share_play_analysis:$event.target.checked})"></label>
     </div>
-    <div v-else class="settings-rows"><div class="setting-line"><strong>{{ t('全局主题') }}</strong><div class="theme-choices"><button v-for="name in themeNames" :key="name" :class="{active:!preferences.use_custom_theme && preferences.theme===name}" @click="selectTheme(name)">{{ name }}</button><button :class="{active:preferences.use_custom_theme}" @click="savePreference('use_custom_theme',true)">✨{{ t('用户自定义') }}</button></div></div>
+    <div v-else class="settings-rows"><div class="setting-line"><strong>{{ t('全局主题') }}</strong><div class="theme-choices"><button v-for="name in themeNames" :key="name" :class="{active:!preferences.saved_theme_id && !preferences.use_custom_theme && preferences.theme===name}" @click="selectTheme(name)">{{ name }}</button><button :class="{active:!preferences.saved_theme_id && preferences.use_custom_theme}" @click="savePreference('use_custom_theme',true)">✨{{ t('用户自定义') }}</button></div></div>
       <div class="setting-line"><strong>{{ t('方块颜色自定义') }}</strong><div class="custom-colors"><label v-for="index in 16" :key="index"><span>{{ 2**index }}</span><input type="color" :value="customColors[index-1]" @input="changeColor(index-1,$event.target.value)"></label></div></div>
+      <div class="setting-line"><SavedThemeLibrary /></div>
     </div>
     <section v-if="section === 'game'" class="settings-rows verse-claim-settings">
       <h3>{{ t('继承 2048Verse 历史') }}</h3>
@@ -80,6 +82,8 @@ import { resolveTileColors } from '../utils/tileColors.js';
 import { json, request } from './client.js';
 import { t, language, setLanguage } from './i18n.js';
 import { preferenceSyncStatus, refreshAccountPreferences, retryAccountPreferences, saveAccountPreferences } from '../services/preferences/accountPreferences.js';
+import SavedThemeLibrary from './SavedThemeLibrary.vue';
+import { DEFAULT_TIMER_SPLITS, normalizeTimerSplits, saveTimerSplits } from './timerSplits.js';
 const props=defineProps({playSettings:{type:Object,required:true}});
 const emit=defineEmits(['update:play-settings']);
 const store=createLocalStorageStore({key:'user-preferences',version:1,defaultValue:{}});
@@ -93,6 +97,8 @@ const archiveApplications=ref([]), archiveDialog=ref(false), archiveBusy=ref(fal
 const archiveFile=ref(null), archiveForm=reactive({variant:'4x4',endedAt:'',score:0});
 const archiveStatus={pending:'等待站长审核',approved:'已批准并归档',rejected:'申请已拒绝',revoked:'归档资格已撤销'};
 const thresholds=reactive({'4x4':0,'3x4':0,'2x4':0,'3x3':0});
+const timerVariant=ref('4x4'),timerError=ref('');
+const timerDrafts=reactive(Object.fromEntries(variants.map(variant=>[variant,DEFAULT_TIMER_SPLITS[variant].join('\n')])));
 const customColors=reactive(Array.from({length:16},(_,i)=>preferences.value.custom_colors?.[i] || themes.Default[i]));
 function claimDate(seconds){return seconds?new Date(seconds*1000).toLocaleString(language.value==='zh'?'zh-CN':'en-US'):'—';}
 const formatNumber=value=>new Intl.NumberFormat(language.value==='zh'?'zh-CN':'en-US').format(Number(value)||0);
@@ -107,12 +113,12 @@ function refreshPreferences(){
 function updatePlay(changes){emit('update:play-settings',{...props.playSettings,...changes});}
 function savePreference(key,value){
   preferences.value=store.update(current=>{
-    if(key==='use_custom_theme') return {...current,use_custom_theme:true,colors:current.custom_colors || themes.Default};
+    if(key==='use_custom_theme') return {...current,use_custom_theme:true,saved_theme_id:0,colors:current.custom_colors || themes.Default};
     return {...current,[key]:value};
   });
   if(key==='language')setLanguage(value);
   saveAccountPreferences(key==='use_custom_theme'
-    ? {use_custom_theme:true,custom_colors:preferences.value.custom_colors || themes.Default}
+    ? {use_custom_theme:true,saved_theme_id:0,custom_colors:preferences.value.custom_colors || themes.Default}
     : {[key]:value});
   if(key==='theme'||key==='use_custom_theme'||key==='custom_colors'||key==='dark_mode'||key==='font_size_factor'||key==='ui_scale'||key==='do_animation'){
     if(key==='theme')writeSharedTilePalette(resolveTileColors(themes[value]));
@@ -121,17 +127,17 @@ function savePreference(key,value){
   }
 }
 function selectTheme(name){
-  preferences.value=store.update(current=>({...current,theme:name,use_custom_theme:false,colors:themes[name]}));
+  preferences.value=store.update(current=>({...current,theme:name,use_custom_theme:false,saved_theme_id:0,colors:themes[name]}));
   writeSharedTilePalette(resolveTileColors(themes[name]));
-  saveAccountPreferences({theme:name,use_custom_theme:false});
+  saveAccountPreferences({theme:name,use_custom_theme:false,saved_theme_id:0});
   window.dispatchEvent(new Event('human-preferences-changed'));
 }
 function changeColor(index,color){
   customColors[index]=color;
   const all=Array.from({length:36},(_,i)=>i<16?customColors[i]:preferences.value.custom_colors?.[i]||themes.Default[i]);
-  preferences.value=store.update(current=>({...current,custom_colors:all,colors:all,use_custom_theme:true}));
+  preferences.value=store.update(current=>({...current,custom_colors:all,colors:all,use_custom_theme:true,saved_theme_id:0}));
   writeSharedTilePalette(resolveTileColors(all));
-  saveAccountPreferences({custom_colors:all,use_custom_theme:true});
+  saveAccountPreferences({custom_colors:all,use_custom_theme:true,saved_theme_id:0});
   window.dispatchEvent(new Event('human-preferences-changed'));
 }
 async function saveThresholds(){
@@ -140,6 +146,13 @@ async function saveThresholds(){
   }
   try{await json('/api/human/me/settings',{method:'PUT',body:{display_thresholds:Object.fromEntries(variants.map(v=>[v,thresholds[v]]))}});thresholdError.value='';}
   catch{thresholdError.value='展示阈值保存失败，请检查网络后重试。';}
+}
+function timerPayload(){return normalizeTimerSplits(Object.fromEntries(variants.map(variant=>[variant,timerDrafts[variant].split(/\r?\n/).map(value=>value.trim()).filter(Boolean)])));}
+async function saveTimerSettings(){
+  timerError.value='';let splits;
+  try{splits=timerPayload();}catch{timerError.value='计时节点格式无效。';return;}
+  try{const data=await json('/api/human/me/settings',{method:'PUT',body:{display_thresholds:Object.fromEntries(variants.map(v=>[v,thresholds[v]])),timer_splits:splits}});saveTimerSplits(data.timer_splits||splits);for(const variant of variants)timerDrafts[variant]=(data.timer_splits?.[variant]||splits[variant]).join('\n');}
+  catch{timerError.value='计时节点保存失败，请检查网络后重试。';}
 }
 async function loadVerseClaim(){
   verseBusy.value=true;verseError.value='';
@@ -183,7 +196,7 @@ onMounted(async()=>{
   window.addEventListener('focus',refreshPreferences);
   window.addEventListener('storage',refreshPreferences);
   window.addEventListener('account-preferences-changed',refreshPreferences);
-  try{const data=await json('/api/human/me/settings');Object.assign(thresholds,data.display_thresholds||{});}
+  try{const data=await json('/api/human/me/settings');Object.assign(thresholds,data.display_thresholds||{});const splits=saveTimerSplits(data.timer_splits);for(const variant of variants)timerDrafts[variant]=splits[variant].join('\n');}
   catch{thresholdError.value='无法读取展示阈值，请检查网络后重试。';}
   loadVerseClaim();loadArchiveApplications();
 });

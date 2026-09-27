@@ -21,8 +21,8 @@
             <div class="timer-row"><div class="timer">{{ duration(elapsed) }}</div><span class="muted small">{{ number(run?.seq || 0) }}{{ t(" 步") }}</span></div></div>
             <div class="milestone-heading"><span>{{ t("首次达成") }}</span><span>{{ t("用时") }}</span></div>
             <div class="side-body milestone-list" role="region" :aria-label="t(&quot;节点用时列表&quot;)" tabindex="0">
-            <div v-for="tile in visibleNodes" :key="tile" class="milestone" :class="{ reached: run?.nodes[tile] }">
-              <span class="node-tile" :class="{ 'node-tile-large': tile >= 1024, 'node-tile-huge': tile >= 16384 }" :style="tileStyle(tile)">{{ tile }}</span><strong class="node-time">{{ run?.nodes[tile] ? nodeTime(run.nodes[tile].elapsed) : '—' }}</strong>
+            <div v-for="row in visibleNodeRows" :key="row.key" class="milestone" :class="{ reached: row.time }">
+              <span class="node-tile" :class="{ 'node-tile-large': row.tile >= 1024, 'node-tile-huge': row.tile >= 16384 }" :style="[tileStyle(row.tile),{'--node-indent':`${Math.min(row.depth,4)*5}px`}]">{{ row.tile }}</span><strong class="node-time">{{ row.time ? nodeTime(row.time.elapsed) : '—' }}</strong>
             </div>
             </div>
             <div class="panel-footer timing-note">{{ t("练习与暂停计入连续用时。") }}</div>
@@ -100,7 +100,7 @@
       <template v-else-if="modal === 'settings'"><h2>{{ t("设置") }}</h2><p v-if="preferenceSyncStatus === 'error'" role="alert">{{ language === 'zh' ? '账号设置尚未同步，请检查网络。' : 'Account settings have not synced. Check your connection.' }} <button @click="retryAccountPreferences">{{ language === 'zh' ? '重试' : 'Retry' }}</button></p>
         <section class="live-setting"><div><strong>{{ t('直播当前对局') }}</strong><p>{{ t('开启后会创建公开直播间。关闭或离开直播不会影响本局操作。') }}</p></div><label class="setting-toggle"><input type="checkbox" :checked="live.enabled.value" :disabled="!user || !run || !!run?.reason || live.state.value === 'connecting'" @change="toggleLive($event.target.checked)"></label></section>
         <div v-if="live.enabled.value" class="live-setting-status"><span :class="['live-dot',{on:live.state.value==='live'}]"></span><span>{{ t(liveStateLabel) }}<small v-if="run">{{ run.variant.replace('x',' × ') }} · {{ number(run.score) }} {{ t('分') }}</small></span><button v-if="live.room.value" @click="live.share(language)">{{ t('分享直播间') }}</button><a v-if="live.room.value" :href="live.room.value.url" target="_blank" rel="noopener">{{ t('打开直播间') }} ↗</a></div><p v-if="live.notice.value" class="setting-help">{{ t(live.notice.value) }}</p><p class="setting-help">{{ t('直播会公开昵称、头像、棋盘、分数、节点用时和操作') }}</p><p class="setting-help">{{ t('礼物实际消耗的常驻 Token 部分，将有 50% 计入主播的常驻 Token。') }}</p>
-        <label class="theme-setting language-setting">{{ t("语言") }}<select :value="language" :aria-label="t('语言')" @change="setLanguage($event.target.value)"><option value="zh">简体中文</option><option value="en">English</option></select></label><label class="setting-toggle"><span>{{ t("深色模式") }}</span><input type="checkbox" :checked="darkMode" @change="setDarkMode($event.target.checked)"></label><label class="setting-toggle"><span>{{ t("重开确认") }}</span><input type="checkbox" :checked="alwaysConfirmRestart" @change="updatePlaySettings({...playSettings,alwaysConfirmRestart:$event.target.checked})"></label><p class="setting-help">{{ t("开启后，每次重开都先确认。") }}</p><label class="theme-setting">{{ t("棋块主题") }}<select :value="themeName" :aria-label="t(&quot;棋块主题&quot;)" @change="chooseTheme($event.target.value)"><option v-if="themeName === 'custom'" value="custom">{{ t("主站自定义配色") }}</option><option v-for="name in themeNames" :key="name" :value="name">{{ name }}</option></select></label><div class="theme-preview"><span v-for="value in PRACTICE_PALETTE.slice(1)" :key="value" :style="tileStyle(value)">{{ value >= 1024 ? `${value / 1024}k` : value }}</span></div><p>{{ t("棋盘、节点用时和调色盘使用同一套配色。") }}</p></template>
+        <label class="theme-setting language-setting">{{ t("语言") }}<select :value="language" :aria-label="t('语言')" @change="setLanguage($event.target.value)"><option value="zh">简体中文</option><option value="en">English</option></select></label><label class="setting-toggle"><span>{{ t("深色模式") }}</span><input type="checkbox" :checked="darkMode" @change="setDarkMode($event.target.checked)"></label><label class="setting-toggle"><span>{{ t("重开确认") }}</span><input type="checkbox" :checked="alwaysConfirmRestart" @change="updatePlaySettings({...playSettings,alwaysConfirmRestart:$event.target.checked})"></label><p class="setting-help">{{ t("开启后，每次重开都先确认。") }}</p><label class="theme-setting">{{ t("棋块主题") }}<select :value="themeName" :aria-label="t(&quot;棋块主题&quot;)" @change="chooseTheme($event.target.value)"><option v-if="themeName === 'custom'" value="custom">{{ t("主站自定义配色") }}</option><option v-for="name in themeNames" :key="name" :value="name">{{ name }}</option></select></label><div class="theme-preview"><span v-for="value in THEME_TILE_VALUES" :key="value" :style="tileStyle(value)">{{ value }}</span></div><p>{{ t("棋盘、节点用时和调色盘使用同一套配色。") }}</p></template>
       <template v-else-if="modal === 'practice-reminder'"><h2>{{ t('当前是练习板') }}</h2><p>{{ t('你已在练习板走过 40 步。练习出数独立随机，不会计入正式对局。') }}</p><div class="modal-actions"><button class="primary" @click="closeModal(); returnToGame()">{{ t('返回正式局 →') }}</button><button ref="safeButton" @click="closeModal">{{ t('继续练习') }}</button></div></template>
     </section></div>
     <HumanAnalysisDialog v-if="analysisRunId" :run-id="analysisRunId" @close="analysisRunId = ''" />
@@ -126,6 +126,8 @@ import { createLocalStorageStore } from '../services/storage/localStorageStore.j
 import { activateAccountPreferences, preferenceSyncStatus, retryAccountPreferences, saveAccountPreferences } from '../services/preferences/accountPreferences.js';
 import { useHumanAppearance, tileStyle } from './appearance.js';
 import { PRACTICE_PALETTE, createPracticeMoveReminder, practiceCellValue, practiceBoardHex, parsePracticeHex, nodeTime } from './practice.js';
+import { VTH_TILE_VALUES as THEME_TILE_VALUES } from '../services/preferences/savedThemes.js';
+import { saveTimerSplits, timerSplitRow } from './timerSplits.js';
 import { t, language, setLanguage } from './i18n.js';
 import { exportCurrentReplay, openReplayViewer } from './replayExport.js';
 import { SPEED_REFRESH_MS, addSpeedSample, countSpeedSamples } from './speedMetrics.js';
@@ -209,9 +211,13 @@ watch(() => run.value?.seq, (next, old) => { if (next > old && run.value?.id) {
 const timingHidden = ref(!!layoutPrefs.timingHidden), rankingHidden = ref(!!layoutPrefs.rankingHidden);
 const boardHeight = ref(500);
 // 38px tile + 6px gap, with 8px padding and a 1px border on each side.
-const visibleNodes = computed(() => {
+const visibleNodeRows = computed(() => {
   const defaultCount = Math.max(0, Math.floor((boardHeight.value - 18 + 6) / 44));
-  return NODE_TILES.filter((tile, index) => index < defaultCount || run.value?.nodes?.[tile]);
+  const configured = run.value?.timerSplits || NODE_TILES.map(String);
+  return configured.map(expression => {
+    const row = timerSplitRow(expression);
+    return { ...row, time: run.value?.splitTimes?.[row.key] || (row.depth === 0 ? run.value?.nodes?.[row.tile] : null) };
+  }).filter((row, index) => index < defaultCount || row.time);
 });
 let boardObserver, boardResizeFallback;
 watch(humanBoard, board => {
@@ -261,6 +267,9 @@ async function boot() {
     ]);
     policies.value = nextPolicies; user.value = identity.user || null;
     void activateAccountPreferences(user.value?.id);
+    if (user.value) {
+      try { saveTimerSplits((await json('/api/human/me/settings')).timer_splits); } catch { /* cached/default splits remain usable */ }
+    }
     localPreview.value = !!preview.local_preview;
     if (location.pathname.startsWith('/user/') || location.pathname.startsWith('/leaderboard') || location.pathname.startsWith('/analysis')) {
       await route();
@@ -281,6 +290,7 @@ function openAuthDialog(mode = 'login') { authDialogMode.value = mode; authDialo
 function closeAuthDialog() { authDialogOpen.value = false; }
 async function handleAuthenticated(nextUser) {
   user.value = nextUser; closeAuthDialog(); void activateAccountPreferences(nextUser?.id); practice.value = null;
+  try { saveTimerSplits((await json('/api/human/me/settings')).timer_splits); } catch { /* retain local settings */ }
   displayCache.clear();
   if (!location.pathname.startsWith('/user/') && !location.pathname.startsWith('/leaderboard') && !location.pathname.startsWith('/analysis')) { await session.activate(); await Promise.all([loadBests(), loadBoard()]); }
 }

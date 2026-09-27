@@ -3,6 +3,7 @@ import * as engine from './engine.js';
 import * as storage from './storage.js';
 import { json, getStatus, upload } from './client.js';
 import { needsReplayUpload } from './archivePolicy.js';
+import { timerSplitsFor } from './timerSplits.js';
 
 export const messages = {
   rollback_detected: '检测到本地进度落后于服务器记录，本局已判定回档，不能继续排位。',
@@ -243,6 +244,7 @@ export function useHumanSession(user, policies) {
       id: descriptor.run_id, variant: variant.value, userId: account(), browser, seed: descriptor.seed,
       initialHash: hash, hash, threshold: descriptor.threshold, epoch: descriptor.epoch, writer: pending.writer,
       guest: !user.value, monitored: false, serverSeq: 0, firstMoveAt: null, lastActionAt: null, nodesVersion: 1,
+      timerSplits: timerSplitsFor(variant.value), splitTimes: {},
       fourCount: initial.board.filter(value => value === 4).length, spawnCount: 2 };
     events = []; await save(value); await storage.meta(`slot:${slot()}`, value.id); await storage.meta(key, null);
     missingId = null; gate.value = 'ready'; error.value = '';
@@ -276,6 +278,10 @@ export function useHumanSession(user, policies) {
           // Never replace board, score, sequence or RNG with server-side state.
           const replay = engine.buildReplay({ header: { run_id: local.id, variant: local.variant, seed: local.seed }, events });
           await save({ ...local, nodes: replay.final.nodes, nodesVersion: 1 });
+        }
+        if (!Array.isArray(local.timerSplits) || !local.splitTimes) {
+          const timerSplits = timerSplitsFor(local.variant);
+          await save({ ...run.value, timerSplits, splitTimes: engine.rebuildTimerSplitTimes(local.id, local.variant, local.seed, events, timerSplits) });
         }
         if (local.reason) { gate.value = 'ended'; void flushArchives(); return; }
         if (local.guest) { gate.value = 'ready'; return; }

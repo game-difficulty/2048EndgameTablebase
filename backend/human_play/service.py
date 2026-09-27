@@ -17,6 +17,7 @@ PERMIT_SECONDS = 12
 RUN_COLUMNS = "id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,created,ended,writer,epoch,permit_until,monitored,state,display_threshold,visible,source"
 SUMMARY_COLUMNS = "id,user_id,variant,state,ended,reason,eligibility,has_replay,source"
 HISTORY_COLUMNS = "id,variant,ended,reason,has_replay,source,json_extract(state,'$.score') AS score,json_extract(state,'$.board') AS board"
+DEFAULT_TIMER_SPLITS = {variant: [str(value) for value in engine.NODES[variant]] for variant in engine.VARIANTS}
 def rankable_sql(alias: str = "") -> str:
     """Return the shared public/rankable predicate, optionally table-qualified."""
     # Keep the default qualified as well: the predicate contains correlated
@@ -40,18 +41,60 @@ RANKABLE_SQL = rankable_sql()
 
 def player_settings(user_id):
     with database() as db:
-        row = db.execute("SELECT display_thresholds FROM human_player_settings WHERE user_id=?", (user_id,)).fetchone()
-    return {"display_thresholds": json.loads(row[0]) if row else {}}
+        row = db.execute("SELECT display_thresholds,timer_splits FROM human_player_settings WHERE user_id=?", (user_id,)).fetchone()
+    saved_splits = json.loads(row[1]) if row and row[1] else {}
+    return {"display_thresholds": json.loads(row[0]) if row else {},
+            "timer_splits": {variant: saved_splits.get(variant, values) for variant, values in DEFAULT_TIMER_SPLITS.items()}}
 
 
-def save_player_settings(user_id, thresholds):
+def _timer_split(value):
+    if not isinstance(value, str) or len(value) > 100:
+        raise RunError("invalid_timer_splits", 400)
+    parts = value.split("+")
+    if not 1 <= len(parts) <= 8:
+        raise RunError("invalid_timer_splits", 400)
+    numbers = []
+    for part in parts:
+        if not part.isdigit():
+            raise RunError("invalid_timer_splits", 400)
+        number = int(part)
+        if number < 2 or number > 2 ** 31 or number & (number - 1):
+            raise RunError("invalid_timer_splits", 400)
+        numbers.append(number)
+    if any(left < right for left, right in zip(numbers, numbers[1:])):
+        raise RunError("invalid_timer_splits", 400)
+    return "+".join(str(number) for number in numbers)
+
+
+def _timer_splits(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != set(engine.VARIANTS):
+        raise RunError("invalid_timer_splits", 400)
+    result = {}
+    for variant, splits in value.items():
+        if not isinstance(splits, list) or len(splits) > 32:
+            raise RunError("invalid_timer_splits", 400)
+        normalized = [_timer_split(split) for split in splits]
+        if len(set(normalized)) != len(normalized):
+            raise RunError("invalid_timer_splits", 400)
+        result[variant] = normalized
+    return result
+
+
+def save_player_settings(user_id, thresholds, timer_splits=None):
     if set(thresholds) != set(engine.VARIANTS) or any(type(v) is not int or not 0 <= v <= 100000000 for v in thresholds.values()):
         raise RunError("invalid_display_threshold", 400)
+    normalized_splits = _timer_splits(timer_splits)
     with database() as db:
-        db.execute("INSERT INTO human_player_settings(user_id,display_thresholds) VALUES(?,?) "
-                   "ON CONFLICT(user_id) DO UPDATE SET display_thresholds=excluded.display_thresholds",
-                   (user_id, json.dumps(thresholds, separators=(',', ':'))))
-    return {"display_thresholds": thresholds}
+        row = db.execute("SELECT timer_splits FROM human_player_settings WHERE user_id=?", (user_id,)).fetchone()
+        if normalized_splits is None:
+            normalized_splits = json.loads(row[0]) if row and row[0] else DEFAULT_TIMER_SPLITS
+        db.execute("INSERT INTO human_player_settings(user_id,display_thresholds,timer_splits) VALUES(?,?,?) "
+                   "ON CONFLICT(user_id) DO UPDATE SET display_thresholds=excluded.display_thresholds,timer_splits=excluded.timer_splits",
+                   (user_id, json.dumps(thresholds, separators=(',', ':')),
+                    json.dumps(normalized_splits, separators=(',', ':'))))
+    return {"display_thresholds": thresholds, "timer_splits": normalized_splits}
 
 
 class RunError(Exception):

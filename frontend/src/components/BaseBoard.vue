@@ -240,7 +240,7 @@ const getTileInnerStyle = (tile) => {
     color: `var(--color-text-${tile.value})`,
     boxShadow: glowRatio > 0
       ? `0 0 ${glowSpread} rgba(255, 214, 102, ${glowAlpha}), 0 0 ${glowOuter} rgba(255, 214, 102, ${(glowRatio * 0.22).toFixed(3)}), inset 0 0 0 1px rgba(255,255,255,${(0.08 + glowRatio * 0.12).toFixed(3)})`
-      : 'none'
+      : `0 0 10px var(--color-shadow-${tile.value}, transparent), inset 0 0 0 1px var(--color-outline-${tile.value}, transparent)`
   };
 };
 </script>

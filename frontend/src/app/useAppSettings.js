@@ -7,6 +7,7 @@ import { normalizeBCFamilyModulus } from '../utils/bcFamilyModulus';
 import { applyTileColors, resolveTileColors } from '../utils/tileColors';
 import { writeSharedTilePalette } from '../utils/sharedTilePalette';
 import { ACCOUNT_GLOBAL_KEYS, saveAccountPreferences } from '../services/preferences/accountPreferences';
+import { applyActiveSavedTheme, clearSavedThemeStyles } from '../services/preferences/savedThemes';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
 const INITIAL_DARK_MODE = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -37,6 +38,7 @@ const DEFAULT_CONFIG = {
   ui_scale: 100,
   theme: 'Default',
   language: String(document.documentElement.lang || 'en').toLowerCase().startsWith('zh') ? 'zh' : 'en',
+  saved_theme_id: 0,
 };
 
 const MAX_DELETION_THRESHOLD = 0.999999;
@@ -66,6 +68,7 @@ const USER_PREFERENCE_KEYS = [
   'ui_scale',
   'theme',
   'language',
+  'saved_theme_id',
 ];
 
 const userPreferencesStore = createLocalStorageStore({
@@ -215,6 +218,9 @@ const applyGlobalConfig = () => {
     applyTileColors(palette);
     writeSharedTilePalette(resolveTileColors(palette));
   }
+  if (Number(config.value.saved_theme_id) > 0) {
+    void applyActiveSavedTheme(Number(config.value.saved_theme_id), !!config.value.dark_mode).catch(clearSavedThemeStyles);
+  } else clearSavedThemeStyles();
 
   const fontScale = Number(config.value.font_size_factor) || DEFAULT_CONFIG.font_size_factor;
   document.documentElement.style.setProperty('--tile-font-scale', String(fontScale / 100));
@@ -418,23 +424,27 @@ const saveSetting = (key, explicitValue = config.value[key]) => {
     mergeConfig({
       theme: explicitValue,
       use_custom_theme: false,
+      saved_theme_id: 0,
       colors: clonePalette(themeMap.value?.[explicitValue], config.value.colors),
     });
     persistedPreferences = {
       theme: config.value.theme,
       use_custom_theme: config.value.use_custom_theme,
+      saved_theme_id: 0,
       colors: config.value.colors,
     };
   } else if (key === 'use_custom_theme') {
     const useCustomTheme = Boolean(explicitValue);
     mergeConfig({
       use_custom_theme: useCustomTheme,
+      saved_theme_id: 0,
       colors: useCustomTheme
         ? clonePalette(config.value.custom_colors, config.value.colors)
         : clonePalette(themeMap.value?.[config.value.theme], config.value.colors),
     });
     persistedPreferences = {
       use_custom_theme: config.value.use_custom_theme,
+      saved_theme_id: 0,
       colors: config.value.colors,
     };
   } else if (key === 'ui_scale') {

@@ -5,12 +5,14 @@ import { writeSharedTilePalette } from '../utils/sharedTilePalette.js';
 import { createLocalStorageStore } from '../services/storage/localStorageStore.js';
 import { saveAccountPreferences } from '../services/preferences/accountPreferences.js';
 import { refreshLanguage } from './i18n.js';
+import { applyActiveSavedTheme, clearSavedThemeStyles } from '../services/preferences/savedThemes.js';
 
 // Same preference envelope, theme catalog and resolved palette cookie as the main site.
 const preferences = createLocalStorageStore({ key: 'user-preferences', version: 1, defaultValue: {} });
 const validColor = value => typeof value === 'string' && /^#[\da-f]{6}$/i.test(value);
 export const tileStyle = value => value ? {
   background: `var(--color-tile-${value}, #000000)`, color: `var(--color-text-${value}, #f9f6f2)`,
+  boxShadow: `0 0 10px var(--color-shadow-${value}, transparent), inset 0 0 0 1px var(--color-outline-${value}, transparent)`,
 } : { background: 'var(--empty-tile, #716e69)', color: 'var(--muted)' };
 
 export function useHumanAppearance() {
@@ -44,13 +46,16 @@ export function useHumanAppearance() {
       document.documentElement.style.setProperty(`--color-tile-${2 ** (i + 1)}`, color.background);
       document.documentElement.style.setProperty(`--color-text-${2 ** (i + 1)}`, color.color);
     });
+    if (Number(stored.saved_theme_id) > 0) {
+      void applyActiveSavedTheme(Number(stored.saved_theme_id), darkMode.value).then(() => { paletteRevision.value += 1; }).catch(clearSavedThemeStyles);
+    } else clearSavedThemeStyles();
     paletteRevision.value += 1;
   }
   function chooseTheme(name) {
     if (!themes[name]) return;
     const colors = Array.from({ length: 36 }, (_, i) => themes[name][i] || '#000000');
-    preferences.update(current => ({ ...current, theme: name, use_custom_theme: false, colors }));
-    saveAccountPreferences({ theme: name, use_custom_theme: false });
+    preferences.update(current => ({ ...current, theme: name, use_custom_theme: false, saved_theme_id: 0, colors }));
+    saveAccountPreferences({ theme: name, use_custom_theme: false, saved_theme_id: 0 });
     writeSharedTilePalette(resolveTileColors(colors)); refresh();
   }
   watch(hide32k, value => { if (preferences.read().dis_32k !== value) preferences.update(current => ({ ...current, dis_32k: value })); });

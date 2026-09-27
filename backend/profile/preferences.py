@@ -20,7 +20,7 @@ BOOLEAN_KEYS = frozenset({
 })
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 ALLOWED_KEYS = BOOLEAN_KEYS | {
-    "language", "theme", "custom_colors", "font_size_factor", "ui_scale",
+    "language", "theme", "custom_colors", "font_size_factor", "ui_scale", "saved_theme_id",
 }
 
 
@@ -53,6 +53,9 @@ def validate_changes(changes: object) -> dict:
         elif key == "ui_scale":
             if type(value) is not int or value < 90 or value > 125 or value % 5:
                 raise ValueError("invalid_preferences")
+        elif key == "saved_theme_id":
+            if type(value) is not int or value < 0:
+                raise ValueError("invalid_preferences")
         result[key] = value
     return result
 
@@ -70,6 +73,11 @@ def patch_preferences(user_id: int, changes: object, *, only_if_missing: bool = 
     validated = validate_changes(changes)
     with auth_db() as db:
         db.execute("BEGIN IMMEDIATE")
+        saved_theme_id = validated.get("saved_theme_id")
+        if saved_theme_id and db.execute(
+            "SELECT 1 FROM user_saved_themes WHERE id=? AND user_id=?", (saved_theme_id, int(user_id))
+        ).fetchone() is None:
+            raise ValueError("invalid_preferences")
         row = db.execute(
             "SELECT preferences_json,revision FROM user_preferences WHERE user_id=?",
             (int(user_id),),
