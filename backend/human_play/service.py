@@ -330,8 +330,9 @@ def player_id_for_name(username):
     key = canonical_display_name_key(username)
     with auth_db() as db:
         row = db.execute("""SELECT id FROM users WHERE status='active'
-            AND (display_name_key=? OR (display_name_key IS NULL AND display_name=?))""",
-            (key, username)).fetchone()
+            AND (display_name=? OR display_name_key=? OR (display_name_key IS NULL AND display_name=?))
+            ORDER BY CASE WHEN display_name=? THEN 0 WHEN display_name_key=? THEN 1 ELSE 2 END, id
+            LIMIT 1""", (username, key, username, username, key)).fetchone()
     if not row:
         raise RunError("player_not_found", 404)
     return row["id"]

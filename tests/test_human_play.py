@@ -329,8 +329,16 @@ class HumanPlayTests(unittest.TestCase):
         self.assertAlmostEqual(best['four_spawn_rate'], expected_fours / (2 + state['seq']))
         self.assertAlmostEqual(best['single_rating'], rating.single_rating('2x4', state['board']))
         self.assertEqual(service.best_ten(uid, 2, '2x4')['ra_rank'], 1)
+
         admin.review(run2['run_id'], approved=False, operator='site-owner', note='Approval revoked')
         self.assertIsNone(service.best_ten(uid, 2, '2x4')['rating'])
+
+    def test_named_profile_prefers_exact_legacy_case_conflict(self):
+        with auth_db() as db:
+            db.execute("UPDATE users SET display_name='xlb',display_name_key='xlb' WHERE id=1")
+            db.execute("UPDATE users SET display_name='XLB',display_name_key='legacy-conflict:2:xlb' WHERE id=2")
+        self.assertEqual(service.player_id_for_name('xlb'), 1)
+        self.assertEqual(service.player_id_for_name('XLB'), 2)
 
     def test_owner_soft_delete_removes_game_from_all_player_results_but_keeps_archive(self):
         run = self.new('2x4')

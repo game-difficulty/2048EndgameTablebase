@@ -7,6 +7,10 @@ test('profile ownership accepts an authoritative server result', () => {
   assert.equal(isProfileOwner({ player: { id: 73 }, is_owner: true }, { id: 99 }), true);
 });
 
+test('profile ownership accepts the server result before viewer hydration', () => {
+  assert.equal(isProfileOwner({ player: { id: 73 }, is_owner: true }, null), true);
+});
+
 test('profile ownership compares serialized IDs without type sensitivity', () => {
   assert.equal(isProfileOwner({ player: { id: 73 } }, { id: '73' }), true);
   assert.equal(isProfileOwner({ player: { id: '73' } }, { id: 73 }), true);
