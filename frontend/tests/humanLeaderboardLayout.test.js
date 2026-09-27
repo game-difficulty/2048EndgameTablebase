@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const appSource = await readFile(new URL('../src/human/HumanApp.vue', import.meta.url), 'utf8');
+const fullLeaderboardSource = await readFile(new URL('../src/human/HumanLeaderboardPage.vue', import.meta.url), 'utf8');
 const cssSource = await readFile(new URL('../src/human/human.css', import.meta.url), 'utf8');
+
+test('full leaderboard rank numbers are excluded from browser page translation', () => {
+  assert.match(fullLeaderboardSource, /class="full-rank notranslate"[^>]*translate="no"[^>]*>\{\{ item\.rank \}\}/);
+});
 
 test('game sidebar leaderboard shows only username and score while preserving links', () => {
   const sidebar = appSource.slice(

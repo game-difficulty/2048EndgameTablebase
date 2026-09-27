@@ -44,7 +44,7 @@
       <div v-else-if="!data.entries?.length" class="large-empty">{{ L('尚无符合条件的成绩','No eligible results yet') }}</div>
       <div v-else class="full-leaderboard-rows">
         <article v-for="item in data.entries" :key="`${filters.type}:${item.user_id}`" class="full-leaderboard-row">
-          <strong class="full-rank" :class="{ podium: item.rank <= 3 }">{{ item.rank }}</strong>
+          <strong class="full-rank notranslate" :class="{ podium: item.rank <= 3 }" translate="no">{{ item.rank }}</strong>
           <button class="full-player" :title="item.display_name" @click="$emit('player',item.display_name)">{{ item.display_name }}</button>
           <button v-if="filters.type === 'score'" class="full-metric metric-link" :disabled="!item.has_replay" @click="$emit('replay',replayItem(item))">{{ integer(item.score) }}</button>
           <strong v-else-if="filters.type === 'rating'" class="full-metric">{{ decimal(item.rating) }}</strong>
