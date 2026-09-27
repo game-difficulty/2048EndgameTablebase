@@ -701,7 +701,8 @@
     "tabs": {
       "label": "Admin query type",
       "users": "User lookup",
-      "approvals": "Approval transactions"
+      "approvals": "Approval transactions",
+      "profileReviews": "Avatar and name reviews"
     },
     "summary": {
       "usersTotal": "Total users",

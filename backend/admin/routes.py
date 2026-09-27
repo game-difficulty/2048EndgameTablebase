@@ -20,10 +20,16 @@ DEFAULT_ALLOWED_IDENTITIES = ("user0", "assweeass@163.com")
 
 
 @router.get('/profile-reviews')
-def profile_reviews(request: Request, page: int = Query(1, ge=1), status: str = Query('pending', pattern='^(pending|reviewed|revoked|superseded|all)$')):
+def profile_reviews(
+    request: Request,
+    page: int = Query(1, ge=1),
+    status: str = Query('pending', pattern='^(pending|reviewed|revoked|superseded|all)$'),
+    change_type: str = Query('all', pattern='^(avatar|display_name|all)$'),
+    q: str = Query('', max_length=120),
+):
     _require_admin(request)
     from backend.profile.reviews import list_reviews
-    return list_reviews(page, status)
+    return list_reviews(page, status, change_type, q)
 
 
 class ProfileReviewAction(BaseModel):

@@ -166,6 +166,9 @@
         <button type="button" role="tab" :aria-selected="adminSection === 'approvals'" :class="{ active: adminSection === 'approvals' }" @click="adminSection = 'approvals'">
           {{ $t('admin.tabs.approvals') }}
         </button>
+        <button type="button" role="tab" :aria-selected="adminSection === 'profileReviews'" :class="{ active: adminSection === 'profileReviews' }" @click="adminSection = 'profileReviews'">
+          {{ $t('admin.tabs.profileReviews') }}
+        </button>
       </nav>
 
       <section v-if="adminSection === 'users'" class="admin-panel">
@@ -306,14 +309,17 @@
           </button>
         </div>
       </section>
-      <div v-else>
-      <AdminProfileReviews :active="active && adminSection === 'approvals'" />
       <AdminApprovalTransactions
+        v-else-if="adminSection === 'approvals'"
         ref="approvalTransactionsPanel"
         :active="active && adminSection === 'approvals'"
         @changed="refresh"
       />
-      </div>
+      <AdminProfileReviews
+        v-else
+        ref="profileReviewsPanel"
+        :active="active && adminSection === 'profileReviews'"
+      />
     </div>
 
     <div v-if="approvals.open" class="admin-modal">
@@ -470,6 +476,7 @@ const { t } = useI18n();
 const loading = ref(false);
 const adminSection = ref('users');
 const approvalTransactionsPanel = ref(null);
+const profileReviewsPanel = ref(null);
 const error = ref('');
 const query = ref('');
 const tierFilter = ref('all');
@@ -873,6 +880,10 @@ const refreshCurrent = () => {
     approvalTransactionsPanel.value?.load?.();
     return;
   }
+  if (adminSection.value === 'profileReviews') {
+    profileReviewsPanel.value?.load?.();
+    return;
+  }
   refresh();
 };
 
@@ -893,6 +904,8 @@ watch(() => props.active, (active) => {
 .admin-section-tabs {
   display: inline-flex;
   align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
   gap: 0.3rem;
   border: 1px solid var(--border-main);
   border-radius: 0.9rem;
@@ -901,6 +914,8 @@ watch(() => props.active, (active) => {
 }
 
 .admin-section-tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
   border: 0;
   border-radius: 0.65rem;
   background: transparent;

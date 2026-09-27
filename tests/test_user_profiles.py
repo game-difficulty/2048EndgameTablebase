@@ -113,6 +113,29 @@ class UserProfileTests(unittest.TestCase):
         with auth_db() as db:
             self.assertEqual(db.execute('SELECT avatar_key FROM user_profiles WHERE user_id=?', (user_id,)).fetchone()[0], current)
 
+    def test_review_list_filters_and_sorts_by_change_time(self) -> None:
+        first_user = self._create_user('ReviewFirst')
+        second_user = self._create_user('ReviewSecond')
+        self.assertTrue(update_display_name(first_user, 'FirstChanged'))
+        self.assertTrue(update_display_name(second_user, 'SecondChanged'))
+        self.assertTrue(update_avatar(first_user, process_avatar_bytes(self._image_bytes((14, 28, 42)))))
+
+        all_items = list_reviews(status='all')['items']
+        first_name = next(item for item in all_items if item['new_value'] == 'FirstChanged')
+        with auth_db() as db:
+            db.execute('UPDATE user_profile_change_events SET created_at=? WHERE id=?',
+                       ('2030-01-01T00:00:00+00:00', first_name['id']))
+
+        self.assertEqual(list_reviews(status='all')['items'][0]['id'], first_name['id'])
+        names = list_reviews(status='all', change_type='display_name')['items']
+        self.assertEqual(len(names), 2)
+        self.assertTrue(all(item['change_type'] == 'display_name' for item in names))
+        self.assertEqual([item['id'] for item in list_reviews(status='all', query='reviewfirst@example.com')['items']][:1],
+                         [first_name['id']])
+        self.assertEqual(list_reviews(status='pending', change_type='avatar')['total'], 1)
+        self.assertEqual(decide_review(first_name['id'], 'keep', first_user)['status'], 'reviewed')
+        self.assertEqual(list_reviews(status='reviewed', change_type='display_name')['items'][0]['id'], first_name['id'])
+
     def test_display_name_is_unique_and_starts_independent_cooldown(self) -> None:
         alice = self._create_user("Alice")
         self._create_user("Bob")

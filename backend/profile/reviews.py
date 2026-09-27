@@ -5,18 +5,31 @@ from .validation import canonical_display_name_key
 from .storage import delete_avatar_file
 
 
-def list_reviews(page=1, status='pending'):
+def list_reviews(page=1, status='pending', change_type='all', query=''):
     page = max(1, int(page))
-    where = '' if status == 'all' else 'WHERE r.status = ?'
-    params = () if status == 'all' else (status,)
+    filters, params = [], []
+    if status != 'all':
+        filters.append('r.status = ?')
+        params.append(status)
+    if change_type != 'all':
+        filters.append('e.change_type = ?')
+        params.append(change_type)
+    if query.strip():
+        pattern = f'%{query.strip()}%'
+        filters.append('''(CAST(e.user_id AS TEXT) LIKE ? OR u.display_name LIKE ?
+            OR u.email LIKE ? OR e.old_value LIKE ? OR e.new_value LIKE ?)''')
+        params.extend([pattern] * 5)
+    where = f"WHERE {' AND '.join(filters)}" if filters else ''
+    source = '''FROM profile_change_reviews r
+        JOIN user_profile_change_events e ON e.id = r.event_id
+        JOIN users u ON u.id = e.user_id'''
     with auth_db() as db:
-        total = db.execute(f'SELECT COUNT(*) FROM profile_change_reviews r {where}', params).fetchone()[0]
+        total = db.execute(f'SELECT COUNT(*) {source} {where}', params).fetchone()[0]
         rows = db.execute(f'''SELECT e.id, e.user_id, e.change_type, e.old_value, e.new_value,
             e.ip_address, e.created_at,
-            u.display_name, p.avatar_key, r.status, r.reviewed_at FROM profile_change_reviews r
-            JOIN user_profile_change_events e ON e.id=r.event_id JOIN users u ON u.id=e.user_id
+            u.display_name, u.email, p.avatar_key, r.status, r.reviewed_at {source}
             JOIN user_profiles p ON p.user_id=e.user_id
-            {where} ORDER BY e.id DESC LIMIT 20 OFFSET ?''', (*params, (page - 1) * 20)).fetchall()
+            {where} ORDER BY e.created_at DESC, e.id DESC LIMIT 20 OFFSET ?''', (*params, (page - 1) * 20)).fetchall()
     items = []
     for row in rows:
         item = dict(row)

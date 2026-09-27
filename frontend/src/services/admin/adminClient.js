@@ -27,7 +27,10 @@ async function requestJson(path, { method = 'GET', body } = {}) {
 }
 
 export const adminClient = {
-  profileReviews: (page = 1, status = 'pending') => requestJson(`/api/admin/profile-reviews?page=${page}&status=${status}`),
+  profileReviews: ({ page = 1, status = 'all', changeType = 'all', query = '' } = {}) => {
+    const params = new URLSearchParams({ page, status, change_type: changeType, q: query });
+    return requestJson(`/api/admin/profile-reviews?${params}`);
+  },
   reviewProfile: (id, action) => requestJson(`/api/admin/profile-reviews/${id}`, { method: 'POST', body: { action } }),
   verseClaims: (userId = null) => requestJson('/api/admin/verse-claims'
     + (userId ? `?user_id=${encodeURIComponent(userId)}` : '')),

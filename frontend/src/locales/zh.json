@@ -701,7 +701,8 @@
     "tabs": {
       "label": "站长页查询类型",
       "users": "用户查询",
-      "approvals": "审批事务"
+      "approvals": "审批事务",
+      "profileReviews": "头像与昵称备查"
     },
     "summary": {
       "usersTotal": "用户总数",
