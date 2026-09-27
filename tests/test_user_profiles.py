@@ -18,7 +18,7 @@ from backend.profile.service import (
     update_display_name,
 )
 from backend.profile.storage import process_avatar_bytes
-from backend.profile.reviews import list_reviews, decide_review
+from backend.profile.reviews import list_reviews, decide_review, review_all_pending
 
 
 class UserProfileTests(unittest.TestCase):
@@ -135,6 +135,29 @@ class UserProfileTests(unittest.TestCase):
         self.assertEqual(list_reviews(status='pending', change_type='avatar')['total'], 1)
         self.assertEqual(decide_review(first_name['id'], 'keep', first_user)['status'], 'reviewed')
         self.assertEqual(list_reviews(status='reviewed', change_type='display_name')['items'][0]['id'], first_name['id'])
+
+    def test_review_all_pending_only_updates_pending_records(self) -> None:
+        users = [self._create_user(name) for name in ('BulkFirst', 'BulkSecond', 'BulkThird')]
+        for user_id, name in zip(users, ('FirstChange', 'SecondChange', 'ThirdChange')):
+            self.assertTrue(update_display_name(user_id, name))
+        reviews = {item['user_id']: item for item in list_reviews(status='all')['items']}
+        self.assertEqual(decide_review(reviews[users[0]]['id'], 'keep', users[0])['status'], 'reviewed')
+        self.assertEqual(decide_review(reviews[users[1]]['id'], 'revoke', users[0])['status'], 'revoked')
+        self.assertEqual(list_reviews(status='all')['pending_total'], 1)
+
+        self.assertEqual(review_all_pending(users[0]), {'updated': 1})
+        self.assertEqual(review_all_pending(users[0]), {'updated': 0})
+        self.assertEqual(list_reviews(status='all')['pending_total'], 0)
+        with auth_db() as db:
+            rows = db.execute('''SELECT event_id, status, reviewed_by, reviewed_at
+                FROM profile_change_reviews''').fetchall()
+        by_event = {row['event_id']: row for row in rows}
+        self.assertEqual(by_event[reviews[users[0]]['id']]['status'], 'reviewed')
+        self.assertEqual(by_event[reviews[users[1]]['id']]['status'], 'revoked')
+        third = by_event[reviews[users[2]]['id']]
+        self.assertEqual(third['status'], 'reviewed')
+        self.assertEqual(third['reviewed_by'], users[0])
+        self.assertIsNotNone(third['reviewed_at'])
 
     def test_display_name_is_unique_and_starts_independent_cooldown(self) -> None:
         alice = self._create_user("Alice")

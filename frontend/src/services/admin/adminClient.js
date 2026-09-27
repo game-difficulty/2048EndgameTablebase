@@ -32,6 +32,7 @@ export const adminClient = {
     return requestJson(`/api/admin/profile-reviews?${params}`);
   },
   reviewProfile: (id, action) => requestJson(`/api/admin/profile-reviews/${id}`, { method: 'POST', body: { action } }),
+  approvePendingProfileReviews: () => requestJson('/api/admin/profile-reviews/approve-pending', { method: 'POST' }),
   verseClaims: (userId = null) => requestJson('/api/admin/verse-claims'
     + (userId ? `?user_id=${encodeURIComponent(userId)}` : '')),
   decideVerseClaim: (id, approved, note) => requestJson(

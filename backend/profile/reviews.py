@@ -25,6 +25,7 @@ def list_reviews(page=1, status='pending', change_type='all', query=''):
         JOIN users u ON u.id = e.user_id'''
     with auth_db() as db:
         total = db.execute(f'SELECT COUNT(*) {source} {where}', params).fetchone()[0]
+        pending_total = db.execute("SELECT COUNT(*) FROM profile_change_reviews WHERE status='pending'").fetchone()[0]
         rows = db.execute(f'''SELECT e.id, e.user_id, e.change_type, e.old_value, e.new_value,
             e.ip_address, e.created_at,
             u.display_name, u.email, p.avatar_key, r.status, r.reviewed_at {source}
@@ -37,7 +38,16 @@ def list_reviews(page=1, status='pending', change_type='all', query=''):
                               if item['change_type'] == 'avatar'
                               else item['display_name'] == item['new_value'])
         items.append(item)
-    return dict(items=items, total=total)
+    return dict(items=items, total=total, pending_total=pending_total)
+
+
+def review_all_pending(admin_id):
+    with auth_db() as db:
+        db.execute('BEGIN IMMEDIATE')
+        cursor = db.execute('''UPDATE profile_change_reviews
+            SET status='reviewed', reviewed_by=?, reviewed_at=?
+            WHERE status='pending' ''', (admin_id, iso()))
+        return {'updated': cursor.rowcount}
 
 
 def decide_review(event_id, action, admin_id):

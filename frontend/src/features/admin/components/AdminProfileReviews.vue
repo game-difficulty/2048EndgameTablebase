@@ -5,9 +5,14 @@
         <h2>{{ copy.title }}</h2>
         <p>{{ copy.subtitle }}</p>
       </div>
-      <button type="button" class="review-refresh" :disabled="busy" :title="copy.refresh" :aria-label="copy.refresh" @click="load">
-        <RefreshCw :size="17" />
-      </button>
+      <div class="review-head-actions">
+        <button type="button" class="review-bulk" :disabled="busy || pendingTotal === 0" @click="confirmAll = true">
+          <CheckCheck :size="16" />{{ copy.bulkApprove }}<span>{{ pendingTotal }}</span>
+        </button>
+        <button type="button" class="review-refresh" :disabled="busy" :title="copy.refresh" :aria-label="copy.refresh" @click="load">
+          <RefreshCw :size="17" />
+        </button>
+      </div>
     </header>
 
     <form class="review-toolbar" @submit.prevent="search">
@@ -36,6 +41,7 @@
     </form>
 
     <p v-if="error" class="review-error" role="alert">{{ error }}</p>
+    <p v-if="feedback" class="review-feedback" role="status">{{ feedback }}</p>
     <div class="review-table-wrap">
       <table class="review-table">
         <thead>
@@ -104,13 +110,23 @@
         </div>
       </section>
     </div>
+    <div v-if="confirmAll" class="review-overlay" @click.self="!busy && (confirmAll = false)">
+      <section class="review-dialog" role="dialog" aria-modal="true" :aria-label="copy.bulkConfirmTitle">
+        <h3>{{ copy.bulkConfirmTitle }}</h3>
+        <p>{{ copy.bulkConfirmText.replace('{count}', pendingTotal) }}</p>
+        <div>
+          <button type="button" class="action-btn-small" :disabled="busy" @click="confirmAll = false">{{ copy.cancel }}</button>
+          <button type="button" class="action-btn-small" :disabled="busy" @click="approveAllPending">{{ copy.bulkConfirm }}</button>
+        </div>
+      </section>
+    </div>
   </section>
 </template>
 
 <script setup>
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { Check, ChevronLeft, ChevronRight, RefreshCw, Search, Undo2 } from '@lucide/vue';
+import { Check, CheckCheck, ChevronLeft, ChevronRight, RefreshCw, Search, Undo2 } from '@lucide/vue';
 import UiSelect from '../../../components/UiSelect.vue';
 import { adminClient } from '../../../services/admin/adminClient';
 import { userError } from '../../../services/errors/userError.js';
@@ -129,6 +145,9 @@ const labels = {
     markReviewed: '已检查', reset: '恢复默认', loading: '正在加载…', empty: '没有符合条件的记录',
     loadFailed: '无法加载记录', pagination: '第 {page} / {pages} 页，共 {total} 条', previous: '上一页', next: '下一页',
     confirmTitle: '确认恢复默认', confirmText: '确认将这次修改恢复为默认头像或默认昵称？原有修改冷却保留。',
+    bulkApprove: '全部通过检查', bulkConfirmTitle: '全部通过待检查记录？',
+    bulkConfirmText: '将全部 {count} 条待检查记录标记为已检查，不受当前筛选条件和分页影响；不会更改用户的头像或昵称。',
+    bulkConfirm: '确认全部通过', bulkDone: '已通过 {count} 条记录的检查。',
     cancel: '取消', confirm: '确认撤销',
   },
   en: {
@@ -140,6 +159,9 @@ const labels = {
     markReviewed: 'Mark reviewed', reset: 'Reset', loading: 'Loading…', empty: 'No records match these filters',
     loadFailed: 'Unable to load records', pagination: 'Page {page} / {pages}, {total} total', previous: 'Previous page', next: 'Next page',
     confirmTitle: 'Reset this change?', confirmText: 'Reset to the default avatar or display name? The existing cooldown remains.',
+    bulkApprove: 'Approve all pending', bulkConfirmTitle: 'Approve all pending reviews?',
+    bulkConfirmText: 'Mark all {count} pending records as reviewed, regardless of current filters or page. Avatars and names will not change.',
+    bulkConfirm: 'Approve all', bulkDone: 'Marked {count} records as reviewed.',
     cancel: 'Cancel', confirm: 'Confirm reset',
   },
 };
@@ -160,6 +182,7 @@ const typeOptions = computed(() => [
 const items = ref([]);
 const page = ref(1);
 const total = ref(0);
+const pendingTotal = ref(0);
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / 20)));
 const status = ref('all');
 const changeType = ref('all');
@@ -167,7 +190,9 @@ const query = ref('');
 const appliedQuery = ref('');
 const busy = ref(false);
 const error = ref('');
+const feedback = ref('');
 const confirmItem = ref(null);
+const confirmAll = ref(false);
 let loadRevision = 0;
 
 const statusLabel = value => ({ pending: copy.value.pending, reviewed: copy.value.reviewed,
@@ -182,12 +207,14 @@ async function load() {
   const revision = ++loadRevision;
   busy.value = true;
   error.value = '';
+  feedback.value = '';
   try {
     const result = await adminClient.profileReviews({ page: page.value, status: status.value,
       changeType: changeType.value, query: appliedQuery.value });
     if (revision !== loadRevision) return;
     items.value = result.items || [];
     total.value = Number(result.total) || 0;
+    pendingTotal.value = Number(result.pending_total) || 0;
     if (page.value > pageCount.value) {
       page.value = pageCount.value;
       await load();
@@ -196,6 +223,7 @@ async function load() {
     if (revision === loadRevision) {
       items.value = [];
       total.value = 0;
+      pendingTotal.value = 0;
       error.value = userError(requestError, copy.value.loadFailed);
     }
   } finally {
@@ -222,6 +250,21 @@ async function decide(item, action) {
   }
 }
 
+async function approveAllPending() {
+  busy.value = true;
+  error.value = '';
+  try {
+    const result = await adminClient.approvePendingProfileReviews();
+    confirmAll.value = false;
+    await load();
+    feedback.value = copy.value.bulkDone.replace('{count}', Number(result.updated) || 0);
+  } catch (requestError) {
+    error.value = userError(requestError);
+  } finally {
+    busy.value = false;
+  }
+}
+
 watch(() => props.active, active => { if (active) load(); }, { immediate: true });
 defineExpose({ load });
 </script>
@@ -231,6 +274,9 @@ defineExpose({ load });
 .review-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.25rem; }
 .review-head h2 { font-size: var(--font-ui-lg); font-weight: 900; }
 .review-head p { margin-top: .3rem; color: var(--text-secondary); font-size: var(--font-ui-sm); }
+.review-head-actions { display: flex; align-items: center; gap: .55rem; flex: 0 0 auto; }
+.review-bulk { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; min-height: 2.35rem; padding: .4rem .7rem; border: 1px solid var(--border-main); border-radius: .7rem; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 800; cursor: pointer; white-space: nowrap; }
+.review-bulk span { display: inline-flex; align-items: center; justify-content: center; min-width: 1.45rem; height: 1.45rem; padding: 0 .3rem; border-radius: .4rem; background: var(--accent); color: #10202f; font-size: var(--font-ui-xs); }
 .review-refresh, .review-pagination button { display: inline-flex; align-items: center; justify-content: center; width: 2.35rem; height: 2.35rem; border: 1px solid var(--border-main); border-radius: .7rem; background: var(--bg-main); color: var(--text-main); cursor: pointer; }
 .review-toolbar { display: grid; grid-template-columns: minmax(9rem, 10rem) minmax(9rem, 10rem) minmax(12rem, 1fr) auto; gap: .65rem; padding: 0 1.25rem 1rem; }
 .review-filter :deep(.review-filter-trigger), .review-search { min-width: 0; min-height: 2.4rem; border: 1px solid var(--border-main); border-radius: .8rem; background: var(--bg-main); color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 750; padding: .55rem .75rem; }
@@ -238,6 +284,7 @@ defineExpose({ load });
 .review-search:focus, .review-filter :deep(.review-filter-trigger:focus-visible) { border-color: var(--accent); }
 .review-search-button { display: inline-flex; align-items: center; gap: .35rem; justify-content: center; }
 .review-error { margin: 0 1.25rem 1rem; padding: .7rem .8rem; border: 1px solid rgba(239, 68, 68, .3); border-radius: .75rem; background: rgba(239, 68, 68, .1); color: #dc2626; font-size: var(--font-ui-sm); font-weight: 750; }
+.review-feedback { margin: 0 1.25rem 1rem; padding: .7rem .8rem; border: 1px solid rgba(34, 197, 94, .3); border-radius: .75rem; background: rgba(34, 197, 94, .1); color: var(--text-main); font-size: var(--font-ui-sm); font-weight: 750; }
 .review-table-wrap { overflow-x: auto; border-top: 1px solid var(--border-main); }
 .review-table { width: 100%; min-width: 850px; border-collapse: collapse; font-size: var(--font-ui-sm); }
 .review-table th, .review-table td { padding: .78rem 1rem; border-bottom: 1px solid var(--border-main); text-align: left; vertical-align: middle; }
@@ -267,5 +314,5 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .review-dialog h3 { font-size: var(--font-ui-lg); font-weight: 900; }
 .review-dialog p { margin: .7rem 0 1.25rem; color: var(--text-secondary); font-size: var(--font-ui-sm); }
 .review-dialog > div { display: flex; justify-content: flex-end; gap: .5rem; }
-@media (max-width: 760px) { .review-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-search { grid-column: 1 / -1; } .review-search-button { grid-column: 1 / -1; } .review-pagination { justify-content: space-between; } }
+@media (max-width: 760px) { .review-head { flex-wrap: wrap; } .review-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-search { grid-column: 1 / -1; } .review-search-button { grid-column: 1 / -1; } .review-pagination { justify-content: space-between; } }
 </style>

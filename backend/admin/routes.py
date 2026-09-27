@@ -36,6 +36,15 @@ class ProfileReviewAction(BaseModel):
     action: str = Field(pattern='^(keep|revoke)$')
 
 
+@router.post('/profile-reviews/approve-pending')
+def approve_pending_profile_reviews(request: Request):
+    user = _require_admin(request)
+    from backend.live.routes import same_origin
+    same_origin(request.headers)
+    from backend.profile.reviews import review_all_pending
+    return review_all_pending(int(user['id']))
+
+
 @router.post('/profile-reviews/{event_id}')
 def review_profile(event_id: int, payload: ProfileReviewAction, request: Request):
     user = _require_admin(request)
