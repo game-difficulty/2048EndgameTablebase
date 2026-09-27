@@ -4,6 +4,7 @@ import themes from '../../../../docs_and_configs/themes.json' with { type: 'json
 import { authHeaders } from '../auth/sessionTokenStore.js';
 import { getBackendUrl } from '../runtime/backendUrl.js';
 import { createLocalStorageStore } from '../storage/localStorageStore.js';
+import { ensureStoredLanguage } from './languagePreference.js';
 
 export const ACCOUNT_GLOBAL_KEYS = Object.freeze([
   'language', 'dark_mode', 'theme', 'use_custom_theme', 'custom_colors',
@@ -58,6 +59,7 @@ function normalized(source) {
 }
 
 function localValues() {
+  ensureStoredLanguage(globalStore);
   return normalized({ ...pick(globalStore.read(), ACCOUNT_GLOBAL_KEYS), ...pick(humanStore.read(), ACCOUNT_HUMAN_KEYS) });
 }
 

@@ -36,7 +36,7 @@ const DEFAULT_CONFIG = {
   font_size_factor: 100,
   ui_scale: 100,
   theme: 'Default',
-  language: 'en',
+  language: String(document.documentElement.lang || 'en').toLowerCase().startsWith('zh') ? 'zh' : 'en',
 };
 
 const MAX_DELETION_THRESHOLD = 0.999999;

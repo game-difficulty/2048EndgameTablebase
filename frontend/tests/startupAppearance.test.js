@@ -7,7 +7,7 @@ const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const startupScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0]?.[1];
 assert.ok(startupScript);
 
-function boot(value, search = '', storageError = false) {
+function boot(value, search = '', storageError = false, languages = ['en-US']) {
   const attributes = { lang: 'en' };
   const document = { documentElement: {
     get lang() { return attributes.lang; },
@@ -15,14 +15,18 @@ function boot(value, search = '', storageError = false) {
     setAttribute(key, value) { attributes[key] = value; },
     removeAttribute(key) { delete attributes[key]; },
   } };
-  const window = { location: { href: `https://2048tables.online/${search}` },
+  let storedValue = value == null ? null : JSON.stringify({ version: 1, value });
+  const window = { location: { href: `https://2048tables.online/${search}` }, navigator: { languages },
     localStorage: { getItem() {
       if (storageError) throw new Error('Storage blocked');
-      return value == null ? null : JSON.stringify({ version: 1, value });
+      return storedValue;
+    }, setItem(_key, next) {
+      if (storageError) throw new Error('Storage blocked');
+      storedValue = next;
     } },
   };
-  runInNewContext(startupScript, { window, document, URL, JSON });
-  return { attributes, backend: window.__APP_BACKEND_ORIGIN__ };
+  runInNewContext(startupScript, { window, document, URL, JSON, Date });
+  return { attributes, backend: window.__APP_BACKEND_ORIGIN__, storedValue };
 }
 
 test('saved appearance is applied before Vue renders', () => {
@@ -41,8 +45,15 @@ test('explicit startup theme wins without changing saved language', () => {
 
 test('missing or blocked storage keeps defaults and backend origin', () => {
   assert.deepEqual(boot(null).attributes, { lang: 'en' });
-  assert.deepEqual(boot(null, '', true).attributes, { lang: 'en' });
+  assert.deepEqual(boot(null, '', true, ['zh-CN']).attributes, { lang: 'zh-CN' });
   assert.equal(boot(null, '?backend_port=8766').backend, 'https://2048tables.online:8766');
+});
+
+test('new browsers detect and persist the first supported browser language', () => {
+  const chinese = boot(null, '', false, ['ja-JP', 'zh-TW', 'en-US']);
+  assert.equal(chinese.attributes.lang, 'zh-CN');
+  assert.equal(JSON.parse(chinese.storedValue).value.language, 'zh');
+  assert.equal(boot(null, '', false, ['fr-FR']).attributes.lang, 'en');
 });
 
 test('Vue i18n starts in the language selected by the HTML boot script', () => {

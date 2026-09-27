@@ -1,6 +1,7 @@
 import { ref } from 'vue';
 import { createLocalStorageStore } from '../services/storage/localStorageStore.js';
 import { saveAccountPreferences } from '../services/preferences/accountPreferences.js';
+import { ensureStoredLanguage } from '../services/preferences/languagePreference.js';
 
 const preferences = createLocalStorageStore({ key: 'user-preferences', version: 1, defaultValue: {} });
 export const language = ref('zh');
@@ -188,7 +189,7 @@ export function t(text) {
   return text;
 }
 export function refreshLanguage() {
-  language.value = preferences.read().language === 'en' ? 'en' : 'zh';
+  language.value = ensureStoredLanguage(preferences);
   document.documentElement.lang = language.value === 'en' ? 'en' : 'zh-CN';
   document.title = language.value === 'en' ? '2048 · Play' : '2048 · 对局';
 }

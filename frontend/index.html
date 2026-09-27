@@ -24,9 +24,21 @@
         } catch (_) {
           // The app continues with its defaults when storage is unavailable.
         }
-        if (savedPreferences.language === 'zh' || savedPreferences.language === 'en') {
-          document.documentElement.lang = savedPreferences.language === 'zh' ? 'zh-CN' : 'en';
+        if (savedPreferences.language !== 'zh' && savedPreferences.language !== 'en') {
+          const candidates = Array.isArray(window.navigator?.languages) && window.navigator.languages.length
+            ? window.navigator.languages : [window.navigator?.language];
+          const supported = candidates.map(value => String(value || '').toLowerCase())
+            .find(value => value.startsWith('zh') || value.startsWith('en'));
+          savedPreferences.language = supported?.startsWith('zh') ? 'zh' : 'en';
+          try {
+            window.localStorage.setItem('2048tables:user-preferences', JSON.stringify({
+              version: 1, value: savedPreferences, updatedAt: new Date().toISOString(),
+            }));
+          } catch (_) {
+            // Detection still applies for this page when storage is unavailable.
+          }
         }
+        document.documentElement.lang = savedPreferences.language === 'zh' ? 'zh-CN' : 'en';
         const darkMode = startupTheme === 'dark' ? true
           : startupTheme === 'light' ? false : savedPreferences.dark_mode;
         if (darkMode === true) {
