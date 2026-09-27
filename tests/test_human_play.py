@@ -309,6 +309,8 @@ class HumanPlayTests(unittest.TestCase):
         self.send(run2, raw, reason='restarted')
         uid = service.player_id_for_name('Player 1')
         self.assertEqual(uid, 1)
+        self.assertTrue(service.history(uid, 1)['is_owner'])
+        self.assertFalse(service.history(uid, 2)['is_owner'])
         self.assertEqual([row['variant'] for row in service.history(uid, 2, variant='2x4')['entries']], ['2x4'])
         self.assertEqual(service.history(uid, 2, variant='2x4')['entries'][0]['board'], state['board'])
         self.assertEqual([row['variant'] for row in service.history(uid, 2, sort='score_desc')['entries']], ['2x4', '3x3'])

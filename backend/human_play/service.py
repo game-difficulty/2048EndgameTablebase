@@ -385,7 +385,8 @@ def history(user_id, viewer_id, before=None, limit=30, variant="all", sort="newe
     names = identity_map({user_id})
     if user_id not in names:
         raise RunError("player_not_found", 404)
-    return {"player": {"id": user_id, "display_name": names[user_id]}, "stats": dict(aggregate),
+    return {"player": {"id": user_id, "display_name": names[user_id]},
+            "is_owner": viewer_id is not None and user_id == viewer_id, "stats": dict(aggregate),
             "bests": {r["variant"]: r["score"] for r in bests},
             "entries": [{"id": r["id"], "variant": r["variant"], "score": r["score"],
                          "ended_at": r["ended"], "reason": r["reason"],

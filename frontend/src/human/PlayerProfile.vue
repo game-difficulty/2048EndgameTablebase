@@ -97,6 +97,7 @@ import { tileStyle } from './appearance.js';
 import { getTileLabelStyle } from '../components/tileLabelStyle.js';
 import PlayerSettings from './PlayerSettings.vue';
 import { drawBestTenPoster, POSTER_HEIGHT, POSTER_WIDTH, posterCardBounds } from './bestTenPoster.js';
+import { isProfileOwner } from './profileOwnership.js';
 
 const props = defineProps({ username: String, viewer: Object, playSettings: Object });
 const PlayerStatistics = defineAsyncComponent(() => import('./PlayerStatistics.vue'));
@@ -114,7 +115,7 @@ const deleteError = ref('');
 let previewTrigger = null;
 let historySerial = 0, bestSerial = 0, posterFrame = 0;
 const historyCache = new Map(), bestCache = new Map();
-const isOwner = computed(() => !!props.viewer && profile.value?.player.id === props.viewer.id);
+const isOwner = computed(() => isProfileOwner(profile.value, props.viewer));
 const tabs = computed(() => [{id:'profile',label:'个人主页'},{id:'history',label:'历史记录'},
   {id:'statistics',label:'统计'},...(isOwner.value?[{id:'settings',label:'设置'}]:[])]);
 const historyTotal = computed(() => Number(profile.value?.total || 0));
