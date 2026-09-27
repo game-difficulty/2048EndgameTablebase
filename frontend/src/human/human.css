@@ -562,7 +562,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .statistics-current { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; }
 .statistics-current article { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg-card); }
 .statistics-current span { display: block; margin-bottom: 9px; color: var(--muted); font-size: 11px; font-weight: 700; }
-.statistics-current strong { display: block; overflow: hidden; font-size: clamp(18px,2.8vw,28px); font-variant-numeric: tabular-nums; text-overflow: ellipsis; }
+.statistics-current strong { display: block; min-width: 0; font-size: clamp(18px,2.8vw,28px); font-variant-numeric: tabular-nums; line-height: 1.15; white-space: nowrap; }
 .statistics-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }
 .statistics-toolbar>div:first-child { display: flex; align-items: baseline; gap: 9px; }
 .statistics-toolbar span { color: var(--muted); font-size: 12px; }

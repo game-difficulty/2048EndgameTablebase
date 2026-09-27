@@ -10,10 +10,10 @@
     <div v-else-if="!current" class="large-empty">{{ t('此模式暂无统计记录') }}</div>
     <template v-else>
       <div class="statistics-current">
-        <article><span>PB</span><strong>{{ integer(current.pb_score) }}</strong></article>
-        <article><span>{{ t('B10 分数线') }}</span><strong>{{ current.b10_score == null ? '—' : integer(current.b10_score) }}</strong></article>
-        <article><span>B10 RATING</span><strong>{{ format(current.b10_rating, 1) }}</strong></article>
-        <article><span>{{ t('正式记录') }}</span><strong>{{ integer(current.game_count) }}</strong></article>
+        <article><span>PB</span><strong v-fit-statistic-value>{{ integer(current.pb_score) }}</strong></article>
+        <article><span>{{ t('B10 分数线') }}</span><strong v-fit-statistic-value>{{ current.b10_score == null ? '—' : integer(current.b10_score) }}</strong></article>
+        <article><span>B10 RATING</span><strong v-fit-statistic-value>{{ format(current.b10_rating, 1) }}</strong></article>
+        <article><span>{{ t('正式记录') }}</span><strong v-fit-statistic-value>{{ integer(current.game_count) }}</strong></article>
       </div>
 
       <div class="statistics-toolbar">
@@ -63,6 +63,7 @@ import { computed, defineComponent, h, onMounted, ref, watch } from 'vue';
 import { json } from './client.js';
 import { t, language } from './i18n.js';
 import { drawStatisticsPoster } from './statisticsPoster.js';
+import { fitSingleLineText as vFitStatisticValue } from './fitSingleLineText.js';
 
 const props = defineProps({ username: { type: String, required: true } });
 const variants = ['4x4','3x4','2x4','3x3'];
