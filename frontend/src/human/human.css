@@ -334,6 +334,14 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .modal .rank-row { margin-bottom: 6px; }
 .rules-list { padding-left: 20px; font-size: 13px; line-height: 1.8; color: #d1cdc5; }
 .rules-list li { margin: 10px 0; }
+.rules-list strong {
+  color: var(--accent-ink);
+  font-weight: 850;
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 78%, transparent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
 .section-top { display: flex; justify-content: space-between; align-items: center; gap: 15px; margin: 26px 0 22px; }
 .button-link { font-size: 13px; white-space: nowrap; }
 .stats-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin-bottom: 24px; }
