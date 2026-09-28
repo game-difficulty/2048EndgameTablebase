@@ -35,7 +35,7 @@
       <header class="project-heading">
         <img class="project-art heading-art" :src="projectIconUrl(project.id, practiceTheme)" alt="" />
         <div class="heading-copy"><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ project.title }}</h1></div>
-        <div class="practice-tag">单人试玩<br><small>{{ !sessionReady ? '正在同步登录状态' : practiceUser ? '已登录 · 自动记录最佳' : '游客 · 登录后记录最佳' }}</small><a href="#practice-leaderboard">查看试玩榜 ↓</a></div>
+        <div class="practice-tag">单人试玩<br><small>{{ !sessionReady ? '正在同步登录状态' : practiceUser ? '已登录' : '游客' }}</small></div>
         <div class="project-summary">{{ project.description }}</div>
       </header>
 
@@ -72,18 +72,17 @@
 
       <aside class="play-sidebar">
         <section id="practice-leaderboard" class="practice-leaderboard" aria-label="试玩排行榜">
-          <div class="leaderboard-title"><h3>试玩榜</h3><small>仅供试玩 · 不用于赛事裁决</small></div>
+          <div class="leaderboard-title"><h3>试玩榜</h3><small>仅供试玩</small></div>
           <p v-if="leaderboardLoading" class="leaderboard-hint">正在加载…</p>
           <p v-else-if="leaderboardError" class="leaderboard-hint">{{ leaderboardError }}</p>
           <template v-else-if="leaderboard">
             <p v-if="!leaderboard.signed_in" class="leaderboard-hint">游客可查看；<a :href="mainSiteUrl">登录</a>后记录个人最佳。</p>
             <p v-else-if="leaderboard.my_best" class="leaderboard-mine">我的最佳：{{ formatRecord(leaderboard.my_best) }}</p>
-            <p v-else class="leaderboard-hint">完成一局后记录个人最佳。</p>
             <p v-if="recordMessage" class="leaderboard-hint">{{ recordMessage }}</p>
             <ol v-if="leaderboard.top.length" class="leaderboard-list">
               <li v-for="(entry, index) in leaderboard.top" :key="entry.user_id"><span class="leaderboard-rank">{{ index + 1 }}</span><span class="leaderboard-name" :title="entry.display_name">{{ entry.display_name }}</span><strong>{{ formatRecord(entry) }}</strong></li>
             </ol>
-            <p v-else class="leaderboard-hint">暂无记录，来留下第一条。</p>
+            <p v-else class="leaderboard-hint">暂无记录。</p>
           </template>
         </section>
         <section class="rules-panel">
@@ -376,15 +375,13 @@ onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTim
 .project-heading .heading-art{grid-column:1;grid-row:1;width:96px;height:96px}
 .project-heading .heading-copy{grid-column:2;grid-row:1}
 .project-heading .practice-tag{grid-column:3;grid-row:1;margin:0;align-self:center}
-.practice-tag a{display:block;margin-top:5px;color:#8c6427;font-size:12px;text-decoration:none}
-.practice-tag a:hover{text-decoration:underline}
+.game-hud>div{box-sizing:border-box;flex:0 0 120px;width:120px}
 .project-summary{grid-column:1 / -1;grid-row:2;max-width:80ch;padding:12px 16px;border:1px solid #e4dbce;border-radius:7px;background:#fffdf8;color:#685d53;font-size:14px;line-height:1.6}
 .play-main{grid-column:2;grid-row:2;min-width:0}
 .play-sidebar{grid-column:3;grid-row:2;display:grid;align-content:start;gap:14px;min-width:0}
 .practice-leaderboard{margin:0;padding:18px;border:1px solid #d8d0c5;border-radius:9px;background:#fffdf8;scroll-margin-top:16px}
 .project-lab.is-dark .practice-account{color:#c2ccd6}
 .project-lab.is-dark .project-summary,.project-lab.is-dark .practice-leaderboard{background:#1a2633;border-color:#344354;color:#e7edf2}
-.project-lab.is-dark .practice-tag a{color:#d8ac62}
 @media(max-width:1100px){
   .project-heading{grid-column:1 / -1}
   .play-main{grid-column:1}
