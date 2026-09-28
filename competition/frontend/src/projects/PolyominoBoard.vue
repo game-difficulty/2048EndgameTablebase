@@ -229,6 +229,7 @@ onBeforeUnmount(() => { ++animationEpoch; clearTimers(); });
 </script>
 
 <style scoped>
+.poly-label{user-select:none;-webkit-user-select:none}
 .poly-board{position:relative;width:min(100%,620px);overflow:hidden;border-radius:12px;background:#a99d90;touch-action:none;outline:none;user-select:none;container-type:inline-size}
 .poly-cell{position:absolute;border-radius:8px;background:#c8beb2}
 .poly-tile{position:absolute;z-index:3;transition:left var(--board-slide-duration) ease-in-out,top var(--board-slide-duration) ease-in-out;pointer-events:none;--tile-color:#eee4da;color:#776e65}
