@@ -132,6 +132,9 @@ class HumanPlayReplayImportTests(unittest.TestCase):
         self.assertEqual((application["status"], application["approved_by"]), ("approved", 5))
         self.assertIn("source=2048next", application["review_note"])
         self.assertEqual(actions, ["submitted_bulk", "approved_bulk"])
+        repeated = build_plan(root, user_id=7, timezone_name="Pacific/Honolulu",
+                              create_missing=True)
+        self.assertEqual(repeated[0].status, "already_attached")
 
 
 if __name__ == "__main__":

@@ -284,6 +284,11 @@ def _date_bounds(date: str, timezone_name: str) -> tuple[float, float]:
     return start.timestamp(), (start + timedelta(days=1)).timestamp()
 
 
+def _generated_run_id(user_id: int, metadata: FileMetadata, normalized: bytes) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL,
+        f"2048tables:bulk-replay:{user_id}:{metadata.relative_path}:{zlib.crc32(normalized)}"))
+
+
 def _target(db, *, user_id: int, metadata: FileMetadata, result: dict,
             timezone_name: str, override_run_id: str | None | object) -> tuple[str, str]:
     if override_run_id is None:
@@ -292,11 +297,15 @@ def _target(db, *, user_id: int, metadata: FileMetadata, result: dict,
         rows = db.execute("""SELECT id,user_id,variant,state,source,archive,has_replay,ended,status
             FROM human_runs WHERE id=?""", (override_run_id,)).fetchall()
     else:
-        start, end = _date_bounds(metadata.played_date, timezone_name)
+        generated_id = _generated_run_id(user_id, metadata, result["normalized"])
         rows = db.execute("""SELECT id,user_id,variant,state,source,archive,has_replay,ended,status
-            FROM human_runs WHERE user_id=? AND variant=? AND status='sealed'
-              AND json_extract(state,'$.score')=? AND ended>=? AND ended<?
-            ORDER BY ended,id""", (user_id, metadata.variant, metadata.score, start, end)).fetchall()
+            FROM human_runs WHERE id=?""", (generated_id,)).fetchall()
+        if not rows:
+            start, end = _date_bounds(metadata.played_date, timezone_name)
+            rows = db.execute("""SELECT id,user_id,variant,state,source,archive,has_replay,ended,status
+                FROM human_runs WHERE user_id=? AND variant=? AND status='sealed'
+                  AND json_extract(state,'$.score')=? AND ended>=? AND ended<?
+                ORDER BY ended,id""", (user_id, metadata.variant, metadata.score, start, end)).fetchall()
     exact = []
     rejected = []
     for row in rows:
@@ -413,8 +422,7 @@ def _create_approved_archive(db, item: PlannedReplay, *, user_id: int,
     replay_crc = zlib.crc32(item.normalized)
     warnings = [] if result["game_over"] else ["replay_not_game_over"]
     timing = {"elapsed_ms": result["elapsed"], "timed_moves": result["timed_moves"]}
-    run_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
-        f"2048tables:bulk-replay:{user_id}:{item.metadata.relative_path}:{replay_crc}"))
+    run_id = _generated_run_id(user_id, item.metadata, item.normalized)
     existing = db.execute("SELECT id FROM human_runs WHERE id=?", (run_id,)).fetchone()
     if existing:
         raise RuntimeError(f"generated_run_exists:{run_id}")
