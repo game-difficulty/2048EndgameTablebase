@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Approved project icon source</title></head><body><div id="project-icon-draft" aria-label="2048 赛事项目图标设计草案">
+  <style>
+    #project-icon-draft { color-scheme: light dark; --ink:light-dark(#493b2f,#eee4d6); --muted-ink:light-dark(#806d5a,#b7a797); --paper:light-dark(#faf7f0,#28231f); --card-paper:light-dark(#fffdf8,#332c26); --rule:light-dark(#e4d9c9,#51473d); --tray:light-dark(#b9aa99,#746657); --slot:light-dark(#cfc2b3,#827263); --tile:light-dark(#f1e7d9,#d7c8b5); --gold:light-dark(#d9ad60,#c39349); --gold-dark:light-dark(#a3742e,#e7bc75); --danger:light-dark(#a85742,#d98269); --island:light-dark(#789477,#9db69a); font-family:"Clear Sans","Helvetica Neue",Arial,sans-serif; color:var(--ink); }
+    #project-icon-draft .sheet { background:var(--paper); border:1px solid var(--rule); border-radius:15px; padding:18px; }
+    #project-icon-draft .heading { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:8px; margin:0 0 16px; }
+    #project-icon-draft h2 { margin:0; font-size:19px; font-weight:500; letter-spacing:.02em; }
+    #project-icon-draft .heading small { color:var(--muted-ink); font-size:12px; }
+    #project-icon-draft .grid-cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:11px; }
+    #project-icon-draft .item { display:flex; flex-direction:column; align-items:center; background:var(--card-paper); border:1px solid var(--rule); border-radius:11px; padding:13px 10px 11px; min-width:0; }
+    #project-icon-draft .art { position:relative; width:112px; height:112px; flex:none; border-radius:15px; background:var(--tray); box-shadow:inset 0 2px 5px light-dark(#8b786866,#100d0a66); overflow:hidden; }
+    #project-icon-draft .board { position:absolute; left:11px; top:11px; width:90px; height:90px; box-sizing:border-box; display:grid; grid-template-columns:repeat(var(--n),minmax(0,1fr)); grid-template-rows:repeat(var(--n),minmax(0,1fr)); gap:3px; padding:4px; border-radius:8px; background:light-dark(#aa9a87,#67594c); }
+    #project-icon-draft .cell { min-width:0; min-height:0; display:flex; align-items:center; justify-content:center; border-radius:3px; background:var(--slot); font-weight:500; font-size:10px; line-height:1; white-space:nowrap; color:light-dark(#67513b,#4b3829); }
+    #project-icon-draft .board[data-n="3"] .cell { font-size:14px; border-radius:4px; }
+    #project-icon-draft .board[data-n="5"] .cell { font-size:7px; border-radius:2px; }
+    #project-icon-draft .board[data-n="7"] { gap:2px; padding:4px; }
+    #project-icon-draft .board[data-n="7"] .cell { font-size:0; border-radius:2px; }
+    #project-icon-draft .cell.number { background:var(--tile); }
+    #project-icon-draft .art[data-kind="evil"] .cell.value-2 { background:light-dark(#f2e7d9,#dacbb7); color:light-dark(#695646,#4f3e30); }
+    #project-icon-draft .art[data-kind="evil"] .cell.value-4 { background:light-dark(#dec5a1,#bd9c70); color:light-dark(#59402c,#382717); }
+    #project-icon-draft .cell.strong { background:var(--gold); color:light-dark(#50351b,#392711); }
+    #project-icon-draft .cell.wall { background:light-dark(#746a5f,#3c3833); color:light-dark(#eee3d4,#bdb1a3); }
+    #project-icon-draft .cell.seal { background:linear-gradient(135deg,light-dark(#3a3431cc,#171615cc),light-dark(#39312a99,#171615aa)),var(--tile); color:#fff7e9; }
+    #project-icon-draft .cell.island { background:var(--island); color:light-dark(#fbf8e9,#293828); }
+    #project-icon-draft .cell.cargo { background:var(--gold); color:light-dark(#553716,#382411); }
+    #project-icon-draft .cell.poly { color:light-dark(#513617,#382411); font-size:7px; }
+    #project-icon-draft .cell.poly-a { background:light-dark(#f1cf92,#eccb90); }
+    #project-icon-draft .cell.poly-b { background:light-dark(#d9ad60,#c39349); }
+    #project-icon-draft .cell.poly-c { background:light-dark(#c6964e,#b4833e); }
+    #project-icon-draft .cell.poly-d { background:light-dark(#e4ba74,#d5a961); }
+    #project-icon-draft .cell.playable { background:var(--tile); }
+    #project-icon-draft .cell.void { background:transparent; }
+    #project-icon-draft .cell.threat { background:var(--danger); color:#fff8ed; box-shadow:0 0 0 2px light-dark(#7f332b,#edb49b); }
+    #project-icon-draft .top-gate, #project-icon-draft .bottom-gate { position:absolute; left:41px; width:30px; height:9px; border:2px dashed light-dark(#f5ddaa,#e4c483); box-sizing:border-box; background:light-dark(#b9aa99,#746657); }
+    #project-icon-draft .top-gate { top:2px; border-bottom:0; }
+    #project-icon-draft .bottom-gate { bottom:2px; border-top:0; }
+    #project-icon-draft .mark { position:absolute; display:flex; align-items:center; justify-content:center; font-weight:500; color:light-dark(#fff8e8,#201a14); background:light-dark(#9e753b,#e0ae61); box-shadow:0 2px 5px light-dark(#65452f66,#0008); }
+    #project-icon-draft .mark.round { width:37px; height:37px; border-radius:50%; right:4px; top:4px; font-size:15px; }
+    #project-icon-draft .mark.corner { right:3px; bottom:4px; border-radius:5px; min-width:30px; height:25px; padding:0 3px; font-size:11px; }
+    #project-icon-draft .mark.undo { right:0; bottom:0; width:46px; height:46px; border-radius:50% 0 12px 0; font-size:37px; line-height:1; }
+    #project-icon-draft .mark.question { right:1px; bottom:1px; top:auto; width:34px; height:34px; font-size:24px; }
+    #project-icon-draft .cao-block { position:absolute; left:36px; top:36px; width:41px; height:41px; display:flex; align-items:center; justify-content:center; box-sizing:border-box; border-radius:5px; background:var(--gold); color:light-dark(#50351b,#392711); font-size:25px; font-weight:500; box-shadow:0 2px 3px light-dark(#6c513e66,#21181088); }
+    #project-icon-draft .evil-face { position:absolute; right:1px; bottom:1px; width:40px; height:40px; border-radius:50%; background:light-dark(#873f35,#9e4d40); box-shadow:0 0 0 2px light-dark(#f2d8b4,#d7aa81),0 2px 5px light-dark(#5c281f88,#160a0988); transform:rotate(-12deg); }
+    #project-icon-draft .evil-face::before, #project-icon-draft .evil-face::after { content:""; position:absolute; top:-5px; width:0; height:0; border-left:6px solid transparent; border-right:6px solid transparent; border-bottom:12px solid light-dark(#873f35,#9e4d40); }
+    #project-icon-draft .evil-face::before { left:3px; transform:rotate(-25deg); }
+    #project-icon-draft .evil-face::after { right:3px; transform:rotate(25deg); }
+    #project-icon-draft .evil-face .eye { position:absolute; top:11px; width:8px; height:6px; border-radius:50% 50% 35% 35%; background:light-dark(#f5dfb5,#ffdfa4); }
+    #project-icon-draft .evil-face .eye.left { left:8px; transform:rotate(22deg); }
+    #project-icon-draft .evil-face .eye.right { right:8px; transform:rotate(-22deg); }
+    #project-icon-draft .evil-face .grin { position:absolute; left:11px; top:19px; width:20px; height:11px; box-sizing:border-box; border-bottom:3px solid light-dark(#f5dfb5,#ffdfa4); border-radius:0 0 50% 50%; transform:rotate(-7deg); }
+    #project-icon-draft .speed-clock { position:absolute; right:2px; bottom:2px; width:40px; height:40px; box-sizing:border-box; border:3px solid light-dark(#fff0cd,#2d2219); border-radius:50%; background:light-dark(#a87835,#e0ac5b); box-shadow:0 2px 5px light-dark(#59402b66,#0008); }
+    #project-icon-draft .speed-clock::before { content:""; position:absolute; left:-15px; top:10px; width:12px; height:14px; background:repeating-linear-gradient(to bottom,light-dark(#f9e3af,#f1c881) 0 2px,transparent 2px 6px); }
+    #project-icon-draft .speed-clock .hands { position:absolute; inset:0; animation:project-clock-spin .8s linear infinite; }
+    #project-icon-draft .speed-clock .hands::before { content:""; position:absolute; left:15px; top:6px; width:3px; height:12px; border-radius:2px; background:light-dark(#fff0cd,#2d2219); transform-origin:50% 12px; }
+    #project-icon-draft .speed-clock .hands::after { content:""; position:absolute; left:15px; top:16px; width:11px; height:3px; border-radius:2px; background:light-dark(#fff0cd,#2d2219); }
+    @keyframes project-clock-spin { to { transform:rotate(360deg); } }
+    @media (prefers-reduced-motion:reduce) { #project-icon-draft .speed-clock .hands { animation:none; } }
+    #project-icon-draft .die { position:absolute; right:1px; top:2px; width:43px; height:43px; box-sizing:border-box; border:3px solid light-dark(#8b6e44,#e0b779); border-radius:8px; background:light-dark(#f7edda,#e4d0ac); box-shadow:0 3px 5px light-dark(#59402b66,#0008); display:grid; grid-template-columns:repeat(2,1fr); gap:5px; padding:7px; transform:rotate(11deg); }
+    #project-icon-draft .die i { width:7px; height:7px; border-radius:50%; background:light-dark(#765536,#4c3523); }
+    #project-icon-draft .portal { position:absolute; top:46px; color:light-dark(#fff7e6,#f2d7a3); font-size:31px; line-height:1; text-shadow:0 1px 2px #574536; }
+    #project-icon-draft .portal.left { left:0; }
+    #project-icon-draft .portal.right { right:0; }
+    #project-icon-draft .mini-cap { position:absolute; right:5px; bottom:5px; color:light-dark(#fff4dc,#f3d7a8); font-weight:500; font-size:11px; background:light-dark(#815f38,#4e3925); padding:2px 4px; border-radius:4px; }
+    #project-icon-draft .label { width:100%; margin-top:10px; display:flex; align-items:center; justify-content:center; gap:5px; text-align:center; font-size:14px; font-weight:500; line-height:1.25; }
+    #project-icon-draft .num { color:var(--muted-ink); font-size:11px; font-weight:400; }
+    #project-icon-draft .note { margin-top:4px; color:var(--muted-ink); text-align:center; font-size:11px; line-height:1.2; }
+    #project-icon-draft .trial { color:var(--gold-dark); }
+    #project-icon-draft .art[data-kind="island"] .cell.island { border-radius:50%; box-shadow:inset 0 -3px 0 light-dark(#43604f,#516b57); }
+    #project-icon-draft .art[data-kind="shape"] .board { left:3px; top:3px; width:106px; height:106px; padding:2px; gap:1px; background:transparent; }
+    #project-icon-draft .art[data-kind="shape"] .cell.playable { background:var(--gold); }
+    #project-icon-draft .art[data-kind="shape"] .cell.void { background:transparent; }
+    #project-icon-draft .art[data-kind="grow"] .cell.poly { border-radius:1px; }
+    @media(max-width:780px) { #project-icon-draft .grid-cards { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+    @media(max-width:590px) { #project-icon-draft .grid-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } #project-icon-draft .sheet { padding:12px; } }
+    @media(max-width:360px) { #project-icon-draft .grid-cards { grid-template-columns:1fr; } }
+  </style>
+  <section class="sheet">
+    <div class="heading"><h2>赛事项目图标 · 方向 A</h2><small>10 个正式项目 · 2 个练习项目</small></div>
+    <div class="grid-cards">
+      <div class="item"><div class="art" data-kind="cargo" role="img" aria-label="中央二乘二曹字特殊块，从上方进入并从下方出口运出"><div class="board" data-n="4" data-map=". . . . / . . . . / . . . . / . . . ."></div><span class="top-gate"></span><span class="bottom-gate"></span><span class="cao-block">曹</span></div><div class="label"><span class="num">01</span>真华容道</div><div class="note">10分钟内尽量运出特殊块</div></div>
+      <div class="item"><div class="art" data-kind="half" role="img" aria-label="2 与 4 等概率出现"><div class="board" data-n="3" data-map="2 4 . / . 4 2 / 2 . 4"></div><span class="mark round">½</span></div><div class="label"><span class="num">02</span>50%出4</div><div class="note">出4概率50% · 死亡后比得分</div></div>
+      <div class="item"><div class="art" data-kind="evil" role="img" aria-label="二与四交替铺满棋盘，右下角是邪恶笑脸"><div class="board" data-n="4" data-map="2 4 2 4 / 4 2 4 2 / 2 4 2 4 / 4 2 4 2"></div><span class="evil-face" aria-hidden="true"><i class="eye left"></i><i class="eye right"></i><i class="grin"></i></span></div><div class="label"><span class="num">03</span>对抗出数</div><div class="note">AI对抗出数 · 死亡后比得分</div></div>
+      <div class="item"><div class="art" data-kind="pure" role="img" aria-label="纯二满盘，右下角快速旋转的计时钟"><div class="board" data-n="3" data-map="2 2 2 / 2 2 2 / 2 2 2"></div><span class="speed-clock" aria-hidden="true"><i class="hands"></i></span></div><div class="label"><span class="num">04</span>纯2满盘竞速</div><div class="note">只出2 · 盘面和≥1022即完成</div></div>
+      <div class="item"><div class="art" data-kind="undo" role="img" aria-label="满盘竞速，允许撤销"><div class="board" data-n="3" data-map="4 8 16 / 32 64 128 / 256 512 1024"></div><span class="mark undo">↶</span></div><div class="label"><span class="num">05</span>大满盘撤销竞速</div><div class="note">可撤销重开 · 先达2044</div></div>
+      <div class="item"><div class="art" data-kind="dice" role="img" aria-label="掷骰决定固定墙的位置"><div class="board" data-n="3" data-map="2 . 4 / . W . / . 2 ."></div><span class="die" aria-hidden="true"><i></i><i></i><i></i><i></i></span></div><div class="label"><span class="num">06</span>骰子障碍</div><div class="note">掷骰定墙位 · 死亡后比盘面和</div></div>
+      <div class="item"><div class="art" data-kind="mirror" role="img" aria-label="中央墙阻隔，外沿互通，收集十个64"><div class="board" data-n="4" data-map="64 . . 64 / . W W . / . W W . / 64 . . 64"></div><span class="portal left">↶</span><span class="portal right">↷</span><span class="mini-cap">×10</span></div><div class="label"><span class="num">07</span>镜面64砖×10</div><div class="note">外沿传送 · 集齐10个64</div></div>
+      <div class="item"><div class="art" data-kind="brick" role="img" aria-label="五乘五棋盘左下四乘四全部是256，剩余L形有其他数字"><div class="board" data-n="5" data-map=". 2 4 8 . / 256 256 256 256 16 / 256 256 256 256 32 / 256 256 256 256 64 / 256 256 256 256 128"></div></div><div class="label"><span class="num">08</span>256砖</div><div class="note">256不可合并 · 死亡后比得分</div></div>
+      <div class="item"><div class="art" data-kind="island" role="img" aria-label="只与同类合并的孤岛特殊块"><div class="board" data-n="4" data-map=". 2 . . / 4 . I . / . I . 8 / . . 2 ."></div><span class="mini-cap">孤岛</span></div><div class="label"><span class="num">09</span>困难孤岛</div><div class="note">孤岛只与同类合并 · 不计分</div></div>
+      <div class="item"><div class="art" data-kind="shape" role="img" aria-label="放大的十二格不规则棋盘，右下角问号"><div class="board" data-n="7" data-map="_ _ _ P _ _ _ / _ _ P P P _ _ / _ P P P P _ _ / _ _ P P P _ _ / _ _ _ P _ _ _ / _ _ _ _ _ _ _ / _ _ _ _ _ _ _"></div><span class="mark round question">?</span></div><div class="label"><span class="num">10</span>随机形状</div><div class="note">随机12格棋盘 · 死亡后比得分</div></div>
+      <div class="item"><div class="art" data-kind="seal" role="img" aria-label="每一百步更换三处半透明封锁格"><div class="board" data-n="4" data-map="2 . S . / . 4 . . / S . . 8 / . . S ."></div><span class="mark corner">100</span></div><div class="label"><span class="num">11</span>百步封锁 <span class="trial">· 练习</span></div><div class="note">开局封3格 · 每100步轮换</div></div>
+      <div class="item"><div class="art" data-kind="grow" role="img" aria-label="棋盘四角各有一个三格L形256"><div class="board" data-n="4" data-map="A . . B / A A B B / C C D D / C . . D"></div></div><div class="label"><span class="num">12</span>越来越大 <span class="trial">· 练习</span></div><div class="note">128占两格 · 256占两或三格</div></div>
+    </div>
+  </section>
+  <script>
+    (() => {
+      const root = document.getElementById('project-icon-draft');
+      for (const board of root.querySelectorAll('.board[data-map]')) {
+        const tokens = board.dataset.map.replaceAll('/', ' ').trim().split(/\s+/);
+        const n = Number(board.dataset.n);
+        const labeledPoly = new Set();
+        board.style.setProperty('--n', n);
+        for (const token of tokens.slice(0, n * n)) {
+          const cell = document.createElement('span');
+          cell.className = 'cell';
+          if (token === '_') cell.classList.add('void');
+          else if (token === 'W') { cell.classList.add('wall'); cell.textContent = '×'; }
+          else if (token === 'S') { cell.classList.add('seal'); cell.textContent = '▨'; }
+          else if (token === 'I') { cell.classList.add('island'); cell.textContent = '◈'; }
+          else if (token === 'P') cell.classList.add('playable');
+          else if ('ABCD'.includes(token) && token.length === 1) {
+            cell.classList.add('poly', `poly-${token.toLowerCase()}`);
+            if (!labeledPoly.has(token)) { cell.textContent = '256'; labeledPoly.add(token); }
+          }
+          else if (token === '!') { cell.classList.add('threat'); cell.textContent = '4'; }
+          else if (token !== '.') {
+            cell.classList.add('number');
+            cell.classList.add(`value-${token}`);
+            if (Number(token) >= 64) cell.classList.add('strong');
+            cell.textContent = token;
+          }
+          board.appendChild(cell);
+        }
+      }
+    })();
+  </script>
+</div></body></html>

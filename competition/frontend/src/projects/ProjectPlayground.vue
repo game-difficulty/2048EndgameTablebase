@@ -26,7 +26,7 @@
       <aside class="project-rail">
         <a href="/practice" class="rail-back">← 全部项目</a>
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" :class="{ active: item.id === project.id }">
-          <img class="project-art rail-art" :src="projectIconUrl(item.id)" alt="" /><small>{{ item.order }}</small><span>{{ item.shortTitle }}</span>
+          <img class="project-art rail-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>{{ item.order }}</small><span>{{ item.shortTitle }}</span>
         </a>
       </aside>
 
@@ -322,4 +322,18 @@ onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTim
 .project-lab.is-dark :deep(.mirror-cross i),.project-lab.is-dark :deep(.mirror-cross b){background:#263340;box-shadow:0 0 0 2px rgba(11,18,25,.3)}
 @media(max-width:600px){.lab-header nav{gap:8px}.theme-toggle{width:34px;padding:5px}.theme-toggle span{display:none}}
 @media(max-width:360px){.lab-brand strong{font-size:14px}.lab-header nav .full-label{display:none}.lab-header nav .compact-label{display:inline}}
+.project-entry { display: grid; grid-template-columns: 124px minmax(0, 1fr); grid-template-rows: auto auto minmax(76px, 1fr) auto; column-gap: 18px; align-content: start; }
+.project-entry .entry-art { grid-column: 1; grid-row: 1 / 4; float: none; width: 124px; height: 124px; margin: 0; }
+.project-entry > small { grid-column: 2; grid-row: 1; }
+.project-entry h2 { grid-column: 2; grid-row: 2; margin: 6px 0; }
+.project-entry p { grid-column: 2; grid-row: 3; clear: none; min-height: 0; margin: 0; line-height: 1.45; }
+.project-entry footer { grid-column: 1 / -1; grid-row: 4; margin-top: 16px; }
+.heading-art { width: 96px; height: 96px; }
+@media(max-width:820px) { .heading-art { width: 72px; height: 72px; } }
+@media(max-width:600px) {
+  .project-entry { grid-template-columns: 106px minmax(0, 1fr); grid-template-rows: 22px 84px auto auto; column-gap: 14px; padding: 16px; }
+  .project-entry .entry-art { grid-row: 1 / 3; width: 106px; height: 106px; }
+  .project-entry h2 { align-self: start; font-size: 20px; }
+  .project-entry p { grid-column: 1 / -1; grid-row: 3; margin-top: 12px; }
+}
 </style>
