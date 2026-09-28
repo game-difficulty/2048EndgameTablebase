@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
@@ -15,7 +16,6 @@ from pathlib import Path
 
 from backend.auth.daily_activity import BEIJING
 from backend.auth.db import auth_db, get_auth_db_path
-from backend.human_play.store import db_path as human_db_path
 
 
 # Use only events caused by a person. Settlement, grant and award rows are not visits.
@@ -68,7 +68,8 @@ def refresh(*, first_day: date, last_day: date, play_db: Path | None = None) -> 
             activity.update((day, user_id, site) for day, user_id in entries
                             if day and user_id in valid_users)
 
-    path = Path(play_db) if play_db is not None else human_db_path()
+    path = Path(play_db) if play_db is not None else Path(
+        os.getenv('HUMAN_PLAY_DB') or '/var/lib/2048tables/play/human.sqlite3')
     if play_db is not None and not path.is_file():
         raise FileNotFoundError(path)
     if path.is_file():
