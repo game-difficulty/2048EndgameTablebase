@@ -122,6 +122,7 @@ async function load() {
 
 onMounted(() => {
   document.documentElement.dataset.theme = 'dark';
+  fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' }).catch(() => {});
   load();
   window.addEventListener('popstate', load);
 });

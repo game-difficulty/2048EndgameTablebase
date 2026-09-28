@@ -713,10 +713,11 @@
       "tokens24h": "Tokens 24h"
     },
     "tokenActivity": {
-      "title": "Token Activity",
-      "range": "Last 14 natural days",
+      "title": "Daily Activity & Token Use",
+      "range": "Last 14 calendar days (UTC+8) · identified accounts",
       "tokens": "Token spent",
-      "users": "Spending users"
+      "users": "Spending users",
+      "activeAccounts": "Daily active accounts"
     },
     "users": {
       "title": "User Lookup",

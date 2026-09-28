@@ -35,6 +35,7 @@
           <div class="admin-chart-legend">
             <span><i class="legend-token" />{{ $t('admin.tokenActivity.tokens') }}</span>
             <span><i class="legend-users" />{{ $t('admin.tokenActivity.users') }}</span>
+            <span><i class="legend-active" />{{ $t('admin.tokenActivity.activeAccounts') }}</span>
           </div>
         </div>
         <div class="admin-chart-wrap">
@@ -90,6 +91,7 @@
             </g>
             <polyline class="chart-line token-line" :points="tokenChart.tokenPoints" />
             <polyline class="chart-line users-line" :points="tokenChart.userPoints" />
+            <polyline class="chart-line active-line" :points="tokenChart.activePoints" />
             <g v-if="activeChartPoint" class="chart-hover-layer">
               <line
                 class="chart-hover-line"
@@ -100,12 +102,13 @@
               />
               <circle class="chart-point token-point active" :cx="activeChartPoint.x" :cy="activeChartPoint.tokenY" r="6" />
               <circle class="chart-point users-point active" :cx="activeChartPoint.x" :cy="activeChartPoint.userY" r="6" />
+              <circle class="chart-point active-point active" :cx="activeChartPoint.x" :cy="activeChartPoint.activeY" r="6" />
               <foreignObject
                 class="chart-tooltip-object"
                 :x="activeChartPoint.tooltipX"
                 :y="activeChartPoint.tooltipY"
                 width="188"
-                height="88"
+                height="116"
               >
                 <div xmlns="http://www.w3.org/1999/xhtml" class="admin-chart-tooltip">
                   <div class="tooltip-date">{{ activeChartPoint.date }}</div>
@@ -116,6 +119,10 @@
                   <div class="tooltip-row">
                     <span><i class="legend-users" />{{ $t('admin.tokenActivity.users') }}</span>
                     <strong>{{ formatNumber(activeChartPoint.usersCount) }}</strong>
+                  </div>
+                  <div class="tooltip-row">
+                    <span><i class="legend-active" />{{ $t('admin.tokenActivity.activeAccounts') }}</span>
+                    <strong>{{ formatNumber(activeChartPoint.activeAccounts) }}</strong>
                   </div>
                 </div>
               </foreignObject>
@@ -137,6 +144,14 @@
                 :cy="point.userY"
                 r="4"
               />
+              <circle
+                v-for="point in tokenChart.points"
+                :key="`active-point-${point.date}`"
+                class="chart-point active-point"
+                :cx="point.x"
+                :cy="point.activeY"
+                r="4"
+              />
             </g>
             <g class="chart-hit-layer">
               <rect
@@ -148,7 +163,7 @@
                 :width="point.hitWidth"
                 :height="tokenChart.bottom - tokenChart.top"
                 tabindex="0"
-                :aria-label="`${point.date}: ${formatTokens(point.tokens)} tokens, ${formatNumber(point.usersCount)} users`"
+                :aria-label="`${point.date}: ${formatTokens(point.tokens)} tokens, ${formatNumber(point.usersCount)} spending users, ${formatNumber(point.activeAccounts)} active accounts`"
                 @pointerenter="showChartTooltip(point.index)"
                 @pointermove="showChartTooltip(point.index)"
                 @pointerdown.prevent="showChartTooltip(point.index)"
@@ -623,7 +638,7 @@ const tokenChart = computed(() => {
     { targetTicks: 7 },
   );
   const userAxis = buildNiceTicks(
-    Math.max(1, ...rows.map((row) => Number(row.spending_users || 0))),
+    Math.max(1, ...rows.map((row) => Math.max(Number(row.spending_users || 0), Number(row.active_accounts || 0)))),
     top,
     bottom,
     { targetTicks: 8, integer: true },
@@ -633,6 +648,7 @@ const tokenChart = computed(() => {
     const x = left + ((right - left) * index) / span;
     const tokens = Number(row.tokens_spent || 0);
     const usersCount = Number(row.spending_users || 0);
+    const activeAccounts = Number(row.active_accounts || 0);
     return {
       index,
       date: row.date,
@@ -640,8 +656,10 @@ const tokenChart = computed(() => {
       x,
       tokens,
       usersCount,
+      activeAccounts,
       tokenY: bottom - ((bottom - top) * tokens) / tokenAxis.axisMax,
       userY: bottom - ((bottom - top) * usersCount) / userAxis.axisMax,
+      activeY: bottom - ((bottom - top) * activeAccounts) / userAxis.axisMax,
     };
   });
   const points = rawPoints.map((point, index) => {
@@ -650,8 +668,8 @@ const tokenChart = computed(() => {
     const hitX = index === 0 ? left : (previousX + point.x) / 2;
     const hitRight = index === rawPoints.length - 1 ? right : (point.x + nextX) / 2;
     const tooltipWidth = 188;
-    const tooltipHeight = 88;
-    const minY = Math.min(point.tokenY, point.userY);
+    const tooltipHeight = 116;
+    const minY = Math.min(point.tokenY, point.userY, point.activeY);
     const tooltipX = Math.min(
       right - tooltipWidth,
       Math.max(left, point.x - tooltipWidth / 2),
@@ -679,6 +697,7 @@ const tokenChart = computed(() => {
     xLabels: points.filter((_point, index) => rows.length <= 8 || index % 2 === 0 || index === rows.length - 1),
     tokenPoints: linePoints(points, 'tokenY'),
     userPoints: linePoints(points, 'userY'),
+    activePoints: linePoints(points, 'activeY'),
   };
 });
 
@@ -998,6 +1017,10 @@ watch(() => props.active, (active) => {
   background: color-mix(in srgb, var(--text-main) 88%, black);
 }
 
+.legend-active {
+  background: #16a385;
+}
+
 .admin-chart-wrap {
   margin-top: 1rem;
   overflow-x: auto;
@@ -1049,6 +1072,11 @@ watch(() => props.active, (active) => {
   stroke-width: 3.5;
 }
 
+.active-line {
+  stroke: #16a385;
+  stroke-width: 3.5;
+}
+
 .chart-point {
   stroke: var(--bg-card);
   stroke-width: 2;
@@ -1061,6 +1089,10 @@ watch(() => props.active, (active) => {
 
 .users-point {
   fill: color-mix(in srgb, var(--text-main) 88%, black);
+}
+
+.active-point {
+  fill: #16a385;
 }
 
 .chart-point.active {

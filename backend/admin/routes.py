@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
-from datetime import timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from backend.auth.db import auth_db
+from backend.auth.daily_activity import BEIJING
 from backend.auth.dependencies import require_user
 from backend.auth.service import iso, normalize_email, set_account_status_for_admin, utcnow
 from backend.quota.service import adjust_paid_tokens_for_admin
@@ -285,15 +286,15 @@ def _scalar(db, query: str, params: tuple[Any, ...] = ()) -> int:
 
 
 def _daily_token_activity(db, days: int) -> list[dict[str, Any]]:
-    today = utcnow().date()
+    today = datetime.now(BEIJING).date()
     first_day = today - timedelta(days=days - 1)
-    cutoff = f"{first_day.isoformat()}T00:00:00"
+    cutoff = datetime.combine(first_day, time.min, BEIJING).astimezone(timezone.utc).isoformat()
     rows_by_day = {
         str(row["day"]): row
         for row in db.execute(
             """
             SELECT
-              substr(created_at, 1, 10) AS day,
+              date(created_at, '+8 hours') AS day,
               SUM(final_cost_units) AS units,
               COUNT(DISTINCT user_id) AS spending_users
             FROM token_ledger
@@ -306,6 +307,15 @@ def _daily_token_activity(db, days: int) -> list[dict[str, Any]]:
         ).fetchall()
     }
 
+    active_by_day = {
+        str(row['day']): int(row['active_accounts'])
+        for row in db.execute('''
+            SELECT day, COUNT(DISTINCT user_id) AS active_accounts
+            FROM daily_user_activity WHERE day >= ?
+            GROUP BY day
+        ''', (first_day.isoformat(),)).fetchall()
+    }
+
     rows = []
     for offset in range(days):
         day = (first_day + timedelta(days=offset)).isoformat()
@@ -315,6 +325,7 @@ def _daily_token_activity(db, days: int) -> list[dict[str, Any]]:
                 "date": day,
                 "tokens_spent": _token_value(row["units"]) if row else 0,
                 "spending_users": int(row["spending_users"] or 0) if row else 0,
+                "active_accounts": active_by_day.get(day, 0),
             }
         )
     return rows

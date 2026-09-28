@@ -16,6 +16,7 @@ from backend.quota.errors import InsufficientTokens
 from . import gifts, audience, lucky_bags, red_envelopes
 from backend.auth.dependencies import current_guest_from_websocket
 from backend.auth.principal import ActorRef
+from backend.auth.daily_activity import activity_day, record_daily_visit
 from .store import week_bounds
 from .rooms import DEFAULT_ROOM, DEFAULT_ROOM_ID, ROOMS, RoomDefinition
 from .content import create_content
@@ -884,7 +885,13 @@ async def watch(ws: WebSocket):
     user = None
     with contextlib.suppress(Exception):
         user = await asyncio.to_thread(current_user_from_websocket, ws)
+    recorded_day = None
     if user:
+        try:
+            await asyncio.to_thread(record_daily_visit, int(user['id']), 'live')
+            recorded_day = activity_day()
+        except Exception:
+            logging.getLogger(__name__).exception('Could not record Live account visit')
         already_present = user['id'] in hub.viewer_users.values()
         hub.viewer_users[ws] = user['id']
         hub.viewer_times[ws] = (time.time(), time.time())
@@ -924,6 +931,13 @@ async def watch(ws: WebSocket):
             incoming = await asyncio.wait_for(ws.receive_text(), 90)
             if incoming != 'ping':
                 break
+            day = activity_day()
+            if user and day != recorded_day:
+                try:
+                    await asyncio.to_thread(record_daily_visit, int(user['id']), 'live')
+                    recorded_day = day
+                except Exception:
+                    logging.getLogger(__name__).exception('Could not record Live account visit')
             if ws in hub.viewer_times:
                 hub.viewer_times[ws] = (hub.viewer_times[ws][0], time.time())
     except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError):

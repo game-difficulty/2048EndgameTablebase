@@ -775,10 +775,11 @@
       "loadFailed": "站长数据加载失败。"
     },
     "tokenActivity": {
-      "title": "Token 消耗趋势",
-      "range": "最近 14 个自然日",
+      "title": "日活与 Token 使用趋势",
+      "range": "最近 14 个北京时间自然日 · 已识别账号",
       "tokens": "Token 消耗量",
-      "users": "消耗用户数"
+      "users": "消耗用户数",
+      "activeAccounts": "日活账号数"
     }
   },
   "menu": {

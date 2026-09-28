@@ -224,6 +224,14 @@ def init_auth_db() -> None:
               FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
 
+            CREATE TABLE IF NOT EXISTS daily_user_activity (
+              day TEXT NOT NULL,
+              user_id INTEGER NOT NULL,
+              site TEXT NOT NULL,
+              PRIMARY KEY(day, user_id, site),
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
             CREATE TABLE IF NOT EXISTS token_accounts (
               user_id INTEGER PRIMARY KEY,
               bonus_balance_units INTEGER NOT NULL DEFAULT 0,

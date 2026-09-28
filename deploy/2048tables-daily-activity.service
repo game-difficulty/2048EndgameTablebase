@@ -1,0 +1,13 @@
+[Unit]
+Description=Backfill daily active 2048 account activity
+After=2048tables-cloud.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/2048tables/app
+EnvironmentFile=/etc/2048tables/cloud.env
+EnvironmentFile=-/etc/2048tables/play.env
+ExecStart=/opt/2048tables/venv/bin/python -m scripts.refresh_daily_activity --days 14 --play-db /var/lib/2048tables/play/human.sqlite3
+NoNewPrivileges=true

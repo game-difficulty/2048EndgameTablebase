@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh daily active 2048 account activity after Beijing midnight
+
+[Timer]
+OnCalendar=*-*-* 16:10:00 UTC
+Persistent=true
+Unit=2048tables-daily-activity.service
+
+[Install]
+WantedBy=timers.target
