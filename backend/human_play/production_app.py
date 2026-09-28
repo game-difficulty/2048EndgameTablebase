@@ -10,24 +10,40 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 
 from backend.admin.routes import router as admin_router
 from backend.auth.db import init_auth_db
 from backend.auth.dependencies import require_user
 from backend.auth.routes import router as auth_router
 from backend.cloud_analysis_jobs import (
+    AnalysisQueueFull,
     analysis_download_filename,
     analysis_job_payload,
+    check_analysis_capacity,
+    create_analysis_job,
     get_analysis_job,
     start_analysis_worker,
     cleanup_expired_jobs,
 )
 from backend.analysis_history import cleanup_artifacts, router as analysis_history_router
-from backend.cloud_files import build_file_download_response, get_download_root
+from backend.cloud_files import (
+    allowed_extensions_for_kind,
+    build_file_download_response,
+    delete_upload,
+    get_download_root,
+    get_max_upload_bytes_for_kind,
+    register_upload,
+    save_upload_file,
+)
 from backend.http_compression import DisplayCompression
 from backend.profile.routes import router as profile_router
+from backend.quota.errors import InsufficientTokens
 from backend.quota.routes import router as quota_router
+from backend.quota.service import cancel_reservation, get_token_balance, reserve_operation_tokens_many
+from backend.tablebase_catalog import resolve_configured_tablebase
+from backend.auth.dependencies import client_ip
+from backend.auth.service import record_usage
 from backend.token_rewards import settle_human_rolling_weeks
 from Config import SingletonConfig
 
@@ -95,6 +111,85 @@ app.include_router(profile_router)
 app.include_router(quota_router)
 app.include_router(human_router)
 app.include_router(analysis_history_router)
+
+
+@app.post("/api/analysis/jobs")
+async def analysis_upload(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    pattern: str = Form(...),
+    target: str = Form(...),
+    user: dict = Depends(require_user),
+):
+    uploads = []
+    reservations = []
+    job_started = False
+    try:
+        normalized_pattern = str(pattern or "").strip()
+        normalized_target = str(target or "").strip()
+        full_pattern = f"{normalized_pattern}_{normalized_target}"
+        descriptor = resolve_configured_tablebase(full_pattern)
+        if descriptor is None:
+            raise ValueError("The selected tablebase is not available.")
+        if descriptor.get("_provider") == "remote" and not descriptor.get("_available", False):
+            raise HTTPException(503, detail={
+                "code": "REMOTE_TABLEBASE_OFFLINE",
+                "message": "The selected tablebase is temporarily unavailable.",
+            })
+        check_analysis_capacity(int(user["id"]), len(files))
+        for upload in files:
+            saved = await save_upload_file(
+                upload,
+                allowed_extensions=allowed_extensions_for_kind("analysis"),
+                max_bytes=get_max_upload_bytes_for_kind("analysis"),
+            )
+            uploads.append(register_upload(
+                saved, kind="analysis", user_id=int(user["id"]),
+                session_id=int(user["session_id"]),
+            ))
+        reservations = reserve_operation_tokens_many(
+            user_id=int(user["id"]), session_id=int(user["session_id"]),
+            operation_key="analysis_per_replay",
+            full_patterns=[full_pattern] * len(uploads),
+        )
+        job = create_analysis_job(
+            uploads=uploads, pattern=normalized_pattern, target=normalized_target,
+            user_id=int(user["id"]), session_id=int(user["session_id"]),
+            quota_reservations=reservations,
+        )
+        job_started = True
+        record_usage(
+            user_id=int(user["id"]), session_id=int(user["session_id"]),
+            event_type="analysis_job", quota_key="analysis_job", cost=0,
+            metadata={"pattern": pattern, "target": target, "total": len(uploads)},
+            ip_address=client_ip(request),
+        )
+    except InsufficientTokens as exc:
+        for reservation in reservations:
+            cancel_reservation(reservation, reason="analysis_job_not_created")
+        raise HTTPException(402, detail=exc.payload) from exc
+    except AnalysisQueueFull as exc:
+        for reservation in reservations:
+            cancel_reservation(reservation, reason="analysis_job_not_created")
+        raise HTTPException(429, detail={"code": str(exc)}, headers={"Retry-After": "10"}) from exc
+    except ValueError as exc:
+        for reservation in reservations:
+            cancel_reservation(reservation, reason="analysis_job_not_created")
+        raise HTTPException(400, detail=str(exc)) from exc
+    except Exception:
+        if not job_started:
+            for reservation in reservations:
+                cancel_reservation(reservation, reason="analysis_job_not_created")
+        raise
+    finally:
+        if not job_started:
+            for upload_record in uploads:
+                delete_upload(upload_record.upload_id, int(user["id"]))
+    return {
+        "job_id": job.job_id,
+        "total": job.total,
+        "token_balance": get_token_balance(int(user["id"])),
+    }
 
 
 @app.get("/api/analysis/jobs/{job_id}")
