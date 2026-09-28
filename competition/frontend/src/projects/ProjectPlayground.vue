@@ -4,6 +4,8 @@
       <a class="lab-brand" href="/practice"><span>20</span><strong>2048 赛事项目试玩</strong></a>
       <nav>
         <a :href="competitionHomePath" aria-label="赛事中心"><span class="full-label">赛事中心</span><span class="compact-label" aria-hidden="true">赛事</span></a>
+        <span v-if="sessionReady && practiceUser" class="practice-account">{{ practiceUser.display_name }}</span>
+        <a v-else-if="sessionReady" :href="mainSiteUrl">登录</a>
         <b>tournament.2048tables.online</b>
         <button class="theme-toggle" type="button" :aria-label="practiceTheme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" :aria-pressed="practiceTheme === 'dark'" @click="toggleTheme">
           <svg v-if="practiceTheme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
@@ -30,12 +32,14 @@
         </a>
       </aside>
 
-      <section class="play-main">
-        <header class="project-heading">
-          <img class="project-art heading-art" :src="projectIconUrl(project.id, practiceTheme)" alt="" /><div><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ project.title }}</h1><span>{{ project.description }}</span></div>
-          <div class="practice-tag">单人试玩<br><small>登录后记录最佳成绩</small></div>
-        </header>
+      <header class="project-heading">
+        <img class="project-art heading-art" :src="projectIconUrl(project.id, practiceTheme)" alt="" />
+        <div class="heading-copy"><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ project.title }}</h1></div>
+        <div class="practice-tag">单人试玩<br><small>{{ !sessionReady ? '正在同步登录状态' : practiceUser ? '已登录 · 自动记录最佳' : '游客 · 登录后记录最佳' }}</small><a href="#practice-leaderboard">查看试玩榜 ↓</a></div>
+        <div class="project-summary">{{ project.description }}</div>
+      </header>
 
+      <section class="play-main">
         <div class="game-shell">
           <section class="game-hud">
             <div><small>{{ project.cargoTransport ? '剩余时间' : '用时' }}</small><strong class="timer">{{ project.cargoTransport ? remainingText : elapsedText }}</strong></div>
@@ -66,12 +70,8 @@
         </div>
       </section>
 
-      <aside class="rules-panel">
-        <p>玩法说明</p><h2>{{ project.shortTitle }}</h2><div class="rule-copy">{{ project.description }}</div>
-        <dl><dt>棋盘</dt><dd>{{ project.boardLabel || `${project.rows}×${project.cols}` }}</dd><dt>结算</dt><dd>{{ settlement }}</dd></dl>
-        <div v-if="project.mirrorPortals" class="mirror-note"><strong>镜面棋盘怎么走？</strong><span>把中央十字想成真正的墙。向左滑出最左边的砖会从最右边回来；上下同理。砖最终都停在中央墙的两侧。</span><div class="mirror-mini"><i></i><i></i><i></i><i></i><b></b><em></em></div></div>
-        <p v-if="snapshot.aiError" class="wasm-warning">WASM 暂不可用，本次已用确定性随机出数代替：{{ snapshot.aiError }}</p>
-        <section class="practice-leaderboard" aria-label="试玩排行榜">
+      <aside class="play-sidebar">
+        <section id="practice-leaderboard" class="practice-leaderboard" aria-label="试玩排行榜">
           <div class="leaderboard-title"><h3>试玩榜</h3><small>仅供试玩 · 不用于赛事裁决</small></div>
           <p v-if="leaderboardLoading" class="leaderboard-hint">正在加载…</p>
           <p v-else-if="leaderboardError" class="leaderboard-hint">{{ leaderboardError }}</p>
@@ -85,6 +85,12 @@
             </ol>
             <p v-else class="leaderboard-hint">暂无记录，来留下第一条。</p>
           </template>
+        </section>
+        <section class="rules-panel">
+          <p>玩法说明</p><h2>{{ project.shortTitle }}</h2>
+          <dl><dt>棋盘</dt><dd>{{ project.boardLabel || `${project.rows}×${project.cols}` }}</dd><dt>结算</dt><dd>{{ settlement }}</dd></dl>
+          <div v-if="project.mirrorPortals" class="mirror-note"><strong>镜面棋盘怎么走？</strong><span>把中央十字想成真正的墙。向左滑出最左边的砖会从最右边回来；上下同理。砖最终都停在中央墙的两侧。</span><div class="mirror-mini"><i></i><i></i><i></i><i></i><b></b><em></em></div></div>
+          <p v-if="snapshot.aiError" class="wasm-warning">WASM 暂不可用，本次已用确定性随机出数代替：{{ snapshot.aiError }}</p>
         </section>
       </aside>
     </main>
@@ -129,9 +135,11 @@ const thinking = ref(false);
 const diceVisible = ref(false);
 const finishVisible = ref(false);
 const leaderboard = ref(null);
-const leaderboardLoading = ref(false);
+const leaderboardLoading = ref(true);
 const leaderboardError = ref('');
 const recordMessage = ref('');
+const practiceUser = ref(null);
+const sessionReady = ref(false);
 let runId = 0;
 let submittedRunId = -1;
 let timer = null;
@@ -157,6 +165,31 @@ watch(() => snapshot.value.finished, finished => {
 function formatRecord(entry) {
   if (leaderboard.value?.metric === 'time') return formatElapsed(entry.result_value);
   return `${Number(entry.result_value).toLocaleString()}${leaderboard.value?.metric === 'deliveries' ? ' 块' : ' 分'}`;
+}
+async function syncPracticeSession() {
+  async function readSession() {
+    try {
+      practiceUser.value = (await api.session()).user;
+      return true;
+    } catch (error) {
+      return error.status || 0;
+    }
+  }
+  const initial = await readSession();
+  if (initial === 401 && window.location.hostname === 'tournament.2048tables.online') {
+    // Older main/play/live logins may still have a host-only cookie. Visiting
+    // their existing /me endpoint upgrades it to the shared parent-domain cookie.
+    for (const origin of [new URL(mainSiteUrl).origin, 'https://play.2048tables.online', 'https://live.2048tables.online']) {
+      try {
+        await fetch(`${origin}/api/auth/me`, {
+          mode: 'no-cors', credentials: 'include', cache: 'no-store',
+          signal: AbortSignal.timeout?.(2500),
+        });
+      } catch { /* An unavailable sibling site must not block practice. */ }
+      if (await readSession() === true) break;
+    }
+  }
+  sessionReady.value = true;
 }
 async function loadLeaderboard() {
   if (!project.value) return;
@@ -254,7 +287,7 @@ function keydown(event) {
   if (direction) { event.preventDefault(); move(direction); }
   if ((event.key === 'z' || event.key === 'Z') && project.value.allowUndo) { event.preventDefault(); undo(); }
 }
-onMounted(() => { createGame(); loadLeaderboard(); timer = window.setInterval(() => { now.value = performance.now(); if (project.value?.cargoTransport && game.value && !game.value.finished && game.value.elapsed(now.value) >= CARGO_LIMIT_MS) snapshot.value = game.value.expire(now.value); }, 16); window.addEventListener('keydown', keydown); });
+onMounted(() => { createGame(); syncPracticeSession().finally(loadLeaderboard); timer = window.setInterval(() => { now.value = performance.now(); if (project.value?.cargoTransport && game.value && !game.value.finished && game.value.elapsed(now.value) >= CARGO_LIMIT_MS) snapshot.value = game.value.expire(now.value); }, 16); window.addEventListener('keydown', keydown); });
 onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTimer); window.clearTimeout(finishTimer); window.clearTimeout(thinkingTimer); window.removeEventListener('keydown', keydown); });
 </script>
 
@@ -335,5 +368,39 @@ onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTim
   .project-entry .entry-art { grid-row: 1 / 3; width: 106px; height: 106px; }
   .project-entry h2 { align-self: start; font-size: 20px; }
   .project-entry p { grid-column: 1 / -1; grid-row: 3; margin-top: 12px; }
+}
+.practice-account{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#685742;font-size:12px}
+.play-page{grid-template-rows:auto auto;align-items:start}
+.project-rail{grid-column:1;grid-row:1 / span 2}
+.project-heading{grid-column:2 / 4;grid-row:1;display:grid;grid-template-columns:96px minmax(0,1fr) 210px;align-items:center;column-gap:18px;row-gap:12px;margin:0 0 4px}
+.project-heading .heading-art{grid-column:1;grid-row:1;width:96px;height:96px}
+.project-heading .heading-copy{grid-column:2;grid-row:1}
+.project-heading .practice-tag{grid-column:3;grid-row:1;margin:0;align-self:center}
+.practice-tag a{display:block;margin-top:5px;color:#8c6427;font-size:12px;text-decoration:none}
+.practice-tag a:hover{text-decoration:underline}
+.project-summary{grid-column:1 / -1;grid-row:2;max-width:80ch;padding:12px 16px;border:1px solid #e4dbce;border-radius:7px;background:#fffdf8;color:#685d53;font-size:14px;line-height:1.6}
+.play-main{grid-column:2;grid-row:2;min-width:0}
+.play-sidebar{grid-column:3;grid-row:2;display:grid;align-content:start;gap:14px;min-width:0}
+.practice-leaderboard{margin:0;padding:18px;border:1px solid #d8d0c5;border-radius:9px;background:#fffdf8;scroll-margin-top:16px}
+.project-lab.is-dark .practice-account{color:#c2ccd6}
+.project-lab.is-dark .project-summary,.project-lab.is-dark .practice-leaderboard{background:#1a2633;border-color:#344354;color:#e7edf2}
+.project-lab.is-dark .practice-tag a{color:#d8ac62}
+@media(max-width:1100px){
+  .project-heading{grid-column:1 / -1}
+  .play-main{grid-column:1}
+  .play-sidebar{grid-column:2}
+}
+@media(max-width:820px){
+  .play-page{display:block}
+  .project-heading{grid-template-columns:72px minmax(0,1fr);margin-bottom:14px}
+  .project-heading .heading-art{width:72px;height:72px;grid-column:1;grid-row:1;margin:0}
+  .project-heading .practice-tag{grid-column:1 / -1;grid-row:2;justify-self:start}
+  .project-summary{grid-column:1 / -1;grid-row:3;max-width:none}
+  .play-sidebar{margin-top:14px}
+}
+@media(max-width:600px){
+  .project-heading{grid-template-columns:58px minmax(0,1fr)}
+  .project-heading .heading-art{width:58px;height:58px}
+  .practice-account{max-width:95px}
 }
 </style>
