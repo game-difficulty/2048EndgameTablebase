@@ -224,7 +224,7 @@ async function loadHistory(force = false) {
   closePreview();
   const params = new URLSearchParams({variant:filterVariant.value,sort:sort.value,
     page:String(currentPage.value),page_size:String(pageSize.value)});
-  const key = `${props.username}?${params}`;
+  const key = `${props.viewer?.id ?? 'guest'}:${props.username}?${params}`;
   if (!force && historyCache.has(key)) { applyHistory(historyCache.get(key)); loading.value = false; return; }
   loading.value = true; error.value = '';
   try {
@@ -243,7 +243,7 @@ function goToPage(page) {
 function applyBestTen(result) { bestMeta.value = result; bestTen.value = result.entries; }
 async function loadBestTen(force = false) {
   const serial = ++bestSerial;
-  const key = `${props.username}:${bestVariant.value}`;
+  const key = `${props.viewer?.id ?? 'guest'}:${props.username}:${bestVariant.value}`;
   if (!force && bestCache.has(key)) { applyBestTen(bestCache.get(key)); bestLoading.value = false; return; }
   bestLoading.value = true;
   try {
@@ -304,6 +304,11 @@ async function deleteHistoryRun() {
   finally { deletingId.value = null; }
 }
 watch(() => props.username, () => {closePreview();historyCache.clear();bestCache.clear();profile.value=null;entries.value=[];currentPage.value=1;loadHistory();loadBestTen();}, {immediate:true});
+watch(() => props.viewer?.id ?? null, (next, previous) => {
+  if (next === previous) return;
+  historyCache.clear(); bestCache.clear();
+  loadHistory(true); loadBestTen(true);
+});
 watch([filterVariant,sort,pageSize], () => { currentPage.value=1; loadHistory(); });
 watch(bestVariant, loadBestTen);
 watch(isOwner, owner => { if (!owner && tab.value === 'settings') selectTab('profile'); });

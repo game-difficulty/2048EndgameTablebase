@@ -360,7 +360,7 @@ def player_history(username: str, request: Request, response: Response,
         raise HTTPException(400, 'invalid_page_size')
     response.headers['Cache-Control'] = 'private, no-store'
     viewer = current_user_from_request(request)
-    user_id = call(service.player_id_for_name, username)
+    user_id = call(service.player_id_for_name, username, viewer['id'] if viewer else None)
     return call(service.history, user_id, viewer['id'] if viewer else None,
                 variant=variant, sort=sort, limit=page_size, page=page)
 
@@ -376,14 +376,15 @@ def delete_player_history_run(run_id: str, request: Request, response: Response)
 def player_best_ten(username: str, request: Request, response: Response, variant: str = '4x4'):
     response.headers['Cache-Control'] = 'private, no-store'
     viewer = current_user_from_request(request)
-    user_id = call(service.player_id_for_name, username)
+    user_id = call(service.player_id_for_name, username, viewer['id'] if viewer else None)
     return call(service.best_ten, user_id, viewer['id'] if viewer else None, variant)
 
 
 @router.get('/users/{username}/statistics')
-def player_statistics(username: str, response: Response, variant: str = '4x4'):
+def player_statistics(username: str, request: Request, response: Response, variant: str = '4x4'):
     response.headers['Cache-Control'] = 'private, max-age=30'
-    user_id = call(service.player_id_for_name, username)
+    viewer = current_user_from_request(request)
+    user_id = call(service.player_id_for_name, username, viewer['id'] if viewer else None)
     return call(service.player_statistics, user_id, variant)
 
 

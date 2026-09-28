@@ -337,8 +337,17 @@ class HumanPlayTests(unittest.TestCase):
         with auth_db() as db:
             db.execute("UPDATE users SET display_name='xlb',display_name_key='xlb' WHERE id=1")
             db.execute("UPDATE users SET display_name='XLB',display_name_key='legacy-conflict:2:xlb' WHERE id=2")
+            db.execute("""INSERT INTO users(id,email,password_hash,display_name,created_at,updated_at)
+                VALUES(3,'3@test.invalid','!disabled','Player 3',?,?)""", (iso(), iso()))
         self.assertEqual(service.player_id_for_name('xlb'), 1)
         self.assertEqual(service.player_id_for_name('XLB'), 2)
+        self.assertEqual(service.player_id_for_name('XLB', preferred_user_id=1), 1)
+        self.assertEqual(service.player_id_for_name('xlb', preferred_user_id=2), 2)
+        self.assertEqual(service.player_id_for_name('Player 3', preferred_user_id=2), 3)
+        response = self.client.get('/api/human/users/XLB/history')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['player']['id'], 1)
+        self.assertTrue(response.json()['is_owner'])
 
     def test_owner_soft_delete_removes_game_from_all_player_results_but_keeps_archive(self):
         run = self.new('2x4')

@@ -368,10 +368,18 @@ def identity_map(ids):
         return {r["id"]: (r["display_name"] or "玩家") for r in rows if r["status"] == "active"}
 
 
-def player_id_for_name(username):
+def player_id_for_name(username, preferred_user_id=None):
     from backend.profile.validation import canonical_display_name_key
     key = canonical_display_name_key(username)
     with auth_db() as db:
+        if preferred_user_id is not None:
+            preferred = db.execute(
+                "SELECT id,display_name FROM users WHERE id=? AND status='active'",
+                (int(preferred_user_id),),
+            ).fetchone()
+            if (preferred
+                    and canonical_display_name_key(preferred["display_name"]) == key):
+                return preferred["id"]
         row = db.execute("""SELECT id FROM users WHERE status='active'
             AND (display_name=? OR display_name_key=? OR (display_name_key IS NULL AND display_name=?))
             ORDER BY CASE WHEN display_name=? THEN 0 WHEN display_name_key=? THEN 1 ELSE 2 END, id

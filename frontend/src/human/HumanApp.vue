@@ -79,7 +79,7 @@
         </div>
       </template>
 
-      <KeepAlive><PlayerProfile v-if="view === 'profile'" :username="profileName" :viewer="user" :play-settings="playSettings" @back="goGame" @update:play-settings="updatePlaySettings" @replay="openReplay" @analyze="openAnalysis" /></KeepAlive>
+      <KeepAlive><PlayerProfile v-if="view === 'profile' && !booting" :username="profileName" :viewer="user" :play-settings="playSettings" @back="goGame" @update:play-settings="updatePlaySettings" @replay="openReplay" @analyze="openAnalysis" /></KeepAlive>
 
       <HumanLeaderboardPage v-if="view === 'leaderboard'" @back="goGame" @player="openPlayer" @replay="openReplay" />
 
@@ -256,7 +256,7 @@ function duration(ms) { const s = Math.floor(Math.max(0, ms) / 1000); return `${
 const date = timestamp => new Date(timestamp * 1000).toLocaleString(language.value === 'en' ? 'en-US' : 'zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 const reasonText = reason => t({ game_over: '自然结束', restarted: '重开', abandoned: '放弃', interrupted: '中断' }[reason] || reason);
 
-let booting = true;
+const booting = ref(true);
 async function boot() {
   bootError.value = '';
   try {
@@ -279,7 +279,7 @@ async function boot() {
       await route();
     }
   } catch { bootError.value = '本地服务未就绪，请确认服务已启动后重试。'; }
-  finally { booting = false; }
+  finally { booting.value = false; }
 }
 async function localLogin() {
   authBusy.value = true;
@@ -497,7 +497,7 @@ async function goGame() {
   if (location.pathname !== '/' || location.hash !== '#game') history.pushState(null, '', '/#game');
   await showGame();
 }
-watch([variant, period], () => { if (!booting) loadBoard(); });
+watch([variant, period], () => { if (!booting.value) loadBoard(); });
 watch(() => run.value?.seq, () => live.publishTail());
 watch(() => [run.value?.variant, run.value?.score], ([key, score]) => {
   const value = Math.max(0, Number(score) || 0);
