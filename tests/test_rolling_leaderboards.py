@@ -114,6 +114,22 @@ class RollingRewardTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM token_rolling_snapshot WHERE board_key='human:4x4'").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM token_reward_receipts WHERE reward_key LIKE 'rolling:%:human:4x4:%'").fetchone()[0], 1)
 
+    def test_main_only_settlement_does_not_read_play_scores(self):
+        stamp = self.boundary.timestamp() - 10
+        with database() as db:
+            rolling.add(db, board_key='4x4', run_id='play-run', user_id=1,
+                        score=2000, achieved_at=stamp, eligible_at=stamp,
+                        now=self.boundary.timestamp() - 1)
+        with auth_db() as db:
+            rolling.add(db, board_key='gamer_high_score_weekly', run_id='main-run',
+                        user_id=2, score=1000, achieved_at=stamp, eligible_at=stamp,
+                        now=self.boundary.timestamp() - 1)
+        settle_rolling_weeks(self.boundary, include_human=False)
+        with auth_db() as db:
+            boards = [row[0] for row in db.execute(
+                'SELECT board_key FROM token_rolling_snapshot ORDER BY board_key')]
+            self.assertEqual(boards, ['gamer_high_score_weekly'])
+
     def test_human_top_ten_and_main_top_five_are_frozen_and_idempotent(self):
         t = self.boundary.timestamp()
         with database() as db:

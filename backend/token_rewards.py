@@ -159,15 +159,16 @@ def settle_weeks(now=None):
             week = end
 
 
-def settle_rolling_weeks(now=None):
+def settle_rolling_weeks(now=None, *, include_human=True):
     """Freeze six rolling boards at Monday 08:00 Beijing and credit once.
 
     The live 7-day rankings keep sliding every moment; this fixed boundary
     applies only to which 168-hour snapshot receives the weekly rewards.
     """
     from backend import rolling_leaderboards as rolling
-    from backend.human_play.store import database as human_database
-    from backend.human_play.rolling import as_of as human_as_of
+    if include_human:
+        from backend.human_play.store import database as human_database
+        from backend.human_play.rolling import as_of as human_as_of
     now = now or datetime.now(timezone.utc)
     with auth_db() as db:
         first = datetime.fromisoformat(db.execute("""SELECT value FROM token_reward_state
@@ -183,13 +184,15 @@ def settle_rolling_weeks(now=None):
                   AND julianday(submitted_at)<julianday(?) LIMIT 1""",
                 (lower.isoformat(), boundary.isoformat())).fetchone():
                 break
-        # Human scores are in a different SQLite file. Serialize its one-time
-        # backfill and snapshot without holding the account database write lock.
-        with human_database() as human_db:
-            human_db.execute('BEGIN IMMEDIATE')
-            human_rows = {variant: [dict(row) for row in human_as_of(
-                human_db, variant, boundary, 100)]
-                for variant in HUMAN_WEEKLY_REWARDS}
+        human_rows = {}
+        if include_human:
+            # Human scores are in a different SQLite file. Snapshot them before
+            # taking the account database write lock.
+            with human_database() as human_db:
+                human_db.execute('BEGIN IMMEDIATE')
+                human_rows = {variant: [dict(row) for row in human_as_of(
+                    human_db, variant, boundary, 100)]
+                    for variant in HUMAN_WEEKLY_REWARDS}
         with auth_db() as db:
             db.execute('BEGIN IMMEDIATE')
             if db.execute("SELECT 1 FROM token_rolling_settlements WHERE boundary=?",
@@ -292,13 +295,14 @@ def settle_human_rolling_weeks(now=None):
         boundary += timedelta(days=7)
 
 
-def maintain_rolling_boards():
+def maintain_rolling_boards(*, include_human=True):
     """Keep expiries current without waiting for a visitor, then prune paid data."""
     import time
     from backend import rolling_leaderboards as rolling
     from backend.leaderboards.rolling_gamer import BOARDS, ensure_backfill
-    from backend.human_play.rolling import VARIANTS, ensure_backfill as human_backfill
-    from backend.human_play.store import database as human_database
+    if include_human:
+        from backend.human_play.rolling import VARIANTS, ensure_backfill as human_backfill
+        from backend.human_play.store import database as human_database
     now = time.time()
     with auth_db() as db:
         settled = db.execute("SELECT MAX(boundary) FROM token_rolling_settlements").fetchone()[0]
@@ -326,24 +330,26 @@ def maintain_rolling_boards():
                 db.execute("""DELETE FROM rolling_candidates WHERE achieved_at<=?
                     AND run_id NOT IN (SELECT run_id FROM gamer_high_scores)
                     AND run_id NOT IN (SELECT run_id FROM gamer_weekly_high_scores)""", (cutoff,))
-    with human_database() as db:
-        human_prune_due = cutoff is not None and any(db.execute("""SELECT 1 FROM rolling_candidates
-            WHERE board_key=? AND achieved_at<=? LIMIT 1""", (variant, cutoff)).fetchone()
-            for variant in VARIANTS)
-        human_work_due = (not db.execute("SELECT 1 FROM rolling_meta WHERE key='human_rolling_v1'").fetchone()
-                          or any(rolling.due(db, variant, now) for variant in VARIANTS)
-                          or human_prune_due)
-        if human_work_due:
-            db.execute('BEGIN IMMEDIATE')
-            human_backfill(db, now)
-            for variant in VARIANTS:
-                rolling.maintain(db, variant, now)
-            if human_prune_due:
-                db.execute("DELETE FROM rolling_candidates WHERE achieved_at<=?", (cutoff,))
+    if include_human:
+        with human_database() as db:
+            human_prune_due = cutoff is not None and any(db.execute("""SELECT 1 FROM rolling_candidates
+                WHERE board_key=? AND achieved_at<=? LIMIT 1""", (variant, cutoff)).fetchone()
+                for variant in VARIANTS)
+            human_work_due = (not db.execute("SELECT 1 FROM rolling_meta WHERE key='human_rolling_v1'").fetchone()
+                              or any(rolling.due(db, variant, now) for variant in VARIANTS)
+                              or human_prune_due)
+            if human_work_due:
+                db.execute('BEGIN IMMEDIATE')
+                human_backfill(db, now)
+                for variant in VARIANTS:
+                    rolling.maintain(db, variant, now)
+                if human_prune_due:
+                    db.execute("DELETE FROM rolling_candidates WHERE achieved_at<=?", (cutoff,))
 
 
 def run_maintenance():
     backfill_trophies()
     settle_weeks()
-    settle_rolling_weeks()
-    maintain_rolling_boards()
+    # The Play service maintains and settles human boards against its own DB.
+    settle_rolling_weeks(include_human=False)
+    maintain_rolling_boards(include_human=False)
