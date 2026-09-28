@@ -109,6 +109,30 @@ class HumanPlayReplayImportTests(unittest.TestCase):
         plan = build_plan(root, user_id=7, timezone_name="Asia/Shanghai")
         self.assertEqual(plan[0].status, "skipped_pku")
 
+    def test_missing_record_can_be_created_as_approved_audited_archive(self):
+        result = inspect_2048next(_next_replay().encode("ascii"))
+        root = Path(self.temp.name) / "bundle"
+        root.mkdir()
+        path = root / f"XLB_4x4_32k_#2_2026-01-03_{result['score']}_2048next.txt"
+        path.write_text(_next_replay(), encoding="ascii")
+        plan = build_plan(root, user_id=7, timezone_name="Asia/Shanghai",
+                          create_missing=True)
+        self.assertEqual(plan[0].status, "create_missing")
+        outcome = apply_plan(plan, user_id=7, input_root=root, operator_id=5,
+                             timezone_name="Asia/Shanghai")
+        self.assertEqual(outcome["counts"], {"created": 1})
+        with database() as db:
+            run = db.execute("SELECT source,reason,archive FROM human_runs").fetchone()
+            application = db.execute("""SELECT status,approved_by,review_note
+                FROM human_archive_applications""").fetchone()
+            actions = [row[0] for row in db.execute("""SELECT action
+                FROM human_archive_application_audit ORDER BY id""")]
+        self.assertEqual((run["source"], run["reason"]), ("manual", "imported"))
+        self.assertIsNotNone(run["archive"])
+        self.assertEqual((application["status"], application["approved_by"]), ("approved", 5))
+        self.assertIn("source=2048next", application["review_note"])
+        self.assertEqual(actions, ["submitted_bulk", "approved_bulk"])
+
 
 if __name__ == "__main__":
     unittest.main()

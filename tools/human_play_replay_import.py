@@ -183,7 +183,13 @@ def inspect_2048next(raw: bytes) -> dict:
 
     normalized = verse_replay.encode_rpl1(variant, initial, effective)
     # Reuse the canonical validator for derived fields and a second full replay.
-    return verse_replay.inspect_replay(normalized, variant)
+    result = verse_replay.inspect_replay(normalized, variant)
+    if replay.start_unix_ms is not None:
+        # The 2048next field name is historical; current exports store Unix
+        # seconds.  Also accept millisecond values from future/older exporters.
+        stamp = float(replay.start_unix_ms)
+        result["source_started_at"] = stamp / 1000 if stamp > 10_000_000_000 else stamp
+    return result
 
 
 def inspect_old_verse(raw: bytes, expected_variant: str) -> dict:
@@ -326,7 +332,8 @@ _NO_OVERRIDE = object()
 
 
 def build_plan(input_root: Path, *, user_id: int, timezone_name: str,
-               overrides: dict[str, str | None] | None = None) -> list[PlannedReplay]:
+               overrides: dict[str, str | None] | None = None,
+               create_missing: bool = False) -> list[PlannedReplay]:
     input_root = input_root.resolve()
     overrides = overrides or {}
     plan: list[PlannedReplay] = []
@@ -353,6 +360,8 @@ def build_plan(input_root: Path, *, user_id: int, timezone_name: str,
             status, detail = _target(db, user_id=user_id, metadata=metadata,
                                      result=result, timezone_name=timezone_name,
                                      override_run_id=override)
+            if status == "no_match" and create_missing and override is _NO_OVERRIDE:
+                status, detail = "create_missing", "create audited manual archive"
             run_id = detail if status in {"matched", "already_attached", "archive_conflict"} else None
             item = PlannedReplay(path, metadata, status,
                                  "" if status in {"matched", "already_attached"} else detail,
@@ -386,8 +395,79 @@ def _init_audit(db) -> None:
     """)
 
 
-def apply_plan(plan: list[PlannedReplay], *, user_id: int, input_root: Path) -> dict:
-    selected = [item for item in plan if item.status == "matched"]
+def _ended_at(item: PlannedReplay, timezone_name: str) -> float:
+    assert item.metadata and item.result
+    if item.result.get("source_started_at") is not None:
+        return float(item.result["source_started_at"]) + item.result["elapsed"] / 1000
+    start, end = _date_bounds(item.metadata.played_date, timezone_name)
+    return (start + end) / 2
+
+
+def _create_approved_archive(db, item: PlannedReplay, *, user_id: int,
+                             operator_id: int, batch_id: str,
+                             timezone_name: str, now: float) -> None:
+    assert item.metadata and item.result and item.normalized
+    result = item.result
+    ended = _ended_at(item, timezone_name)
+    archive = gzip.compress(item.normalized, compresslevel=6, mtime=0)
+    replay_crc = zlib.crc32(item.normalized)
+    warnings = [] if result["game_over"] else ["replay_not_game_over"]
+    timing = {"elapsed_ms": result["elapsed"], "timed_moves": result["timed_moves"]}
+    run_id = str(uuid.uuid5(uuid.NAMESPACE_URL,
+        f"2048tables:bulk-replay:{user_id}:{item.metadata.relative_path}:{replay_crc}"))
+    existing = db.execute("SELECT id FROM human_runs WHERE id=?", (run_id,)).fetchone()
+    if existing:
+        raise RuntimeError(f"generated_run_exists:{run_id}")
+    cursor = db.execute("""INSERT INTO human_archive_applications
+        (user_id,variant,claimed_ended_at,claimed_score,status,replay_crc,replay_size,
+         moves,final_board_json,is_game_over,timing_summary_json,warning_flags_json,
+         original_filename,requested_at,updated_at,approved_by,approved_at,review_note,run_id)
+        VALUES(?,?,?,?,'approved',?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+        user_id, item.metadata.variant, ended, result["score"], replay_crc,
+        len(item.normalized), result["moves"], json.dumps(result["board"], separators=(",", ":")),
+        int(result["game_over"]), json.dumps(timing, separators=(",", ":")),
+        json.dumps(warnings), item.path.name[:180], now, now, operator_id, now,
+        f"bulk replay import {batch_id}; source={item.metadata.source}", run_id,
+    ))
+    application_id = cursor.lastrowid
+    created = max(1394323200.0, ended - result["elapsed"] / 1000)
+    state = {
+        "score": result["score"], "board": result["board"], "seq": result["moves"],
+        "elapsed": result["elapsed"], "nodes": result["nodes"], "hash": None,
+        "spawnCount": result["spawn_count"], "fourCount": result["four_count"],
+        "replay_timing_version": 2,
+        "imported": {"application_id": application_id, "bulk_batch_id": batch_id,
+                     "replay_source": item.metadata.source,
+                     "ordinal": item.metadata.ordinal},
+    }
+    db.execute("""INSERT INTO human_runs
+        (id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,
+         created,ended,writer,epoch,permit_until,monitored,state,archive,display_threshold,
+         visible,has_replay,source,single_rating,single_rating_version)
+        VALUES(?,?,?,?,?,'',0,'sealed','eligible','imported',?,?,'',0,0,0,?,?,0,1,1,
+               'manual',?,?)""", (
+        run_id, user_id, f"manual:{application_id}", item.metadata.variant,
+        str(application_id), created, ended, json.dumps(state, separators=(",", ":")),
+        archive, rating.single_rating(item.metadata.variant, result["board"]),
+        rating.RATING_VERSION,
+    ))
+    for action in ("submitted_bulk", "approved_bulk"):
+        db.execute("""INSERT INTO human_archive_application_audit
+            (application_id,operator_id,action,note,created_at) VALUES(?,?,?,?,?)""",
+            (application_id, operator_id, action,
+             f"batch={batch_id}; source={item.metadata.source}", now))
+    run = dict(db.execute("SELECT * FROM human_runs WHERE id=?", (run_id,)).fetchone())
+    statistics.upsert_fact(db, run, result["board"], result["score"], result["rate"])
+    item.run_id = run_id
+    item.status = "created"
+
+
+def apply_plan(plan: list[PlannedReplay], *, user_id: int, input_root: Path,
+               operator_id: int | None = None,
+               timezone_name: str = "Asia/Shanghai") -> dict:
+    selected = [item for item in plan if item.status in {"matched", "create_missing"}]
+    if any(item.status == "create_missing" for item in selected) and operator_id is None:
+        raise ValueError("operator_id_required_to_create_missing")
     batch_id = uuid.uuid4().hex
     affected: set[tuple[int, str]] = set()
     now = time.time()
@@ -395,6 +475,12 @@ def apply_plan(plan: list[PlannedReplay], *, user_id: int, input_root: Path) -> 
         db.execute("BEGIN IMMEDIATE")
         _init_audit(db)
         for item in selected:
+            if item.status == "create_missing":
+                _create_approved_archive(db, item, user_id=user_id,
+                                         operator_id=int(operator_id), batch_id=batch_id,
+                                         timezone_name=timezone_name, now=now)
+                affected.add((user_id, item.metadata.variant))
+                continue
             assert item.run_id and item.normalized and item.result and item.metadata
             row = db.execute("""SELECT id,user_id,variant,state,source,archive,status,ended
                 FROM human_runs WHERE id=?""", (item.run_id,)).fetchone()
@@ -479,6 +565,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Write the full plan/result as JSON")
     parser.add_argument("--apply", action="store_true",
                         help="Actually attach uniquely matched replays; default is dry-run")
+    parser.add_argument("--create-missing", action="store_true",
+                        help="Create audited approved manual archives when no score record exists")
+    parser.add_argument("--operator-id", type=int,
+                        help="Approving operator recorded for --create-missing")
     parser.add_argument("--require-all", action="store_true",
                         help="Fail unless every non-PKU input is matched/already attached")
     args = parser.parse_args(argv)
@@ -488,18 +578,23 @@ def main(argv: list[str] | None = None) -> int:
         resolved_user_id = resolve_user_id(args.username, args.user_id)
         plan = build_plan(args.input, user_id=resolved_user_id,
                           timezone_name=args.timezone,
-                          overrides=load_overrides(args.overrides))
+                          overrides=load_overrides(args.overrides),
+                          create_missing=args.create_missing)
     except Exception as exc:
         parser.error(str(exc))
     blocking = [item for item in plan if item.metadata and item.metadata.source != "pku"
-                and item.status not in {"matched", "already_attached", "duplicate_input"}]
+                and item.status not in {"matched", "create_missing", "already_attached",
+                                        "duplicate_input"}]
     result = {"mode": "apply" if args.apply else "dry-run", "user_id": resolved_user_id,
               "input": str(args.input.resolve()), **summarize(plan),
               "files": [item.payload() for item in plan]}
     if args.require_all and blocking:
         result["error"] = "unresolved_inputs"
     elif args.apply:
-        result["apply"] = apply_plan(plan, user_id=resolved_user_id, input_root=args.input.resolve())
+        result["apply"] = apply_plan(plan, user_id=resolved_user_id,
+                                     input_root=args.input.resolve(),
+                                     operator_id=args.operator_id,
+                                     timezone_name=args.timezone)
         result.update(summarize(plan))
         result["files"] = [item.payload() for item in plan]
     output = json.dumps(result, ensure_ascii=False, indent=2)
