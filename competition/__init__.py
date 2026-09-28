@@ -1,0 +1,2 @@
+"""Standalone competition service package."""
+
