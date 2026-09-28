@@ -315,7 +315,7 @@
       },
       "periods": {
         "all": "All Time",
-        "week": "Last 7 days"
+        "week": "Past Week"
       },
       "empty": "No verified scores are available for this leaderboard.",
       "loadFailed": "Failed to load the leaderboard.",
@@ -1160,12 +1160,12 @@
         "description": "Personal bests played entirely at difficulty 100."
       },
       "gamer_high_score_weekly": {
-        "title": "Last 7 Days High Scores",
-        "description": "Personal bests in general mode during the last 168 hours."
+        "title": "Past Week High Scores",
+        "description": "Personal bests in general mode over the past week."
       },
       "gamer_adversarial_weekly": {
-        "title": "Last 7 Days Adversarial High Scores",
-        "description": "Personal bests played entirely at difficulty 100 during the last 168 hours."
+        "title": "Past Week Adversarial High Scores",
+        "description": "Personal bests played entirely at difficulty 100 over the past week."
       },
       "minigames": {
         "title": "Minigames",

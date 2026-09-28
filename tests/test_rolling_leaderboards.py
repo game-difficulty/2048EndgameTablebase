@@ -10,6 +10,8 @@ from unittest.mock import patch
 from backend import rolling_leaderboards as rolling
 from backend.auth.db import auth_db, init_auth_db
 from backend.human_play.store import init_db, database
+from backend.leaderboards.rolling_gamer import payload as gamer_rolling_payload
+from backend.leaderboards.service import _period_for
 from backend.token_rewards import HUMAN_WEEKLY_REWARDS, settle_human_rolling_weeks, settle_rolling_weeks
 
 
@@ -76,6 +78,25 @@ class RollingRewardTests(unittest.TestCase):
     def tearDown(self):
         self.env.stop()
         self.temp.cleanup()
+
+    def test_gamer_seven_day_boards_cross_calendar_week(self):
+        now = self.boundary.timestamp()
+        with auth_db() as db:
+            for board in ('gamer_high_score_weekly', 'gamer_adversarial_weekly'):
+                rolling.add(db, board_key=board, run_id=board + ':recent',
+                            user_id=1, score=1000, achieved_at=now-6*86400,
+                            eligible_at=now-6*86400, now=now-1)
+                rolling.add(db, board_key=board, run_id=board + ':expired',
+                            user_id=2, score=2000, achieved_at=now-8*86400,
+                            eligible_at=now-8*86400, now=now-1)
+        for board in ('gamer_high_score_weekly', 'gamer_adversarial_weekly'):
+            result = gamer_rolling_payload(board, now=now)
+            self.assertEqual(result['period']['start'],
+                             (self.boundary-timedelta(days=7)).isoformat())
+            self.assertEqual(result['period']['end'], self.boundary.isoformat())
+            self.assertEqual([entry['score'] for entry in result['entries']], [1000])
+            with self.assertRaises(ValueError):
+                _period_for(board, self.boundary)
 
     def test_play_only_settlement_survives_later_unified_settlement(self):
         stamp = self.boundary.timestamp() - 10

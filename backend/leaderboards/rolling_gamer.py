@@ -1,4 +1,4 @@
-"""Rolling 168-hour ranked-game display, separate from legacy calendar-week awards."""
+"""Rolling 168-hour ranked-game display, independent of Monday reward settlement."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -50,6 +50,8 @@ def ensure_backfill(db, now=None):
 
 
 def payload(board_key, limit=10, now=None):
+    # Display always uses [now - 168h, now); Monday 08:00 Beijing freezes a
+    # separate reward snapshot and must not reset either displayed board.
     if board_key not in BOARDS:
         raise KeyError(board_key)
     now = time.time() if now is None else rolling.timestamp(now)

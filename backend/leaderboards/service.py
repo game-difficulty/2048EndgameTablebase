@@ -70,16 +70,17 @@ def _local_midnight(value: datetime) -> datetime:
 
 
 def _period_for(board_key: str, now: datetime | None = None) -> tuple[str | None, str]:
+    # Gamer "weekly" boards display a rolling 168 hours via rolling_gamer.payload().
+    # Monday 08:00 Beijing is only the reward snapshot boundary; never use a
+    # calendar-week leaderboard snapshot for their live display.
+    if board_key in GAMER_WEEKLY_BOARDS:
+        raise ValueError(f"Rolling gamer board cannot use snapshot periods: {board_key}")
     current = now or datetime.now(timezone.utc)
     today = _local_midnight(current)
     if board_key == TOKEN_LAST_WEEK_BOARD:
         this_monday = today - timedelta(days=today.weekday())
         last_monday = this_monday - timedelta(days=7)
         return last_monday.isoformat(), this_monday.isoformat()
-    if board_key in GAMER_WEEKLY_BOARDS:
-        this_monday = today - timedelta(days=today.weekday())
-        next_monday = this_monday + timedelta(days=7)
-        return this_monday.isoformat(), next_monday.isoformat()
     return None, today.isoformat()
 
 

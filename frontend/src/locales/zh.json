@@ -315,7 +315,7 @@
       },
       "periods": {
         "all": "总榜",
-        "week": "近 7 天"
+        "week": "近一周"
       },
       "empty": "当前榜单暂无有效成绩。",
       "loadFailed": "排行榜加载失败。",
@@ -1160,12 +1160,12 @@
         "description": "全程使用难度 100 的个人最高分。"
       },
       "gamer_high_score_weekly": {
-        "title": "近 7 天高分榜",
-        "description": "最近 168 小时普通模式的个人最高分。"
+        "title": "近一周高分榜",
+        "description": "近一周普通模式的个人最高分。"
       },
       "gamer_adversarial_weekly": {
-        "title": "近 7 天对抗模式高分榜",
-        "description": "最近 168 小时全程难度 100 的个人最高分。"
+        "title": "近一周对抗模式高分榜",
+        "description": "近一周全程难度 100 的个人最高分。"
       },
       "minigames": {
         "title": "小游戏榜",

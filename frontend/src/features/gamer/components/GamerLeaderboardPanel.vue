@@ -112,6 +112,7 @@ const periods = [
   { value: 'all', labelKey: 'gamer.leaderboard.periods.all' },
   { value: 'week', labelKey: 'gamer.leaderboard.periods.week' },
 ];
+// "week" selects the rolling 168-hour display, not the Monday reward period.
 const boardKeys = {
   'general:all': 'gamer_high_score',
   'general:week': 'gamer_high_score_weekly',

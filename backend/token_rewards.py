@@ -160,7 +160,11 @@ def settle_weeks(now=None):
 
 
 def settle_rolling_weeks(now=None):
-    """Freeze six rolling boards at Monday 08:00 Beijing and credit once."""
+    """Freeze six rolling boards at Monday 08:00 Beijing and credit once.
+
+    The live 7-day rankings keep sliding every moment; this fixed boundary
+    applies only to which 168-hour snapshot receives the weekly rewards.
+    """
     from backend import rolling_leaderboards as rolling
     from backend.human_play.store import database as human_database
     from backend.human_play.rolling import as_of as human_as_of

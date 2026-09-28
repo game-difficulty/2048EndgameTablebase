@@ -345,17 +345,17 @@ watch(() => [props.requestedKey, props.requestSerial], ([boardKey]) => {
 }
 
 .leaderboard-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.3rem;
   padding: 0.35rem;
   border: 1px solid var(--border-main);
   border-radius: 0.9rem;
   background: color-mix(in srgb, var(--bg-card) 88%, transparent);
-  overflow-x: auto;
 }
 
 .leaderboard-tab {
-  min-width: 10.5rem;
+  min-width: 0;
   min-height: 2.8rem;
   padding: 0.65rem 1rem;
   border: 1px solid transparent;
@@ -375,6 +375,12 @@ watch(() => [props.requestedKey, props.requestSerial], ([boardKey]) => {
   color: white;
   background: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 80%, black 20%);
+}
+
+@media (max-width: 48rem) {
+  .leaderboard-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .leaderboard-context {

@@ -15,6 +15,7 @@ from backend.leaderboards.service import (
     TOKEN_LAST_WEEK_BOARD,
     TOKEN_LIFETIME_BOARD,
     _period_for,
+    leaderboard_catalog,
     leaderboard_payload,
     refresh_due_leaderboards,
 )
@@ -22,6 +23,11 @@ from backend.quota.service import adjust_paid_tokens_for_admin
 
 
 class LeaderboardTests(unittest.TestCase):
+    def test_catalog_exposes_both_rolling_gamer_boards(self) -> None:
+        keys = {board['key'] for board in leaderboard_catalog()}
+        self.assertIn('gamer_high_score_weekly', keys)
+        self.assertIn('gamer_adversarial_weekly', keys)
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.old_db = os.environ.get("CLOUD_AUTH_DB")
