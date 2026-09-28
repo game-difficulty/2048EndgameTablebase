@@ -4,7 +4,7 @@ import asyncio
 import hmac
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from .auth import auth_user_exists, principal_from_request
 from .db import SCHEMA_VERSION
@@ -60,6 +60,32 @@ def optional_principal(request: Request) -> Principal | None:
         if exc.status_code != 401:
             raise
         return None
+
+
+@router.get("/practice/appearance")
+async def practice_appearance(principal: PrincipalDependency, response: Response) -> dict:
+    """Read only this player's main-site tile appearance for practice boards."""
+    from backend.profile.preferences import get_preferences
+    from backend.profile.themes import ThemeError, get_theme
+
+    def load() -> dict:
+        preferences = get_preferences(principal.user_id)["preferences"]
+        appearance = {
+            key: preferences[key]
+            for key in ("theme", "use_custom_theme", "custom_colors", "font_size_factor", "saved_theme_id")
+            if key in preferences
+        }
+        saved_id = preferences.get("saved_theme_id")
+        if type(saved_id) is int and saved_id > 0:
+            try:
+                appearance["saved_theme"] = get_theme(principal.user_id, saved_id)["theme"]
+            except ThemeError as exc:
+                if exc.status != 404:
+                    raise
+        return appearance
+
+    response.headers["Cache-Control"] = "private, no-store"
+    return await asyncio.to_thread(load)
 
 
 @router.get("/practice/{project_id}/leaderboard")

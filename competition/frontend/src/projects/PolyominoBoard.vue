@@ -26,6 +26,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { tileLabelSize } from './practiceAppearance.js';
 import {
   BOARD_ANIMATION_DURATION,
   BOARD_MERGE_REVEAL_DELAY,
@@ -37,6 +38,8 @@ import {
 const props = defineProps({
   snapshot: { type: Object, required: true },
   disabled: Boolean,
+  tileStyles: { type: Object, default: () => ({}) },
+  fontScale: { type: Number, default: 1 },
 });
 const emit = defineEmits(['move']);
 const root = ref(null);
@@ -69,10 +72,12 @@ function bounds(tile) {
 }
 function tileStyle(tile) {
   const box = bounds(tile);
+  const appearance = props.tileStyles[tile.value];
   return {
     left: `${GAP + box.minCol * (cellWidth() + GAP)}%`,
     top: `${GAP + box.minRow * (cellHeight() + GAP)}%`,
     width: `${box.width}%`, height: `${box.height}%`,
+    ...(appearance ? { '--tile-color': appearance.backgroundColor, color: appearance.color } : {}),
   };
 }
 function partStyle(tile, cell) {
@@ -156,6 +161,7 @@ function labelStyle(tile) {
   return {
     left: `${((centerCol - box.minCol) * (cellWidth() + GAP) + cellWidth() / 2) / box.width * 100}%`,
     top: `${((centerRow - box.minRow) * (cellHeight() + GAP) + cellHeight() / 2) / box.height * 100}%`,
+    fontSize: tileLabelSize(tile.value, cols.value, props.fontScale),
   };
 }
 function rawTiles(source = props.snapshot?.tiles || []) {

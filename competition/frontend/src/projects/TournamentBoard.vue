@@ -44,6 +44,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ISLAND, WALL } from './engine.js';
+import { tileLabelSize } from './practiceAppearance.js';
 import {
   BOARD_ANIMATION_DURATION,
   BOARD_MERGE_REVEAL_DELAY,
@@ -59,6 +60,8 @@ const props = defineProps({
   showDiceEffect: Boolean,
   sealedCells: { type: Array, default: () => [] },
   disabled: Boolean,
+  tileStyles: { type: Object, default: () => ({}) },
+  fontScale: { type: Number, default: 1 },
 });
 const emit = defineEmits(['move']);
 const root = ref(null);
@@ -309,6 +312,8 @@ function tilePosition(tile) {
   return {
     ...percentPosition(tile.row, tile.col),
     transition: `left ${tile.duration}ms ease-in-out, top ${tile.duration}ms ease-in-out`,
+    fontSize: tileLabelSize(tile.value, cols.value, props.fontScale),
+    ...props.tileStyles[tile.value],
   };
 }
 
@@ -336,6 +341,7 @@ onBeforeUnmount(() => { animationEpoch += 1; clearTimers(); });
 </script>
 
 <style scoped>
+.tournament-board{container-type:inline-size}
 .board-tile{user-select:none;-webkit-user-select:none}
 .tournament-board{--gap:2.25%;position:relative;width:min(100%,620px);aspect-ratio:1;margin:auto;overflow:hidden;border-radius:12px;background:#a99d90;touch-action:none;outline:none}.board-cell{float:left;width:calc((100% - (var(--cols) + 1) * var(--gap))/var(--cols));height:calc((100% - (var(--rows) + 1) * var(--gap))/var(--rows));margin:var(--gap) 0 0 var(--gap);border-radius:8px;background:#c8beb2}.tournament-board.irregular{background:transparent}.tournament-board.irregular .board-cell{background:#c8beb2;box-shadow:0 0 0 2px #a99d90}.tournament-board.irregular .board-cell.blocked{visibility:hidden}.board-tile{position:absolute;z-index:3;width:calc((100% - (var(--cols) + 1) * var(--gap))/var(--cols));height:calc((100% - (var(--rows) + 1) * var(--gap))/var(--rows));display:grid;place-items:center;border-radius:8px;background:#eee4da;color:#776e65;font-size:clamp(20px,6vw,48px);font-weight:800;line-height:1;box-shadow:inset 0 0 0 1px rgba(255,255,255,.15)}.board-tile.moving{z-index:5;pointer-events:none}.board-tile.wall{background:repeating-linear-gradient(135deg,#4d5662 0 8px,#424a55 8px 16px);box-shadow:inset 0 0 0 2px #697482}.board-tile.island{background:#172f3d url('https://2048tables.online/minigames-assets/portal.png?v=minigames-img-20260710b') center/cover no-repeat;box-shadow:0 0 10px rgba(56,189,248,.22)}.value-4{background:#ede0c8}.value-8{color:#f9f6f2;background:#f2b179}.value-16{color:#f9f6f2;background:#f59563}.value-32{color:#f9f6f2;background:#f67c5f}.value-64{color:#f9f6f2;background:#ef5b3c}.value-128{color:#f9f6f2;background:#edcf72;font-size:clamp(17px,5vw,40px)}.value-256{color:#f9f6f2;background:#edcc61;font-size:clamp(17px,5vw,40px)}.value-512{color:#f9f6f2;background:#edc850;font-size:clamp(17px,5vw,40px)}.value-1024,.value-2048{color:#f9f6f2;background:#edc53f;font-size:clamp(14px,4vw,34px)}.pop{animation:tile-pop 200ms ease}.appear{animation:tile-appear 200ms ease backwards}.mirror-cross{position:absolute;inset:0;z-index:2;pointer-events:none}.mirror-cross i,.mirror-cross b{position:absolute;display:block;background:#6d6258;box-shadow:0 0 0 2px rgba(42,35,30,.2)}.mirror-cross i{left:calc(50% - var(--gap)/2);top:0;width:var(--gap);height:100%}.mirror-cross b{left:0;top:calc(50% - var(--gap)/2);width:100%;height:var(--gap)}.portal-labels span{position:absolute;z-index:6;color:#f8e1a8;font-size:18px;font-weight:800;pointer-events:none}.portal-labels span:first-child{left:50%;top:3px;transform:translateX(-50%)}.portal-labels span:last-child{left:3px;top:50%;transform:translateY(-50%)}.board-dice-effect{position:absolute;inset:0;z-index:20;display:grid;place-items:center;align-content:center;gap:8px;background:rgba(22,27,33,.82);color:#fff}.board-die{display:grid;grid-template:repeat(3,12px)/repeat(3,12px);gap:3px;padding:12px;border-radius:10px;background:#f7f2e8;box-shadow:0 10px 25px rgba(0,0,0,.35);animation:dice-roll .7s cubic-bezier(.2,.8,.2,1)}.board-die i{width:8px;height:8px;border-radius:50%;background:transparent}.face-1 i:nth-child(5),.face-2 i:nth-child(1),.face-2 i:nth-child(9),.face-3 i:nth-child(1),.face-3 i:nth-child(5),.face-3 i:nth-child(9),.face-4 i:nth-child(1),.face-4 i:nth-child(3),.face-4 i:nth-child(7),.face-4 i:nth-child(9),.face-5 i:nth-child(1),.face-5 i:nth-child(3),.face-5 i:nth-child(5),.face-5 i:nth-child(7),.face-5 i:nth-child(9),.face-6 i:nth-child(1),.face-6 i:nth-child(3),.face-6 i:nth-child(4),.face-6 i:nth-child(6),.face-6 i:nth-child(7),.face-6 i:nth-child(9){background:#40372f}@keyframes tile-pop{0%{transform:scale(1)}50%{transform:scale(1.2)}100%{transform:scale(1)}}@keyframes tile-appear{0%{transform:scale(0);opacity:0}100%{transform:scale(1);opacity:1}}@keyframes dice-roll{0%{transform:translateY(-60px) rotate(-220deg) scale(.55);opacity:0}70%{transform:translateY(6px) rotate(16deg) scale(1.07)}100%{transform:none;opacity:1}}
 .board-cell{position:absolute;float:none;margin:0}.board-cell,.board-tile{width:var(--cell-width,calc((100% - (var(--cols) + 1) * var(--gap))/var(--cols)));height:var(--cell-height,calc((100% - (var(--rows) + 1) * var(--gap))/var(--rows)))}.board-tile.no-transition{transition:none!important}.board-tile.hidden{opacity:0}.tournament-board.irregular{background:#a99d90}.tournament-board.irregular .board-cell{box-shadow:none}

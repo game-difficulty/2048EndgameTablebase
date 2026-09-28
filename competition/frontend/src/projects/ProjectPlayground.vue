@@ -51,9 +51,9 @@
           </section>
 
           <div class="board-column">
-            <CargoBoard v-if="project.cargoTransport" :snapshot="snapshot" :disabled="snapshot.finished" @move="move" />
-            <PolyominoBoard v-else-if="project.polyomino" :snapshot="snapshot" :disabled="snapshot.finished" @move="move" />
-            <TournamentBoard v-else :snapshot="snapshot" :mirror-portals="project.mirrorPortals" :irregular-shape="project.shapeShifter" :sealed-cells="snapshot.sealedCells" :disabled="snapshot.finished || locked" @move="move" />
+            <CargoBoard v-if="project.cargoTransport" :snapshot="snapshot" :disabled="snapshot.finished" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
+            <PolyominoBoard v-else-if="project.polyomino" :snapshot="snapshot" :disabled="snapshot.finished" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
+            <TournamentBoard v-else :snapshot="snapshot" :mirror-portals="project.mirrorPortals" :irregular-shape="project.shapeShifter" :sealed-cells="snapshot.sealedCells" :disabled="snapshot.finished || locked" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
             <div v-if="diceVisible" class="dice-curtain"><div class="die" :class="`face-${snapshot.dice}`"><i v-for="dot in 9" :key="dot"></i></div><strong>掷出 {{ snapshot.dice }} 点</strong><span>{{ dicePlacement }}</span></div>
             <div v-if="thinking" class="thinking" role="status"><span></span>AI 思考中</div>
             <div v-if="finishVisible" class="finish-panel" role="dialog" aria-label="本次试玩结果">
@@ -105,6 +105,7 @@ import { CargoGame, CARGO_LIMIT_MS } from './cargoEngine.js';
 import TournamentBoard from './TournamentBoard.vue';
 import PolyominoBoard from './PolyominoBoard.vue';
 import CargoBoard from './CargoBoard.vue';
+import { resolvePracticeAppearance } from './practiceAppearance.js';
 import { projectIconUrl } from '../../../shared/projectIcons.js';
 import { api } from '../api.js';
 
@@ -138,6 +139,7 @@ const leaderboardLoading = ref(true);
 const leaderboardError = ref('');
 const recordMessage = ref('');
 const practiceUser = ref(null);
+const accountAppearance = ref(null);
 const sessionReady = ref(false);
 let runId = 0;
 let submittedRunId = -1;
@@ -150,6 +152,7 @@ const elapsedText = computed(() => formatElapsed(game.value?.elapsed(now.value) 
 const remainingText = computed(() => formatElapsed(Math.max(0, CARGO_LIMIT_MS - (game.value?.elapsed(now.value) || snapshot.value.elapsedMs))));
 const dicePlacement = computed(() => snapshot.value.dice <= 3 ? '角位放置墙' : snapshot.value.dice <= 5 ? '边位放置墙' : '中心位放置墙');
 const settlement = computed(() => project.value?.cargoTransport ? '无路可走或10分钟结束，按送出数量比较' : project.value?.race ? '先达到目标者获胜' : project.value?.resultMetric === 'boardSum' ? '双方死亡后比较盘面和' : '双方死亡后比较得分');
+const resolvedAppearance = computed(() => resolvePracticeAppearance(accountAppearance.value, practiceTheme.value));
 
 watch(() => snapshot.value.finished, finished => {
   window.clearTimeout(finishTimer);
@@ -189,6 +192,11 @@ async function syncPracticeSession() {
     }
   }
   sessionReady.value = true;
+  if (practiceUser.value) {
+    void api.practiceAppearance().then(appearance => {
+      if (practiceUser.value) accountAppearance.value = appearance;
+    }).catch(() => { /* Keep the default board palette if preferences are unavailable. */ });
+  }
 }
 async function loadLeaderboard() {
   if (!project.value) return;

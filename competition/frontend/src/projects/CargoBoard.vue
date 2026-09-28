@@ -4,7 +4,7 @@
       <span v-for="cell in 4" :key="`entry-${cell}`" :style="portCellStyle(cell - 1, true)" />
       <b>入口</b>
     </div>
-    <TournamentBoard class="cargo-number-board" :snapshot="snapshot" :disabled="disabled" @move="emit('move', $event)" />
+    <TournamentBoard class="cargo-number-board" :snapshot="snapshot" :disabled="disabled" :tile-styles="tileStyles" :font-scale="fontScale" @move="emit('move', $event)" />
     <div class="cargo-port cargo-exit" aria-label="出口">
       <span v-for="cell in 2" :key="`exit-${cell}`" :style="portCellStyle(cell - 1, false)" />
       <b>出口 ↓</b>
@@ -25,7 +25,12 @@ import TournamentBoard from './TournamentBoard.vue';
 import { CARGO_SHAPES } from './cargoEngine.js';
 import { BOARD_SLIDE_DURATION } from './boardMotion.js';
 
-const props = defineProps({ snapshot: { type: Object, required: true }, disabled: Boolean });
+const props = defineProps({
+  snapshot: { type: Object, required: true },
+  disabled: Boolean,
+  tileStyles: { type: Object, default: () => ({}) },
+  fontScale: { type: Number, default: 1 },
+});
 const emit = defineEmits(['move']);
 const stage = ref(null);
 const displayCargo = ref(null);
