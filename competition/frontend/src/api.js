@@ -49,6 +49,10 @@ export function commandId() {
 
 export const api = {
   session: () => request('/api/session'),
+  practiceLeaderboard: (projectId) => request(`/api/practice/${encodeURIComponent(projectId)}/leaderboard`),
+  submitPracticeResult: (projectId, result) => request(`/api/practice/${encodeURIComponent(projectId)}/results`, {
+    method: 'POST', body: result,
+  }),
   list: () => request('/api/competitions'),
   create: (name, projects) => request('/api/competitions', {
     method: 'POST',

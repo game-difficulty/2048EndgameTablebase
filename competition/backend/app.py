@@ -14,6 +14,7 @@ from .config import load_settings
 from .db import CompetitionDatabase
 from .errors import CompetitionError
 from .hub import RoomHub
+from .practice_leaderboard import PracticeLeaderboard
 from .routes import router
 from .service import CompetitionService
 
@@ -67,6 +68,7 @@ def create_app() -> FastAPI:
     )
     app.state.competition_settings = settings
     app.state.competition_service = service
+    app.state.practice_leaderboard = PracticeLeaderboard(database)
     app.state.competition_hub = hub
     app.add_middleware(
         CORSMiddleware,

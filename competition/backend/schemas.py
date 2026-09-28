@@ -3,6 +3,13 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class PracticeResultRequest(BaseModel):
+    score: int
+    board_sum: int
+    elapsed_ms: int
+    outcome: str
+
+
 class ProjectInput(BaseModel):
     key: str | None = None
     name: str = Field(min_length=1, max_length=80)

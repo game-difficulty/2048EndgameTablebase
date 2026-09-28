@@ -17,7 +17,7 @@
       <section class="index-intro"><p>TOURNAMENT PROJECT LAB</p><h1>比赛项目试玩</h1><span>以下页面用于举办方验收规则、选手熟悉操作。试玩成绩不会进入正式比赛。</span></section>
       <div class="project-list">
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" class="project-entry">
-          <img class="project-art entry-art" :src="projectIconUrl(item.id)" alt="" /><small>PROJECT {{ item.order }}</small><h2>{{ item.title }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><span>{{ item.estimatedMinutes }}</span><b>开始试玩 →</b></footer>
+          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.order }}</small><h2>{{ item.title }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><b>开始试玩 →</b></footer>
         </a>
       </div>
     </main>
@@ -32,8 +32,8 @@
 
       <section class="play-main">
         <header class="project-heading">
-          <img class="project-art heading-art" :src="projectIconUrl(project.id)" alt="" /><div><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ project.title }}</h1><span>{{ project.description }}</span></div>
-          <div class="practice-tag">单人试玩<br><small>不记录成绩</small></div>
+          <img class="project-art heading-art" :src="projectIconUrl(project.id, practiceTheme)" alt="" /><div><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ project.title }}</h1><span>{{ project.description }}</span></div>
+          <div class="practice-tag">单人试玩<br><small>登录后记录最佳成绩</small></div>
         </header>
 
         <div class="game-shell">
@@ -68,9 +68,24 @@
 
       <aside class="rules-panel">
         <p>玩法说明</p><h2>{{ project.shortTitle }}</h2><div class="rule-copy">{{ project.description }}</div>
-        <dl><dt>棋盘</dt><dd>{{ project.boardLabel || `${project.rows}×${project.cols}` }}</dd><dt>预计用时</dt><dd>{{ project.estimatedMinutes }}</dd><dt>结算</dt><dd>{{ settlement }}</dd></dl>
+        <dl><dt>棋盘</dt><dd>{{ project.boardLabel || `${project.rows}×${project.cols}` }}</dd><dt>结算</dt><dd>{{ settlement }}</dd></dl>
         <div v-if="project.mirrorPortals" class="mirror-note"><strong>镜面棋盘怎么走？</strong><span>把中央十字想成真正的墙。向左滑出最左边的砖会从最右边回来；上下同理。砖最终都停在中央墙的两侧。</span><div class="mirror-mini"><i></i><i></i><i></i><i></i><b></b><em></em></div></div>
         <p v-if="snapshot.aiError" class="wasm-warning">WASM 暂不可用，本次已用确定性随机出数代替：{{ snapshot.aiError }}</p>
+        <section class="practice-leaderboard" aria-label="试玩排行榜">
+          <div class="leaderboard-title"><h3>试玩榜</h3><small>仅供试玩 · 不用于赛事裁决</small></div>
+          <p v-if="leaderboardLoading" class="leaderboard-hint">正在加载…</p>
+          <p v-else-if="leaderboardError" class="leaderboard-hint">{{ leaderboardError }}</p>
+          <template v-else-if="leaderboard">
+            <p v-if="!leaderboard.signed_in" class="leaderboard-hint">游客可查看；<a :href="mainSiteUrl">登录</a>后记录个人最佳。</p>
+            <p v-else-if="leaderboard.my_best" class="leaderboard-mine">我的最佳：{{ formatRecord(leaderboard.my_best) }}</p>
+            <p v-else class="leaderboard-hint">完成一局后记录个人最佳。</p>
+            <p v-if="recordMessage" class="leaderboard-hint">{{ recordMessage }}</p>
+            <ol v-if="leaderboard.top.length" class="leaderboard-list">
+              <li v-for="(entry, index) in leaderboard.top" :key="entry.user_id"><span class="leaderboard-rank">{{ index + 1 }}</span><span class="leaderboard-name" :title="entry.display_name">{{ entry.display_name }}</span><strong>{{ formatRecord(entry) }}</strong></li>
+            </ol>
+            <p v-else class="leaderboard-hint">暂无记录，来留下第一条。</p>
+          </template>
+        </section>
       </aside>
     </main>
   </div>
@@ -86,6 +101,7 @@ import TournamentBoard from './TournamentBoard.vue';
 import PolyominoBoard from './PolyominoBoard.vue';
 import CargoBoard from './CargoBoard.vue';
 import { projectIconUrl } from '../../../shared/projectIcons.js';
+import { api } from '../api.js';
 
 const props = defineProps({ projectId: { type: String, default: '' } });
 const practiceThemeKey = 'tournament-practice-theme';
@@ -102,6 +118,7 @@ function toggleTheme() {
   try { window.localStorage.setItem(practiceThemeKey, practiceTheme.value); } catch { /* Keep the in-page choice. */ }
 }
 const competitionHomePath = String(import.meta.env.VITE_COMPETITION_HOME_PATH || '/test');
+const mainSiteUrl = String(import.meta.env.VITE_MAIN_SITE_URL || 'https://2048tables.online/');
 const projects = PRACTICE_PROJECTS;
 const project = computed(() => PROJECT_BY_ID[props.projectId] || null);
 const game = ref(null);
@@ -111,6 +128,12 @@ const locked = ref(false);
 const thinking = ref(false);
 const diceVisible = ref(false);
 const finishVisible = ref(false);
+const leaderboard = ref(null);
+const leaderboardLoading = ref(false);
+const leaderboardError = ref('');
+const recordMessage = ref('');
+let runId = 0;
+let submittedRunId = -1;
 let timer = null;
 let diceTimer = null;
 let finishTimer = null;
@@ -125,13 +148,58 @@ watch(() => snapshot.value.finished, finished => {
   window.clearTimeout(finishTimer);
   finishVisible.value = false;
   if (!finished) return;
+  submitFinishedRun();
   finishTimer = window.setTimeout(() => {
     if (snapshot.value.finished) finishVisible.value = true;
   }, 2000);
 });
 
+function formatRecord(entry) {
+  if (leaderboard.value?.metric === 'time') return formatElapsed(entry.result_value);
+  return `${Number(entry.result_value).toLocaleString()}${leaderboard.value?.metric === 'deliveries' ? ' 块' : ' 分'}`;
+}
+async function loadLeaderboard() {
+  if (!project.value) return;
+  const projectId = project.value.id;
+  leaderboardLoading.value = true;
+  leaderboardError.value = '';
+  try {
+    const result = await api.practiceLeaderboard(projectId);
+    if (project.value?.id === projectId) {
+      leaderboard.value = result;
+      if (snapshot.value.finished) submitFinishedRun();
+    }
+  } catch {
+    if (project.value?.id === projectId) leaderboardError.value = '榜单暂不可用，不影响试玩。';
+  } finally {
+    if (project.value?.id === projectId) leaderboardLoading.value = false;
+  }
+}
+async function submitFinishedRun() {
+  if (!project.value || submittedRunId === runId || !leaderboard.value?.signed_in) return;
+  if (project.value.race && snapshot.value.outcome !== 'target_reached') return;
+  const thisRun = runId;
+  const projectId = project.value.id;
+  const result = {
+    score: Math.trunc(snapshot.value.score || 0),
+    board_sum: Math.trunc(snapshot.value.boardSum || 0),
+    elapsed_ms: Math.max(1, Math.round(snapshot.value.elapsedMs || 0)),
+    outcome: snapshot.value.outcome,
+  };
+  submittedRunId = thisRun;
+  recordMessage.value = '正在记录成绩…';
+  try {
+    const updated = await api.submitPracticeResult(projectId, result);
+    if (project.value?.id === projectId) leaderboard.value = updated;
+    if (runId === thisRun) recordMessage.value = updated.improved ? '个人最佳已更新。' : '本次未超过个人最佳。';
+  } catch (error) {
+    if (runId === thisRun) recordMessage.value = error.status === 401 ? '登录已过期，本次未记录。' : '成绩记录失败，不影响试玩。';
+  }
+}
+
 function createGame() {
   if (!project.value) return;
+  runId += 1;
   game.value = project.value.cargoTransport ? new CargoGame(project.value) : project.value.polyomino ? new PolyominoGame(project.value) : new TournamentGame(project.value);
   snapshot.value = game.value.snapshot();
   if (project.value.diceWall) showDice();
@@ -166,6 +234,8 @@ async function move(direction) {
 }
 function restart() {
   if (!game.value || locked.value) return;
+  runId += 1;
+  recordMessage.value = '';
   window.clearTimeout(finishTimer);
   finishVisible.value = false;
   snapshot.value = game.value.reset(true);
@@ -184,12 +254,28 @@ function keydown(event) {
   if (direction) { event.preventDefault(); move(direction); }
   if ((event.key === 'z' || event.key === 'Z') && project.value.allowUndo) { event.preventDefault(); undo(); }
 }
-onMounted(() => { createGame(); timer = window.setInterval(() => { now.value = performance.now(); if (project.value?.cargoTransport && game.value && !game.value.finished && game.value.elapsed(now.value) >= CARGO_LIMIT_MS) snapshot.value = game.value.expire(now.value); }, 16); window.addEventListener('keydown', keydown); });
+onMounted(() => { createGame(); loadLeaderboard(); timer = window.setInterval(() => { now.value = performance.now(); if (project.value?.cargoTransport && game.value && !game.value.finished && game.value.elapsed(now.value) >= CARGO_LIMIT_MS) snapshot.value = game.value.expire(now.value); }, 16); window.addEventListener('keydown', keydown); });
 onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTimer); window.clearTimeout(finishTimer); window.clearTimeout(thinkingTimer); window.removeEventListener('keydown', keydown); });
 </script>
 
 <style scoped>
 .project-art { display: block; flex: none; border-radius: 8px; object-fit: cover; }
+.practice-leaderboard{margin-top:20px;padding-top:16px;border-top:1px solid #e5ded5}
+.leaderboard-title h3{margin:0;font-size:17px}
+.leaderboard-title small,.leaderboard-hint{color:#817469;font-size:12px;line-height:1.5}
+.leaderboard-title small{display:block;margin-top:3px}
+.leaderboard-hint{margin:10px 0}
+.leaderboard-hint a{color:#8c6427}
+.leaderboard-mine{margin:12px 0;padding:8px;border-radius:5px;background:#f0ece5;font-size:12px;font-weight:700}
+.leaderboard-list{list-style:none;margin:12px 0 0;padding:0}
+.leaderboard-list li{display:flex;align-items:center;gap:8px;min-width:0;padding:7px 0;border-top:1px solid #eee8df;font-size:12px}
+.leaderboard-rank{width:16px;color:#9f7b3e;text-align:center;font-weight:700}
+.leaderboard-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.leaderboard-list strong{font-variant-numeric:tabular-nums;white-space:nowrap}
+.project-lab.is-dark .practice-leaderboard,.project-lab.is-dark .leaderboard-list li{border-color:#344354}
+.project-lab.is-dark .leaderboard-title small,.project-lab.is-dark .leaderboard-hint{color:#a9b7c5}
+.project-lab.is-dark .leaderboard-hint a,.project-lab.is-dark .leaderboard-rank{color:#d8ac62}
+.project-lab.is-dark .leaderboard-mine{background:#263544}
 .entry-art { float: left; width: 78px; height: 78px; margin: 0 16px 10px 0; }
 .project-entry > small, .project-entry h2 { display: block; }
 .project-entry p { clear: both; }

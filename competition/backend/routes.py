@@ -4,7 +4,7 @@ import asyncio
 import hmac
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from .auth import auth_user_exists, principal_from_request
 from .db import SCHEMA_VERSION
@@ -26,6 +26,7 @@ from .schemas import (
     IssueResolutionRequest,
     LineupRequest,
     PickBanRequest,
+    PracticeResultRequest,
     ReadinessRequest,
     ResultConfirmationRequest,
     ResultOverrideRequest,
@@ -50,6 +51,33 @@ def current_principal(request: Request) -> Principal:
 
 
 PrincipalDependency = Annotated[Principal, Depends(current_principal)]
+
+
+def optional_principal(request: Request) -> Principal | None:
+    try:
+        return current_principal(request)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        return None
+
+
+@router.get("/practice/{project_id}/leaderboard")
+async def practice_leaderboard(request: Request, project_id: str) -> dict:
+    viewer = optional_principal(request)
+    return await asyncio.to_thread(request.app.state.practice_leaderboard.list, project_id, viewer)
+
+
+@router.post("/practice/{project_id}/results")
+async def submit_practice_result(
+    request: Request, project_id: str, result: PracticeResultRequest,
+    principal: PrincipalDependency,
+) -> dict:
+    return await asyncio.to_thread(
+        request.app.state.practice_leaderboard.submit, project_id, principal,
+        score=result.score, board_sum=result.board_sum,
+        elapsed_ms=result.elapsed_ms, outcome=result.outcome,
+    )
 
 
 async def _broadcast(request: Request, room_code: str) -> None:

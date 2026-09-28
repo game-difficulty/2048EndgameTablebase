@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 SCHEMA = """
@@ -313,6 +313,18 @@ CREATE TABLE IF NOT EXISTS competition_result_confirmations (
   CHECK (side IN ('yellow', 'white'))
 );
 
+CREATE TABLE IF NOT EXISTS practice_bests (
+  project_id TEXT NOT NULL,
+  rules_version INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  display_name TEXT NOT NULL,
+  result_value INTEGER NOT NULL,
+  elapsed_ms INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  achieved_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, rules_version, user_id)
+);
+
 CREATE INDEX IF NOT EXISTS competition_staff_user_idx
   ON competition_staff(user_id, competition_id);
 CREATE INDEX IF NOT EXISTS competition_seats_user_idx
@@ -334,6 +346,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS competition_open_issue_dedupe_idx
   WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS competition_live_outbox_pending_idx
   ON competition_live_outbox(delivered_at, id);
+CREATE INDEX IF NOT EXISTS practice_bests_project_idx
+  ON practice_bests(project_id, rules_version);
 """
 
 
