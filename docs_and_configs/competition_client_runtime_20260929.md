@@ -1,6 +1,6 @@
 # 比赛项目本机执行与轻量同步
 
-日期：2026-09-29。状态：代码已实现，本地验证完成；本轮未部署。
+日期：2026-09-29。状态：代码已实现，本地验证及线上部署完成。代码提交 `274af04`，发布版本 `20260929-client-runtime-r1`。
 
 ## 1. 职责划分
 
@@ -124,3 +124,18 @@ API：`POST /api/competitions/{code}/games/current/state`。
 截图位于 `output/playwright/client-runtime-*.png`。竞速边界局面由本地测试夹具构造，不是线上房间；未修改线上比赛数据。
 
 部署时需同时发布比赛前端、比赛后端及直播前端，保留 WASM 静态资源。无需数据库 schema 迁移。
+
+## 9. 线上发布记录
+
+- 比赛入口：`https://tournament.2048tables.online/test`；试玩入口：`https://tournament.2048tables.online/practice`。
+- 比赛前后端分别切换至 `/opt/2048tables/tournament/releases/20260929-client-runtime-r1`、`/opt/2048tables/tournament-app/releases/20260929-client-runtime-r1`。
+- 以线上 `20260929-zh-special-r1` 为基础发布，保留已有静态资源、seeded WASM 和原生模块；未修改主站、Play 后端或其入口。
+- 直播端已在同期发布中带有本次所需接收逻辑。本次重新构建并核对线上 `live-Bm4cqBte.js`、`live-B3heurOu.css` 的 SHA-256 完全一致，因此不重复切换直播入口，不覆盖其他直播功能。
+- 发布前两次检查均只有 3 间 `SEATING` 房间，无进行中的比赛。未创建测试比赛或修改现有比赛状态。
+- 发布包 SHA-256：`9659bc53f2d3d821857fefb0e13036b20c718e3ff795ffd2934bb71d3600dc07`。脚本：`tools/deploy_competition_client_runtime_20260929.py`；逐文件校验 manifest 后执行，失败自动切回旧版本。
+- 旧发布目录保留；数据库备份及切换记录位于 `/var/lib/2048tables/backups/20260929-client-runtime-r1`。没有数据库 schema 迁移。
+- 服务器端导入、12 项目录及新接口注册检查通过，比赛服务为 `active`。内部 OpenAPI 确认只有状态上传接口，旧走步/动作接口已移除。
+- 公网健康接口返回 `ok: true`；比赛、试玩（含项目 15）、新前端脚本及 WASM 均返回 200。比赛页面实际加载 `index-d17Y88gF.js`。Live 首页仍返回 200，入口 SHA-256 未改变。
+- 按 Playwright 流程验证：未登录进入比赛页正常提示登录；对抗出数试玩连续两次方向操作推进步数，WASM 请求返回 200，无 AI 加载错误。游客登录探测的 401 为预期响应。
+- 本轮没有在线上进行六人完整赛事；正式双端快速输入、乱序和竞速结算依据第 8 节本地验证，以及重新通过的 124 项后端/直播回归、76 项前端测试。
+- 已打开旧版比赛页面的用户应刷新页面后再开赛，因为旧走步接口不再保留。
