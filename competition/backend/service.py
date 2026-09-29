@@ -86,6 +86,7 @@ class CompetitionService:
         database: CompetitionDatabase,
         *,
         bootstrap_organizer_ids: frozenset[int] = frozenset(),
+        room_creator_ids: frozenset[int] = frozenset(),
         draw_reveal_seconds: int = 4,
         draft_turn_seconds: int = 60,
         c_draw_reveal_seconds: int = 5,
@@ -97,6 +98,7 @@ class CompetitionService:
     ):
         self.database = database
         self.bootstrap_organizer_ids = bootstrap_organizer_ids
+        self.room_creator_ids = room_creator_ids
         self.draw_reveal_seconds = max(1, int(draw_reveal_seconds))
         self.draft_turn_seconds = max(5, int(draft_turn_seconds))
         self.c_draw_reveal_seconds = max(1, int(c_draw_reveal_seconds))
@@ -122,6 +124,9 @@ class CompetitionService:
             principal.is_platform_organizer
             or principal.user_id in self.bootstrap_organizer_ids
         )
+
+    def _can_create_competition(self, principal: Principal) -> bool:
+        return self._is_platform_organizer(principal) or principal.user_id in self.room_creator_ids
 
     def _new_room_code(self) -> str:
         return "".join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(6))
@@ -1551,7 +1556,7 @@ class CompetitionService:
         room_code: str | None = None,
         projects: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        if not self._is_platform_organizer(principal):
+        if not self._can_create_competition(principal):
             raise CompetitionError(
                 "ORGANIZER_REQUIRED",
                 "Only a platform organizer can create a competition room.",

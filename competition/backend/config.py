@@ -31,6 +31,7 @@ class CompetitionSettings:
     database_path: Path
     allow_dev_auth: bool
     bootstrap_organizer_ids: frozenset[int]
+    room_creator_ids: frozenset[int]
     cors_origins: tuple[str, ...]
     frontend_dist: Path
     draw_reveal_seconds: int
@@ -50,6 +51,8 @@ def load_settings() -> CompetitionSettings:
     )
     raw_ids = _csv("COMPETITION_BOOTSTRAP_ORGANIZER_IDS")
     organizer_ids = frozenset(int(item) for item in raw_ids if item.isdigit())
+    raw_creator_ids = _csv("COMPETITION_ROOM_CREATOR_IDS")
+    room_creator_ids = frozenset(int(item) for item in raw_creator_ids if item.isdigit())
     cors_origins = _csv("COMPETITION_CORS_ORIGINS") or (
         "http://localhost:5174",
         "http://127.0.0.1:5174",
@@ -58,6 +61,7 @@ def load_settings() -> CompetitionSettings:
         database_path=database_path,
         allow_dev_auth=_flag("COMPETITION_ALLOW_DEV_AUTH", False),
         bootstrap_organizer_ids=organizer_ids,
+        room_creator_ids=room_creator_ids,
         cors_origins=cors_origins,
         frontend_dist=COMPETITION_ROOT / "frontend" / "dist",
         draw_reveal_seconds=_positive_int("COMPETITION_DRAW_REVEAL_SECONDS", 4, 1),

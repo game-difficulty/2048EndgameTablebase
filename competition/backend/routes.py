@@ -155,7 +155,7 @@ async def session(request: Request, principal: PrincipalDependency) -> dict:
             "display_name": principal.display_name,
             "site_role": principal.site_role,
         },
-        "can_create_competition": service._is_platform_organizer(principal),
+        "can_create_competition": service._can_create_competition(principal),
     }
 
 

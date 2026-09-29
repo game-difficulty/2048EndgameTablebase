@@ -56,6 +56,27 @@ def test_only_platform_organizer_can_create(service: CompetitionService) -> None
     assert captured.value.code == "ORGANIZER_REQUIRED"
 
 
+def test_room_creator_can_open_only_their_own_room(tmp_path) -> None:
+    service = CompetitionService(
+        CompetitionDatabase(tmp_path / "room-creators.sqlite3"),
+        room_creator_ids=frozenset({89}),
+    )
+    service.initialize()
+    creator = principal(89)
+    admin = principal(1, role="admin")
+    assert service._can_create_competition(creator)
+    assert not service._is_platform_organizer(creator)
+
+    service.create_competition(admin, name="Other Cup", room_code="TEST77")
+    own = service.create_competition(creator, name="Own Cup", room_code="MINE23")
+    assert own["me"]["staff_roles"] == ["organizer"]
+    assert [room["room_code"] for room in service.list_competitions(creator)] == ["MINE23"]
+    with pytest.raises(CompetitionError) as denied:
+        service.close_competition("TEST77", creator, command_id="creator-close-other")
+    assert denied.value.code == "ORGANIZER_REQUIRED"
+    assert service.close_competition("MINE23", creator, command_id="creator-close-own")["status"] == CompetitionStatus.CANCELLED.value
+
+
 def test_organizer_can_close_room_before_draw_without_creating_live_room(
     service: CompetitionService,
 ) -> None:

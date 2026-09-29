@@ -25,6 +25,7 @@ def create_app() -> FastAPI:
     service = CompetitionService(
         database,
         bootstrap_organizer_ids=settings.bootstrap_organizer_ids,
+        room_creator_ids=settings.room_creator_ids,
         draw_reveal_seconds=settings.draw_reveal_seconds,
         draft_turn_seconds=settings.draft_turn_seconds,
         c_draw_reveal_seconds=settings.c_draw_reveal_seconds,
