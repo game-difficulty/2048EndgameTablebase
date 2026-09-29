@@ -9,7 +9,6 @@ export const ANNOUNCEMENTS = Object.freeze([
     summaryKey: 'announcements.playBeta.summary',
     bodyKeys: Object.freeze([
       'announcements.playBeta.intro',
-      'announcements.playBeta.comparison',
     ]),
     featureKeys: Object.freeze([
       'announcements.playBeta.features.games',

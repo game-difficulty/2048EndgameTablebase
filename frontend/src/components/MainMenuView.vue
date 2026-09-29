@@ -11,8 +11,8 @@
 
     <!-- Menu Grid -->
     <div class="grid w-full grid-cols-4 auto-rows-fr gap-5 px-4">
-      <!-- Play Game Card -->
-      <button @click="$emit('selectTab', 'GamerView')"
+      <!-- Play Site Card -->
+      <a href="https://play.2048tables.online/" target="_blank" rel="noopener noreferrer"
         class="menu-card menu-card-primary h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
         <div class="menu-card-icon-shell menu-card-icon-primary mb-4 group-hover:scale-110 transition-transform duration-500">
           <svg class="menu-card-icon-svg" viewBox="0 0 64 64" aria-hidden="true">
@@ -25,8 +25,8 @@
           </svg>
         </div>
         <h3 class="text-[1.45rem] font-black text-text-main mb-2 tracking-tight">{{ $t('menu.play') }}</h3>
-        <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.play') }}</p>
-      </button>
+        <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.playSite') }}</p>
+      </a>
 
       <!-- Trainer Card -->
       <button @click="$emit('selectTab', 'TrainerView')"
@@ -90,17 +90,21 @@
         <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.minigames') }}</p>
       </button>
 
-      <!-- Leaderboards -->
-      <button @click="$emit('selectTab', 'LeaderboardsView')"
+      <!-- 2048 AI -->
+      <button @click="$emit('selectTab', 'GamerView')"
         class="menu-card menu-card-secondary h-full min-h-[220px] rounded-2xl p-6 transition-all duration-300 transform hover:-translate-y-2 flex flex-col items-center text-center group border backdrop-blur-sm">
         <div class="menu-card-icon-shell menu-card-icon-secondary mb-4 group-hover:scale-110 transition-transform duration-500">
           <svg class="menu-card-icon-svg" viewBox="0 0 64 64" aria-hidden="true">
-            <path d="M22 13h20v10c0 8-3.8 13.5-10 16.2C25.8 36.5 22 31 22 23V13Z" fill="currentColor" opacity="0.2"/>
-            <path d="M22 18h-7v4c0 6.2 3.8 10.2 10 11M42 18h7v4c0 6.2-3.8 10.2-10 11M32 39v8M22 52h20M27 47h10" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <rect x="17" y="17" width="30" height="30" rx="7" fill="currentColor" opacity="0.18"/>
+            <rect x="22" y="22" width="20" height="20" rx="4" stroke="currentColor" stroke-width="3.5" fill="none"/>
+            <path d="M27 12v6M37 12v6M27 46v6M37 46v6M12 27h6M12 37h6M46 27h6M46 37h6" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+            <circle cx="28" cy="29" r="2.3" fill="currentColor"/>
+            <circle cx="36" cy="29" r="2.3" fill="currentColor"/>
+            <path d="M27.5 36c2.7 2.1 6.3 2.1 9 0" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none"/>
           </svg>
         </div>
-        <h3 class="text-[1.45rem] font-black text-text-main mb-2 tracking-tight">{{ $t('menu.leaderboards') }}</h3>
-        <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.leaderboards') }}</p>
+        <h3 class="text-[1.45rem] font-black text-text-main mb-2 tracking-tight">{{ $t('menu.ai') }}</h3>
+        <p class="menu-card-copy ui-body text-text-secondary opacity-70">{{ $t('menu.descriptions.play') }}</p>
       </button>
 
       <!-- Settings -->
