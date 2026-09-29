@@ -20,6 +20,13 @@ function schedule(element) {
   element.__rankingFitFrame = requestAnimationFrame(() => fit(element));
 }
 
+function scheduleWhenTextChanges(element) {
+  const text = element.textContent;
+  if (element.__rankingFitText === text) return;
+  element.__rankingFitText = text;
+  schedule(element);
+}
+
 export const fitSingleLineText = {
   mounted(element) {
     let cleanup;
@@ -35,13 +42,15 @@ export const fitSingleLineText = {
       cleanup = () => window.removeEventListener('resize', onResize);
     }
     observers.set(element, cleanup);
+    element.__rankingFitText = element.textContent;
     schedule(element);
-    document.fonts?.ready.then(() => schedule(element));
+    document.fonts?.ready.then(() => { if (observers.has(element)) schedule(element); });
   },
-  updated: schedule,
+  updated: scheduleWhenTextChanges,
   beforeUnmount(element) {
     cancelAnimationFrame(element.__rankingFitFrame || 0);
     observers.get(element)?.();
     observers.delete(element);
+    delete element.__rankingFitText;
   },
 };

@@ -536,7 +536,11 @@ watch(manualSpawn, enabled => {
     practice.value = { ...practice.value, board, pending: false };
   }
 });
-function refreshVisibleAppearance() { if (!document.hidden) refreshAppearance(); }
+function refreshVisibleAppearance() {
+  if (document.hidden) return;
+  clock.value = session.now();
+  refreshAppearance();
+}
 function leavePage() { session.stop(); }
 function restorePage(event) {
   if (!event.persisted) return;
@@ -550,9 +554,11 @@ function scheduleRoute() {
 }
 onMounted(() => {
   session.start();
-  clockTimer = setInterval(() => { clock.value = session.now(); }, 500);
+  clockTimer = setInterval(() => {
+    if (!document.hidden && view.value === 'game' && run.value?.firstMoveAt && !run.value.reason) clock.value = session.now();
+  }, 500);
   speedTimer = setInterval(() => {
-    if (view.value === 'game' && !practice.value && playSettings.value.showSpeed) speedClock.value = session.now();
+    if (!document.hidden && view.value === 'game' && !practice.value && playSettings.value.showSpeed) speedClock.value = session.now();
   }, SPEED_REFRESH_MS);
   window.addEventListener('keydown', keydown); window.addEventListener('hashchange', scheduleRoute); window.addEventListener('popstate', scheduleRoute); window.addEventListener('pagehide', leavePage); window.addEventListener('pageshow', restorePage); window.addEventListener('focus', refreshAppearance); window.addEventListener('storage', refreshAppearance); window.addEventListener('human-preferences-changed', refreshAppearance); window.addEventListener('account-preferences-changed', refreshPlaySettings); document.addEventListener('visibilitychange', refreshVisibleAppearance); boot();
 });

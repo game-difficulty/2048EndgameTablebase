@@ -7,6 +7,7 @@ import { humanBoardFrame, paddedBoard } from '../src/human/boardAnimation.js';
 import { createTerminalOverlay, TERMINAL_OVERLAY_DELAY_MS } from '../src/human/terminalOverlay.js';
 const seed = '00000001000000020000000300000004';
 const playerProfileSource = readFileSync(new URL('../src/human/PlayerProfile.vue', import.meta.url), 'utf8');
+const humanAppSource = readFileSync(new URL('../src/human/HumanApp.vue', import.meta.url), 'utf8');
 
 test('history delete controls are enabled while no delete request is pending', () => {
   assert.match(playerProfileSource, /deletingId\s*=\s*ref\(null\)/);
@@ -19,6 +20,11 @@ test('cached profile releases inactive poster resources and bounds API results',
   assert.match(playerProfileSource, /posterCanvas\.value\.width = 1; posterCanvas\.value\.height = 1/);
   assert.match(playerProfileSource, /remember\(historyCache, key, result, 12\)/);
   assert.match(playerProfileSource, /remember\(bestCache, key, result, 8\)/);
+});
+
+test('background Play tabs do not refresh the game clock or speed display', () => {
+  assert.match(humanAppSource, /if \(!document\.hidden && view\.value === 'game' && run\.value\?\.firstMoveAt/);
+  assert.match(humanAppSource, /if \(!document\.hidden && view\.value === 'game' && !practice\.value && playSettings\.value\.showSpeed/);
 });
 
 test('terminal overlay waits two seconds and stays dismissed for that game', () => {
