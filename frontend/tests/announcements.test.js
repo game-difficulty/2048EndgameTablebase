@@ -11,9 +11,10 @@ test('catalog has unique stable IDs and all bilingual content', () => {
     const messages = JSON.parse(readFileSync(new URL(`../src/locales/${language}.json`, import.meta.url), 'utf8'));
     const value = key => key.split('.').reduce((obj, part)=>obj?.[part], messages);
     for (const item of ANNOUNCEMENTS) {
-      for (const key of [item.titleKey,item.summaryKey,item.bodyKey]) assert.equal(typeof value(key), 'string');
-      for (const part of ['title','note','recharge','lucky','envelope','weekly','trophy']) assert.equal(typeof value(`${item.rewardCopyKey}.${part}`), 'string');
-      assert.equal(new URL(item.liveUrl).protocol, 'https:');
+      const contentKeys = [item.titleKey,item.summaryKey,item.bodyKey,item.noticeKey,...(item.bodyKeys||[]),...(item.featureKeys||[])].filter(Boolean);
+      for (const key of contentKeys) assert.equal(typeof value(key), 'string');
+      if (item.rewardCopyKey) for (const part of ['title','note','recharge','lucky','envelope','weekly','trophy']) assert.equal(typeof value(`${item.rewardCopyKey}.${part}`), 'string');
+      assert.equal(new URL(item.siteUrl || item.liveUrl).protocol, 'https:');
     }
   }
 });

@@ -10,6 +10,20 @@
     "title": "Announcements",
     "history": "Past Announcements",
     "dismiss": "Dismiss this announcement",
+    "playBeta": {
+      "title": "Play enters beta: verified games, complete archives and progress analysis",
+      "summary": "Play is now in beta with four board variants, complete replay archives, player profiles, shareable statistics, replay analysis and 2048Verse history migration. Read the announcement.",
+      "intro": "2048 Play is now in beta for 4×4, 3×4, 3×3 and 2×4. It shares accounts and core preferences with the main site and is built for continuous, serious games.",
+      "comparison": "Where 2048Verse centers on a score history, Play connects each game from its seeded start and verification through archival, replay, analysis and sharing, with fewer manual downloads and repeat uploads.",
+      "features": {
+        "games": "Ranked games use pre-generated seeds and server-side replay verification. High-score runs stay online and periodically checkpoint. Finished games keep compressed replays and enter all-time and rolling 168-hour rankings with weekly Token rewards.",
+        "profile": "Player profiles bring together history, PBs, Best 10, Rating, terminal achievements and progress charts. Best 10 and statistics posters are generated locally in the browser for sharing.",
+        "analysis": "Archived games can run one or several tablebase analyses directly, without downloading and uploading again. Results include grades, agreement, stage replays and result cards, and may appear in the public analysis library.",
+        "migration": "You may request a one-time migration from a 2048Verse account. Imported results have the same standing as native games for PB, Best 10, Rating, rankings and statistics, and missing replays can be attached later.",
+        "practice": "Open any position in the practice board to arrange tiles, spawn manually and explore alternatives. Play also includes player livestreams, themes and .vth palettes, a 65K color, custom timing splits, IPS/MPS and the current game's 4-spawn rate."
+      },
+      "notice": "During beta, an active game's recoverable state remains local to its current browser and cannot move between devices. Do not clear site data, keep free space on the system drive, and remain online after high-score monitoring begins. If an upload or record fails, save the replay and contact the administrator."
+    },
     "liveRewards": {
       "title": "AI livestream is here, with more ways to earn Tokens",
       "summary": "AI livestream is here! Watch live games and join lucky bags. Weekly rankings and minigame trophies now earn permanent Tokens too. Read the announcement.",

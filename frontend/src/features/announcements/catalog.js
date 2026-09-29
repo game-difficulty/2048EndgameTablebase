@@ -3,6 +3,26 @@ import { TAB_IDS, TAB_REGISTRY } from '../../app/tabRegistry.js';
 // Keep published IDs and copy revisions stable so archived notices remain readable.
 export const ANNOUNCEMENTS = Object.freeze([
   Object.freeze({
+    id: '2026-09-29-play-beta',
+    date: '2026-09-29',
+    titleKey: 'announcements.playBeta.title',
+    summaryKey: 'announcements.playBeta.summary',
+    bodyKeys: Object.freeze([
+      'announcements.playBeta.intro',
+      'announcements.playBeta.comparison',
+    ]),
+    featureKeys: Object.freeze([
+      'announcements.playBeta.features.games',
+      'announcements.playBeta.features.profile',
+      'announcements.playBeta.features.analysis',
+      'announcements.playBeta.features.migration',
+      'announcements.playBeta.features.practice',
+    ]),
+    noticeKey: 'announcements.playBeta.notice',
+    siteUrl: 'https://play.2048tables.online/',
+    target: Object.freeze({ type: 'announcement', id: '2026-09-29-play-beta' }),
+  }),
+  Object.freeze({
     id: '2026-09-16-live-rewards',
     date: '2026-09-16',
     titleKey: 'announcements.liveRewards.title',

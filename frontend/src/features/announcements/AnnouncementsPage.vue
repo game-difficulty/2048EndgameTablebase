@@ -12,9 +12,13 @@
       <article :key="selected.id">
         <time :datetime="selected.date">{{ selected.date }}</time>
         <h2>{{ $t(selected.titleKey) }}</h2>
-        <p>{{ $t(selected.bodyKey) }}</p>
-        <a v-if="selected.liveUrl" :href="selected.liveUrl" target="_blank" rel="noopener noreferrer" class="live-link">
-          <Radio :size="19" />{{ selected.liveUrl }}<ExternalLink :size="16" />
+        <p v-for="key in bodyKeys" :key="key">{{ $t(key) }}</p>
+        <ul v-if="selected.featureKeys?.length" class="announcement-features">
+          <li v-for="key in selected.featureKeys" :key="key">{{ $t(key) }}</li>
+        </ul>
+        <p v-if="selected.noticeKey" class="announcement-notice">{{ $t(selected.noticeKey) }}</p>
+        <a v-if="siteUrl" :href="siteUrl" target="_blank" rel="noopener noreferrer" class="live-link">
+          <Radio :size="19" />{{ siteUrl }}<ExternalLink :size="16" />
         </a>
         <TokenSources v-if="selected.rewardCopyKey" :copy-key="selected.rewardCopyKey" />
         <button v-if="selected.rewardCopyKey" class="action-btn-small" @click="$emit('open-quota')"><CircleHelp :size="16" />{{ $t('billing.quotaGuide.open') }}</button>
@@ -32,6 +36,8 @@ const props = defineProps({ requestedId: { type: String, default: '' } });
 defineEmits(['open-quota']);
 const selectedId = ref(props.requestedId);
 const selected = computed(() => findAnnouncement(selectedId.value));
+const bodyKeys = computed(() => selected.value.bodyKeys || (selected.value.bodyKey ? [selected.value.bodyKey] : []));
+const siteUrl = computed(() => selected.value.siteUrl || selected.value.liveUrl || '');
 watch(() => props.requestedId, id => { selectedId.value = id; });
 </script>
 
@@ -48,6 +54,9 @@ time { font-size: var(--font-ui-xs); color: var(--text-secondary); }
 article { min-width: 0; padding-bottom: 2rem; }
 article h2 { margin: 0.4rem 0 1rem; font-size: 1.4rem; font-weight: 900; }
 article p { line-height: 1.75; font-size: var(--font-ui-sm); color: var(--text-secondary); }
+.announcement-features { display: grid; gap: 0.65rem; margin: 1rem 0 1.2rem; padding-left: 1.3rem; color: var(--text-main); font-size: var(--font-ui-sm); line-height: 1.65; }
+.announcement-features li::marker { color: var(--accent); }
+.announcement-notice { padding: 0.85rem 1rem; border-left: 3px solid var(--accent); background: var(--bg-card); }
 .live-link { display: inline-flex; align-items: center; gap: 0.5rem; margin: 0.8rem 0 1.5rem; color: var(--accent); font-weight: 750; }
 .live-link:hover { text-decoration: underline; }
 article > button { width: fit-content; display: inline-flex; align-items: center; gap: 0.4rem; }
