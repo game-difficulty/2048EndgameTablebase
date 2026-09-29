@@ -1,5 +1,5 @@
 import { authHeaders } from '../services/auth/sessionTokenStore.js';
-import { eventBytes } from './engine.js';
+import { eventUploadSlice } from './eventBuffer.js';
 import { decodeReceipt, uploadBody } from './wire.js';
 
 export async function request(path, { body, method = 'GET', headers = {}, binary = false, keepalive = false, timeoutMs = 8000 } = {}) {
@@ -21,12 +21,13 @@ export async function json(path, options) { return decodeReceipt(await (await re
 export const getStatus = (run, browser) => json(`/api/human/runs/${run.id}/status`, { headers: { 'X-Human-Browser': browser } });
 export async function upload(run, events, browser, writer, action, status, keepalive = false) {
   const start = status.seq;
-  const packed = await uploadBody(eventBytes(events.slice(start)));
+  const tail = eventUploadSlice(events, start);
+  const packed = await uploadBody(tail.bytes);
   return json(`/api/human/runs/${run.id}/${action}`, {
     method: 'POST', body: packed.body, binary: true, keepalive,
     headers: { ...packed.headers, 'X-Human-Browser': browser, 'X-Human-Writer': writer, 'X-Human-Epoch': String(status.epoch),
       'X-Human-Start': String(start), 'X-Human-Count': String(run.seq),
-      'X-Human-Prefix': start === 0 ? run.initialHash : events[start - 1]?.[2] || 'missing',
+      'X-Human-Prefix': start === 0 ? run.initialHash : tail.prefix || 'missing',
       'X-Human-Reason': run.reason || '', 'X-Human-Permit': run.permit || '' },
   });
 }

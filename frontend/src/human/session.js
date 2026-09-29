@@ -4,6 +4,7 @@ import * as storage from './storage.js';
 import { json, getStatus, upload } from './client.js';
 import { needsReplayUpload } from './archivePolicy.js';
 import { timerSplitsFor } from './timerSplits.js';
+import { EventBuffer } from './eventBuffer.js';
 
 export const messages = {
   rollback_detected: '检测到本地进度落后于服务器记录，本局已判定回档，不能继续排位。',
@@ -26,7 +27,7 @@ export function useHumanSession(user, policies) {
   const busy = ref(false); const moveBusy = ref(false);
   const error = ref(''); const archiveNotice = ref(''); const savedSeq = ref(0);
   const archiveFailures = shallowRef([]), reportedArchiveFailures = new Set();
-  let browser = ''; const writer = crypto.randomUUID(); let release; let events = [];
+  let browser = ''; const writer = crypto.randomUUID(); let release; let events = new EventBuffer();
   let permitEnd = 0; let lastUpload = 0; let lastContact = 0; let timer; let disposed = false; let missingId = null;
   let pendingVisibilityCheck = false;
   let stateQueue = Promise.resolve(), networkJob = null, generation = 0;
@@ -95,7 +96,8 @@ export function useHumanSession(user, policies) {
   function firstOverSequence(snapshot, frozenEvents) {
     if (snapshot.firstOverSeq) return snapshot.firstOverSeq;
     let state = { ...engine.initialState(snapshot.id, snapshot.variant, snapshot.seed), variant: snapshot.variant };
-    for (const event of frozenEvents) {
+    for (let index = 0; index < frozenEvents.length; index++) {
+      const event = typeof frozenEvents.replayAt === 'function' ? frozenEvents.replayAt(index) : frozenEvents[index];
       state = engine.nextMove(state, event[0] & 3, event[1]).state;
       if (state.score > snapshot.threshold) return state.seq;
     }
@@ -139,7 +141,7 @@ export function useHumanSession(user, policies) {
     if (!navigator.onLine && high()) { offline(); return; }
     pendingVisibilityCheck = false;
     if (run.value.guest || run.value.reason) return;
-    const snapshot = { ...run.value }, frozenEvents = events.slice();
+    const snapshot = { ...run.value }, frozenEvents = events.clone();
     gate.value = 'ready';
     connectionGraceEnd = performance.now() + 8000;
     if (networkJob?.generation === generation) {
@@ -246,7 +248,7 @@ export function useHumanSession(user, policies) {
       guest: !user.value, monitored: false, serverSeq: 0, firstMoveAt: null, lastActionAt: null, nodesVersion: 1,
       timerSplits: timerSplitsFor(variant.value), splitTimes: {},
       fourCount: initial.board.filter(value => value === 4).length, spawnCount: 2 };
-    events = []; await save(value); await storage.meta(`slot:${slot()}`, value.id); await storage.meta(key, null);
+    events = new EventBuffer(); await save(value); await storage.meta(`slot:${slot()}`, value.id); await storage.meta(key, null);
     missingId = null; gate.value = 'ready'; error.value = '';
     if (user.value && pending.writer !== writer) {
       const snapshot = { ...run.value };
@@ -259,24 +261,24 @@ export function useHumanSession(user, policies) {
     generation += 1;
     await stateQueue;
     connectionGraceEnd = 0;
-    release?.(); release = null; permitEnd = 0; variant.value = id; run.value = null; events = [];
+    release?.(); release = null; permitEnd = 0; variant.value = id; run.value = null; events = new EventBuffer();
     try {
       browser ||= await storage.browserId();
       release = await storage.acquireSlot(slot());
       if (!release) { gate.value = 'other-tab'; return; }
       const localId = await storage.meta(`slot:${slot()}`); const local = await storage.readRun(localId);
       if (local) {
-        run.value = local; events = await storage.readEvents(local.id); savedSeq.value = local.seq;
+        run.value = local; events = new EventBuffer(await storage.readEvents(local.id)); savedSeq.value = local.seq;
         if (events.length !== local.seq) throw new Error('local_storage_failed');
         if (!Number.isInteger(local.fourCount) || !Number.isInteger(local.spawnCount)) {
           const initial = engine.initialState(local.id, local.variant, local.seed);
-          const fourCount = initial.board.filter(value => value === 4).length + events.filter(event => !!(event[0] & 64)).length;
+          const fourCount = initial.board.filter(value => value === 4).length + events.countCodeMask(64);
           await save({ ...local, fourCount, spawnCount: 2 + events.length });
         }
         if (local.nodesVersion !== 1) {
           // Recover newly displayed early milestones from this browser's own replay only.
           // Never replace board, score, sequence or RNG with server-side state.
-          const replay = engine.buildReplay({ header: { run_id: local.id, variant: local.variant, seed: local.seed }, events });
+          const replay = engine.buildReplay({ header: { run_id: local.id, variant: local.variant, seed: local.seed }, events: events.slice() });
           await save({ ...local, nodes: replay.final.nodes, nodesVersion: 1 });
         }
         if (!Array.isArray(local.timerSplits) || !local.splitTimes) {
@@ -286,7 +288,7 @@ export function useHumanSession(user, policies) {
         if (local.reason) { gate.value = 'ended'; void flushArchives(); return; }
         if (local.guest) { gate.value = 'ready'; return; }
         gate.value = 'ready';
-        const snapshot = { ...run.value }, frozenEvents = events.slice();
+        const snapshot = { ...run.value }, frozenEvents = events.clone();
         if (!navigator.onLine && high()) offline();
         else void background(async context => {
           try { await checkConnection(context, snapshot, frozenEvents); }
@@ -351,14 +353,14 @@ export function useHumanSession(user, policies) {
   function startMonitoring() {
     if (networkJob?.generation === generation) return;
     const snapshot = { ...run.value }, crossing = firstOverSequence(snapshot, events);
-    const frozenEvents = events.slice(0, crossing);
+    const frozenEvents = events.clone(crossing);
     return background(context => synchronize(context, 'monitor', { ...snapshot, seq: crossing }, frozenEvents,
       { seq: snapshot.serverSeq || 0, epoch: snapshot.epoch }));
   }
   function sync(keepalive = false) {
     if (!run.value || !high() || run.value.reason) return;
     if (!run.value.monitored) return startMonitoring();
-    const snapshot = { ...run.value }, frozenEvents = events.slice();
+    const snapshot = { ...run.value }, frozenEvents = events.clone();
     const status = { seq: snapshot.serverSeq || 0, epoch: snapshot.epoch };
     return background(context => synchronize(context, 'append', snapshot, frozenEvents, status, keepalive));
   }
@@ -424,7 +426,7 @@ export function useHumanSession(user, policies) {
   }
   function liveCheckpoint() {
     if (!run.value || run.value.reason || run.value.guest || high()) return;
-    const snapshot = { ...run.value }, frozenEvents = events.slice();
+    const snapshot = { ...run.value }, frozenEvents = events.clone();
     if (![32768, 65536].some(value => snapshot.nodes?.[value]?.seq === snapshot.seq)) return;
     const status = { seq: snapshot.serverSeq || 0, epoch: snapshot.epoch };
     return background(context => synchronize(context, 'live', snapshot, frozenEvents, status));
