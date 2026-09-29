@@ -3,7 +3,11 @@ import { boardFrameRenderMode, cloneBoard } from './boardFrame.js';
 
 // Shared by the main board and human boards: consume explicit frames, snap interrupted
 // transitions to their committed target, then slide, reveal merges/spawns and settle.
-export function useBoardAnimation(props, boardViewport, viewportSignature) {
+export function animationLayoutTarget(surface, fallback = document.body) {
+  return surface?.querySelector?.('.moving-tile, .tile') || surface || fallback;
+}
+
+export function useBoardAnimation(props, boardViewport, viewportSignature, animationSurface = null) {
   let tileIdCounter = 0;
   const activeTiles = ref([]);
   let animTimeout = null;
@@ -140,8 +144,9 @@ export function useBoardAnimation(props, boardViewport, viewportSignature) {
       activeTiles.value.forEach(t => t.isInterrupting = true);
       await nextTick();
       if (epoch !== animationEpoch) return;
-      // Force browser reflow
-      void document.body.offsetHeight;
+      // Commit the transition-free tile positions before sliding. Restrict the
+      // synchronous layout read to this board instead of invalidating the page.
+      void animationLayoutTarget(animationSurface?.value).offsetHeight;
 
       const {
           direction = '',

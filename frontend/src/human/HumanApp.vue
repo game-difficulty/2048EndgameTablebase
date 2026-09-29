@@ -251,7 +251,8 @@ const isPracticeOver = computed(() => practice.value && isOver(practice.value.bo
 const gateTitle = computed(() => ({ loading: '准备棋盘', checking: '正在检查本地进度', network: '需要连接服务器', rejected: '本局无法继续排位', storage: '本地存档不可用', missing: '本地存档缺失', 'other-tab': '此变体正在另一页面进行', paused: '本局已暂停', ended: run.value?.archived ? '本局已归档' : '本局结束' }[gate.value] || '稍候'));
 const gateDescription = computed(() => ['network','rejected','storage','missing'].includes(gate.value) ? error.value : gate.value === 'ended' ? `${number(run.value?.score || 0)} 分 · ${run.value?.guest ? '访客练习保留在本地' : run.value?.archived ? '回放已验证并归档' : needsReplayUpload(run.value) ? '回放等待上传' : '回放仅保存在本地'}` : gate.value === 'other-tab' ? '请回到原页面，或关闭原页面后重新检查。其他变体仍可独立游玩。' : gate.value === 'paused' ? '棋盘保持不变，连续计时仍在进行。' : '只验证本地记录，不从服务器加载棋盘。');
 const modalTitle = computed(() => ({ restart: '重开确认', 'practice-reminder': '当前是练习板', rules: '对局规则', settings: '设置', 'replay-export': '回放', 'archive-failure': '回放上传失败，请保存回放' }[modal.value] || '提示'));
-const number = value => new Intl.NumberFormat(language.value === 'en' ? 'en-US' : 'zh-CN').format(value || 0);
+const numberFormatter = computed(() => new Intl.NumberFormat(language.value === 'en' ? 'en-US' : 'zh-CN'));
+const number = value => numberFormatter.value.format(value || 0);
 function duration(ms) { const s = Math.floor(Math.max(0, ms) / 1000); return `${Math.floor(s / 3600).toString().padStart(2,'0')}:${Math.floor(s / 60 % 60).toString().padStart(2,'0')}:${(s % 60).toString().padStart(2,'0')}`; }
 const date = timestamp => new Date(timestamp * 1000).toLocaleString(language.value === 'en' ? 'en-US' : 'zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 const reasonText = reason => t({ game_over: '自然结束', restarted: '重开', abandoned: '放弃', interrupted: '中断' }[reason] || reason);

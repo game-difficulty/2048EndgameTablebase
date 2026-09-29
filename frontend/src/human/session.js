@@ -438,6 +438,7 @@ export function useHumanSession(user, policies) {
   }
   return { run, variant, gate, busy, moveBusy, waitForMove, error, archiveNotice, archiveFailures, dismissArchiveFailure, failedReplayEvents, savedSeq, transition, activate, play, retry, restart,
     pause, resume, start, stop, flushArchives, high, now, liveCheckpoint,
-    getEvents: () => events.map(e => [...e]), getPolicy: policy,
+    getEventCount: () => events.length,
+    getEvents: (start = 0, end = events.length) => events.slice(start, end).map(e => [...e]), getPolicy: policy,
     liveContext: () => ({ browser, writer, run: run.value ? { ...run.value } : null }) };
 }

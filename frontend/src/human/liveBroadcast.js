@@ -22,7 +22,7 @@ export function createLiveBroadcast(session, getBest = () => 0) {
   async function prefixPacket(events){const packed=await uploadBody(eventBytes(events));const body=packed.body instanceof Uint8Array?packed.body:new Uint8Array(packed.body);const packet=new Uint8Array(5+body.byteLength);packet.set([72,76,80,49],0);packet[4]=(packed.headers['Content-Encoding']==='gzip'?1:0)|(packed.headers['X-Human-Layout']==='planes5'?2:0);packet.set(body,5);return packet;}
   async function connect(descriptor){
     const own=++generation;closeSocket();lease=descriptor.lease;room.value=descriptor;state.value='connecting';sentSeq=0;
-    const {context}=payload(),events=[...session.getEvents()];
+    const {context}=payload(),events=session.getEvents();
     const packet=await prefixPacket(events);if(own!==generation||!enabled.value)return;
     const ws=new WebSocket(descriptor.publish_url);socket=ws;ws.binaryType='arraybuffer';
     ws.onopen=()=>{if(socket!==ws)return;ws.send(JSON.stringify({type:'hello',lease,seq:events.length,started_at:(context.run.firstMoveAt||Date.now())/1000,appearance,best_score:Number(getBest(context.run.variant)||0)}));ws.send(packet)};
@@ -45,7 +45,7 @@ export function createLiveBroadcast(session, getBest = () => 0) {
       for(let attempt=0;attempt<6;attempt++){try{await reconnect();return}catch(error){if(error?.code!=='live_run_not_current'||attempt===5)throw error;await new Promise(resolve=>setTimeout(resolve,250*(attempt+1)))}}
     }catch{enabled.value=false;state.value='off'}finally{restoreJob=null}})();return restoreJob;
   }
-  function publishTail(){if(!enabled.value||!ready||socket?.readyState!==1)return;const events=session.getEvents();if(events.length<sentSeq){socket.close();return}for(let index=sentSeq;index<events.length;index++)socket.send(eventBytes([events[index]]));sentSeq=events.length;void session.liveCheckpoint()}
+  function publishTail(){if(!enabled.value||!ready||socket?.readyState!==1)return;const count=session.getEventCount();if(count<sentSeq){socket.close();return}const tail=session.getEvents(sentSeq,count);for(const event of tail)socket.send(eventBytes([event]));sentSeq=count;void session.liveCheckpoint()}
   async function runChanged(){if(!enabled.value)return;try{await reconnect()}catch(error){notice.value=liveError(error);scheduleReconnect()}}
   function finish(){if(ready&&socket?.readyState===1)socket.send(JSON.stringify({type:'end'}))}
   function updateAppearance(value){appearance=value;if(ready&&socket?.readyState===1)socket.send(JSON.stringify({type:'appearance',appearance}))}

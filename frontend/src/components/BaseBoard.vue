@@ -108,7 +108,7 @@ const boardViewportStyle = computed(() => {
     '--tile-height': `${layout.tileHeightPercent}%`,
   };
 });
-const { activeTiles } = useBoardAnimation(props, boardViewport, viewportSignature);
+const { activeTiles } = useBoardAnimation(props, boardViewport, viewportSignature, boardRef);
 const MERGE_GLOW_STEPS = 5;
 let touchGesture = null;
 
@@ -246,6 +246,10 @@ const getTileInnerStyle = (tile) => {
 </script>
 
 <style scoped>
+.board-stage {
+  contain: layout;
+}
+
 .board {
   --visible-rows: 4;
   --visible-cols: 4;

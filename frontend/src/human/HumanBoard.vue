@@ -1,5 +1,5 @@
 <template>
-  <div class="human-board" :class="{ editable }" :style="{ '--cols': cols, '--rows': rows, '--human-slide-duration': animate ? '100ms' : '0ms' }"
+  <div ref="boardRef" class="human-board" :class="{ editable }" :style="{ '--cols': cols, '--rows': rows, '--human-slide-duration': animate ? '100ms' : '0ms' }"
        role="group" :aria-label="t(`${rows} 行 ${cols} 列棋盘`)" tabindex="0"
        @pointerdown="down" @pointerup="up" @pointercancel="pointer = null" @contextmenu.prevent @auxclick.prevent>
     <button v-for="(value, index) in board" :key="index" type="button" class="tile"
@@ -16,7 +16,7 @@
   </div>
 </template>
 <script setup>
-import { computed, shallowRef, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import { tileStyle } from './appearance.js';
 import { liveAppearanceTileStyle } from './liveAppearance.js';
 import { t } from './i18n.js';
@@ -28,13 +28,14 @@ const props = defineProps({ board: Array, rows: Number, cols: Number, transition
   touchButton: { type: Number, default: 0 }, swipeSensitivity: { type: Number, default: 100 }, animate: { type: Boolean, default: true },
   palette: { type: Object, default: null } });
 const resolvedTileStyle = value => liveAppearanceTileStyle(props.palette, value) || tileStyle(value);
+const boardRef = ref(null);
 let revision = 0;
 const frame = shallowRef(null);
 const viewport = computed(() => ({ rows: props.rows, cols: props.cols, visibleIndices: props.board.map((_,i) => Math.floor(i / props.cols) * 4 + i % props.cols) }));
 watch(() => [props.board, props.rows, props.cols, props.transition], () => {
   frame.value = humanBoardFrame(++revision, props.board, props.rows, props.cols, props.transition);
 }, { immediate: true });
-const { activeTiles } = useBoardAnimation({ get frame() { return frame.value; }, isVariant: false, get animationDuration() { return props.animate ? 300 : 0; } }, viewport, computed(() => `${props.rows}:${props.cols}`));
+const { activeTiles } = useBoardAnimation({ get frame() { return frame.value; }, isVariant: false, get animationDuration() { return props.animate ? 300 : 0; } }, viewport, computed(() => `${props.rows}:${props.cols}`), boardRef);
 function position(tile) {
   return { left: `calc(var(--board-gap) + ${tile.col} * ((100% - (var(--cols) + 1) * var(--board-gap)) / var(--cols) + var(--board-gap)))`, top: `calc(var(--board-gap) + ${tile.row} * ((100% - (var(--rows) + 1) * var(--board-gap)) / var(--rows) + var(--board-gap)))` };
 }

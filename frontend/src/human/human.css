@@ -147,6 +147,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .new-game { min-width: 96px; font-size: 16px; padding: 8px 16px; }
 .human-board {
   --cols: 4; --rows: 4; --board-gap: 14px; container-type: inline-size;
+  contain: layout;
   display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
   grid-template-rows: repeat(var(--rows), auto);
   gap: var(--board-gap); padding: var(--board-gap); background: #30302e; border-radius: 6px;

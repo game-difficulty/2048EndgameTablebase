@@ -121,6 +121,16 @@ test('move saving stays guarded without marking page controls as a long operatio
   assert.equal(s.run.value.seq, 1);
 });
 
+test('replay readers can copy only the unsent live tail', async t => {
+  const s = await setup(t, 1000000);
+  for (let index = 0; index < 8; index++) await move(s);
+  assert.equal(s.getEventCount(), 8);
+  const tail = s.getEvents(6);
+  assert.equal(tail.length, 2);
+  tail[0][0] = 255;
+  assert.notEqual(s.getEvents(6, 7)[0][0], 255, 'callers cannot mutate the session replay');
+});
+
 test('first checkpoint is frozen; delayed receipt preserves newer moves and local events', async t => {
   const s = await setup(t), pending = hold('monitor');
   await cross(s); await pending.entered.promise;
