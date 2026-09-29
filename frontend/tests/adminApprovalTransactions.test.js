@@ -11,7 +11,7 @@ test('admin page switches user lookup and approval transactions in one workspace
   assert.match(page, /adminSection === 'approvals'/);
   assert.match(page, /<AdminApprovalTransactions/);
   assert.match(page, /v-if="adminSection === 'users'"/);
-  assert.match(page, /<div v-else>[\s\S]*?<AdminApprovalTransactions/);
+  assert.match(page, /<AdminApprovalTransactions[\s\S]*?v-else-if="adminSection === 'approvals'"/);
 });
 
 test('approval transaction panel queries summaries and reuses audited decision endpoints', () => {
