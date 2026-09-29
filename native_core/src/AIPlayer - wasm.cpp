@@ -1069,7 +1069,8 @@ uint64_t AIPlayer::apply_dynamic_mask() {
 // ------------------------------------------------------------------
 EvilGen::EvilGen(uint64_t initial_board)
     : cache(), max_d(3), hardest_pos(0), hardest_num(1), board(initial_board),
-      node(0), dead_score(131072) {}
+      node(0), dead_score(131072), tie_state(0), tie_count(0),
+      randomize_ties(false) {}
 
 void EvilGen::reset_board(uint64_t new_board) {
   hardest_pos = 0;
@@ -1146,17 +1147,29 @@ int32_t EvilGen::search_evil_gen(uint64_t b, int32_t depth,
           int32_t current_val = temp + static_cast<int32_t>(score << 1);
           best = std::max(best, current_val);
 
-          if (best >= evil)
+          if (best > evil || (best == evil && !(randomize_ties && depth == max_d)))
             break;
         }
       }
 
       if (best <= evil) {
-        evil = best;
         if (max_d == depth) {
-          hardest_pos = static_cast<uint8_t>(pos_idx);
-          hardest_num = static_cast<uint8_t>(num);
+          bool select = true;
+          if (best < evil) {
+            tie_count = 1;
+          } else if (randomize_ties) {
+            ++tie_count;
+            tie_state ^= tie_state << 13;
+            tie_state ^= tie_state >> 17;
+            tie_state ^= tie_state << 5;
+            select = tie_state % tie_count == 0;
+          }
+          if (select) {
+            hardest_pos = static_cast<uint8_t>(pos_idx);
+            hardest_num = static_cast<uint8_t>(num);
+          }
         }
+        evil = best;
       }
     }
     empty_mask &= (empty_mask - 1);
@@ -1173,11 +1186,23 @@ int32_t EvilGen::dispatcher(uint64_t current_board) {
 
 void EvilGen::start_search(int32_t depth) {
   cache.clear();
+  tie_count = 0;
   max_d = depth;
   dispatcher(board);
 }
 
 std::tuple<uint64_t, uint8_t, uint8_t> EvilGen::gen_new_num(int32_t depth) {
+  randomize_ties = false;
+  start_search(depth);
+  uint64_t new_board =
+      board | (static_cast<uint64_t>(hardest_num) << (4 * hardest_pos));
+  return {new_board, static_cast<uint8_t>(15 - hardest_pos), hardest_num};
+}
+
+std::tuple<uint64_t, uint8_t, uint8_t> EvilGen::gen_new_num_seeded(int32_t depth,
+                                                                    uint32_t seed) {
+  randomize_ties = true;
+  tie_state = seed ? seed : 0x9e3779b9U;
   start_search(depth);
   uint64_t new_board =
       board | (static_cast<uint64_t>(hardest_num) << (4 * hardest_pos));

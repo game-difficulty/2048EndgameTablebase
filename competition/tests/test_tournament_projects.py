@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+from dataclasses import replace
 from types import ModuleType
 
 import pytest
@@ -8,11 +10,13 @@ import pytest
 from competition.backend.db import CompetitionDatabase
 from competition.backend.domain import Principal
 from competition.backend.projects.contracts import ProjectState
+from competition.backend.projects.practice_variants import GrowingTilesAdapter, GrowingTilesAdapterV3, HundredStepSealAdapter, _poly_move
 from competition.backend.projects.tournament_variants import (
     TOURNAMENT_ADAPTER_FACTORIES,
     TOURNAMENT_RULES,
     Tournament2048Adapter,
     Tournament2048AdapterV2,
+    TOURNAMENT_V3_ADAPTER_FACTORIES,
     ISLAND,
     WALL,
     _max_playable_rectangle,
@@ -20,6 +24,7 @@ from competition.backend.projects.tournament_variants import (
     tournament_project_catalog,
 )
 from competition.backend.service import CompetitionService
+from competition.tests.test_match_service import prepare_game_a, ready_and_start
 
 
 SEED = "31" * 32
@@ -106,10 +111,144 @@ def test_formal_catalog_can_be_frozen_into_a_competition(tmp_path) -> None:
     assert [project["project_ref"] for project in room["projects"]] == [
         "tournament-cargo-transport-4x4",
         *(rules.project_ref for rules in TOURNAMENT_RULES),
+        "practice-hundred-step-seal-4x4",
+        "practice-growing-tiles-4x4",
     ]
     assert {project["adapter"]["view_protocol"] for project in room["projects"]} == {
-        "2048-board-v2", "cargo-transport-v1"
+        "2048-board-v2", "cargo-transport-v1", "polyomino-board-v1"
     }
+    assert {project["project_ref"]: project["rules_version"] for project in room["projects"]}[
+        "practice-growing-tiles-4x4"
+    ] == "tournament-v3"
+    assert {project["project_ref"]: project["rules_version"] for project in room["projects"]}[
+        "tournament-shape-shifter-hard-12"
+    ] == "tournament-v3"
+
+
+def test_seal_adapter_keeps_independent_shared_seal_and_spawn_streams() -> None:
+    item = HundredStepSealAdapter()
+    yellow = item.initial_state(seed=SEED)
+    white = item.initial_state_for_side(seed=SEED, side="white")
+    assert yellow.board == white.board
+    assert yellow.extra["sealed_cells"] == white.extra["sealed_cells"]
+    assert len(yellow.extra["sealed_cells"]) == 3
+    assert all(yellow.board[index // 4][index % 4] == 0 for index in yellow.extra["sealed_cells"])
+    assert yellow.rng_counter == 2
+    assert item.public_payload(yellow)["next_seal_in"] == 100
+
+    rotated, counter = item._draw_seals(SEED, yellow.extra["sealed_cells"], yellow.extra["seal_counter"])
+    assert not set(rotated) & set(yellow.extra["sealed_cells"])
+    assert counter > yellow.extra["seal_counter"]
+    assert item._spawn_unsealed(yellow.board, SEED, 2, rotated) == item._spawn_unsealed(white.board, SEED, 2, rotated)
+
+    near_rotation = replace(yellow, move_count=99)
+    direction = next(direction for direction in ("up", "right", "down", "left")
+                     if item._move_with_seals(near_rotation.board, direction, yellow.extra["sealed_cells"])[0]
+                     != near_rotation.board)
+    after = item.apply_move(near_rotation, direction)
+    assert after.move_count == 100
+    assert after.rng_counter == near_rotation.rng_counter + 1
+    assert after.extra["seal_counter"] > near_rotation.extra["seal_counter"]
+    assert not set(after.extra["sealed_cells"]) & set(yellow.extra["sealed_cells"])
+    assert after.extra["last_transition"]["seals"]["released"] == yellow.extra["sealed_cells"]
+    assert after.extra["last_transition"]["before"] == [value for row in yellow.board for value in row]
+
+
+def test_growing_tiles_adapter_exposes_rigid_tiles_and_shared_numeric_seed() -> None:
+    item = GrowingTilesAdapter()
+    yellow = item.initial_state(seed=SEED)
+    white = item.initial_state(seed=SEED)
+    assert yellow.board == white.board
+    assert yellow.rng_counter == white.rng_counter == 2
+    assert yellow.extra["tiles"] == white.extra["tiles"]
+    assert item.public_view(yellow).view_protocol == "polyomino-board-v1"
+    direction = next(direction for direction in ("up", "right", "down", "left")
+                     if _poly_move(yellow.extra["tiles"], direction)[-1])
+    moved = item.apply_move(yellow, direction)
+    assert moved.rng_counter == 3
+    assert moved.extra["last_transition"]["before"] == yellow.extra["tiles"]
+
+
+def test_growing_tiles_merge_geometry_matches_practice_rules() -> None:
+    sideways = [
+        {"id": "a", "value": 64, "cells": [4]},
+        {"id": "b", "value": 64, "cells": [5]},
+    ]
+    tiles, score, _movements, _merges, changed = _poly_move(sideways, "left")
+    assert changed and score == 128
+    assert tiles == [{"id": "merge-a-b", "value": 128, "cells": [4, 5]}]
+
+    offset = [
+        {"id": "a", "value": 128, "cells": [5, 6]},
+        {"id": "b", "value": 128, "cells": [10, 11]},
+    ]
+    tiles, score, _movements, _merges, changed = _poly_move(offset, "up")
+    assert changed and score == 256
+    assert tiles == [{"id": "merge-a-b", "value": 256, "cells": [1, 2, 3]}]
+
+
+def test_restartable_races_remain_operable_after_death() -> None:
+    board = ((2, 4, 8), (16, 32, 64), (128, 256, 128))
+    for project_ref in ("tournament-pure2-full-race-3x3", "tournament-grand-full-undo-race-3x3"):
+        item = adapter_v2(project_ref)
+        assert item._outcome(board) is None
+        state = item.initial_state(seed=SEED)
+        dead = item.public_payload(replace(state, board=board))
+        assert dead["no_moves"] is True
+
+
+@pytest.mark.parametrize("project_ref,rules_version", [
+    (item["project_ref"], item["rules_version"]) for item in tournament_project_catalog()
+])
+def test_every_project_starts_as_two_live_match_sessions(
+    tmp_path, project_ref: str, rules_version: str
+) -> None:
+    service = CompetitionService(CompetitionDatabase(tmp_path / "embedded.sqlite3"))
+    service.initialize()
+    players = prepare_game_a(service, "EMBED7")
+    descriptor = service.project_registry.snapshot(project_ref, rules_version)
+    protocol = descriptor["view_protocol"]
+    with service.database.transaction(immediate=True) as db:
+        competition_id = db.execute(
+            "SELECT id FROM competitions WHERE room_code = 'EMBED7'"
+        ).fetchone()["id"]
+        project_key = db.execute(
+            "SELECT project_a FROM competition_drafts WHERE competition_id = ?",
+            (competition_id,),
+        ).fetchone()["project_a"]
+        db.execute(
+            """UPDATE competition_projects
+               SET project_ref = ?, adapter_rules_version = ?, rules_version = ?,
+                   adapter_snapshot_json = ?
+               WHERE competition_id = ? AND project_key = ?""",
+            (project_ref, rules_version, rules_version, json.dumps(descriptor),
+             competition_id, project_key),
+        )
+    started = ready_and_start(service, players, "A", "EMBED7")
+    sessions = started["match"]["sessions"]
+    assert sessions["yellow"]["public_view"]["view_protocol"] == protocol
+    assert sessions["white"]["public_view"]["view_protocol"] == protocol
+    if project_ref == "practice-growing-tiles-4x4":
+        assert (sessions["yellow"]["public_view"]["payload"]["rows"],
+                sessions["yellow"]["public_view"]["payload"]["cols"]) == (4, 5)
+    if project_ref == "tournament-shape-shifter-hard-12":
+        assert sessions["yellow"]["public_view"]["payload"]["cols"] <= 6
+    with service.database.transaction() as db:
+        rows = db.execute(
+            "SELECT side, seed_hex, rng_counter FROM competition_game_sessions WHERE competition_id = ?",
+            (competition_id,),
+        ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["seed_hex"] == rows[1]["seed_hex"]
+    assert rows[0]["rng_counter"] == rows[1]["rng_counter"] == 0
+    for participant, side in ((players[0], "yellow"), (players[3], "white")):
+        runtime = service.snapshot("EMBED7", participant)["match"]["my_session"]["runtime"]
+        assert runtime["seed"] == rows[0]["seed_hex"]
+        assert runtime["protocol"] == "client-runtime-v1"
+        assert runtime["sequence"] == 0
+        assert runtime["checkpoint"] is None
+        assert sessions[side]["public_view"]["payload"]["awaiting_client"]
+        assert all(value == 0 for row in sessions[side]["public_view"]["payload"]["board"] for value in row)
 
 
 def test_all_nine_projects_are_registered_with_public_v2_views() -> None:
@@ -229,6 +368,33 @@ def test_hard_shape_shifter_has_twelve_connected_playable_cells() -> None:
         if sample == 0:
             first_board = board
     assert item._empty_board(f"{1:064x}", 0)[0] == first_board
+
+
+def test_v3_shape_uses_six_by_six_source_and_crops_to_bounding_rectangle() -> None:
+    item = TOURNAMENT_V3_ADAPTER_FACTORIES[0]()
+    assert item.descriptor.rules_version == "tournament-v3"
+    for sample in range(200):
+        board, _extra = item._empty_board(f"{sample + 1:064x}", 0)
+        rows, cols = len(board), len(board[0])
+        assert rows <= 6 and cols <= 6 and cols >= rows
+        assert sum(value != WALL for line in board for value in line) == 12
+        assert 4 <= _max_playable_rectangle([list(line) for line in board]) <= 8
+        assert all(any(value != WALL for value in edge) for edge in (
+            board[0], board[-1],
+            tuple(line[0] for line in board),
+            tuple(line[-1] for line in board),
+        ))
+
+
+def test_v3_growing_tiles_has_five_columns_and_moves_across_them() -> None:
+    item = GrowingTilesAdapterV3()
+    state = item.initial_state(seed=SEED)
+    assert len(state.board) == 4 and all(len(line) == 5 for line in state.board)
+    assert item.public_payload(state)["cols"] == 5
+    tiles, gained, _movements, _merges, changed = _poly_move(
+        [{"id": "a", "value": 2, "cells": [4]}], "left", 4, 5,
+    )
+    assert changed and gained == 0 and tiles[0]["cells"] == [0]
 
 
 def test_dice_wall_uses_the_correct_position_class() -> None:

@@ -76,16 +76,16 @@ class GamePhaseRequest(BaseModel):
     command_id: str
 
 
-class GameMoveRequest(BaseModel):
-    direction: str
-    phase_token: str
-    command_id: str
-
-
-class GameActionRequest(BaseModel):
-    action: str
-    phase_token: str
-    command_id: str
+class ClientGameStateRequest(BaseModel):
+    instance_id: str = Field(min_length=1, max_length=100)
+    sequence: int = Field(ge=1, le=2**53 - 1)
+    phase_token: str = Field(max_length=100)
+    payload: dict
+    checkpoint: dict
+    result_value: int = Field(ge=0, le=10**15)
+    elapsed_ms: int = Field(ge=0, le=10**9)
+    finished: bool
+    outcome: str | None = Field(default=None, max_length=40)
 
 
 class ResultConfirmationRequest(BaseModel):

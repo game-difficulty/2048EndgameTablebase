@@ -4,7 +4,7 @@ import asyncio
 import hmac
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 
 from .auth import auth_user_exists, principal_from_request
 from .db import SCHEMA_VERSION
@@ -14,10 +14,9 @@ from .schemas import (
     AssignStaffRequest,
     BlindPickRequest,
     ClaimSeatRequest,
+    ClientGameStateRequest,
     CommandRequest,
     CreateCompetitionRequest,
-    GameMoveRequest,
-    GameActionRequest,
     GamePhaseRequest,
     GameReadinessRequest,
     ForceAdvanceRequest,
@@ -203,6 +202,20 @@ async def competition_snapshot(
     return {"competition": room}
 
 
+@router.post("/competitions/{room_code}/close")
+async def close_competition(
+    request: Request, room_code: str, payload: CommandRequest,
+    principal: PrincipalDependency,
+) -> dict:
+    service = service_from_request(request)
+    room = await asyncio.to_thread(
+        service.close_competition, room_code, principal,
+        command_id=payload.command_id,
+    )
+    await _broadcast(request, room["room_code"])
+    return {"competition": room}
+
+
 @router.post("/competitions/{room_code}/staff")
 async def assign_staff(
     request: Request,
@@ -382,44 +395,22 @@ async def start_current_game(
     return {"competition": room}
 
 
-@router.post("/competitions/{room_code}/games/current/move")
-async def move_current_game(
-    request: Request,
-    room_code: str,
-    payload: GameMoveRequest,
-    principal: PrincipalDependency,
+@router.post("/competitions/{room_code}/games/current/state")
+async def sync_client_game(
+    request: Request, room_code: str, payload: ClientGameStateRequest,
+    principal: PrincipalDependency, background: BackgroundTasks,
 ) -> dict:
-    service = service_from_request(request)
-    room = await asyncio.to_thread(
-        service.move_current_game,
-        room_code,
-        principal,
-        direction=payload.direction,
-        phase_token=payload.phase_token,
-        command_id=payload.command_id,
+    result = await asyncio.to_thread(
+        service_from_request(request).sync_client_game,
+        room_code, principal, **payload.model_dump(),
     )
-    await _broadcast(request, room["room_code"])
-    return {"competition": room}
-
-
-@router.post("/competitions/{room_code}/games/current/action")
-async def action_current_game(
-    request: Request,
-    room_code: str,
-    payload: GameActionRequest,
-    principal: PrincipalDependency,
-) -> dict:
-    service = service_from_request(request)
-    room = await asyncio.to_thread(
-        service.move_current_game,
-        room_code,
-        principal,
-        direction=payload.action,
-        phase_token=payload.phase_token,
-        command_id=payload.command_id,
-    )
-    await _broadcast(request, room["room_code"])
-    return {"competition": room}
+    # Acknowledge persistence first; slow viewers cannot hold up this request.
+    if result.get("competition"):
+        background.add_task(_broadcast, request, room_code.upper())
+    elif result.get("update"):
+        background.add_task(hub_from_request(request).broadcast_message, room_code.upper(),
+                            {"type": "project.snapshot", "data": result["update"]})
+    return result
 
 
 @router.post("/competitions/{room_code}/games/current/result/confirm")

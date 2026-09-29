@@ -1,4 +1,4 @@
-export const TOURNAMENT_PROJECTS = Object.freeze([
+const BASE_TOURNAMENT_PROJECTS = Object.freeze([
   {
     order: 1,
     practicePath: '/practice/1',
@@ -109,15 +109,17 @@ export const TOURNAMENT_PROJECTS = Object.freeze([
     description: '每局使用随机生成的12格棋盘，棋盘外区域不可进入。双方都无路可走后比较得分。',
     estimatedMinutes: '待测',
     boardLabel: '随机 · 12格',
-    rows: 7, cols: 7, spawn4Rate: .1, shapeShifter: true, playableCells: 12,
+    rows: 6, cols: 6, spawn4Rate: .1, shapeShifter: true, playableCells: 12,
+    adapterRulesVersion: 'tournament-v3',
   },
 ]);
 
-export const PRACTICE_ONLY_PROJECTS = Object.freeze([
+const ADDITIONAL_TOURNAMENT_PROJECTS = Object.freeze([
   {
     order: 11,
     practicePath: '/practice/11',
     id: 'practice-hundred-step-seal-4x4',
+    key: 'project-11',
     title: '百步封锁（4×4）',
     shortTitle: '百步封锁',
     description: '开局先随机封住3格，再生成初始数字；之后每100个有效移动轮换封锁。封住的数字保留，且不会在封锁格出数。无路可走后比较得分。',
@@ -129,12 +131,21 @@ export const PRACTICE_ONLY_PROJECTS = Object.freeze([
     order: 12,
     practicePath: '/practice/12',
     id: 'practice-growing-tiles-4x4',
-    title: '越来越大（4×4）',
+    key: 'project-12',
+    title: '越来越大（4×5）',
     shortTitle: '越来越大',
     description: '64合成双格128；两个128移动时有格子重合，即合成双格或三格256。多格砖整块移动，256不可合并；死亡后比得分。',
     estimatedMinutes: '待测',
-    rows: 4, cols: 4, spawn4Rate: .1, polyomino: true,
+    rows: 4, cols: 5, spawn4Rate: .1, polyomino: true,
+    adapterRulesVersion: 'tournament-v3',
   },
+]);
+
+export const TOURNAMENT_PROJECTS = Object.freeze([...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS]);
+
+// These rules are being trialled on the practice site. They are intentionally
+// absent from TOURNAMENT_PROJECTS until their competition adapters are ready.
+export const PRACTICE_ONLY_PROJECTS = Object.freeze([
   { order: 13, practicePath: '/practice/13', id: 'practice-pair-bond-4x4', key: 'practice-13',
     title: '出双入对（4×4）', shortTitle: '出双入对',
     description: '偶尔出现特殊块；两块相邻便粘成双格，新的双格形成时旧双格消失。无路可走后比得分。',
@@ -165,12 +176,13 @@ export const PROJECT_BY_TITLE = Object.freeze(Object.fromEntries(
 ));
 
 export function competitionProjectInput(project) {
+  const rulesVersion = project.adapterRulesVersion || 'tournament-v2';
   return {
     key: project.key,
     name: project.title,
     description: project.description,
     project_ref: project.id,
-    adapter_rules_version: 'tournament-v2',
-    rules_version: 'tournament-v2',
+    adapter_rules_version: rulesVersion,
+    rules_version: rulesVersion,
   };
 }

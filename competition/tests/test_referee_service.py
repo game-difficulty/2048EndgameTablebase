@@ -80,13 +80,15 @@ def test_referee_pause_requires_both_captains_before_resume(service) -> None:
     assert paused["match"]["suspension"]["started_by_display_name"] == "Player 1"
     assert all(clock["state"] == "stopped" for clock in paused["match"]["clocks"].values())
 
+    own = service.snapshot("MATCH5", players[0])["match"]
     with pytest.raises(CompetitionError) as captured:
-        service.move_current_game(
-            "MATCH5",
-            players[0],
-            direction="left",
-            phase_token=service.snapshot("MATCH5", players[0])["match"]["phase_token"],
-            command_id="paused-move-attempt",
+        service.sync_client_game(
+            "MATCH5", players[0],
+            instance_id=own["my_session"]["runtime"]["instance_id"], sequence=1,
+            phase_token=own["phase_token"],
+            payload={"board": [[2, 0], [0, 0]], "score": 0, "move_count": 1},
+            checkpoint={"version": 1, "state": {}}, result_value=0, elapsed_ms=10,
+            finished=False, outcome=None,
         )
     assert captured.value.code == "MATCH_SUSPENDED"
 

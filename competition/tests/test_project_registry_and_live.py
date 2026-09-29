@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from competition.backend.db import CompetitionDatabase
+from competition.backend.auth import avatar_urls_for_users
 from competition.backend.domain import Principal
 from competition.backend.errors import CompetitionError
 from competition.backend.projects import ProjectRegistry, Standard2048Adapter
@@ -17,6 +19,35 @@ from competition.tests.test_match_service import prepare_game_a, ready_and_start
 
 def player(user_id: int, *, role: str = "user") -> Principal:
     return Principal(user_id=user_id, display_name=f"Player {user_id}", site_role=role)
+
+
+def test_player_avatars_reach_room_and_public_roster_without_exposing_profile_keys(
+    tmp_path, monkeypatch
+) -> None:
+    auth_path = tmp_path / "auth.sqlite3"
+    monkeypatch.setenv("CLOUD_AUTH_DB", str(auth_path))
+    with sqlite3.connect(auth_path) as db:
+        db.execute("CREATE TABLE user_profiles (user_id INTEGER, avatar_key TEXT)")
+        db.execute(
+            "INSERT INTO user_profiles VALUES (?, ?)",
+            (10, "10/" + "a" * 24 + ".webp"),
+        )
+        db.execute("INSERT INTO user_profiles VALUES (?, ?)", (11, "../outside.webp"))
+    assert avatar_urls_for_users([10, 11]) == {
+        10: "/media/avatars/10/" + "a" * 24 + ".webp",
+    }
+
+    service = CompetitionService(CompetitionDatabase(tmp_path / "avatar-match.sqlite3"))
+    service.initialize()
+    participants = prepare_draw(service, "AVATAR")
+    snapshot = service.snapshot("AVATAR", participants[0])
+    yellow = [seat for seat in snapshot["seats"] if seat["side"] == "yellow"]
+    assert yellow[0]["avatar_url"] == "/media/avatars/10/" + "a" * 24 + ".webp"
+    assert yellow[1]["avatar_url"] is None
+
+    projection = service.live_projection(service.list_live_rooms()[0]["public_key"])
+    assert projection["teams"]["yellow"]["roster"][0]["avatar_url"] == yellow[0]["avatar_url"]
+    assert "avatar_key" not in json.dumps(projection)
 
 
 def test_live_directory_starts_at_draw_and_expires_after_result_retention(tmp_path) -> None:
@@ -200,3 +231,34 @@ def test_registered_adapter_exports_versioned_public_views(tmp_path) -> None:
         assert view["sequence"] == 0
         assert len(view["payload"]["board"]) == 4
     assert "seed" not in json.dumps(projection)
+
+
+def test_live_ready_projection_shows_progress_without_revealing_lineup(tmp_path) -> None:
+    service = CompetitionService(
+        CompetitionDatabase(tmp_path / "ready-public.sqlite3"),
+        draw_reveal_seconds=1, draft_turn_seconds=5,
+        c_draw_reveal_seconds=1, lineup_seconds=5,
+        test_project_target_tile=4,
+    )
+    service.initialize()
+    players = prepare_game_a(service, "PUBREADY")
+    public_key = service.list_live_rooms()[0]["public_key"]
+    projection = service.live_projection(public_key)
+    assert projection["phase"] == "GAME_A_READY"
+    assert all(not value for side in projection["game_readiness"].values() for value in side.values())
+    assert all(game["players"] == {"yellow": None, "white": None} for game in projection["games"])
+
+    token = service.snapshot("PUBREADY", players[0])["match"]["phase_token"]
+    service.set_game_readiness(
+        "PUBREADY", players[0], readiness_role="player", ready=True,
+        phase_token=token, command_id="ready-public-yellow-player",
+    )
+    projection = service.live_projection(public_key)
+    assert projection["game_readiness"]["yellow"] == {
+        "player_ready": True, "captain_ready": False,
+    }
+    assert projection["game_readiness"]["white"] == {
+        "player_ready": False, "captain_ready": False,
+    }
+    assert all(game["players"] == {"yellow": None, "white": None} for game in projection["games"])
+    assert "player_user_id" not in json.dumps(projection)

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -105,26 +104,16 @@ def force_one_move_completion(
     side: str,
     code: str = "MATCH5",
 ) -> dict:
-    with service.database.transaction(immediate=True) as db:
-        room = db.execute(
-            "SELECT id FROM competitions WHERE room_code = ?", (code,)
-        ).fetchone()
-        db.execute(
-            """
-            UPDATE competition_game_sessions
-            SET board_json = ?, score = 0, move_count = 0
-            WHERE competition_id = ? AND game_key = ? AND side = ?
-            """,
-            (json.dumps([[2, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]), room["id"], game_key, side),
-        )
     snapshot = service.snapshot(code, principal)
-    return service.move_current_game(
-        code,
-        principal,
-        direction="left",
+    runtime = snapshot["match"]["my_session"]["runtime"]
+    return service.sync_client_game(
+        code, principal, instance_id=runtime["instance_id"], sequence=runtime["sequence"] + 1,
         phase_token=snapshot["match"]["phase_token"],
-        command_id=f"match-{game_key}-{side}-winning-move",
-    )
+        payload={"board": [[4, 2, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+                 "score": 4, "move_count": 1},
+        checkpoint={"version": 1, "state": {}}, result_value=4, elapsed_ms=10,
+        finished=True, outcome="target_reached",
+    )["competition"]
 
 
 def test_standard_adapter_is_deterministic_and_rejects_noop() -> None:
@@ -185,11 +174,19 @@ def test_ready_gate_clocks_private_play_and_result_confirmation(
     started = ready_and_start(service, players, "A")
     assert started["status"] == CompetitionStatus.GAME_A_PLAYING.value
     assert all(clock["state"] == "running" for clock in started["match"]["clocks"].values())
+    assert all(
+        session["project_clock"]["mode"] == "elapsed"
+        and session["project_clock"]["running"]
+        and session["project_clock"]["limit_ms"] is None
+        for session in started["match"]["sessions"].values()
+    )
     assert service.snapshot("MATCH5", players[0])["match"]["my_session"]["board"]
 
     yellow_done = force_one_move_completion(service, players[0], "A", "yellow")
     assert yellow_done["match"]["clocks"]["yellow"]["state"] == "stopped"
     assert yellow_done["match"]["clocks"]["white"]["state"] == "running"
+    assert yellow_done["match"]["sessions"]["yellow"]["project_clock"]["running"] is False
+    assert yellow_done["match"]["sessions"]["white"]["project_clock"]["running"] is True
     white_view = service.snapshot("MATCH5", players[3])
     opponent = white_view["match"]["sessions"]["yellow"]
     assert opponent["state"] == "completed"
@@ -283,7 +280,7 @@ def test_team_clock_expiry_forfeits_all_remaining_games(
             SET remaining_ms_base = 1, running_since = ?
             WHERE competition_id = ? AND side = 'yellow'
             """,
-            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), room["id"]),
+            ((datetime.now(timezone.utc) - timedelta(seconds=6)).isoformat(), room["id"]),
         )
     assert service.settle_deadline("MATCH5") is True
     finished = service.snapshot("MATCH5", players[0])

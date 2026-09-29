@@ -183,6 +183,7 @@ class CargoTransportAdapter:
             "revision": int(state.extra.get("revision", state.move_count)) + 1,
             "last_transition": {
                 "kind": "move", "direction": direction,
+                "before": _flat(state.board),
                 "movements": movements, "spawn": spawn,
                 "cargoBefore": cargo_before, "cargoMoved": cargo_moved,
                 "cargoExit": shifted if delivered else None,

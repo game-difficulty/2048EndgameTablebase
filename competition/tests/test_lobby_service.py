@@ -56,6 +56,58 @@ def test_only_platform_organizer_can_create(service: CompetitionService) -> None
     assert captured.value.code == "ORGANIZER_REQUIRED"
 
 
+def test_organizer_can_close_room_before_draw_without_creating_live_room(
+    service: CompetitionService,
+) -> None:
+    create_room(service)
+    players = fill_room(service)
+    service.set_ready("TEAM42", players[0], ready=True, command_id="ready-before-close")
+
+    with pytest.raises(CompetitionError) as unauthorized:
+        service.close_competition(
+            "TEAM42", players[1], command_id="unauthorized-close"
+        )
+    assert unauthorized.value.code == "ORGANIZER_REQUIRED"
+
+    closed = service.close_competition(
+        "TEAM42", principal(1, role="admin"), command_id="close-room-1"
+    )
+    assert closed["status"] == CompetitionStatus.CANCELLED.value
+    assert closed["me"]["can_close"] is False
+    assert closed["me"]["can_claim_seat"] is False
+    assert service.list_live_rooms() == []
+    listing = service.list_competitions(principal(1, role="admin"))
+    assert listing[0]["status"] == CompetitionStatus.CANCELLED.value
+    assert listing[0]["can_close"] is False
+    assert service.close_competition(
+        "TEAM42", principal(1, role="admin"), command_id="close-room-1"
+    )["version"] == closed["version"]
+    with pytest.raises(CompetitionError) as repeated:
+        service.close_competition(
+            "TEAM42", principal(1, role="admin"), command_id="close-room-2"
+        )
+    assert repeated.value.code == "ROOM_CLOSE_UNAVAILABLE"
+    with service.database.transaction() as db:
+        events = db.execute(
+            "SELECT event_type FROM competition_events WHERE competition_id = ? ORDER BY sequence",
+            (closed["id"],),
+        ).fetchall()
+    assert events[-1]["event_type"] == "competition.closed"
+
+
+def test_room_cannot_be_closed_after_draw_begins(service: CompetitionService) -> None:
+    create_room(service)
+    players = fill_room(service)
+    service.set_ready("TEAM42", players[0], ready=True, command_id="ready-draw-yellow")
+    service.set_ready("TEAM42", players[3], ready=True, command_id="ready-draw-white")
+    with pytest.raises(CompetitionError) as captured:
+        service.close_competition(
+            "TEAM42", principal(1, role="admin"), command_id="close-after-draw"
+        )
+    assert captured.value.code == "ROOM_CLOSE_UNAVAILABLE"
+    assert service.snapshot("TEAM42", principal(1, role="admin"))["status"] == CompetitionStatus.DRAW.value
+
+
 def test_six_players_fill_room_and_captains_ready(service: CompetitionService) -> None:
     create_room(service)
     players = fill_room(service)
@@ -166,4 +218,3 @@ def test_event_sequence_is_contiguous(service: CompetitionService) -> None:
         ).fetchall()
     sequences = [int(row["sequence"]) for row in rows]
     assert sequences == list(range(1, len(sequences) + 1))
-

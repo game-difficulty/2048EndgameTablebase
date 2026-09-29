@@ -85,6 +85,7 @@ def test_complete_manual_draft_and_blind_secrecy(service: CompetitionService) ->
     assert after_first["status"] == CompetitionStatus.SECOND_PICK_BAN.value
     assert after_first["draft"]["project_a"] == keys[0]
     assert after_first["draft"]["ban_m"] == keys[1]
+    assert after_first["draft"]["sources"]["A"] == "captain"
 
     second_view = service.snapshot("DRAFT2", second_captain)
     after_second = service.submit_pick_ban(
@@ -96,6 +97,7 @@ def test_complete_manual_draft_and_blind_secrecy(service: CompetitionService) ->
         command_id="draft-second-submit",
     )
     assert after_second["status"] == CompetitionStatus.BLIND_PICK.value
+    assert after_second["draft"]["sources"]["B"] == "captain"
 
     yellow_captain = players[0]
     white_captain = players[3]
@@ -111,6 +113,7 @@ def test_complete_manual_draft_and_blind_secrecy(service: CompetitionService) ->
     assert opponent_view["draft"]["blind_submissions"]["yellow"] is True
     assert opponent_view["draft"]["my_blind_choice"] is None
     assert "blind_choices" not in opponent_view["draft"]
+    assert opponent_view["draft"]["sources"]["yellow"] == "captain"
 
     with service.database.transaction() as db:
         event = db.execute(
@@ -201,6 +204,9 @@ def test_all_draft_timeouts_choose_first_available(service: CompetitionService) 
         "white": keys[4],
     }
     assert snapshot["draft"]["project_c"] == keys[4]
+    assert snapshot["draft"]["sources"] == {
+        "A": "timeout", "B": "timeout", "yellow": "timeout", "white": "timeout"
+    }
 
 
 def test_draws_match_stored_seed_and_commitment(service: CompetitionService) -> None:
@@ -245,4 +251,3 @@ def test_project_pool_validation_and_snapshot(service: CompetitionService) -> No
     assert [item["key"] for item in snapshot["projects"]] == [
         f"rule-{index}" for index in range(1, 7)
     ]
-

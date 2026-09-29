@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import sqlite3
+from collections.abc import Iterable
 from typing import Any
 
 from fastapi import HTTPException, Request, WebSocket
@@ -100,3 +103,26 @@ def auth_user_exists(user_id: int) -> bool:
         ).fetchone()
     return row is not None
 
+
+def avatar_urls_for_users(user_ids: Iterable[int]) -> dict[int, str]:
+    """Resolve public profile avatars without copying profile data into a match."""
+    ids = sorted({int(user_id) for user_id in user_ids if int(user_id) > 0})
+    if not ids:
+        return {}
+    try:
+        from backend.auth.db import auth_db
+        with auth_db() as db:
+            rows = db.execute(
+                f"SELECT user_id, avatar_key FROM user_profiles "
+                f"WHERE user_id IN ({','.join('?' for _ in ids)}) AND avatar_key IS NOT NULL",
+                ids,
+            ).fetchall()
+    except (ImportError, OSError, sqlite3.Error):
+        return {}
+    urls = {}
+    for row in rows:
+        user_id = int(row["user_id"])
+        key = str(row["avatar_key"] or "")
+        if re.fullmatch(rf"{user_id}/[0-9a-f]{{24}}\.webp", key):
+            urls[user_id] = f"/media/avatars/{key}"
+    return urls

@@ -348,4 +348,5 @@ onBeforeUnmount(() => { animationEpoch += 1; clearTimers(); });
 .board-seals{position:absolute;inset:0;z-index:7;pointer-events:none}.board-seal{position:absolute;width:var(--cell-width,calc((100% - (var(--cols) + 1) * var(--gap))/var(--cols)));height:var(--cell-height,calc((100% - (var(--rows) + 1) * var(--gap))/var(--rows)));border-radius:8px;background:rgba(18,22,28,.43);box-shadow:inset 0 0 0 2px rgba(16,19,23,.88),inset 0 12px 18px rgba(0,0,0,.54),0 2px 8px rgba(0,0,0,.25)}.board-seal-icon{position:absolute;top:7px;right:7px;width:22px;height:22px;color:#f5ede2;filter:drop-shadow(0 1px 2px #000)}.board-seal-enter-active,.board-seal-leave-active{transition:opacity .2s ease,filter .2s ease}.board-seal-enter-from,.board-seal-leave-to{opacity:0;filter:blur(3px)}
 .board-tile.pop{animation:tile-pop var(--board-pop-duration) ease backwards}
 .board-tile.appear{animation:tile-appear var(--board-pop-duration) ease backwards}
+.tournament-board:not(.irregular) .board-cell.blocked{background:repeating-linear-gradient(135deg,#4d5662 0 8px,#424a55 8px 16px);box-shadow:inset 0 0 0 2px #697482}
 </style>

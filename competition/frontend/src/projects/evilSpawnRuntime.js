@@ -11,16 +11,15 @@ function encodeBoard(board) {
 }
 
 export async function evilSpawnRuntime(board, depth, tieSeed) {
-  modulePromise ||= runtimeImport('/wasm/evil_core.js?v=tournament-v2').then(({ default: create }) => create({
-    locateFile: path => `/wasm/${path}?v=tournament-v2`,
-  }));
+  modulePromise ||= runtimeImport('/wasm/evil_core.js?v=client-runtime-v1').then(({ default: create }) => create({
+    locateFile: path => `/wasm/${path}?v=client-runtime-v1`,
+  })).catch(error => { modulePromise = null; throw error; });
   const module = await modulePromise;
   const encoded = encodeBoard(board);
   generator ||= new module.EvilGen(encoded);
   generator.reset_board(encoded);
-  const result = typeof generator.gen_new_num_seeded === 'function'
-    ? generator.gen_new_num_seeded(depth, tieSeed >>> 0)
-    : generator.gen_new_num(depth);
+  if (typeof generator.gen_new_num_seeded !== 'function') throw new Error('EvilGen WASM 版本过旧，请刷新后重试。');
+  const result = generator.gen_new_num_seeded(depth, tieSeed >>> 0);
   const index = Number(result?.[1]);
   const exponent = Number(result?.[2]);
   if (!Number.isInteger(index) || board[index] !== 0 || ![1, 2].includes(exponent)) {

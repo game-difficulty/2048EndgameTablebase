@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-import json
 
-from competition.backend.db import CompetitionDatabase
 from competition.backend.domain import CompetitionStatus
 from competition.backend.projects.cargo_transport import (
     CargoTransportAdapter,
@@ -16,8 +14,7 @@ from competition.backend.projects.cargo_transport import (
     _has_cargo_move,
     _move_cargo_board,
 )
-from competition.backend.service import CompetitionService
-from competition.tests.test_match_service import prepare_game_a, ready_and_start
+from competition.tests.test_client_runtime import setup_game, packet
 
 
 SEED = "31" * 32
@@ -151,88 +148,47 @@ def test_death_requires_no_numeric_or_cargo_move_and_ends_session() -> None:
     assert adapter.public_payload(dead)["remaining_ms"] == LIMIT_MS - 123_456
 
 
-def test_match_settles_both_cargo_sessions_at_ten_active_minutes(tmp_path) -> None:
-    service = CompetitionService(
-        CompetitionDatabase(tmp_path / "cargo-match.sqlite3"),
-        draw_reveal_seconds=1, draft_turn_seconds=5,
-        c_draw_reveal_seconds=1, lineup_seconds=5,
-        team_clock_seconds=1200,
-    )
-    service.initialize()
-    players = prepare_game_a(service, "CARGO7")
-    ready_and_start(service, players, "A", "CARGO7")
-    adapter = CargoTransportAdapter()
+def test_match_settles_cargo_only_after_client_reports_time_limit(tmp_path) -> None:
+    service, players = setup_game(tmp_path, CargoTransportAdapter.project_id)
     moment = datetime.now(timezone.utc)
     with service.database.transaction(immediate=True) as db:
-        room = db.execute("SELECT id FROM competitions WHERE room_code = ?", ("CARGO7",)).fetchone()
-        competition_id = str(room["id"])
-        for side in ("yellow", "white"):
-            state = adapter.initial_state(seed=SEED)
-            extra = {**state.extra, "project_clock_start_ms": 1_200_000}
-            db.execute(
-                """
-                UPDATE competition_game_sessions
-                SET project_ref = ?, rules_version = ?, board_json = ?,
-                    adapter_state_json = ?, rng_counter = ?, score = ?
-                WHERE competition_id = ? AND game_key = 'A' AND side = ?
-                """,
-                (adapter.project_id, adapter.rules_version,
-                 json.dumps(state.board), json.dumps(extra), state.rng_counter,
-                 3 if side == "yellow" else 2, competition_id, side),
-            )
         db.execute(
-            """
-            UPDATE competition_team_clocks
-            SET running_since = ? WHERE competition_id = ?
-            """,
-            ((moment - timedelta(milliseconds=LIMIT_MS + 10)).isoformat(), competition_id),
+            "UPDATE competition_team_clocks SET running_since = ?",
+            ((moment - timedelta(milliseconds=LIMIT_MS + 10)).isoformat(),),
         )
-    assert service.settle_deadline("CARGO7", now=moment)
-    snapshot = service.snapshot("CARGO7", players[0])
+    # Project timeout is a local rule, not a server deadline.
+    assert not service.settle_deadline("MATCH5", now=moment)
+    assert service.snapshot("MATCH5", players[0])["status"] == CompetitionStatus.GAME_A_PLAYING.value
+    for participant, delivered in ((players[0], 3), (players[3], 2)):
+        final = packet(service, participant, finished=True, value=delivered,
+                       elapsed=LIMIT_MS, outcome="time_limit")
+        final["payload"].update(board=[list(row) for row in EMPTY],
+                                delivered=delivered, remaining_ms=0)
+        service.sync_client_game("MATCH5", participant, **final)
+    snapshot = service.snapshot("MATCH5", players[0])
     assert snapshot["status"] == CompetitionStatus.GAME_A_RESULT.value
     assert snapshot["match"]["current_result"]["winner_side"] == "yellow"
+    assert snapshot["match"]["current_result"]["reason"] == "delivered_cargo"
     assert all(item["finished"] for item in snapshot["match"]["sessions"].values())
     assert all(item["public_view"]["view_protocol"] == "cargo-transport-v1"
                for item in snapshot["match"]["sessions"].values())
 
 
 def test_match_death_stops_only_the_dead_side_clock(tmp_path) -> None:
-    service = CompetitionService(
-        CompetitionDatabase(tmp_path / "cargo-death.sqlite3"),
-        draw_reveal_seconds=1, draft_turn_seconds=5,
-        c_draw_reveal_seconds=1, lineup_seconds=5,
-        team_clock_seconds=1200,
-    )
-    service.initialize()
-    players = prepare_game_a(service, "CARGOD")
-    ready_and_start(service, players, "A", "CARGOD")
-    adapter = CargoTransportAdapter()
-    state = adapter.initial_state(seed=SEED)
-    raw = [8, 32, 32, 16, 4, 16, 0, 4, 16, 32, 4, 16, 32, 2, 32, 4]
-    board = tuple(tuple(raw[index:index + 4]) for index in range(0, 16, 4))
-    with service.database.transaction(immediate=True) as db:
-        room = db.execute("SELECT id FROM competitions WHERE room_code = ?", ("CARGOD",)).fetchone()
-        db.execute(
-            """
-            UPDATE competition_game_sessions
-            SET project_ref = ?, rules_version = ?, seed_hex = ?, board_json = ?,
-                adapter_state_json = ?, rng_counter = ?
-            WHERE competition_id = ? AND game_key = 'A' AND side = 'yellow'
-            """,
-            (adapter.project_id, adapter.rules_version, SEED, json.dumps(board),
-             json.dumps({**state.extra, "cargo": {"id": 0, "shape": 0, "row": -2, "col": 1},
-                         "project_clock_start_ms": 1_200_000}), state.rng_counter, room["id"]),
-        )
-    token = service.snapshot("CARGOD", players[0])["match"]["phase_token"]
-    result = service.move_current_game(
-        "CARGOD", players[0], direction="down", phase_token=token,
-        command_id="cargo-death-move",
-    )
+    service, players = setup_game(tmp_path, CargoTransportAdapter.project_id)
+    final = packet(service, players[0], finished=True, value=2,
+                   elapsed=123_456, outcome="no_moves")
+    final["payload"].update(board=[list(row) for row in EMPTY],
+                            delivered=2, remaining_ms=LIMIT_MS - 123_456)
+    result = service.sync_client_game("MATCH5", players[0], **final)["competition"]
     assert result["match"]["clocks"]["yellow"]["state"] == "stopped"
     assert result["match"]["clocks"]["white"]["state"] == "running"
     session = result["match"]["sessions"]["yellow"]
     assert session["finished"] is True
+    assert session["project_clock"]["mode"] == "countdown"
+    assert session["project_clock"]["limit_ms"] == LIMIT_MS
+    assert session["project_clock"]["running"] is False
     assert session["public_view"]["payload"]["outcome"] == "no_moves"
-    assert 0 < session["public_view"]["payload"]["remaining_ms"] < LIMIT_MS
+    assert session["public_view"]["payload"]["remaining_ms"] == LIMIT_MS - 123_456
     frozen = session["public_view"]["payload"]["remaining_ms"]
-    assert service.snapshot("CARGOD", players[0])["match"]["sessions"]["yellow"]["public_view"]["payload"]["remaining_ms"] == frozen
+    assert service.snapshot("MATCH5", players[0])["match"]["sessions"]["yellow"]["public_view"]["payload"]["remaining_ms"] == frozen

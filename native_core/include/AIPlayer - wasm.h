@@ -129,6 +129,9 @@ public:
   Cache cache;
   uint64_t node;
   uint32_t dead_score;
+  uint32_t tie_state;
+  uint32_t tie_count;
+  bool randomize_ties;
 
   EvilGen(uint64_t initial_board);
   void reset_board(uint64_t new_board);
@@ -137,6 +140,8 @@ public:
   int32_t dispatcher(uint64_t current_board);
   void start_search(int32_t depth = 4);
   std::tuple<uint64_t, uint8_t, uint8_t> gen_new_num(int32_t depth = 4);
+  std::tuple<uint64_t, uint8_t, uint8_t> gen_new_num_seeded(int32_t depth,
+                                                           uint32_t seed);
 };
 
 // ------------------------------------------------------------------

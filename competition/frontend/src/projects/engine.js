@@ -100,8 +100,7 @@ function cropAndOrientShape(board, size) {
   };
 }
 
-export function createHardShape(random, playableCells = 12) {
-  const generationSize = 7;
+export function createHardShape(random, playableCells = 12, generationSize = 6) {
   for (let attempt = 0; attempt < 4096; attempt += 1) {
     const board = connectedShape(generationSize, playableCells, random);
     const rectangle = maxPlayableRectangle(board, generationSize, generationSize);
@@ -239,6 +238,7 @@ export class TournamentGame {
       const shape = createHardShape(
         randomStream(this.seed, `shape:${this.restartCount}`),
         this.project.playableCells || 12,
+        this.project.shapeGenerationSize || 6,
       );
       board = shape.board;
       this.rows = shape.rows;
@@ -274,7 +274,7 @@ export class TournamentGame {
     return { index, value };
   }
 
-  async spawn(board) {
+  spawn(board) {
     const ticket = this.nextSpawnTicket();
     if (this.project.isolatedIsland) {
       const islandChance = .05 - board.filter(value => value === ISLAND).length * .02;
@@ -288,6 +288,10 @@ export class TournamentGame {
     }
     if (!this.project.evilSpawn) return this.randomSpawn(board, ticket);
     if (!board.includes(0)) return null;
+    return this.spawnEvil(board, ticket);
+  }
+
+  async spawnEvil(board, ticket) {
     const emptyCount = board.filter(value => value === 0).length;
     const boardSum = board.reduce((sum, value) => sum + (value > 0 ? value : 0), 0);
     const adaptiveDepth = emptyCount <= 1 ? 7 : emptyCount <= 2 ? 6 : emptyCount <= 5 ? 5 : 4;
@@ -298,6 +302,7 @@ export class TournamentGame {
       return spawn;
     } catch (error) {
       this.aiError = error instanceof Error ? error.message : String(error);
+      if (this.project.strictEvilSpawn) throw error;
       return this.randomSpawn(board, ticket);
     }
   }
@@ -393,7 +398,7 @@ export class TournamentGame {
     return { released, sealed: this.sealedCells.slice() };
   }
 
-  async move(direction) {
+  move(direction) {
     if (this.finished || !DIRECTIONS.includes(direction)) return { changed: false, snapshot: this.snapshot() };
     const rules = { ...this.project, rows: this.rows, cols: this.cols };
     const moved = this.project.sealEveryMoves
@@ -407,11 +412,14 @@ export class TournamentGame {
     this.moves += 1;
     const interval = Number(this.project.sealEveryMoves || 0);
     const seals = interval > 0 && this.moves % interval === 0 ? this.rotateSeals() : null;
-    const spawn = await this.spawn(this.board);
-    this.revision += 1;
-    this.transition = { kind: 'move', direction, before, movements: moved.movements, spawn, seals };
-    this.settleOutcome();
-    return { changed: true, snapshot: this.snapshot() };
+    const finish = spawn => {
+      this.revision += 1;
+      this.transition = { kind: 'move', direction, before, movements: moved.movements, spawn, seals };
+      this.settleOutcome();
+      return { changed: true, snapshot: this.snapshot() };
+    };
+    const spawned = this.spawn(this.board);
+    return spawned?.then ? spawned.then(finish) : finish(spawned);
   }
 
   undo() {

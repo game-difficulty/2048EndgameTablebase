@@ -10,6 +10,7 @@ test('practice labels keep the main board size tiers across grid widths', () => 
   assert.equal(tileLabelSize(16384, 4), '4.0000cqw');
   assert.equal(tileLabelSize(2, 3), '10.6667cqw');
   assert.equal(tileLabelSize(2, 5, 1.5), '9.6000cqw');
+  assert.equal(tileLabelSize(128, 7), '3.8095cqw');
 });
 
 test('signed-in named and custom palettes resolve per-tile backgrounds', () => {

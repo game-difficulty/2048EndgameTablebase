@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from .auth import avatar_urls_for_users
 from .db import CompetitionDatabase
 from .domain import CompetitionStatus, Principal, SEAT_POSITIONS, StaffRole, TeamSide
 from .errors import CompetitionError
@@ -19,6 +20,7 @@ from .projects import (
     TOURNAMENT_ADAPTER_FACTORIES,
 )
 from .projects.contracts import ProjectState
+from . import client_runtime
 
 
 ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -45,6 +47,9 @@ GAME_RESULT_STATUS = {
 MATCH_ACTIVE_STATUSES = frozenset(
     (*GAME_READY_STATUS.values(), *GAME_PLAYING_STATUS.values(), *GAME_RESULT_STATUS.values())
 )
+CLOSABLE_ROOM_STATUSES = frozenset({
+    CompetitionStatus.SEATING.value, CompetitionStatus.READY_CHECK.value,
+})
 ISSUE_CATEGORIES = frozenset({"network_device", "project", "rules", "other"})
 SUSPENSION_REASON_CODES = frozenset(
     {"network_device", "project", "rules", "medical", "other"}
@@ -850,6 +855,8 @@ class CompetitionService:
                     0, int(extra["project_clock_start_ms"])
                     - self._clock_remaining_ms(clock, now or datetime.now(timezone.utc)),
                 )
+        if str(row["state"]) == "completed" and extra.get("client_completed"):
+            elapsed_ms = int(extra.get("client_elapsed_ms", elapsed_ms))
         return ProjectState(
             board=tuple(tuple(int(value) for value in items) for items in raw_board),
             score=int(row["score"]),
@@ -871,6 +878,38 @@ class CompetitionService:
         return self.project_registry.resolve(
             str(row["project_ref"]), str(row["rules_version"])
         )
+
+    def _private_session_payload(self, row, db, *, now):
+        state = self._session_state(row, db, now=now)
+        adapter = self._adapter_for_session_row(row)
+        return {
+            **client_runtime.public_payload(state),
+            "runtime": {
+                "protocol": client_runtime.PROTOCOL, "instance_id": str(row["instance_id"]),
+                "project_ref": str(row["project_ref"]), "rules_version": str(row["rules_version"]),
+                "side": str(row["side"]), "seed": str(row["seed_hex"]),
+                "sequence": int(state.extra.get("client_sequence", 0)),
+                "team_remaining_at_start_ms": state.extra.get("project_clock_start_ms", 0),
+                "checkpoint": state.extra.get("checkpoint"),
+                "race_stop_requested": bool(state.extra.get("race_stop_at")),
+                "target_tile": getattr(adapter, "target_tile", None),
+            },
+        }
+
+    def _attach_result_timings(self, db, competition_id, results):
+        """Expose submitted race times without re-evaluating any board."""
+        by_game = {item['game_key']: item for item in results}
+        if not by_game:
+            return
+        for row in db.execute(
+            "SELECT * FROM competition_game_sessions WHERE competition_id=? AND state='completed'",
+            (competition_id,),
+        ).fetchall():
+            result = by_game.get(str(row['game_key']))
+            if result is not None:
+                state = self._session_state(row, db)
+                result[f"{row['side']}_elapsed_ms"] = state.elapsed_ms
+                result[f"{row['side']}_outcome"] = state.outcome
 
     def _publish_game_result(
         self,
@@ -900,27 +939,15 @@ class CompetitionService:
         adapter = self._adapter_for_session_row(sessions[TeamSide.YELLOW.value])
         yellow_state = self._session_state(sessions[TeamSide.YELLOW.value], db, now=now)
         white_state = self._session_state(sessions[TeamSide.WHITE.value], db, now=now)
-        yellow_score = (
-            int(adapter.result_value(yellow_state))
-            if hasattr(adapter, "result_value")
-            else int(sessions[TeamSide.YELLOW.value]["score"])
+        yellow_score, white_score, winner, result_reason = client_runtime.resolve_result(
+            yellow_state, white_state,
+            race=bool(getattr(getattr(adapter, "rules", None), "race", False)),
         )
-        white_score = (
-            int(adapter.result_value(white_state))
-            if hasattr(adapter, "result_value")
-            else int(sessions[TeamSide.WHITE.value]["score"])
-        )
-        if hasattr(adapter, "resolve_winner"):
-            winner, result_reason = adapter.resolve_winner(yellow_state, white_state)
-        else:
-            winner = (
-                TeamSide.YELLOW.value
-                if yellow_score > white_score
-                else TeamSide.WHITE.value
-                if white_score > yellow_score
-                else "draw"
-            )
-            result_reason = "score"
+        if result_reason == 'score':
+            if getattr(getattr(adapter, 'rules', None), 'result_metric', None) == 'board_sum':
+                result_reason = 'board_sum'
+            elif adapter.descriptor.view_protocol == 'cargo-transport-v1':
+                result_reason = 'delivered_cargo'
         db.execute(
             """
             INSERT INTO competition_game_results
@@ -1118,16 +1145,26 @@ class CompetitionService:
             if str(clock["state"]) == "running"
             and self._clock_remaining_ms(clock, now) == 0
         }
+        # The budget itself is unchanged. Local input stops at zero; allow a
+        # final checkpoint generated before zero a short transmission window.
+        if expired:
+            for clock in clocks:
+                if str(clock['side']) in expired:
+                    deadline = parse_time(clock['running_since']) + timedelta(milliseconds=int(clock['remaining_ms_base']) + 5000)
+                    if now < deadline:
+                        expired.discard(str(clock['side']))
         if not expired:
             return room, False
         return self._finish_by_clock_expiry(
             db, room, expired_sides=expired, now=now
         ), True
 
-    def _settle_project_time_limits(
+    def _settle_race_ack_deadlines(
         self, db: sqlite3.Connection, room: sqlite3.Row, *, now: datetime
     ) -> tuple[sqlite3.Row, bool]:
         competition_id = str(room["id"])
+        if bool(self._suspension_row(db, competition_id)['active']):
+            return room, False
         control = self._match_control_row(db, competition_id)
         game_key = str(control["current_game_key"])
         sessions = db.execute(
@@ -1141,25 +1178,18 @@ class CompetitionService:
         for session in sessions:
             if str(session["state"]) != "playing":
                 continue
-            adapter = self._adapter_for_session_row(session)
-            limit = getattr(adapter, "time_limit_ms", None)
-            if limit is None or self._session_state(session, db, now=now).elapsed_ms < limit:
+            # Race peers acknowledge the stop with their final local state.
+            # A disconnected peer must not keep the match stuck forever.
+            extra = json.loads(session["adapter_state_json"])
+            race_stop = parse_time(extra.get("race_stop_at"))
+            if race_stop is None or now < race_stop:
                 continue
             db.execute(
-                """
-                UPDATE competition_game_sessions
-                SET state = 'completed', outcome_reason = 'time_limit',
-                    completed_at = ?, updated_at = ?
-                WHERE competition_id = ? AND game_key = ? AND side = ? AND state = 'playing'
-                """,
-                (now.isoformat(), now.isoformat(), competition_id, game_key, str(session["side"])),
+                """UPDATE competition_game_sessions SET state = 'completed', outcome_reason = 'opponent_finished',
+                   completed_at = ?, updated_at = ? WHERE competition_id = ? AND instance_id = ?""",
+                (now.isoformat(), now.isoformat(), competition_id, str(session["instance_id"])),
             )
             self._stop_clock(db, competition_id, str(session["side"]), now=now)
-            self._append_event(
-                db, competition_id, "project.completed", None,
-                {"game_key": game_key, "side": str(session["side"]),
-                 "score": int(session["score"]), "outcome": "time_limit"},
-            )
             changed = True
         if not changed:
             return room, False
@@ -1184,7 +1214,7 @@ class CompetitionService:
     ) -> tuple[sqlite3.Row, bool]:
         status = str(room["status"])
         if status in set(GAME_PLAYING_STATUS.values()):
-            room, project_changed = self._settle_project_time_limits(db, room, now=now)
+            room, project_changed = self._settle_race_ack_deadlines(db, room, now=now)
             if str(room["status"]) not in set(GAME_PLAYING_STATUS.values()):
                 return room, True
             room, clock_changed = self._settle_game_clocks(db, room, now=now)
@@ -1415,6 +1445,7 @@ class CompetitionService:
             CompetitionStatus.CREATED.value,
             CompetitionStatus.SEATING.value,
             CompetitionStatus.READY_CHECK.value,
+            CompetitionStatus.CANCELLED.value,
         }
         ended = next_status in {
             CompetitionStatus.FINISHED.value,
@@ -1597,6 +1628,31 @@ class CompetitionService:
             "ROOM_CODE_EXHAUSTED", "Could not allocate a room code.", 503
         )
 
+    def close_competition(
+        self, room_code: str, principal: Principal, *, command_id: str
+    ) -> dict[str, Any]:
+        normalized_command = self._normalize_command_id(command_id)
+        action = "competition.close"
+        with self.database.transaction(immediate=True) as db:
+            room = self._room_row(db, room_code)
+            self._require_room_organizer(db, room, principal)
+            competition_id = str(room["id"])
+            if self._check_command(db, competition_id, principal, normalized_command, action):
+                return self._snapshot(db, room, principal)
+            if str(room["status"]) not in CLOSABLE_ROOM_STATUSES:
+                raise CompetitionError(
+                    "ROOM_CLOSE_UNAVAILABLE",
+                    "A room can only be closed before the draw begins.",
+                    409,
+                )
+            self._append_event(
+                db, competition_id, "competition.closed", principal.user_id,
+                {"previous_status": str(room["status"])},
+            )
+            self._record_command(db, competition_id, principal, normalized_command, action)
+            self._touch(db, competition_id, status=CompetitionStatus.CANCELLED.value)
+            return self._snapshot(db, self._room_row(db, room_code), principal)
+
     def list_competitions(self, principal: Principal) -> list[dict[str, Any]]:
         with self.database.transaction() as db:
             if self._is_platform_organizer(principal):
@@ -1697,17 +1753,19 @@ class CompetitionService:
         ).fetchone()
         seat_rows = db.execute(
             """
-            SELECT side, position, display_name_snapshot
+            SELECT side, position, user_id, display_name_snapshot
             FROM competition_seats WHERE competition_id = ?
             ORDER BY CASE side WHEN 'yellow' THEN 0 ELSE 1 END, position
             """,
             (competition_id,),
         ).fetchall()
+        avatar_urls = avatar_urls_for_users(row["user_id"] for row in seat_rows)
         roster = {
             side: [
                 {
                     "position": int(row["position"]),
                     "display_name": str(row["display_name_snapshot"]),
+                    "avatar_url": avatar_urls.get(int(row["user_id"])),
                     "is_captain": int(row["position"]) == 1,
                 }
                 for row in seat_rows
@@ -1839,11 +1897,32 @@ class CompetitionService:
             (str(row["side"]), int(row["position"])): str(row["display_name_snapshot"])
             for row in seat_rows
         }
+        seat_avatars = {
+            (str(row["side"]), int(row["position"])): avatar_urls.get(int(row["user_id"]))
+            for row in seat_rows
+        }
         control = db.execute(
             "SELECT * FROM competition_match_control WHERE competition_id = ?",
             (competition_id,),
         ).fetchone()
         current_game = str(control["current_game_key"]) if control else None
+        game_readiness = {
+            side: {"player_ready": False, "captain_ready": False}
+            for side in ("yellow", "white")
+        }
+        if current_game and status == GAME_READY_STATUS[current_game]:
+            for row in db.execute(
+                """
+                SELECT side, player_ready_by_user_id, captain_ready_by_user_id
+                FROM competition_game_readiness
+                WHERE competition_id = ? AND game_key = ?
+                """,
+                (competition_id, current_game),
+            ).fetchall():
+                game_readiness[str(row["side"])] = {
+                    "player_ready": bool(row["player_ready_by_user_id"]),
+                    "captain_ready": bool(row["captain_ready_by_user_id"]),
+                }
         # Only a game that actually started may expose its two participants.
         # In particular, completing the A/B/C plan or entering a ready check
         # must not publish future assignments to the live feed.
@@ -1861,6 +1940,7 @@ class CompetitionService:
                 revealed_players[side][str(row["game_key"])] = {
                     "position": position,
                     "display_name": seat_names.get((side, position), "Unknown player"),
+                    "avatar_url": seat_avatars.get((side, position)),
                     "automatic": bool(row["automatic"]),
                 }
         results = [dict(row) for row in db.execute(
@@ -1875,9 +1955,11 @@ class CompetitionService:
                 "winner_side": str(row["winner_side"]),
                 "reason": str(row["reason"]),
                 "result_revision": int(row["result_revision"]),
+                "corrected": bool(row["corrected_at"]),
             }
             for row in results
         ]
+        self._attach_result_timings(db, competition_id, public_results)
         score = {
             "yellow": int(control["yellow_wins"]) if control else 0,
             "white": int(control["white_wins"]) if control else 0,
@@ -1920,10 +2002,10 @@ class CompetitionService:
                 "finished": str(session["state"]) == "completed",
             }
             try:
-                project_views[side] = self._adapter_for_session_row(session).public_view(
-                    self._session_state(session, db, now=now),
-                    generation=int(session["public_generation"]),
-                ).as_dict()
+                project_views[side] = client_runtime.public_view(
+                    self._adapter_for_session_row(session), self._session_state(session, db, now=now),
+                    int(session["public_generation"]),
+                )
             except Exception:
                 # A public renderer failure cannot affect authoritative match state.
                 project_views[side] = None
@@ -1962,6 +2044,7 @@ class CompetitionService:
             "revealed_players": revealed_players,
             "games": games,
             "current_game": current_game,
+            "game_readiness": game_readiness,
             "score": score,
             "team_clocks": clocks,
             "captain_confirmation_status": confirmations,
@@ -2807,8 +2890,7 @@ class CompetitionService:
                     json.dumps(
                         {
                             **initial.extra,
-                            **({"project_clock_start_ms": project_clock_starts[str(row["side"])]}
-                               if getattr(adapter, "time_limit_ms", None) is not None else {}),
+                            "project_clock_start_ms": project_clock_starts[str(row["side"])],
                         },
                         separators=(",", ":"),
                     ),
@@ -2816,19 +2898,7 @@ class CompetitionService:
                     now.isoformat(),
                 )
                 for row in lineups
-                for initial in [
-                    (
-                        adapter.initial_state_for_side(seed=shared_seed, side=str(row["side"]))
-                        if hasattr(adapter, "initial_state_for_side")
-                        else adapter.initial_state(
-                            seed=(
-                                adapter.seed_for_side(shared_seed, str(row["side"]))
-                                if hasattr(adapter, "seed_for_side")
-                                else shared_seed
-                            )
-                        )
-                    )
-                ]
+                for initial in [client_runtime.initial_state(adapter, shared_seed)]
             ],
         )
         db.execute(
@@ -2864,168 +2934,110 @@ class CompetitionService:
         room = self._change_draft_status(db, room, GAME_PLAYING_STATUS[game_key])
         return room
 
-    def move_current_game(
-        self,
-        room_code: str,
-        principal: Principal,
-        *,
-        direction: str,
-        phase_token: str,
-        command_id: str,
-    ) -> dict[str, Any]:
-        normalized_direction = str(direction or "").strip().lower()
-        if normalized_direction not in {"up", "down", "left", "right", "restart", "undo"}:
-            raise CompetitionError("INVALID_MOVE", "Unsupported project action.")
-        normalized_command = self._normalize_command_id(command_id)
-        action = "game.move"
+    def sync_client_game(self, room_code, principal, *, instance_id, sequence, phase_token,
+                         payload, checkpoint, result_value, elapsed_ms, finished, outcome):
+        """Accept a player's latest complete state; no move, RNG or WASM calls."""
         now = datetime.now(timezone.utc)
+        if len(json.dumps({"payload": payload, "checkpoint": checkpoint})) > 1024 * 1024:
+            raise CompetitionError("STATE_TOO_LARGE", "Project state is too large.", 413)
+        board = payload.get("board")
+        if (not isinstance(board, list) or not 1 <= len(board) <= 12
+                or not all(isinstance(row, list) and 1 <= len(row) <= 12 for row in board)
+                or any(len(row) != len(board[0]) for row in board)
+                or any(type(cell) is not int for row in board for cell in row)
+                or type(payload.get("score")) is not int or payload["score"] < 0
+                or type(payload.get("move_count")) is not int or payload["move_count"] < 0
+                or checkpoint.get("version") != 1 or not isinstance(checkpoint.get("state"), dict)):
+            raise CompetitionError("INVALID_CLIENT_STATE", "Malformed project state.")
+        if finished and outcome not in {"target_reached", "no_moves", "time_limit", "opponent_finished"}:
+            raise CompetitionError("INVALID_CLIENT_STATE", "Unknown completion reason.")
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)
             competition_id = str(room["id"])
-            if self._check_command(
-                db, competition_id, principal, normalized_command, action
-            ):
-                return self._snapshot(db, room, principal)
-            room, settled = self._settle_due_in_transaction(db, room, now=now)
-            control = self._match_control_row(db, competition_id)
-            self._ensure_not_suspended(db, competition_id)
-            game_key = str(control["current_game_key"])
-            if str(room["status"]) != GAME_PLAYING_STATUS[game_key]:
-                if settled:
-                    return self._snapshot(db, room, principal)
-                raise CompetitionError(
-                    "INVALID_GAME_PHASE", "The current project is not accepting moves.", 409
-                )
-            if not secrets.compare_digest(
-                str(control["phase_token"]), str(phase_token or "")
-            ):
-                raise CompetitionError(
-                    "STALE_PHASE", "The game phase has changed. Refresh the room state.", 409
-                )
             session = db.execute(
-                """
-                SELECT * FROM competition_game_sessions
-                WHERE competition_id = ? AND game_key = ? AND player_user_id = ?
-                """,
-                (competition_id, game_key, principal.user_id),
+                "SELECT * FROM competition_game_sessions WHERE competition_id = ? AND instance_id = ? AND player_user_id = ?",
+                (competition_id, instance_id, principal.user_id),
             ).fetchone()
             if session is None:
-                raise CompetitionError(
-                    "ACTIVE_PLAYER_REQUIRED",
-                    "Only an active player can move in this project.",
-                    403,
-                )
-            if str(session["state"]) != "playing":
-                if settled:
-                    return self._snapshot(db, room, principal)
-                raise CompetitionError(
-                    "PROJECT_ALREADY_COMPLETE", "Your project session is already complete.", 409
-                )
-            try:
-                adapter = self._adapter_for_session_row(session)
-                action_payload = (
-                    {"type": "move", "direction": normalized_direction}
-                    if normalized_direction in {"up", "down", "left", "right"}
-                    else {"type": normalized_direction}
-                )
-                next_state = (
-                    adapter.apply_action(self._session_state(session, db, now=now), action_payload)
-                    if hasattr(adapter, "apply_action")
-                    else adapter.apply_move(self._session_state(session, db, now=now), normalized_direction)
-                )
-            except ValueError as exc:
-                raise CompetitionError("INVALID_MOVE", str(exc), 409) from exc
-            session_state = "completed" if next_state.finished else "playing"
+                raise CompetitionError("ACTIVE_PLAYER_REQUIRED", "Only this project's active player may upload.", 403)
+            extra = json.loads(session["adapter_state_json"])
+            accepted = int(extra.get("client_sequence", 0))
+            if sequence <= accepted:
+                result = {"instance_id": instance_id, "accepted_sequence": accepted, "duplicate": True}
+                if finished or str(session['state']) == 'completed':
+                    result['competition'] = self._snapshot(db, room, principal)
+                return result
+            control = self._match_control_row(db, competition_id)
+            game_key = str(session["game_key"])
+            if (str(room["status"]) != GAME_PLAYING_STATUS[game_key]
+                    or str(session["state"]) != "playing"):
+                return {"instance_id": instance_id, "accepted_sequence": accepted,
+                        "stopped": True, "competition": self._snapshot(db, room, principal)}
+            self._ensure_not_suspended(db, competition_id)
+            if not secrets.compare_digest(str(control["phase_token"]), str(phase_token or "")):
+                raise CompetitionError("STALE_PHASE", "Refresh the current match phase.", 409)
+            room, settled = self._settle_game_clocks(db, room, now=now)
+            if settled:
+                return {"instance_id": instance_id, "accepted_sequence": accepted,
+                        "stopped": True, "competition": self._snapshot(db, room, principal)}
+            if elapsed_ms > int(extra['project_clock_start_ms']):
+                raise CompetitionError('TEAM_CLOCK_EXPIRED', 'The team time budget has expired.', 409)
+            extra.update(client_sequence=sequence, client_payload=payload, checkpoint=checkpoint,
+                         result_value=result_value, client_elapsed_ms=elapsed_ms, client_completed=bool(finished))
             db.execute(
-                """
-                UPDATE competition_game_sessions
-                SET board_json = ?, score = ?, move_count = ?, rng_counter = ?, adapter_state_json = ?,
-                    state = ?, outcome_reason = ?, completed_at = ?, updated_at = ?
-                WHERE competition_id = ? AND game_key = ? AND side = ?
-                """,
-                (
-                    json.dumps(next_state.board, separators=(",", ":")),
-                    next_state.score,
-                    next_state.move_count,
-                    next_state.rng_counter,
-                    json.dumps(next_state.extra, separators=(",", ":")),
-                    session_state,
-                    next_state.outcome,
-                    now.isoformat() if next_state.finished else None,
-                    now.isoformat(),
-                    competition_id,
-                    game_key,
-                    str(session["side"]),
-                ),
+                """UPDATE competition_game_sessions SET board_json = ?, score = ?, move_count = ?,
+                   adapter_state_json = ?, state = ?, outcome_reason = ?, completed_at = ?, updated_at = ?
+                   WHERE competition_id = ? AND instance_id = ?""",
+                (json.dumps(board, separators=(",", ":")), payload["score"], payload["move_count"],
+                 json.dumps(extra, separators=(",", ":")), "completed" if finished else "playing",
+                 outcome if finished else None, now.isoformat() if finished else None, now.isoformat(),
+                 competition_id, instance_id),
             )
-            self._append_event(
-                db,
-                competition_id,
-                "project.move_accepted",
-                principal.user_id,
-                {
-                    "game_key": game_key,
-                    "side": str(session["side"]),
-                    "direction": normalized_direction,
-                    "move_count": next_state.move_count,
-                },
-            )
-            if next_state.finished:
-                remaining = self._stop_clock(
-                    db,
-                    competition_id,
-                    str(session["side"]),
-                    now=now,
-                )
-                if next_state.outcome == "target_reached" and getattr(adapter, "rules", None) and adapter.rules.race:
-                    opponent_side = (
-                        TeamSide.WHITE.value
-                        if str(session["side"]) == TeamSide.YELLOW.value
-                        else TeamSide.YELLOW.value
-                    )
-                    db.execute(
-                        """
-                        UPDATE competition_game_sessions
-                        SET state = 'completed', outcome_reason = 'opponent_finished',
-                            completed_at = ?, updated_at = ?
-                        WHERE competition_id = ? AND game_key = ? AND side = ? AND state = 'playing'
-                        """,
-                        (now.isoformat(), now.isoformat(), competition_id, game_key, opponent_side),
-                    )
-                    self._stop_clock(db, competition_id, opponent_side, now=now)
-                self._append_event(
-                    db,
-                    competition_id,
-                    "project.completed",
-                    principal.user_id,
-                    {
-                        "game_key": game_key,
-                        "side": str(session["side"]),
-                        "score": next_state.score,
-                        "outcome": next_state.outcome,
-                        "remaining_ms": remaining,
-                    },
-                )
-            self._record_command(
-                db, competition_id, principal, normalized_command, action
-            )
-            completed_count = int(
-                db.execute(
-                    """
-                    SELECT COUNT(*) AS count FROM competition_game_sessions
-                    WHERE competition_id = ? AND game_key = ? AND state = 'completed'
-                    """,
-                    (competition_id, game_key),
-                ).fetchone()["count"]
-            )
-            if completed_count == 2:
-                room = self._publish_game_result(
-                    db, room, game_key=game_key, now=now
-                )
+            if finished:
+                # Freeze the team clock at the reported local completion time,
+                # excluding upload latency. The server still owns match clocks.
+                self._stop_clock(db, competition_id, str(session["side"]), now=now)
+                remaining = max(0, int(extra["project_clock_start_ms"]) - elapsed_ms)
+                db.execute("UPDATE competition_team_clocks SET remaining_ms_base = ? WHERE competition_id = ? AND side = ?",
+                           (remaining, competition_id, str(session["side"])))
+                adapter = self._adapter_for_session_row(session)
+                if outcome == "target_reached" and bool(getattr(getattr(adapter, "rules", None), "race", False)):
+                    opponent = db.execute(
+                        "SELECT * FROM competition_game_sessions WHERE competition_id = ? AND game_key = ? AND side != ? AND state = 'playing'",
+                        (competition_id, game_key, str(session["side"])),
+                    ).fetchone()
+                    if opponent is not None:
+                        opponent_extra = json.loads(opponent["adapter_state_json"])
+                        opponent_extra["race_stop_at"] = (now + timedelta(seconds=5)).isoformat()
+                        db.execute("UPDATE competition_game_sessions SET adapter_state_json = ? WHERE competition_id = ? AND instance_id = ?",
+                                   (json.dumps(opponent_extra), competition_id, str(opponent["instance_id"])))
+                self._append_event(db, competition_id, "project.completed", principal.user_id,
+                                   {"game_key": game_key, "side": str(session["side"]), "score": result_value,
+                                    "outcome": outcome, "client_sequence": sequence})
+            completed = db.execute(
+                "SELECT count(*) AS count FROM competition_game_sessions WHERE competition_id = ? AND game_key = ? AND state = 'completed'",
+                (competition_id, game_key),
+            ).fetchone()["count"]
+            if completed == 2:
+                room = self._publish_game_result(db, room, game_key=game_key, now=now)
             else:
                 self._touch(db, competition_id)
                 room = self._room_row(db, room_code)
-            return self._snapshot(db, room, principal)
+            result = {"instance_id": instance_id, "accepted_sequence": sequence}
+            if finished:
+                result["competition"] = self._snapshot(db, room, principal)
+            else:
+                state = self._session_state(db.execute(
+                    "SELECT * FROM competition_game_sessions WHERE competition_id = ? AND instance_id = ?",
+                    (competition_id, instance_id)).fetchone(), db, now=now)
+                adapter = self._adapter_for_session_row(session)
+                result["update"] = {
+                    "room_code": str(room["room_code"]), "game_key": game_key,
+                    "instance_id": instance_id, "side": str(session["side"]),
+                    "version": int(room["version"]), "server_time": now.isoformat(),
+                    "public_view": client_runtime.public_view(adapter, state, int(session["public_generation"])),
+                }
+            return result
 
     def _advance_after_result(
         self,
@@ -3519,6 +3531,15 @@ class CompetitionService:
                 raise CompetitionError(
                     "RESUME_READINESS_INCOMPLETE", "Both captains must be ready to resume.", 409
                 )
+            for session in db.execute(
+                "SELECT instance_id, adapter_state_json FROM competition_game_sessions WHERE competition_id=? AND state='playing'",
+                (competition_id,),
+            ).fetchall():
+                extra = json.loads(session['adapter_state_json'])
+                if extra.get('race_stop_at'):
+                    extra['race_stop_at'] = (now + timedelta(seconds=5)).isoformat()
+                    db.execute('UPDATE competition_game_sessions SET adapter_state_json=? WHERE instance_id=?',
+                               (json.dumps(extra, separators=(',', ':')), session['instance_id']))
             db.execute(
                 """
                 UPDATE competition_team_clocks
@@ -3860,6 +3881,7 @@ class CompetitionService:
         self, db: sqlite3.Connection, room: sqlite3.Row, principal: Principal
     ) -> dict[str, Any]:
         competition_id = str(room["id"])
+        staff_roles = self._staff_roles(db, competition_id, principal.user_id)
         occupied = int(
             db.execute(
                 "SELECT COUNT(*) AS count FROM competition_seats WHERE competition_id = ?",
@@ -3875,7 +3897,11 @@ class CompetitionService:
             "version": int(room["version"]),
             "created_at": str(room["created_at"]),
             "updated_at": str(room["updated_at"]),
-            "my_staff_roles": self._staff_roles(db, competition_id, principal.user_id),
+            "my_staff_roles": staff_roles,
+            "can_close": str(room["status"]) in CLOSABLE_ROOM_STATUSES and (
+                self._is_platform_organizer(principal)
+                or StaffRole.ORGANIZER.value in staff_roles
+            ),
         }
 
     def _snapshot(
@@ -3891,6 +3917,7 @@ class CompetitionService:
             """,
             (competition_id,),
         ).fetchall()
+        avatar_urls = avatar_urls_for_users(row["user_id"] for row in seat_rows)
         readiness_rows = db.execute(
             """
             SELECT side, ready_by_user_id, ready_at
@@ -3916,6 +3943,7 @@ class CompetitionService:
                 "position": int(row["position"]),
                 "user_id": int(row["user_id"]),
                 "display_name": str(row["display_name_snapshot"]),
+                "avatar_url": avatar_urls.get(int(row["user_id"])),
                 "is_captain": int(row["position"]) == 1,
                 "seated_at": str(row["seated_at"]),
             }
@@ -4070,6 +4098,25 @@ class CompetitionService:
                     "yellow": str(draft_row["blind_yellow"]),
                     "white": str(draft_row["blind_white"]),
                 }
+            # Public provenance without exposing either blind choice before C_DRAW.
+            draft_sources: dict[str, str] = {}
+            for event in db.execute(
+                """
+                SELECT event_type, payload_json FROM competition_events
+                WHERE competition_id = ? AND event_type IN
+                    ('draft.pick_ban_submitted', 'draft.blind_submitted')
+                ORDER BY sequence
+                """,
+                (competition_id,),
+            ).fetchall():
+                payload = json.loads(str(event["payload_json"] or "{}"))
+                source = "timeout" if payload.get("automatic") else "captain"
+                if event["event_type"] == "draft.pick_ban_submitted":
+                    key = "A" if payload.get("phase") == CompetitionStatus.FIRST_PICK_BAN.value else "B"
+                    draft_sources[key] = source
+                elif payload.get("side") in (TeamSide.YELLOW.value, TeamSide.WHITE.value):
+                    draft_sources[str(payload["side"])] = source
+            draft_payload["sources"] = draft_sources
 
         lineup_state = db.execute(
             "SELECT * FROM competition_lineup_state WHERE competition_id = ?",
@@ -4112,6 +4159,7 @@ class CompetitionService:
                         "display_name": seat_names.get(
                             (side, int(row["position"])), "Unknown player"
                         ),
+                        "avatar_url": avatar_urls.get(int(row["player_user_id"])),
                         "automatic": bool(row["automatic"]),
                     }
                     for row in lineup_rows
@@ -4228,6 +4276,7 @@ class CompetitionService:
                     "display_name": seat_names.get(
                         (str(row["side"]), int(row["position"])), "Unknown player"
                     ),
+                    "avatar_url": avatar_urls.get(int(row["player_user_id"])),
                 }
                 for row in db.execute(
                     """
@@ -4272,14 +4321,25 @@ class CompetitionService:
             public_sessions = {}
             for row in sessions:
                 adapter = self._adapter_for_session_row(row)
+                state = self._session_state(row, db, now=snapshot_now)
+                side = str(row["side"])
+                limit_ms = getattr(adapter, "time_limit_ms", None)
                 public_sessions[str(row["side"])] = {
+                    "instance_id": str(row["instance_id"]),
                     "state": str(row["state"]),
                     "finished": str(row["state"]) == "completed",
                     "project_key": str(row["project_key"]),
-                    "public_view": adapter.public_view(
-                        self._session_state(row, db, now=snapshot_now),
-                        generation=int(row["public_generation"]),
-                    ).as_dict(),
+                    "project_clock": {
+                        "mode": "countdown" if limit_ms is not None else "elapsed",
+                        "elapsed_ms": state.elapsed_ms,
+                        "limit_ms": int(limit_ms) if limit_ms is not None else None,
+                        "running": (
+                            str(row["state"]) == "playing"
+                            and clocks.get(side, {}).get("state") == "running"
+                            and not suspended
+                        ),
+                    },
+                    "public_view": client_runtime.public_view(adapter, state, int(row["public_generation"])),
                 }
             my_session_row = next(
                 (
@@ -4294,9 +4354,7 @@ class CompetitionService:
                     "side": str(my_session_row["side"]),
                     "player_user_id": int(my_session_row["player_user_id"]),
                     "project_key": str(my_session_row["project_key"]),
-                    **self._adapter_for_session_row(my_session_row).public_payload(
-                        self._session_state(my_session_row, db, now=snapshot_now)
-                    ),
+                    **self._private_session_payload(my_session_row, db, now=snapshot_now),
                 }
                 if my_session_row is not None
                 else None
@@ -4335,6 +4393,7 @@ class CompetitionService:
                 }
                 for row in result_rows
             ]
+            self._attach_result_timings(db, competition_id, results)
             current_result = next(
                 (item for item in results if item["game_key"] == current_game), None
             )
@@ -4543,6 +4602,7 @@ class CompetitionService:
                 "seat": my_seat,
                 "is_captain": is_captain,
                 "can_manage": can_manage,
+                "can_close": can_manage and status in CLOSABLE_ROOM_STATUSES,
                 "can_claim_seat": status in {
                     CompetitionStatus.SEATING.value,
                     CompetitionStatus.READY_CHECK.value,

@@ -12,6 +12,14 @@ test('a polyomino spawn consumes one numeric ticket', () => {
   assert.equal(game.randomState, nextRandom(before));
 });
 
+test('the practice board and movement use four rows and five columns', () => {
+  const game = new PolyominoGame({ rows: 4, cols: 5, spawn4Rate: 0 }, { seed: 'poly-five-wide' });
+  assert.equal(game.snapshot().board.length, 20);
+  assert.equal(game.snapshot().cols, 5);
+  const result = movePolyominoTiles([tile('edge', 2, 4)], 'left', 4, 5);
+  assert.deepEqual(result.tiles[0].cells, [0]);
+});
+
 test('64+64 makes one rigid two-cell 128 along the move axis', () => {
   const horizontal = movePolyominoTiles([tile('a', 64, 1), tile('b', 64, 2)], 'left');
   assert.deepEqual(horizontal.tiles.map(item => [item.value, item.cells]), [[128, [0, 1]]]);

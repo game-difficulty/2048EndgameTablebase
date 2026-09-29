@@ -33,6 +33,7 @@ class VariantRules:
     estimated_minutes: str = ""
     isolated_island: bool = False
     shape_playable_cells: int | None = None
+    shape_generation_size: int = 7
 
     @property
     def race(self) -> bool:
@@ -96,11 +97,25 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
             "name": rules.display_name,
             "description": _description(rules),
             "project_ref": rules.project_ref,
-            "adapter_rules_version": "tournament-v2",
-            "rules_version": "tournament-v2",
+            "adapter_rules_version": "tournament-v3" if rules.shape_playable_cells is not None else "tournament-v2",
+            "rules_version": "tournament-v3" if rules.shape_playable_cells is not None else "tournament-v2",
         }
         for index, rules in enumerate(TOURNAMENT_RULES, start=2)
-    ]]
+    ], {
+        "key": "project-11",
+        "name": "百步封锁（4×4）",
+        "description": "开局封住3格，此后每100步轮换；双方死亡后按得分结算。",
+        "project_ref": "practice-hundred-step-seal-4x4",
+        "adapter_rules_version": "tournament-v2",
+        "rules_version": "tournament-v2",
+    }, {
+        "key": "project-12",
+        "name": "越来越大（4×5）",
+        "description": "64合成双格128；128相撞合成双格或三格256；双方死亡后按得分结算。",
+        "project_ref": "practice-growing-tiles-4x4",
+        "adapter_rules_version": "tournament-v3",
+        "rules_version": "tournament-v3",
+    }]
 
 
 def _description(rules: VariantRules) -> str:
@@ -244,12 +259,12 @@ def _crop_and_orient_shape(board: list[list[int]]) -> list[list[int]]:
     return cropped
 
 
-def _hard_shape(seed: str, restart_count: int, playable_cells: int) -> tuple[tuple[int, ...], ...]:
-    # Tournament variant: 12 playable cells generated inside a 7x7 source,
+def _hard_shape(seed: str, restart_count: int, playable_cells: int, generation_size: int = 7) -> tuple[tuple[int, ...], ...]:
+    # Tournament variant: 12 playable cells generated inside a bounded source,
     # filtered to a largest full rectangle area of 4-8 before cropping.
     rng = _ShapeRandom(seed, f"shape:{restart_count}")
     for _attempt in range(4096):
-        board = _connected_shape(7, playable_cells, rng)
+        board = _connected_shape(generation_size, playable_cells, rng)
         rectangle = _max_playable_rectangle(board)
         if 4 <= rectangle <= 8:
             cropped = _crop_and_orient_shape(board)
@@ -407,7 +422,8 @@ class Tournament2048Adapter:
 
     def _empty_board(self, seed: str, restart_count: int, side: str | None = None) -> tuple[tuple[tuple[int, ...], ...], dict[str, Any]]:
         if self.rules.shape_playable_cells is not None:
-            board = _hard_shape(seed, restart_count, self.rules.shape_playable_cells)
+            board = _hard_shape(seed, restart_count, self.rules.shape_playable_cells,
+                                self.rules.shape_generation_size)
             return board, {"restart_count": restart_count, "shape_shifter": True}
         flat = [0] * (self.rules.rows * self.rules.cols)
         extra: dict[str, Any] = {"restart_count": restart_count}
@@ -452,7 +468,7 @@ class Tournament2048Adapter:
             value, count = self.rules.target_tile_count
             if sum(cell == value for row in board for cell in row) >= count:
                 return "target_reached"
-        if not self.rules.allow_undo and not _has_moves(board, self.rules):
+        if not (self.rules.allow_undo or self.rules.allow_restart) and not _has_moves(board, self.rules):
             return "no_moves"
         return None
 
@@ -488,6 +504,7 @@ class Tournament2048Adapter:
             "last_transition": {
                 "kind": "move",
                 "direction": direction,
+                "before": [value for row in state.board for value in row],
                 "movements": movements,
                 "spawn": spawn,
             },
@@ -582,6 +599,7 @@ class Tournament2048Adapter:
             "target_tile": self.rules.target_tile_count[0] if self.rules.target_tile_count else None,
             "target_count": self.rules.target_tile_count[1] if self.rules.target_tile_count else None,
             "current_target_count": tile_count,
+            "no_moves": not _has_moves(state.board, self.rules),
             "unmergeable_value": self.rules.unmergeable,
             "mirror_portals": self.rules.mirror_portals,
             "dice": state.extra.get("dice"),
@@ -665,4 +683,16 @@ class Tournament2048AdapterV2(Tournament2048Adapter):
 
 TOURNAMENT_V2_ADAPTER_FACTORIES = tuple(
     (lambda selected=rules: Tournament2048AdapterV2(selected)) for rules in TOURNAMENT_RULES
+)
+
+
+class Tournament2048AdapterV3(Tournament2048AdapterV2):
+    rules_version = "tournament-v3"
+
+
+TOURNAMENT_V3_ADAPTER_FACTORIES = (
+    lambda: Tournament2048AdapterV3(replace(
+        next(rules for rules in TOURNAMENT_RULES if rules.shape_playable_cells is not None),
+        rows=6, cols=6, shape_generation_size=6,
+    )),
 )

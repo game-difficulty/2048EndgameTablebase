@@ -52,3 +52,16 @@ def test_dice_uses_board_sum_and_unknown_projects_are_rejected(board):
     assert board.list(project)["top"][0]["user_id"] == 2
     with pytest.raises(CompetitionError):
         board.list("not-a-project")
+
+
+@pytest.mark.parametrize("project", [
+    "practice-pair-bond-4x4",
+    "practice-chemical-reaction-4x4",
+    "practice-timed-bomb-4x4",
+])
+def test_new_special_projects_rank_by_standard_score(board, project):
+    result(board, project, 1, 64)
+    result(board, project, 2, 128)
+    listed = board.list(project)
+    assert listed["metric"] == "score"
+    assert [entry["user_id"] for entry in listed["top"]] == [2, 1]

@@ -22,24 +22,31 @@ function headers(hasBody = false) {
   return result;
 }
 
-async function request(path, { method = 'GET', body } = {}) {
-  const response = await fetch(`${apiOrigin}${path}`, {
-    method,
-    headers: headers(body !== undefined),
-    credentials: 'include',
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = payload?.detail;
-    const error = new Error(
-      (typeof detail === 'object' ? detail?.message : detail) || `请求失败（${response.status}）`,
-    );
-    error.code = typeof detail === 'object' ? detail?.code : '';
-    error.status = response.status;
-    throw error;
-  }
-  return payload;
+async function request(path, { method = 'GET', body, timeoutMs } = {}) {
+  const controller = timeoutMs ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(`${apiOrigin}${path}`, {
+      method,
+      headers: headers(body !== undefined),
+      credentials: 'include',
+      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    // A truncated/aborted success body is not an acknowledgement: the state
+    // sender must retry, particularly when this was the final result.
+    const payload = response.ok ? await response.json() : await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = payload?.detail;
+      const error = new Error(
+        (typeof detail === 'object' ? detail?.message : detail) || `请求失败（${response.status}）`,
+      );
+      error.code = typeof detail === 'object' ? detail?.code : '';
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  } finally { if (timeout !== null) clearTimeout(timeout); }
 }
 
 export function commandId() {
@@ -60,6 +67,9 @@ export const api = {
     body: { name, projects },
   }),
   room: (code) => request(`/api/competitions/${encodeURIComponent(code)}`),
+  closeRoom: (code) => request(`/api/competitions/${encodeURIComponent(code)}/close`, {
+    method: 'POST', body: { command_id: commandId() },
+  }),
   claimSeat: (code, side, position) => request(
     `/api/competitions/${encodeURIComponent(code)}/seat`,
     { method: 'POST', body: { side, position, command_id: commandId() } },
@@ -122,19 +132,10 @@ export const api = {
     `/api/competitions/${encodeURIComponent(code)}/games/current/start`,
     { method: 'POST', body: { phase_token: phaseToken, command_id: commandId() } },
   ),
-  moveCurrentGame: (code, direction, phaseToken) => request(
-    `/api/competitions/${encodeURIComponent(code)}/games/current/move`,
-    {
-      method: 'POST',
-      body: { direction, phase_token: phaseToken, command_id: commandId() },
-    },
-  ),
-  actionCurrentGame: (code, action, phaseToken) => request(
-    `/api/competitions/${encodeURIComponent(code)}/games/current/action`,
-    {
-      method: 'POST',
-      body: { action, phase_token: phaseToken, command_id: commandId() },
-    },
+  syncClientGame: (code, packet, phaseToken) => request(
+    `/api/competitions/${encodeURIComponent(code)}/games/current/state`,
+    { method: 'POST', timeoutMs: 8000,
+      body: { ...packet, elapsed_ms: Math.round(packet.elapsed_ms), phase_token: phaseToken } },
   ),
   confirmCurrentResult: (code, resultRevision, phaseToken) => request(
     `/api/competitions/${encodeURIComponent(code)}/games/current/result/confirm`,

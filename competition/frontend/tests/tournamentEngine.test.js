@@ -186,8 +186,8 @@ test('seal and shape setup do not consume numeric spawn tickets', () => {
   matchingSeal.nextSpawnTicket();
   assert.deepEqual(seal.rotateSeals().sealed, matchingSeal.rotateSeals().sealed);
   assert.equal(seal.randomState, before);
-  const shapeA = new TournamentGame({ rows: 7, cols: 7, shapeShifter: true, playableCells: 12 }, { seed: 'shape' });
-  const shapeB = new TournamentGame({ rows: 7, cols: 7, shapeShifter: true, playableCells: 12 }, { seed: 'shape' });
+  const shapeA = new TournamentGame({ rows: 6, cols: 6, shapeShifter: true, playableCells: 12 }, { seed: 'shape' });
+  const shapeB = new TournamentGame({ rows: 6, cols: 6, shapeShifter: true, playableCells: 12 }, { seed: 'shape' });
   shapeB.nextSpawnTicket();
   assert.deepEqual(shapeA.emptyBoard(), shapeB.emptyBoard());
 });
@@ -200,7 +200,7 @@ test('dice sides may differ while their numeric spawn stream stays shared', () =
   assert.equal(yellow.nextSpawnTicket(), white.nextSpawnTicket());
 });
 
-test('hard shape shifter creates twelve connected cells in a 7x7 source with rectangle area 4-8', () => {
+test('hard shape shifter crops twelve connected cells from a 6x6 source', () => {
   let state = 0x12345678;
   const random = () => {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
@@ -211,7 +211,13 @@ test('hard shape shifter creates twelve connected cells in a 7x7 source with rec
     const playable = shape.board.map((value,index) => value !== WALL ? index : -1).filter(index => index >= 0);
     assert.equal(playable.length, 12);
     assert.ok(shape.cols >= shape.rows);
-    assert.ok(shape.rows <= 7 && shape.cols <= 7);
+    assert.ok(shape.rows <= 6 && shape.cols <= 6);
+    for (const edge of [
+      shape.board.slice(0, shape.cols),
+      shape.board.slice(-shape.cols),
+      Array.from({length: shape.rows}, (_, row) => shape.board[row * shape.cols]),
+      Array.from({length: shape.rows}, (_, row) => shape.board[row * shape.cols + shape.cols - 1]),
+    ]) assert.ok(edge.some(value => value !== WALL));
     const rectangle = maxPlayableRectangle(shape.board, shape.rows, shape.cols);
     assert.ok(rectangle >= 4 && rectangle <= 8);
 

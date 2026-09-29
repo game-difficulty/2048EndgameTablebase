@@ -12,6 +12,14 @@ val wrap_evil_gen_new_num(EvilGen& self, int depth) {
     output.set(2, std::get<2>(result));
     return output;
 }
+val wrap_evil_gen_new_num_seeded(EvilGen& self, int depth, uint32_t seed) {
+    auto result = self.gen_new_num_seeded(depth, seed);
+    val output = val::array();
+    output.set(0, std::get<0>(result));
+    output.set(1, std::get<1>(result));
+    output.set(2, std::get<2>(result));
+    return output;
+}
 EMSCRIPTEN_BINDINGS(evil_core_module) {
     class_<EvilGen>("EvilGen")
         .constructor<uint64_t>()
@@ -20,6 +28,7 @@ EMSCRIPTEN_BINDINGS(evil_core_module) {
         .function("dispatcher", &EvilGen::dispatcher)
         .function("start_search", &EvilGen::start_search)
         .function("gen_new_num", &wrap_evil_gen_new_num)
+        .function("gen_new_num_seeded", &wrap_evil_gen_new_num_seeded)
         .property("max_d", &EvilGen::max_d)
         .property("hardest_pos", &EvilGen::hardest_pos)
         .property("hardest_num", &EvilGen::hardest_num)
