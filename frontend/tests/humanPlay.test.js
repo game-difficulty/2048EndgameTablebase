@@ -14,6 +14,13 @@ test('history delete controls are enabled while no delete request is pending', (
   assert.doesNotMatch(playerProfileSource, /deletingId\s*=\s*ref\(['"]{2}\)/);
 });
 
+test('cached profile releases inactive poster resources and bounds API results', () => {
+  assert.match(playerProfileSource, /onDeactivated\(\(\) => deactivateResources\(\{ releasePoster: true \}\)\)/);
+  assert.match(playerProfileSource, /posterCanvas\.value\.width = 1; posterCanvas\.value\.height = 1/);
+  assert.match(playerProfileSource, /remember\(historyCache, key, result, 12\)/);
+  assert.match(playerProfileSource, /remember\(bestCache, key, result, 8\)/);
+});
+
 test('terminal overlay waits two seconds and stays dismissed for that game', () => {
   let visible = false, scheduled = null, cleared = 0;
   const overlay = createTerminalOverlay({

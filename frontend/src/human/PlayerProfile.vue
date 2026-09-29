@@ -20,7 +20,7 @@
         <div v-if="bestLoading" class="large-empty">{{ t('正在读取记录…') }}</div>
         <div v-else-if="!bestTen.length" class="large-empty">{{ t('此模式暂无可展示记录') }}</div>
         <div v-else class="best-poster-stage">
-          <canvas ref="posterCanvas" class="best-poster-canvas" width="1600" height="2700" role="img" :aria-label="t('Best 10 成绩海报')"></canvas>
+          <canvas ref="posterCanvas" class="best-poster-canvas" width="800" height="1350" role="img" :aria-label="t('Best 10 成绩海报')"></canvas>
           <button v-for="(entry,index) in bestTen" v-show="entry.has_replay" :key="entry.id" type="button" class="best-poster-hit" :style="posterHitStyle(index)" :aria-label="`${t('查看回放')} B${index + 1}，${number(entry.score)} ${t('分')}`" @click="$emit('replay',entry)"></button>
         </div>
       </div>
@@ -89,7 +89,7 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Trash2 } from '@lucide/vue';
 import { json, request } from './client.js';
 import { t, language } from './i18n.js';
@@ -115,6 +115,11 @@ const deleteError = ref('');
 let previewTrigger = null;
 let historySerial = 0, bestSerial = 0, posterFrame = 0;
 const historyCache = new Map(), bestCache = new Map();
+const POSTER_PREVIEW_WIDTH = 800, POSTER_PREVIEW_HEIGHT = 1350;
+function remember(cache, key, value, limit) {
+  cache.delete(key); cache.set(key, value);
+  while (cache.size > limit) cache.delete(cache.keys().next().value);
+}
 const isOwner = computed(() => isProfileOwner(profile.value, props.viewer));
 const tabs = computed(() => [{id:'profile',label:'个人主页'},{id:'history',label:'历史记录'},
   {id:'statistics',label:'统计'},...(isOwner.value?[{id:'settings',label:'设置'}]:[])]);
@@ -139,14 +144,35 @@ const paginationItems = computed(() => {
   return items;
 });
 const previewDims = computed(() => ({'4x4':[4,4],'3x4':[3,4],'2x4':[2,4],'3x3':[3,3]})[preview.value?.variant] || [4,4]);
-let themeObserver;
-onMounted(() => {
+let themeObserver, resourcesActive = false;
+function activateResources() {
+  if (resourcesActive) return;
+  resourcesActive = true;
   themeObserver = new MutationObserver(() => {
     posterDark.value = document.documentElement.dataset.theme === 'dark';
     posterThemeVersion.value += 1;
   });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'style'] });
-});
+  document.addEventListener('pointerdown', outsidePreview);
+  document.addEventListener('keydown', previewKeydown);
+  document.addEventListener('scroll', closePreview, true);
+  window.addEventListener('resize', positionPreview);
+}
+function deactivateResources({ releasePoster = false } = {}) {
+  if (posterFrame) { cancelAnimationFrame(posterFrame); posterFrame = 0; }
+  closePreview();
+  if (resourcesActive) {
+    resourcesActive = false;
+    themeObserver?.disconnect(); themeObserver = null;
+    document.removeEventListener('pointerdown', outsidePreview);
+    document.removeEventListener('keydown', previewKeydown);
+    document.removeEventListener('scroll', closePreview, true);
+    window.removeEventListener('resize', positionPreview);
+  }
+  if (releasePoster && posterCanvas.value) {
+    posterCanvas.value.width = 1; posterCanvas.value.height = 1;
+  }
+}
 function currentTilePalette() {
   const style = getComputedStyle(document.documentElement);
   const palette = {};
@@ -194,18 +220,10 @@ function outsidePreview(event) {
   if (preview.value && !previewElement.value?.contains(event.target) && !previewTrigger?.contains(event.target)) closePreview();
 }
 function previewKeydown(event) { if (event.key === 'Escape') closePreview(); }
-document.addEventListener('pointerdown', outsidePreview);
-document.addEventListener('keydown', previewKeydown);
-document.addEventListener('scroll', closePreview, true);
-window.addEventListener('resize', positionPreview);
-onUnmounted(() => {
-  if (posterFrame) cancelAnimationFrame(posterFrame);
-  themeObserver?.disconnect();
-  document.removeEventListener('pointerdown', outsidePreview);
-  document.removeEventListener('keydown', previewKeydown);
-  document.removeEventListener('scroll', closePreview, true);
-  window.removeEventListener('resize', positionPreview);
-});
+onMounted(activateResources);
+onActivated(() => { activateResources(); schedulePosterRender(); });
+onDeactivated(() => deactivateResources({ releasePoster: true }));
+onUnmounted(() => deactivateResources({ releasePoster: true }));
 function selectTab(next) {
   closePreview();
   if (next === 'history' && tab.value !== 'history' && filterVariant.value !== bestVariant.value) {
@@ -230,7 +248,7 @@ async function loadHistory(force = false) {
   try {
     const result = await json(`/api/human/users/${encodeURIComponent(props.username)}/history?${params}`);
     if (serial !== historySerial) return;
-    historyCache.set(key, result); applyHistory(result);
+    remember(historyCache, key, result, 12); applyHistory(result);
   } catch { if (serial === historySerial) error.value = '无法读取玩家记录，请稍后重试。'; }
   finally { if (serial === historySerial) loading.value = false; }
 }
@@ -248,18 +266,18 @@ async function loadBestTen(force = false) {
   bestLoading.value = true;
   try {
     const result = await json(`/api/human/users/${encodeURIComponent(props.username)}/best10?variant=${bestVariant.value}`);
-    if (serial === bestSerial) { bestCache.set(key, result); applyBestTen(result); }
+    if (serial === bestSerial) { remember(bestCache, key, result, 8); applyBestTen(result); }
   } catch { if (serial === bestSerial) { bestMeta.value = null; bestTen.value = []; } }
   finally { if (serial === bestSerial) bestLoading.value = false; }
 }
-async function renderPoster() {
+async function renderPoster(canvas = posterCanvas.value, outputWidth = POSTER_PREVIEW_WIDTH, outputHeight = POSTER_PREVIEW_HEIGHT) {
   await nextTick();
-  if (!posterCanvas.value || !bestTen.value.length) return;
-  await drawBestTenPoster({ canvas: posterCanvas.value, name: profile.value?.player.display_name,
+  if (!canvas || !bestTen.value.length) return;
+  await drawBestTenPoster({ canvas, name: profile.value?.player.display_name,
     userId: profile.value?.player.id, variant: bestVariant.value, entries: bestTen.value,
     pbScore: bestMeta.value?.pb_score, pbRank: bestMeta.value?.pb_rank,
     rating: bestMeta.value?.rating, raRank: bestMeta.value?.ra_rank, dark: posterDark.value,
-    language: language.value, tilePalette: currentTilePalette() });
+    language: language.value, tilePalette: currentTilePalette(), outputWidth, outputHeight });
 }
 function schedulePosterRender() {
   if (posterFrame || tab.value !== 'profile') return;
@@ -270,14 +288,17 @@ watch(tab, value => { if (value === 'profile') schedulePosterRender(); }, { flus
 async function downloadPoster() {
   if (!bestTen.value.length) return;
   if (posterFrame) { cancelAnimationFrame(posterFrame); posterFrame = 0; }
-  await renderPoster();
-  const canvas = posterCanvas.value;
-  if (!canvas) return;
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-  if (!blob) { error.value = '无法生成分享图。'; return; }
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a'); link.download = `2048-${bestVariant.value}-best10.png`; link.href = url;
-  link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const canvas = document.createElement('canvas');
+  try {
+    await renderPoster(canvas, 1600, 2700);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) { error.value = '无法生成分享图。'; return; }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.download = `2048-${bestVariant.value}-best10.png`; link.href = url;
+    link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    canvas.width = 1; canvas.height = 1;
+  }
 }
 async function attachReplay(item,event) {
   const file=event.target.files?.[0];event.target.value='';
