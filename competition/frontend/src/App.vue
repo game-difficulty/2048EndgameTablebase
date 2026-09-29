@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { api, connectRoom } from './api';
+import { userFacingError } from './errorMessages.js';
 import ProjectPlayground from './projects/ProjectPlayground.vue';
 import TournamentBoard from './projects/TournamentBoard.vue';
 import CargoBoard from './projects/CargoBoard.vue';
@@ -14,7 +15,7 @@ import {
 
 const pathname = ref(window.location.pathname);
 const projectRouteMatch = computed(() => pathname.value.match(/^\/projects(?:\/([^/]+))?\/?$/));
-const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(1[0-2]|[1-9]))?\/?$/));
+const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(1[0-5]|[1-9]))?\/?$/));
 const isProjectRoute = computed(() => Boolean(projectRouteMatch.value || practiceRouteMatch.value));
 const projectRouteId = computed(() => (projectRouteMatch.value?.[1]
   ? decodeURIComponent(projectRouteMatch.value[1])
@@ -176,7 +177,7 @@ function applyRoom(nextRoom) {
 }
 
 function setError(cause) {
-  error.value = cause instanceof Error ? cause.message : String(cause || '发生未知错误');
+  error.value = userFacingError(cause);
 }
 
 async function loadDashboard(epoch) {
@@ -210,7 +211,7 @@ async function loadRoom(code, epoch) {
         applyRoom(message.data);
         connection.value = 'online';
       }
-      if (message?.type === 'error') setError(message.error?.message || '房间连接失败');
+      if (message?.type === 'error') setError(message.error || '房间连接失败');
     },
   });
 }

@@ -24,6 +24,12 @@ import light11 from '../assets/project-icons/11-light.png?url';
 import dark11 from '../assets/project-icons/11-dark.png?url';
 import light12 from '../assets/project-icons/12-light.png?url';
 import dark12 from '../assets/project-icons/12-dark.png?url';
+import special13 from '../assets/project-icons/13.svg?url';
+import special13Dark from '../assets/project-icons/13-dark.svg?url';
+import special14 from '../assets/project-icons/14.svg?url';
+import special14Dark from '../assets/project-icons/14-dark.svg?url';
+import special15 from '../assets/project-icons/15.svg?url';
+import special15Dark from '../assets/project-icons/15-dark.svg?url';
 
 const lightIcons = [light01, light02, light03, light04, light05, light06, light07, light08, light09, light10, light11, light12];
 const darkIcons = [dark01, dark02, dark03, dark04, dark05, dark06, dark07, dark08, dark09, dark10, dark11, dark12];
@@ -47,6 +53,16 @@ const darkByRef = Object.fromEntries(refs.map((ref, index) => [ref, darkIcons[in
 
 export function projectIconUrl(projectRef, theme = 'auto') {
   const dark = theme === 'dark' || (theme === 'auto' && typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches);
+  const practiceIcons = dark ? {
+    'practice-pair-bond-4x4': special13Dark,
+    'practice-chemical-reaction-4x4': special14Dark,
+    'practice-timed-bomb-4x4': special15Dark,
+  } : {
+    'practice-pair-bond-4x4': special13,
+    'practice-chemical-reaction-4x4': special14,
+    'practice-timed-bomb-4x4': special15,
+  };
+  if (practiceIcons[projectRef]) return practiceIcons[projectRef];
   if (projectRef === refs[3] && typeof window !== 'undefined' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
     return dark ? dark04Animated : light04Animated;
   }

@@ -52,13 +52,13 @@
 
           <div class="board-column">
             <CargoBoard v-if="project.cargoTransport" :snapshot="snapshot" :disabled="snapshot.finished" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
-            <PolyominoBoard v-else-if="project.polyomino" :snapshot="snapshot" :disabled="snapshot.finished" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
+            <PolyominoBoard v-else-if="project.polyomino || project.specialRule" :snapshot="snapshot" :disabled="snapshot.finished" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
             <TournamentBoard v-else :snapshot="snapshot" :mirror-portals="project.mirrorPortals" :irregular-shape="project.shapeShifter" :sealed-cells="snapshot.sealedCells" :disabled="snapshot.finished || locked" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
             <div v-if="diceVisible" class="dice-curtain"><div class="die" :class="`face-${snapshot.dice}`"><i v-for="dot in 9" :key="dot"></i></div><strong>掷出 {{ snapshot.dice }} 点</strong><span>{{ dicePlacement }}</span></div>
             <div v-if="thinking" class="thinking" role="status"><span></span>AI 思考中</div>
             <div v-if="finishVisible" class="finish-panel" role="dialog" aria-label="本次试玩结果">
               <button class="finish-close" type="button" aria-label="关闭结果浮窗" @click="dismissFinish">×</button>
-              <small>{{ snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT' }}</small><h2>{{ snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束' }}</h2><strong>{{ project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : project.sealEveryMoves || project.polyomino ? `${snapshot.score.toLocaleString()} 分` : elapsedText }}</strong><span v-if="project.sealEveryMoves || project.polyomino || project.cargoTransport">用时 {{ elapsedText }}</span><button type="button" @click="restart">再试一次</button>
+              <small>{{ snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT' }}</small><h2>{{ snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束' }}</h2><strong>{{ project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : project.specialRule || project.sealEveryMoves || project.polyomino ? `${snapshot.score.toLocaleString()} 分` : elapsedText }}</strong><span v-if="project.specialRule || project.sealEveryMoves || project.polyomino || project.cargoTransport">用时 {{ elapsedText }}</span><button type="button" @click="restart">再试一次</button>
             </div>
           </div>
 
@@ -101,6 +101,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { PRACTICE_PROJECTS, PROJECT_BY_ID } from './catalog.js';
 import { formatElapsed, TournamentGame } from './engine.js';
 import { PolyominoGame } from './polyominoEngine.js';
+import { PracticeSpecialGame } from './practiceSpecialEngine.js';
 import { CargoGame, CARGO_LIMIT_MS } from './cargoEngine.js';
 import TournamentBoard from './TournamentBoard.vue';
 import PolyominoBoard from './PolyominoBoard.vue';
@@ -240,7 +241,7 @@ async function submitFinishedRun() {
 function createGame() {
   if (!project.value) return;
   runId += 1;
-  game.value = project.value.cargoTransport ? new CargoGame(project.value) : project.value.polyomino ? new PolyominoGame(project.value) : new TournamentGame(project.value);
+  game.value = project.value.cargoTransport ? new CargoGame(project.value) : project.value.polyomino ? new PolyominoGame(project.value) : project.value.specialRule ? new PracticeSpecialGame(project.value) : new TournamentGame(project.value);
   snapshot.value = game.value.snapshot();
   if (project.value.diceWall) showDice();
 }
@@ -251,7 +252,7 @@ function showDice() {
 }
 async function move(direction) {
   if (!game.value || locked.value || snapshot.value.finished) return;
-  if (project.value.polyomino || project.value.cargoTransport) {
+  if (!project.value.evilSpawn) {
     snapshot.value = game.value.move(direction).snapshot;
     return;
   }
@@ -299,6 +300,8 @@ onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTim
 </script>
 
 <style scoped>
+.project-lab .game-hud{position:static;z-index:auto;display:flex;grid-template-columns:none;align-items:stretch;min-height:0;padding:0;color:inherit;background:transparent;border:0;box-shadow:none}
+.project-lab .game-hud>div{color:inherit}
 .project-art { display: block; flex: none; border-radius: 8px; object-fit: cover; }
 .practice-leaderboard{margin-top:20px;padding-top:16px;border-top:1px solid #e5ded5}
 .leaderboard-title h3{margin:0;font-size:17px}

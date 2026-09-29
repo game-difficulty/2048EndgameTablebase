@@ -135,6 +135,19 @@ export const PRACTICE_ONLY_PROJECTS = Object.freeze([
     estimatedMinutes: '待测',
     rows: 4, cols: 4, spawn4Rate: .1, polyomino: true,
   },
+  { order: 13, practicePath: '/practice/13', id: 'practice-pair-bond-4x4', key: 'practice-13',
+    title: '出双入对（4×4）', shortTitle: '出双入对',
+    description: '偶尔出现特殊块；两块相邻便粘成双格，新的双格形成时旧双格消失。无路可走后比得分。',
+    rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05, specialRule: 'pair' },
+  { order: 14, practicePath: '/practice/14', id: 'practice-chemical-reaction-4x4', key: 'practice-14',
+    title: '化学反应（4×4）', shortTitle: '化学反应',
+    description: '偶尔出现两色特殊块；同色相撞消失，异色相撞合成一格墙。无路可走后比得分。',
+    rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05, specialRule: 'chemical' },
+  { order: 15, practicePath: '/practice/15', id: 'practice-timed-bomb-4x4', key: 'practice-15',
+    title: '定时炸弹（4×4）', shortTitle: '定时炸弹',
+    description: '偶尔出现倒计时为12–32的炸弹；每次移动减一，归零变墙。炸弹相撞合并倒计时。无路可走后比得分。',
+    rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05,
+    bombCountdownMin: 12, bombCountdownMax: 32, specialRule: 'bomb' },
 ]);
 
 export const PRACTICE_PROJECTS = Object.freeze([...TOURNAMENT_PROJECTS, ...PRACTICE_ONLY_PROJECTS]);

@@ -12,13 +12,13 @@
     <div
       v-for="tile in activeTiles"
       :key="tile.id"
-      :class="['poly-tile', `value-${tile.value}`, { moving: tile.moving, instant: tile.instant }]"
+      :class="['poly-tile', `value-${tile.value}`, tile.kind && `kind-${tile.kind}`, { moving: tile.moving, instant: tile.instant }]"
       :style="tileStyle(tile)"
     >
       <span :class="['poly-art', { hidden: tile.hidden, pop: tile.pop && !tile.hidden, appear: tile.appear && !tile.hidden }]">
         <span v-for="cell in tile.cells" :key="cell" class="poly-piece" :style="partStyle(tile, cell)" />
         <span v-for="link in links(tile)" :key="link.key" class="poly-bridge" :style="link.style" />
-        <strong class="poly-label" :style="labelStyle(tile)">{{ tile.value }}</strong>
+        <strong class="poly-label" :style="labelStyle(tile)">{{ tileLabel(tile) }}</strong>
       </span>
     </div>
   </div>
@@ -161,8 +161,16 @@ function labelStyle(tile) {
   return {
     left: `${((centerCol - box.minCol) * (cellWidth() + GAP) + cellWidth() / 2) / box.width * 100}%`,
     top: `${((centerRow - box.minRow) * (cellHeight() + GAP) + cellHeight() / 2) / box.height * 100}%`,
-    fontSize: tileLabelSize(tile.value, cols.value, props.fontScale),
+    fontSize: tile.kind === 'bomb' ? 'clamp(14px, 6cqw, 26px)' : tile.kind && tile.kind !== 'number' ? 'clamp(18px, 8cqw, 36px)' : tileLabelSize(tile.value, cols.value, props.fontScale),
   };
+}
+function tileLabel(tile) {
+  if (tile.kind === 'pair-single') return '◆';
+  if (tile.kind === 'pair-double') return '◆ ◆';
+  if (tile.kind === 'chemical-a' || tile.kind === 'chemical-b') return '●';
+  if (tile.kind === 'bomb') return `✹${tile.countdown}`;
+  if (tile.kind === 'wall') return '▦';
+  return tile.value;
 }
 function rawTiles(source = props.snapshot?.tiles || []) {
   return source.map(tile => ({ ...tile, cells: tile.cells.slice(), instant: true, hidden: false, moving: false, pop: false, appear: false }));
@@ -184,7 +192,7 @@ watch(() => props.snapshot?.revision, async () => {
   if (epoch !== animationEpoch) return;
   void root.value?.offsetHeight;
   const movements = new Map(transition.movements.map(item => [item.id, item]));
-  const dying = new Set(transition.merges.flatMap(item => item.sources));
+  const dying = new Set([...transition.merges.flatMap(item => item.sources), ...(transition.removals || [])]);
   const moving = activeTiles.value.map(tile => {
     const movement = movements.get(tile.id);
     return {
@@ -244,6 +252,11 @@ onBeforeUnmount(() => { ++animationEpoch; clearTimers(); });
 .poly-piece,.poly-bridge{position:absolute;display:block;background:var(--tile-color)}.poly-piece{border-radius:8px}
 .poly-label{position:absolute;z-index:1;transform:translate(-50%,-50%);font-size:clamp(16px,12cqw,44px);line-height:1;font-weight:800;white-space:nowrap}
 .value-4{--tile-color:#ede0c8}.value-8{--tile-color:#f2b179;color:#f9f6f2}.value-16{--tile-color:#f59563;color:#f9f6f2}.value-32{--tile-color:#f67c5f;color:#f9f6f2}.value-64{--tile-color:#ef5b3c;color:#f9f6f2}.value-128{--tile-color:#edcf72;color:#f9f6f2}.value-256{--tile-color:#edcc61;color:#f9f6f2}
+.kind-pair-single,.kind-pair-double{--tile-color:#648b84;color:#fffaf0}
+.kind-chemical-a{--tile-color:#657dac;color:#f9f9ff}
+.kind-chemical-b{--tile-color:#b67269;color:#fff8f4}
+.kind-bomb{--tile-color:#645a67;color:#fff6d9}
+.kind-wall{--tile-color:#665e59;color:#e2d6cc}
 .poly-art.pop{animation:poly-pop var(--board-pop-duration) ease backwards}.poly-art.appear{animation:poly-appear var(--board-pop-duration) ease backwards}
 @keyframes poly-pop{0%{transform:scale(1)}50%{transform:scale(1.2)}100%{transform:scale(1)}}
 @keyframes poly-appear{0%{opacity:0;transform:scale(0)}100%{opacity:1;transform:scale(1)}}

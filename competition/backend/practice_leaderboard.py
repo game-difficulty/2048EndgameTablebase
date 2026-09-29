@@ -24,6 +24,9 @@ PROJECT_RULES = {
     "tournament-shape-shifter-hard-12": ("score", 1),
     "practice-hundred-step-seal-4x4": ("score", 1),
     "practice-growing-tiles-4x4": ("score", 1),
+    "practice-pair-bond-4x4": ("score", 2),
+    "practice-chemical-reaction-4x4": ("score", 2),
+    "practice-timed-bomb-4x4": ("score", 2),
 }
 
 
