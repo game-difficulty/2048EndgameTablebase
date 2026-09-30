@@ -5,6 +5,7 @@ const messages = {
   'Email domain is not currently supported for registration.': '暂不支持使用此邮箱域名注册。',
   'Email is already registered.': '该邮箱已注册，请登录或找回密码。',
   'Account is not active.': '该账号当前不可用，请联系站长。',
+  'This account is managed by the site administrator.': '该账号由站长管理，如需注销请联系站长。',
   'Invalid current password.': '当前密码不正确。',
   'Invalid password.': '密码不正确。',
   'Invalid verification code.': '验证码不正确。',

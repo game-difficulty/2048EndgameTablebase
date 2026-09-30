@@ -764,3 +764,10 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
   .statistics-toolbar { align-items: flex-end; }
   .statistics-toolbar-actions { align-items: flex-end; flex-direction: column-reverse; }
 }
+
+/* Opacity only: Continue is clickable throughout the one-second delay. */
+.board-overlay.victory-overlay { animation-delay: 1s; animation-duration: 400ms; }
+.victory-card h2 { font-size: 42px; color: var(--text); }
+@media (prefers-reduced-motion: reduce) {
+  .board-overlay.victory-overlay { animation-duration: 1ms; }
+}

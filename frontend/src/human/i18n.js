@@ -124,7 +124,7 @@ const en = {
   '重试':'Retry', '补传历史':'Retry upload', '节点用时':'Milestone times', '隐藏节点用时':'Hide milestone times', '步':'moves',
   '首次达成':'First reached', '用时':'Time', '节点用时列表':'Milestone times', '练习与暂停计入连续用时。':'Practice and pauses count toward elapsed time.',
   '棋盘变体':'Board variants', '分数':'Score', '最高分':'Best', '练习板':'Practice', '重新开始':'New game', '重新开始（R）':'New game (R)',
-  '继续本局':'Keep playing', '开始新局':'Start a new game', '回看本局':'Replay this game', '明确重开':'Start over', '去练习':'Practice',
+  '胜利！':'You win!', '已合出':'Tile reached:', '继续本局':'Keep playing', '开始新局':'Start a new game', '回看本局':'Replay this game', '明确重开':'Start over', '去练习':'Practice',
   '练习局面编码':'Practice position code', '设置局面':'Set position', '棋块调色盘':'Tile palette', '隐藏 32k':'Hide 32k',
   '↶ 撤销':'↶ Undo', '重做 ↷':'Redo ↷', '重置局面':'Reset position', '清空棋盘':'Clear board', '手动出数':'Manual spawn',
   '等待出数：空格左键出 2，右键出 4。':'Place a tile in an empty cell: left click for 2, right click for 4.',

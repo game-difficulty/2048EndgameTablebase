@@ -5,6 +5,7 @@ import { json, getStatus, upload } from './client.js';
 import { needsReplayUpload } from './archivePolicy.js';
 import { timerSplitsFor } from './timerSplits.js';
 import { EventBuffer } from './eventBuffer.js';
+import { reachedVictory } from './victory.js';
 
 export const messages = {
   rollback_detected: '检测到本地进度落后于服务器记录，本局已判定回档，不能继续排位。',
@@ -24,6 +25,8 @@ const now = (() => { const wall = Date.now(); const start = performance.now(); r
 export function useHumanSession(user, policies) {
   const run = shallowRef(null); const variant = ref('4x4'); const gate = ref('loading');
   const transition = shallowRef(null);
+  const victory = ref(0);
+  function continueAfterVictory() { victory.value = 0; }
   const busy = ref(false); const moveBusy = ref(false);
   const error = ref(''); const archiveNotice = ref(''); const savedSeq = ref(0);
   const archiveFailures = shallowRef([]), reportedArchiveFailures = new Set();
@@ -248,7 +251,7 @@ export function useHumanSession(user, policies) {
       guest: !user.value, monitored: false, serverSeq: 0, firstMoveAt: null, lastActionAt: null, nodesVersion: 1,
       timerSplits: timerSplitsFor(variant.value), splitTimes: {},
       fourCount: initial.board.filter(value => value === 4).length, spawnCount: 2 };
-    events = new EventBuffer(); await save(value); await storage.meta(`slot:${slot()}`, value.id); await storage.meta(key, null);
+    events = new EventBuffer(); victory.value = 0; await save(value); await storage.meta(`slot:${slot()}`, value.id); await storage.meta(key, null);
     missingId = null; gate.value = 'ready'; error.value = '';
     if (user.value && pending.writer !== writer) {
       const snapshot = { ...run.value };
@@ -257,7 +260,7 @@ export function useHumanSession(user, policies) {
   }
   async function activate(id = variant.value) {
     if (busy.value || disposed) return;
-    busy.value = true; gate.value = 'loading'; error.value = '';
+    busy.value = true; gate.value = 'loading'; error.value = ''; victory.value = 0;
     generation += 1;
     await stateQueue;
     connectionGraceEnd = 0;
@@ -306,7 +309,7 @@ export function useHumanSession(user, policies) {
     } finally { busy.value = false; }
   }
   async function play(direction) {
-    if (busy.value || gate.value !== 'ready' || !run.value || run.value.reason || document.hidden) return;
+    if (busy.value || victory.value || gate.value !== 'ready' || !run.value || run.value.reason || document.hidden) return;
     if (high() && (performance.now() >= Math.max(permitEnd, connectionGraceEnd) || !navigator.onLine)) { offline(); return; }
     let finishMove;
     currentMove = new Promise(resolve => { finishMove = resolve; });
@@ -326,6 +329,8 @@ export function useHumanSession(user, policies) {
         next.state.fourCount = (run.value.fourCount || 0) + ((next.event[0] & 64) ? 1 : 0);
         next.state.spawnCount = (run.value.spawnCount || 2) + 1;
         next.state.firstMoveAt ||= stamp;
+        const won = reachedVictory(run.value, next.state);
+        if (won) next.state.victoryShown = true;
         if (!high() && high(next.state)) {
           next.state.firstOverSeq = next.state.seq;
           connectionGraceEnd = navigator.onLine ? performance.now() + 8000 : 0;
@@ -337,7 +342,7 @@ export function useHumanSession(user, policies) {
         catch (error) { events.pop(); throw error; }
         if (engine.isOver(run.value.board, variant.value)) {
           await commit({ ...run.value, reason: 'game_over' }); gate.value = 'ended';
-        }
+        } else if (won) victory.value = won;
       });
     } catch (e) {
       if (gate.value !== 'storage') recordError(e);
@@ -441,7 +446,7 @@ export function useHumanSession(user, policies) {
     window.removeEventListener('offline', offline); window.removeEventListener('online', online);
     document.removeEventListener('visibilitychange', visibility);
   }
-  return { run, variant, gate, busy, moveBusy, waitForMove, error, archiveNotice, archiveFailures, dismissArchiveFailure, failedReplayEvents, savedSeq, transition, activate, play, retry, restart,
+  return { run, variant, gate, victory, continueAfterVictory, busy, moveBusy, waitForMove, error, archiveNotice, archiveFailures, dismissArchiveFailure, failedReplayEvents, savedSeq, transition, activate, play, retry, restart,
     pause, resume, start, stop, flushArchives, high, now, liveCheckpoint,
     getEventCount: () => events.length,
     getEvents: (start = 0, end = events.length) => events.slice(start, end).map(e => [...e]), getPolicy: policy,

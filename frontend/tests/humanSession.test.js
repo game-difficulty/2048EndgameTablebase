@@ -349,3 +349,29 @@ for (const [variant, threshold] of [['4x4', 800000], ['3x4', 70000], ['3x3', 100
     assert.equal(needsReplayUpload({ variant, reason: 'game_over', archived: true, score: threshold + 1, threshold }), false);
   });
 }
+
+
+test('victory is persisted with the move, blocks input until Continue, and survives reentry', async t => {
+  const session = await setup(t, 800000);
+  session.run.value = { ...session.run.value, board: [1024, 1024, ...Array(14).fill(0)] };
+  await move(session);
+  assert.equal(session.victory.value, 2048);
+  assert.equal(f.runs.get(session.run.value.id).victoryShown, true);
+  const seq = session.run.value.seq;
+  await session.play(1);
+  assert.equal(session.run.value.seq, seq);
+  session.continueAfterVictory();
+  assert.equal(session.victory.value, 0);
+  await move(session);
+  await session.activate();
+  await settle();
+  assert.equal(session.victory.value, 0);
+  // Even if a later board crosses the target again, the same run stays dismissed.
+  session.run.value = { ...session.run.value, board: [1024, 1024, ...Array(14).fill(0)] };
+  await move(session);
+  assert.equal(session.victory.value, 0);
+  await session.restart();
+  session.run.value = { ...session.run.value, board: [1024, 1024, ...Array(14).fill(0)] };
+  await move(session);
+  assert.equal(session.victory.value, 2048);
+});

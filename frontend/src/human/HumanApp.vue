@@ -33,9 +33,13 @@
             <div class="score-row"><h1 class="game-title">2048 <small>{{ variant.replace('x', ' × ') }}</small></h1><div class="score-box score-main" :aria-label="t(&quot;分数&quot;)"><span>SCORE</span><strong>{{ number(run?.score || 0) }}</strong></div><div class="score-box" :aria-label="t(&quot;最高分&quot;)"><span>BEST</span><strong>{{ number(currentBest) }}</strong></div></div>
             <div class="game-mode-row"><div class="mode-tabs"><button :class="{ active: !practice }" @click="returnToGame">{{ t(run?.guest ? '访客练习' : '正式对局') }}</button><button :class="{ active: practice }" @click="openPractice">{{ t("练习板") }}</button></div><button class="new-game" @click="requestRestart" :disabled="controlsBusy || gate === 'other-tab'" :aria-label="t(&quot;重新开始&quot;)" :title="t(&quot;重新开始（R）&quot;)">{{ t(practice ? '重置练习' : '新游戏') }}</button></div>
 
-            <HumanBoard ref="humanBoard" :key="practice ? `practice-${practice.variant}` : run?.id" :board="displayBoard" :transition="practice ? practiceTransition : transition" :rows="boardDimensions[0]" :cols="boardDimensions[1]" :editable="!!practice && (selectedTile !== null || practice.pending)" :hide32k="!!practice && hide32k" :touch-button="practice?.pending && manualTile === 4 ? 2 : 0" :swipe-sensitivity="playSettings.swipeSensitivity" :animate="animationEnabled" @cell="practiceCell" @move="onMove">
-              <template v-if="!practice && gate !== 'ready' && (gate !== 'ended' || terminalOverlayVisible)" #overlay>
-                <div class="gate-card" role="status">
+            <HumanBoard ref="humanBoard" :key="practice ? `practice-${practice.variant}` : run?.id" :board="displayBoard" :transition="practice ? practiceTransition : transition" :rows="boardDimensions[0]" :cols="boardDimensions[1]" :editable="!!practice && (selectedTile !== null || practice.pending)" :hide32k="!!practice && hide32k" :touch-button="practice?.pending && manualTile === 4 ? 2 : 0" :swipe-sensitivity="playSettings.swipeSensitivity" :animate="animationEnabled" :overlay-class="!practice && gate === 'ready' && victory ? 'victory-overlay' : ''" @cell="practiceCell" @move="onMove">
+              <template v-if="!practice && ((gate !== 'ready' && (gate !== 'ended' || terminalOverlayVisible)) || (gate === 'ready' && victory))" #overlay>
+                <div v-if="gate === 'ready' && victory" class="gate-card victory-card" role="status">
+                  <h2>{{ t('胜利！') }}</h2><p>{{ t('已合出') }} {{ victory }}</p>
+                  <div class="gate-actions"><button class="primary" type="button" @click="session.continueAfterVictory()">{{ t('继续本局') }}</button></div>
+                </div>
+                <div v-else class="gate-card" role="status">
                   <button v-if="gate === 'ended'" class="gate-dismiss" type="button" :aria-label="t('关闭')" @click="dismissTerminalOverlay">×</button>
                   <h2>{{ t(gateTitle) }}</h2><p>{{ t(gateDescription) }}</p>
                   <div class="gate-actions"><button v-if="['network', 'checking', 'other-tab', 'missing'].includes(gate)" class="primary" :disabled="busy" @click="gate === 'other-tab' || !run ? session.activate() : session.retry()">{{ t(busy ? '检查中…' : '重新检查') }}</button>
@@ -151,7 +155,7 @@ const user = shallowRef(null), policies = shallowRef(null), localPreview = ref(f
 const session = useHumanSession(user, policies);
 const live = createLiveBroadcast(session, selectedVariant => activeBestScore(bests.value, session.run.value, selectedVariant));
 watch(paletteRevision, () => nextTick(() => live.updateAppearance(captureLiveAppearance())), { immediate: true });
-const { run, variant, gate, busy, error, archiveNotice, archiveFailures, savedSeq, transition } = session;
+const { run, variant, gate, victory, busy, error, archiveNotice, archiveFailures, savedSeq, transition } = session;
 const controlsBusy = computed(() => busy.value && !session.moveBusy.value);
 const liveStateLabel = computed(() => ({connecting:'正在连接直播',reconnecting:'正在恢复直播',live:'直播中',error:'直播连接失败',off:'直播已关闭'}[live.state.value] || '直播已关闭'));
 async function toggleLive(value) { try { if (value) await live.start(); else await live.stop(); } catch { /* status is shown in the settings modal */ } }

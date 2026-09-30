@@ -12,7 +12,7 @@
         <span class="tile-label" :style="getTileLabelStyle(tile)">{{ hide32k && tile.value === 32768 ? '' : tile.value }}</span>
       </div>
     </div>
-    <div v-if="$slots.overlay" class="board-overlay"><slot name="overlay" /></div>
+    <div v-if="$slots.overlay" class="board-overlay" :class="overlayClass"><slot name="overlay" /></div>
   </div>
 </template>
 <script setup>
@@ -24,7 +24,7 @@ import { humanBoardFrame } from './boardAnimation.js';
 import { useBoardAnimation } from '../components/useBoardAnimation.js';
 import { getTileLabelStyle } from '../components/tileLabelStyle.js';
 import { boardSwipeDirection } from '../components/boardPointerGesture.js';
-const props = defineProps({ board: Array, rows: Number, cols: Number, transition: Object, editable: Boolean, hide32k: Boolean,
+const props = defineProps({ overlayClass: String, board: Array, rows: Number, cols: Number, transition: Object, editable: Boolean, hide32k: Boolean,
   touchButton: { type: Number, default: 0 }, swipeSensitivity: { type: Number, default: 100 }, animate: { type: Boolean, default: true },
   palette: { type: Object, default: null } });
 const resolvedTileStyle = value => liveAppearanceTileStyle(props.palette, value) || tileStyle(value);
