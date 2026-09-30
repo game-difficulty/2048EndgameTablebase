@@ -554,12 +554,12 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
       disqualifyRanked('record_too_large');
       return;
     }
+    ranked.value.records.push(record);
     ranked.value = {
       ...ranked.value,
       byteEstimate: nextBytes,
     };
   };
-    ranked.value.records.push(record);
 
   const appendRankedMove = ({ direction, spawn, source }) => {
     if (!ranked.value.runId || !ranked.value.eligible) return;
