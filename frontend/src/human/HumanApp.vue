@@ -541,6 +541,11 @@ function refreshVisibleAppearance() {
   clock.value = session.now();
   refreshAppearance();
 }
+function refreshStoredPreferences(event) {
+  if (event.storageArea !== window.localStorage) return;
+  if (event.key === null || event.key === settingsStore.key) refreshPlaySettings();
+  else if (event.key === '2048tables:user-preferences' || event.key === 'saved-vth-theme-cache-v1') refreshAppearance();
+}
 function leavePage() { session.stop(); }
 function restorePage(event) {
   if (!event.persisted) return;
@@ -560,9 +565,9 @@ onMounted(() => {
   speedTimer = setInterval(() => {
     if (!document.hidden && view.value === 'game' && !practice.value && playSettings.value.showSpeed) speedClock.value = session.now();
   }, SPEED_REFRESH_MS);
-  window.addEventListener('keydown', keydown); window.addEventListener('hashchange', scheduleRoute); window.addEventListener('popstate', scheduleRoute); window.addEventListener('pagehide', leavePage); window.addEventListener('pageshow', restorePage); window.addEventListener('focus', refreshAppearance); window.addEventListener('storage', refreshAppearance); window.addEventListener('human-preferences-changed', refreshAppearance); window.addEventListener('account-preferences-changed', refreshPlaySettings); document.addEventListener('visibilitychange', refreshVisibleAppearance); boot();
+  window.addEventListener('keydown', keydown); window.addEventListener('hashchange', scheduleRoute); window.addEventListener('popstate', scheduleRoute); window.addEventListener('pagehide', leavePage); window.addEventListener('pageshow', restorePage); window.addEventListener('focus', refreshAppearance); window.addEventListener('storage', refreshStoredPreferences); window.addEventListener('human-preferences-changed', refreshAppearance); window.addEventListener('account-preferences-changed', refreshPlaySettings); document.addEventListener('visibilitychange', refreshVisibleAppearance); boot();
 });
 onUnmounted(() => {
-  terminalOverlay.dispose(); live.dispose(); session.stop(); clearInterval(clockTimer); clearInterval(speedTimer); window.removeEventListener('keydown', keydown); window.removeEventListener('hashchange', scheduleRoute); window.removeEventListener('popstate', scheduleRoute); window.removeEventListener('pagehide', leavePage); window.removeEventListener('pageshow', restorePage); window.removeEventListener('focus', refreshAppearance); window.removeEventListener('storage', refreshAppearance); window.removeEventListener('human-preferences-changed', refreshAppearance); window.removeEventListener('account-preferences-changed', refreshPlaySettings); document.removeEventListener('visibilitychange', refreshVisibleAppearance);
+  terminalOverlay.dispose(); live.dispose(); session.stop(); clearInterval(clockTimer); clearInterval(speedTimer); window.removeEventListener('keydown', keydown); window.removeEventListener('hashchange', scheduleRoute); window.removeEventListener('popstate', scheduleRoute); window.removeEventListener('pagehide', leavePage); window.removeEventListener('pageshow', restorePage); window.removeEventListener('focus', refreshAppearance); window.removeEventListener('storage', refreshStoredPreferences); window.removeEventListener('human-preferences-changed', refreshAppearance); window.removeEventListener('account-preferences-changed', refreshPlaySettings); document.removeEventListener('visibilitychange', refreshVisibleAppearance);
 });
 </script>

@@ -1,14 +1,10 @@
 const DEFAULT_NAMESPACE = '2048tables';
 
 function canUseLocalStorage() {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return false;
-  }
   try {
-    const key = `${DEFAULT_NAMESPACE}:probe`;
-    window.localStorage.setItem(key, '1');
-    window.localStorage.removeItem(key);
-    return true;
+    // A read must never emit storage events: other tabs may read in response.
+    // Access itself can throw when browser policy disables storage.
+    return typeof window !== 'undefined' && !!window.localStorage;
   } catch (_error) {
     return false;
   }

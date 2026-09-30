@@ -191,10 +191,13 @@ async function submitArchiveApplication(){
   }catch(e){archiveError.value=archiveErrors[e.code]||'补录申请提交失败，请检查回放后重试。';}
   finally{archiveBusy.value=false;}
 }
+function refreshStoredPreferences(event){
+  if(event.storageArea===window.localStorage && (event.key===null || event.key===store.key))refreshPreferences();
+}
 onMounted(async()=>{
   void refreshAccountPreferences();
   window.addEventListener('focus',refreshPreferences);
-  window.addEventListener('storage',refreshPreferences);
+  window.addEventListener('storage',refreshStoredPreferences);
   window.addEventListener('account-preferences-changed',refreshPreferences);
   try{const data=await json('/api/human/me/settings');Object.assign(thresholds,data.display_thresholds||{});const splits=saveTimerSplits(data.timer_splits);for(const variant of variants)timerDrafts[variant]=splits[variant].join('\n');}
   catch{thresholdError.value='无法读取展示阈值，请检查网络后重试。';}
@@ -202,7 +205,7 @@ onMounted(async()=>{
 });
 onUnmounted(()=>{
   window.removeEventListener('focus',refreshPreferences);
-  window.removeEventListener('storage',refreshPreferences);
+  window.removeEventListener('storage',refreshStoredPreferences);
   window.removeEventListener('account-preferences-changed',refreshPreferences);
 });
 </script>
