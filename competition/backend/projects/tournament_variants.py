@@ -87,7 +87,7 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
     catalog = [{
         "key": "project-01",
         "name": "真·华容道（4×4）",
-        "description": "前10次有效移动先整理棋盘，随后从上方出现首个特殊块；特殊块整块滑到尽头，从下方中央送出。无路可走或10分钟到时结束，送出越多越好。",
+        "description": "前10次有效移动先整理棋盘，随后从上方出现首个特殊块；特殊块整块滑到尽头，从下方中央送出。无路可走时结束，送出越多越好。",
         "project_ref": "tournament-cargo-transport-4x4",
         "adapter_rules_version": "tournament-v2",
         "rules_version": "tournament-v2",
