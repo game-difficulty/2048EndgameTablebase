@@ -62,11 +62,24 @@ export const api = {
     method: 'POST', body: result,
   }),
   list: () => request('/api/competitions'),
-  create: (name, projects) => request('/api/competitions', {
+  events: () => request('/api/events'),
+  event: (slug) => request(`/api/events/${encodeURIComponent(slug)}`),
+  eventStatistics: (slug) => request(`/api/events/${encodeURIComponent(slug)}/statistics`),
+  enrollment: (slug) => request(`/api/events/${encodeURIComponent(slug)}/enrollment`),
+  enrollmentAction: (slug, body) => request(`/api/events/${encodeURIComponent(slug)}/enrollment/actions`, { method: 'POST', body }),
+  importEnrollment: (slug, body) => request(`/api/events/${encodeURIComponent(slug)}/enrollment/import`, { method: 'POST', body }),
+  importEventRoster: (slug, body) => request(`/api/events/${encodeURIComponent(slug)}/roster`, { method: 'POST', body }),
+  createEvent: (body) => request('/api/events', { method: 'POST', body }),
+  updateEvent: (slug, body) => request(`/api/events/${encodeURIComponent(slug)}/settings`, { method: 'POST', body }),
+  linkEventRoom: (slug, roomCode) => request(`/api/events/${encodeURIComponent(slug)}/rooms`, {
+    method: 'POST', body: { room_code: roomCode },
+  }),
+  create: (name, projects, eventSlug = null, schedule = {}) => request('/api/competitions', {
     method: 'POST',
-    body: { name, projects },
+    body: { name, projects, event_slug: eventSlug, ...schedule },
   }),
   room: (code) => request(`/api/competitions/${encodeURIComponent(code)}`),
+  checkIn: (code) => request(`/api/competitions/${encodeURIComponent(code)}/check-in`, { method: 'POST' }),
   closeRoom: (code) => request(`/api/competitions/${encodeURIComponent(code)}/close`, {
     method: 'POST', body: { command_id: commandId() },
   }),

@@ -4,6 +4,9 @@ import { api, connectRoom } from './api';
 import { userFacingError } from './errorMessages.js';
 import ProjectPlayground from './projects/ProjectPlayground.vue';
 import PlayerAvatar from './PlayerAvatar.vue';
+import EventCenter from './EventCenter.vue';
+import RoomSchedulePicker from './RoomSchedulePicker.vue';
+import { scheduleTime, roomMatchTitle, roomMatchScore } from './scheduleDisplay.js';
 import TournamentBoard from './projects/TournamentBoard.vue';
 import CargoBoard from './projects/CargoBoard.vue';
 import PolyominoBoard from './projects/PolyominoBoard.vue';
@@ -21,7 +24,7 @@ import {
 
 const pathname = ref(window.location.pathname);
 const projectRouteMatch = computed(() => pathname.value.match(/^\/projects(?:\/([^/]+))?\/?$/));
-const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(1[0-5]|[1-9]))?\/?$/));
+const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(1[0-8]|[1-9]))?\/?$/));
 const isProjectRoute = computed(() => Boolean(projectRouteMatch.value || practiceRouteMatch.value));
 const projectRouteId = computed(() => (projectRouteMatch.value?.[1]
   ? decodeURIComponent(projectRouteMatch.value[1])
@@ -29,6 +32,13 @@ const projectRouteId = computed(() => (projectRouteMatch.value?.[1]
 
 const session = ref(null);
 const rooms = ref([]);
+const events = ref([]);
+const canCreateEvent = ref(false);
+const eventSlug = computed(() => pathname.value.match(/^\/events\/([a-z0-9-]+)\/?$/)?.[1] || '');
+const eventHasRooms = computed(() => !eventSlug.value || events.value.find(event => event.slug === eventSlug.value)?.capabilities.rooms !== false);
+const newRoomEventSlug = ref('');
+const newRoomSchedule = ref({});
+const createRoomOpen = ref(false);
 const room = ref(null);
 const loading = ref(true);
 const busy = ref(false);
@@ -107,7 +117,7 @@ const currentCode = computed(() => {
   return match ? match[1].toUpperCase() : '';
 });
 const selectedProjects = computed(() => selectedProjectIds.value.map(id => PROJECT_BY_ID[id]).filter(Boolean));
-const activeRooms = computed(() => rooms.value.filter(item => item.status !== 'CANCELLED'));
+const activeRooms = computed(() => rooms.value.filter(item => item.status !== 'CANCELLED').sort((a,b) => (a.schedule?.starts_at || a.created_at).localeCompare(b.schedule?.starts_at || b.created_at)));
 const closedRooms = computed(() => rooms.value.filter(item => item.status === 'CANCELLED'));
 const orderedProjectOptions = computed(() => [
   ...selectedProjects.value,
@@ -420,9 +430,13 @@ async function loadDashboard(epoch) {
   disconnectRoom?.();
   disconnectRoom = null;
   connection.value = 'offline';
-  const payload = await api.list();
+  const [payload, directory] = await Promise.all([
+    session.value ? api.list() : Promise.resolve({ competitions: [] }), api.events(),
+  ]);
   if (epoch !== routeEpoch || currentCode.value) return;
   rooms.value = payload.competitions || [];
+  events.value = directory.events || [];
+  canCreateEvent.value = directory.can_create;
 }
 
 async function loadRoom(code, epoch) {
@@ -432,7 +446,7 @@ async function loadRoom(code, epoch) {
   disconnectRoom = null;
   room.value = null;
   connection.value = 'connecting';
-  const payload = await api.room(code);
+  const payload = await api.checkIn(code);
   if (epoch !== routeEpoch || currentCode.value !== code) return;
   if (!applyRoom(payload.competition)) throw new Error('房间响应与当前地址不匹配。');
   disconnectRoom = connectRoom(code, {
@@ -468,7 +482,10 @@ async function route() {
       return;
     }
     if (!session.value) {
-      const payload = await api.session();
+      const payload = await api.session().catch(cause => {
+        if (cause.status === 401 && !currentCode.value) return null;
+        throw cause;
+      });
       if (epoch !== routeEpoch) return;
       session.value = payload;
     }
@@ -518,6 +535,8 @@ async function createRoom() {
     const payload = await api.create(
       newRoomName.value,
       projects.map(competitionProjectInput),
+      newRoomEventSlug.value || null,
+      newRoomSchedule.value,
     );
     navigate(`/rooms/${payload.competition.room_code}`);
     return payload;
@@ -975,18 +994,18 @@ onBeforeUnmount(() => {
       <p>正在同步比赛状态…</p>
     </main>
 
-    <main v-else-if="error && !session" class="center-state error-state">
+    <main v-else-if="error && !session && currentCode" class="center-state error-state">
       <h1>需要登录</h1>
       <p>{{ error }}</p>
       <a class="primary-button" :href="mainSiteUrl">前往主站登录</a>
     </main>
 
     <main v-else-if="!room" class="dashboard page-width">
-      <section class="hero-row">
+      <EventCenter :key="eventSlug" :slug="eventSlug" :events="events" :can-create="canCreateEvent" :status-text="statusText" @navigate="navigate" @refresh="loadDashboard(routeEpoch)" @create-room="slug => { newRoomEventSlug = slug; createRoomOpen = true; }" />
+      <section v-if="eventHasRooms" class="hero-row">
         <div>
-          <p class="eyebrow">独立比赛系统</p>
-          <h1>比赛房间</h1>
-          <p class="muted">创建房间或输入房间码进入候场。观众请从直播大厅进入。</p>
+          <h2>快捷进入房间</h2>
+          <p class="muted">已有房间码？登录后进入候场。观众请从直播大厅进入。</p>
         </div>
         <form class="join-box" @submit.prevent="enterRoom">
           <label for="room-code">房间码</label>
@@ -999,14 +1018,17 @@ onBeforeUnmount(() => {
 
       <p v-if="error" class="alert">{{ error }}</p>
 
-      <section v-if="session?.can_create_competition" class="panel create-panel">
+      <details v-if="eventHasRooms && session && (session.can_create_competition || events.some(e => e.can_manage && e.capabilities.rooms))" :open="createRoomOpen" class="panel room-create-disclosure" @toggle="createRoomOpen = $event.target.open">
+        <summary>创建比赛房间</summary>
         <div>
           <p class="eyebrow">举办方</p>
           <h2>创建新比赛</h2>
           <p class="muted">从已注册玩法中选择至少 5 项；创建后规则与顺序固定。</p>
         </div>
         <form class="create-form" @submit.prevent="createRoom">
+          <label class="create-name">所属赛事<select v-model="newRoomEventSlug"><option value="">独立 / 测试房间</option><option v-for="event in events.filter(item => item.can_manage && item.status !== 'finished' && item.capabilities.rooms)" :key="event.slug" :value="event.slug">{{ event.name }}</option></select></label>
           <label class="create-name">比赛名称<input v-model="newRoomName" minlength="2" maxlength="100" required placeholder="比赛名称" /></label>
+          <RoomSchedulePicker :slug="newRoomEventSlug" @change="newRoomSchedule=$event" />
           <fieldset class="project-picker">
             <legend>项目池 · 已选 {{ selectedProjects.length }} 项</legend>
             <p class="muted">勾选项目后，可调整其在 BP 项目池中的顺序。</p>
@@ -1023,15 +1045,15 @@ onBeforeUnmount(() => {
           <p v-if="selectedProjects.length < 5" class="alert">项目池至少需要 5 项。</p>
           <button class="primary-button" type="submit" :disabled="busy || selectedProjects.length < 5">创建房间</button>
         </form>
-      </section>
+      </details>
 
-      <section class="room-list-section">
-        <div class="section-heading"><h2>我的比赛</h2><span>{{ activeRooms.length }} 场</span></div>
+      <section v-if="session && eventHasRooms" class="room-list-section">
+        <div class="section-heading"><h2>我的比赛房间</h2><span>{{ activeRooms.length }} 场</span></div>
         <div v-if="activeRooms.length" class="room-list">
           <div v-for="item in activeRooms" :key="item.id" class="room-row">
             <button class="room-row-link" type="button" @click="navigate(`/rooms/${item.room_code}`)">
-              <span><strong>{{ item.name }}</strong><small>{{ item.room_code }}</small></span>
-              <span class="room-meta">{{ item.occupied_seats }}/6 · {{ statusText[item.status] || item.status }}</span>
+              <span><strong>{{ roomMatchTitle(item) }} <b>{{ roomMatchScore(item) }}</b></strong><small>{{ item.event?.name || '独立房间' }} · {{ item.room_code }} · {{ scheduleTime(item.schedule?.starts_at) }}{{ item.schedule ? '（北京时间）' : '' }}</small></span>
+              <span class="room-meta">{{ item.schedule?.exception === 'both_late' ? '双方迟到 · 待处理' : statusText[item.status] || item.status }}</span>
             </button>
             <button v-if="item.can_close" class="room-close-button" type="button" :disabled="busy" :aria-label="`关闭比赛房间 ${item.name}`" @click="closeRoom(item)">关闭房间</button>
           </div>
@@ -1041,7 +1063,7 @@ onBeforeUnmount(() => {
           <summary>已关闭的房间 · {{ closedRooms.length }} 场</summary>
           <div class="room-list">
             <button v-for="item in closedRooms" :key="item.id" class="room-row room-row-link" type="button" @click="navigate(`/rooms/${item.room_code}`)">
-              <span><strong>{{ item.name }}</strong><small>{{ item.room_code }}</small></span>
+              <span><strong>{{ roomMatchTitle(item) }} {{ roomMatchScore(item) }}</strong><small>{{ item.room_code }} · {{ scheduleTime(item.schedule?.starts_at) }}</small></span>
               <span class="room-meta">房间已关闭 · 查看记录</span>
             </button>
           </div>
@@ -1053,7 +1075,7 @@ onBeforeUnmount(() => {
       <section class="match-header">
         <div class="page-width match-header-inner">
           <div class="match-header-actions">
-            <button class="back-button" type="button" @click="navigate(competitionHomePath)">← 比赛列表</button>
+            <button class="back-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ room.event?.name || '赛事中心' }}</button>
             <button v-if="room.me.can_close" class="close-room-link" type="button" :disabled="busy" @click="closeRoom(room)">关闭房间</button>
           </div>
           <div class="match-identity">
@@ -1074,6 +1096,13 @@ onBeforeUnmount(() => {
       </section>
 
       <div class="page-width room-content">
+        <section v-if="room.schedule && (isLobby || match?.finish_reason === 'late_forfeit')" class="panel schedule-room-notice">
+          <h2>{{ roomMatchTitle(room) }} · {{ scheduleTime(room.schedule.starts_at) }}（北京时间）</h2>
+          <p v-if="match?.finish_reason === 'late_forfeit'">迟到判负：{{ match.winner_side === 'yellow' ? room.schedule.yellow_name : room.schedule.white_name }} 以 3:0 获胜。</p>
+          <template v-else><p>可提前签到与准备，到点后开始抽签。{{ scheduleTime(room.schedule.late_at) }} 后未全员签到的一方判 0:3 负。</p>
+          <p v-for="side in ['yellow','white']" :key="side">{{ room.schedule[`${side}_name`] }}：{{ room.schedule.players.filter(p => p.side === side).map(p => `${p.display_name}（${p.arrived_at ? '已签到' : '未到场'}）`).join('、') }}</p>
+          <p v-if="room.schedule.exception === 'both_late'" role="alert">双方均未在宽限期内到齐，自动开赛已暂停。请管理员关闭本房间并重新安排赛程。</p></template>
+        </section>
         <p v-if="error" class="alert">{{ error }}</p>
         <p v-if="room.member_hold && !match?.suspension?.active" class="alert" role="status">参赛人员已被移出，流程暂缓。请房主或赛事管理员处理后继续。</p>
 
@@ -1231,7 +1260,7 @@ onBeforeUnmount(() => {
           <section class="teams-grid">
             <div class="team-panel yellow-team">
               <div class="team-heading">
-                <div><p class="eyebrow">YELLOW SIDE</p><h2>黄队</h2></div>
+                <div><p class="eyebrow">YELLOW SIDE</p><h2>{{ room.schedule?.yellow_name || '黄队' }}</h2></div>
                 <span :class="['ready-chip', room.teams.yellow.ready && 'is-ready']">{{ room.teams.yellow.ready ? '已准备' : '未准备' }}</span>
               </div>
               <button
@@ -1252,14 +1281,15 @@ onBeforeUnmount(() => {
 
             <div class="versus-column">
               <span class="versus">VS</span>
-              <span>{{ room.seats.length }} / 6 已落座</span>
+              <span v-if="room.schedule">{{ room.schedule.players.filter(p => p.arrived_at).length }} / 6 已签到</span>
+              <span v-else>{{ room.seats.length }} / 6 已落座</span>
               <span v-if="room.status === 'SEATING'">等待全部选手</span>
               <span v-else>等待双方队长</span>
             </div>
 
             <div class="team-panel white-team">
               <div class="team-heading">
-                <div><p class="eyebrow">WHITE SIDE</p><h2>白队</h2></div>
+                <div><p class="eyebrow">WHITE SIDE</p><h2>{{ room.schedule?.white_name || '白队' }}</h2></div>
                 <span :class="['ready-chip', room.teams.white.ready && 'is-ready']">{{ room.teams.white.ready ? '已准备' : '未准备' }}</span>
               </div>
               <button
@@ -1282,8 +1312,10 @@ onBeforeUnmount(() => {
           <section class="action-bar">
             <div>
               <strong v-if="mySeat">你位于 {{ seatLabel(mySeat.side, mySeat.position) }}{{ mySeat.position === 1 ? '，是本队队长' : '' }}</strong>
+              <strong v-else-if="room.schedule">本房间仅限已编排的选手参赛</strong>
               <strong v-else>请选择一个空位落座</strong>
-              <p v-if="room.status === 'SEATING'">六个席位坐满后，双方队长可以准备。</p>
+              <p v-if="room.schedule">席位已由赛事名单固定；全员签到且双方队长准备后，等待预定开战时间开始抽签。</p>
+              <p v-else-if="room.status === 'SEATING'">六个席位坐满后，双方队长可以准备。</p>
               <p v-else>任一队准备后席位将锁定，双方准备后进入抽签。</p>
             </div>
             <div class="action-buttons">
@@ -1631,7 +1663,8 @@ onBeforeUnmount(() => {
           <p class="eyebrow">MATCH FINISHED</p>
           <h1>{{ match.winner_side === 'draw' ? '全场平局' : `${sideName(match.winner_side)}赢得比赛` }}</h1>
           <div class="final-series-score"><strong>{{ match.series_score.yellow }}</strong><span>黄方&nbsp;&nbsp;—&nbsp;&nbsp;白方</span><strong>{{ match.series_score.white }}</strong></div>
-          <div class="finished-results">
+<p v-if="match.finish_reason === 'late_forfeit'">对方未在开战时间后十分钟内全员签到，本场按 3:0 判定。三个项目均未实际进行。</p>
+          <div v-else class="finished-results">
             <div v-for="result in match.results" :key="result.game_key">
               <img v-if="roomProjectIcon(result.project_key)" class="project-icon finished-icon" :src="roomProjectIcon(result.project_key)" alt="" />
               <span>项目 {{ result.game_key }} · {{ projectName(result.project_key) }}</span>
@@ -1649,6 +1682,8 @@ onBeforeUnmount(() => {
   </div>
 </template>
 <style scoped>
+.schedule-room-notice{padding:18px;margin-bottom:18px}.schedule-room-notice h2{font-size:clamp(18px,2vw,24px);margin:0 0 12px;line-height:1.5}.schedule-room-notice p{line-height:1.7;margin:10px 0}.schedule-room-notice p:last-child{margin-bottom:0}
+.room-create-disclosure{padding:20px;margin:20px 0}.room-create-disclosure>summary{cursor:pointer}.room-create-disclosure>div{margin-top:20px}
 .result-boards{display:grid;grid-template-columns:1fr 1fr;gap:28px;max-width:820px;margin:24px auto}.result-boards>div{min-width:0;display:flex;flex-direction:column;align-items:center;gap:12px}.result-boards :deep(.board){max-width:100%}.public-matchups{padding:12px;text-align:center}.blind-candidate-cards{grid-template-columns:1fr 1fr}.operation-form :deep(.player-avatar){width:32px;height:32px;flex:0 0 32px}
 @media(max-width:600px){.result-boards{gap:12px}.result-boards>div{font-size:12px}}
 </style>

@@ -99,6 +99,10 @@ class CompetitionService:
         live_result_retention_seconds: int = 1800,
     ):
         self.database = database
+        from .event_catalog import EventCatalog
+        self.events = EventCatalog(self)
+        from .event_schedule import EventSchedule
+        self.schedule = EventSchedule(self)
         self.bootstrap_organizer_ids = bootstrap_organizer_ids
         self.room_creator_ids = room_creator_ids
         self.draw_reveal_seconds = max(1, int(draw_reveal_seconds))
@@ -1229,6 +1233,8 @@ class CompetitionService:
     ) -> tuple[sqlite3.Row, bool]:
         status = str(room["status"])
         cid = str(room['id'])
+        if status in ('SEATING', 'READY_CHECK'):
+            return self.schedule.settle(db, room, now)
         if db.execute('SELECT 1 FROM competition_expulsions e JOIN competition_seats s ON s.competition_id=e.competition_id AND s.user_id=e.user_id WHERE e.competition_id=?', (cid,)).fetchone():
             return room, False
         if status == 'C_DRAW' and self._hold_until(db, cid, 'BLIND_CANDIDATES'):
@@ -1437,6 +1443,7 @@ class CompetitionService:
             if remove:
                 db.execute('INSERT OR REPLACE INTO competition_expulsions VALUES(?,?,?,?)', (cid, user_id, principal.user_id, now.isoformat()))
                 if seat and room['status'] in ('SEATING', 'READY_CHECK'):
+                    db.execute('UPDATE competition_scheduled_players SET arrived_at=NULL WHERE competition_id=? AND user_id=?', (cid, user_id))
                     db.execute('DELETE FROM competition_seats WHERE competition_id=? AND user_id=?', (cid, user_id))
                     db.execute('DELETE FROM competition_team_readiness WHERE competition_id=?', (cid,))
                     self._touch(db, cid, status='SEATING')
@@ -1644,8 +1651,14 @@ class CompetitionService:
         name: str,
         room_code: str | None = None,
         projects: list[dict[str, Any]] | None = None,
+        event_slug: str | None = None,
+        starts_at: str | None = None,
+        yellow_team_id: str | None = None,
+        white_team_id: str | None = None,
     ) -> dict[str, Any]:
-        if not self._can_create_competition(principal):
+        with self.database.transaction() as permission_db:
+            event_manager = bool(event_slug and self.events._manager(self.events._event(permission_db, event_slug), principal))
+        if not self._can_create_competition(principal) and not event_manager:
             raise CompetitionError(
                 "ORGANIZER_REQUIRED",
                 "Only a platform organizer can create a competition room.",
@@ -1712,6 +1725,12 @@ class CompetitionService:
                         },
                     )
                     room = self._room_row(db, code)
+                    if event_slug:
+                        self.events.link_in_transaction(db, event_slug, room, principal)
+                        room = self._room_row(db, code)
+                    if starts_at or yellow_team_id or white_team_id:
+                        self.schedule.bind(db, room, event_slug, yellow_team_id, white_team_id, starts_at)
+                        room = self._room_row(db, code)
                     return self._snapshot(db, room, principal)
             except sqlite3.IntegrityError as exc:
                 if requested_code:
@@ -2209,7 +2228,7 @@ class CompetitionService:
                 for row in db.execute(
                     """
                     SELECT room_code FROM competitions
-                    WHERE status IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    WHERE status IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SEATING', 'READY_CHECK')
                     ORDER BY updated_at
                     """,
                     (
@@ -2293,6 +2312,8 @@ class CompetitionService:
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)
             competition_id = str(room["id"])
+            if self.schedule.view(db, competition_id):
+                raise CompetitionError('SCHEDULE_SEATS_FIXED', '赛程房间席位由锁定名单固定，不可自行换座。', 409)
             if self._check_command(
                 db, competition_id, principal, normalized_command, action
             ):
@@ -2402,6 +2423,8 @@ class CompetitionService:
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)
             competition_id = str(room["id"])
+            if self.schedule.view(db, competition_id):
+                raise CompetitionError('SCHEDULE_SEATS_FIXED', '赛程席位已固定；关闭页面即可离开，不会退出名单。', 409)
             if self._check_command(
                 db, competition_id, principal, normalized_command, action
             ):
@@ -2463,6 +2486,7 @@ class CompetitionService:
     ) -> dict[str, Any]:
         normalized_command = self._normalize_command_id(command_id)
         action = "team.ready" if ready else "team.unready"
+        self.settle_deadline(room_code)
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)
             competition_id = str(room["id"])
@@ -2529,7 +2553,7 @@ class CompetitionService:
             )
             next_status = (
                 CompetitionStatus.DRAW.value
-                if ready_count == 2
+                if ready_count == 2 and self.schedule.may_draw(db, competition_id, datetime.now(timezone.utc))
                 else CompetitionStatus.READY_CHECK.value
             )
             if next_status != room["status"]:
@@ -4038,6 +4062,9 @@ class CompetitionService:
             "name": str(room["name"]),
             "status": str(room["status"]),
             "occupied_seats": occupied,
+            "event": self.events.room_event(db, competition_id),
+            "schedule": self.schedule.view(db, competition_id),
+            "series_score": dict(db.execute('SELECT yellow_wins AS yellow,white_wins AS white FROM competition_match_control WHERE competition_id=?', (competition_id,)).fetchone() or {}),
             "version": int(room["version"]),
             "created_at": str(room["created_at"]),
             "updated_at": str(room["updated_at"]),
@@ -4730,6 +4757,8 @@ class CompetitionService:
             "status": status,
             "version": int(room["version"]),
             "event_sequence": int(latest_sequence_row["sequence"]),
+            "event": self.events.room_event(db, competition_id),
+            "schedule": self.schedule.view(db, competition_id),
             "member_hold": bool(db.execute('SELECT 1 FROM competition_expulsions e JOIN competition_seats s ON s.competition_id=e.competition_id AND s.user_id=e.user_id WHERE e.competition_id=?', (competition_id,)).fetchone()),
             "created_at": str(room["created_at"]),
             "updated_at": str(room["updated_at"]),
@@ -4756,13 +4785,13 @@ class CompetitionService:
                     CompetitionStatus.SEATING.value,
                     CompetitionStatus.READY_CHECK.value,
                 }
-                and not has_ready_team,
+                and not has_ready_team and not self.schedule.view(db, competition_id),
                 "can_leave_seat": my_seat is not None
                 and status in {
                     CompetitionStatus.SEATING.value,
                     CompetitionStatus.READY_CHECK.value,
                 }
-                and not has_ready_team,
+                and not has_ready_team and not self.schedule.view(db, competition_id),
                 "can_ready": is_captain
                 and len(seats) == 6
                 and status == CompetitionStatus.READY_CHECK.value,

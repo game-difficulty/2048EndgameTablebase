@@ -18,6 +18,12 @@ from .schemas import (
     CommandRequest,
     ManageMemberRequest,
     CreateCompetitionRequest,
+    CreateEventRequest,
+    LinkEventRoomRequest,
+    UpdateEventRequest,
+    StatisticsRosterRequest,
+    EnrollmentRosterRequest,
+    EnrollmentActionRequest,
     GamePhaseRequest,
     GameReadinessRequest,
     ForceAdvanceRequest,
@@ -183,6 +189,63 @@ async def list_competitions(request: Request, principal: PrincipalDependency) ->
     return {"competitions": rooms}
 
 
+@router.get('/events')
+async def list_events(request: Request):
+    principal = optional_principal(request)
+    service = service_from_request(request)
+    return {'events': await asyncio.to_thread(service.events.list, principal),
+            'can_create': bool(principal and service._is_platform_organizer(principal))}
+
+
+@router.get('/events/{slug}')
+async def event_detail(request: Request, slug: str):
+    return {'event': await asyncio.to_thread(service_from_request(request).events.detail, slug, optional_principal(request))}
+
+
+@router.post('/events', status_code=201)
+async def create_event(request: Request, payload: CreateEventRequest, principal: PrincipalDependency):
+    return {'event': await asyncio.to_thread(service_from_request(request).events.create, principal, **payload.model_dump())}
+
+
+@router.post('/events/{slug}/rooms')
+async def link_event_room(request: Request, slug: str, payload: LinkEventRoomRequest, principal: PrincipalDependency):
+    result = await asyncio.to_thread(service_from_request(request).events.link, slug, payload.room_code, principal)
+    await _broadcast(request, payload.room_code.strip().upper())
+    return {'event': result}
+
+
+@router.post('/events/{slug}/settings')
+async def update_event(request: Request, slug: str, payload: UpdateEventRequest, principal: PrincipalDependency):
+    return {'event': await asyncio.to_thread(service_from_request(request).events.update, slug, principal, **payload.model_dump())}
+
+
+@router.get('/events/{slug}/statistics')
+async def event_statistics(request: Request, slug: str, response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    return await asyncio.to_thread(service_from_request(request).events.statistics.standings, slug)
+
+
+@router.get('/events/{slug}/enrollment')
+async def event_enrollment(request: Request, slug: str, response: Response):
+    response.headers['Cache-Control'] = 'private, no-store'
+    return await asyncio.to_thread(service_from_request(request).events.enrollment.snapshot, slug, optional_principal(request))
+
+
+@router.post('/events/{slug}/enrollment/actions')
+async def enrollment_action(request: Request, slug: str, payload: EnrollmentActionRequest, principal: PrincipalDependency):
+    return await asyncio.to_thread(service_from_request(request).events.enrollment.action, slug, principal, **payload.model_dump(exclude_none=True))
+
+
+@router.post('/events/{slug}/enrollment/import')
+async def enrollment_import(request: Request, slug: str, payload: EnrollmentRosterRequest, principal: PrincipalDependency):
+    return await asyncio.to_thread(service_from_request(request).events.enrollment.import_roster, slug, principal, **payload.model_dump())
+
+
+@router.post('/events/{slug}/roster')
+async def import_event_roster(request: Request, slug: str, payload: StatisticsRosterRequest, principal: PrincipalDependency):
+    return await asyncio.to_thread(service_from_request(request).events.statistics.import_roster, slug, principal, **payload.model_dump())
+
+
 @router.post("/competitions", status_code=201)
 async def create_competition(
     request: Request,
@@ -194,6 +257,10 @@ async def create_competition(
         service.create_competition,
         principal,
         name=payload.name,
+        event_slug=payload.event_slug,
+        starts_at=payload.starts_at,
+        yellow_team_id=payload.yellow_team_id,
+        white_team_id=payload.white_team_id,
         room_code=payload.room_code,
         projects=[
             {
@@ -217,6 +284,14 @@ async def competition_snapshot(
     service = service_from_request(request)
     room = await asyncio.to_thread(service.snapshot, room_code, principal)
     return {"competition": room}
+
+
+@router.post('/competitions/{room_code}/check-in')
+async def competition_check_in(request: Request, room_code: str, principal: PrincipalDependency):
+    service = service_from_request(request)
+    room = await asyncio.to_thread(service.schedule.check_in, room_code, principal)
+    await _broadcast(request, room_code)
+    return {'competition': room}
 
 
 @router.post("/competitions/{room_code}/close")

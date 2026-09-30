@@ -6,10 +6,96 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 14
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS competition_schedule (
+  competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
+  starts_at TEXT NOT NULL, roster_revision INTEGER NOT NULL,
+  yellow_team_id TEXT NOT NULL, white_team_id TEXT NOT NULL,
+  yellow_name TEXT NOT NULL, white_name TEXT NOT NULL,
+  attendance_resolved INTEGER NOT NULL DEFAULT 0,
+  exception TEXT
+);
+CREATE TABLE IF NOT EXISTS competition_scheduled_players (
+  competition_id TEXT NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL, side TEXT NOT NULL, position INTEGER NOT NULL,
+  display_name TEXT NOT NULL, arrived_at TEXT,
+  PRIMARY KEY(competition_id,user_id), UNIQUE(competition_id,side,position)
+);
+CREATE TABLE IF NOT EXISTS tournament_events (
+  slug TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  rules TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'preparing' CHECK(status IN ('preparing','active','finished')),
+  format_key TEXT NOT NULL DEFAULT 'team-draft-v1',
+  owner_user_id INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tournament_room_links (
+  competition_id TEXT PRIMARY KEY REFERENCES competitions(id),
+  event_slug TEXT NOT NULL REFERENCES tournament_events(slug),
+  linked_by INTEGER NOT NULL,
+  linked_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tournament_room_event ON tournament_room_links(event_slug);
+CREATE TABLE IF NOT EXISTS tournament_statistics_config (
+  event_slug TEXT PRIMARY KEY REFERENCES tournament_events(slug),
+  starts_at TEXT NOT NULL, ends_at TEXT NOT NULL,
+  roster_revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tournament_enrollment_config (
+  event_slug TEXT PRIMARY KEY REFERENCES tournament_events(slug),
+  mode TEXT NOT NULL CHECK(mode IN ('solo','self_team','organizer_team')),
+  team_size INTEGER NOT NULL, capacity INTEGER NOT NULL DEFAULT 0,
+  registration_open INTEGER NOT NULL DEFAULT 0,
+  registration_locked INTEGER NOT NULL DEFAULT 0,
+  roster_locked INTEGER NOT NULL DEFAULT 0,
+  revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tournament_teams (
+  id TEXT PRIMARY KEY, event_slug TEXT NOT NULL REFERENCES tournament_events(slug),
+  name TEXT NOT NULL, captain_user_id INTEGER, submitted INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(event_slug,name)
+);
+CREATE TABLE IF NOT EXISTS tournament_entrants (
+  event_slug TEXT NOT NULL REFERENCES tournament_events(slug), user_id INTEGER NOT NULL,
+  display_name TEXT NOT NULL, team_id TEXT REFERENCES tournament_teams(id),
+  is_external INTEGER NOT NULL DEFAULT 0, source TEXT NOT NULL,
+  PRIMARY KEY(event_slug,user_id)
+);
+CREATE TABLE IF NOT EXISTS tournament_team_invites (
+  team_id TEXT NOT NULL REFERENCES tournament_teams(id), user_id INTEGER NOT NULL,
+  display_name TEXT NOT NULL, PRIMARY KEY(team_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS tournament_enrollment_audit (
+  event_slug TEXT NOT NULL, revision INTEGER NOT NULL, actor_user_id INTEGER NOT NULL,
+  action TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(event_slug,revision)
+);
+CREATE TABLE IF NOT EXISTS tournament_statistics_roster (
+  event_slug TEXT NOT NULL REFERENCES tournament_events(slug),
+  user_id INTEGER NOT NULL, display_name TEXT NOT NULL,
+  team_name TEXT NOT NULL, is_external INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(event_slug,user_id)
+);
+CREATE TABLE IF NOT EXISTS tournament_roster_audit (
+  event_slug TEXT NOT NULL, revision INTEGER NOT NULL, actor_user_id INTEGER NOT NULL,
+  payload_json TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY(event_slug,revision)
+);
+INSERT OR IGNORE INTO tournament_events(slug,name,description,rules,format_key,created_at)
+VALUES ('14360-cup-1','第一届14360杯','20 位选手，四队各五人，其中一位外援。仅统计 Table 对局站原生 3×3 成绩。',
+  '比赛时间：北京时间 2026 年 10 月 1 日 00:00 至 10 月 8 日 00:00（结束时刻不含）。对局必须在比赛期间开始并完成。每人按得分取最佳五局，以其盘面和计算个人与团队成绩。外站对局无效。分队结果由举办方导入，本赛事不创建对战房间。',
+  'team-top5-3x3-v1',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+INSERT OR IGNORE INTO tournament_statistics_config(event_slug,starts_at,ends_at)
+VALUES('14360-cup-1','2026-10-01T00:00:00+08:00','2026-10-08T00:00:00+08:00');
+INSERT OR IGNORE INTO tournament_events(slug, name, description, rules, created_at)
+VALUES ('819984-cup-3', '第三届819984杯', '2048 团队赛事。赛事公告、比赛房间与后续参赛服务将在此汇集。',
+        '双方各三名选手，通过抽签、选 Ban 和秘密布阵，依次进行 A、B、C 三个项目的对决。具体项目规则以房间内公布的规则为准。整届赛事的分组和晋级安排以举办方公告为准。',
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 CREATE TABLE IF NOT EXISTS competition_expulsions (
   competition_id TEXT NOT NULL, user_id INTEGER NOT NULL,
   expelled_by INTEGER NOT NULL, created_at TEXT NOT NULL,
@@ -401,6 +487,21 @@ class CompetitionDatabase:
             setup.execute("PRAGMA journal_mode = WAL")
             setup.execute("PRAGMA synchronous = NORMAL")
             setup.executescript(SCHEMA)
+            # Existing grouped statistics rosters are preserved once; future edits use enrollment.
+            setup.execute("""INSERT OR IGNORE INTO tournament_enrollment_config(event_slug,mode,team_size,capacity)
+                SELECT slug,CASE WHEN format_key='team-top5-3x3-v1' THEN 'organizer_team' ELSE 'self_team' END,
+                  CASE WHEN format_key='team-top5-3x3-v1' THEN 5 ELSE 3 END,
+                  CASE WHEN format_key='team-top5-3x3-v1' THEN 20 ELSE 0 END FROM tournament_events""")
+            setup.execute("""INSERT OR IGNORE INTO tournament_teams(id,event_slug,name)
+                SELECT 'legacy:'||r.event_slug||':'||r.team_name,r.event_slug,r.team_name
+                FROM tournament_statistics_roster r JOIN tournament_enrollment_config c ON c.event_slug=r.event_slug
+                WHERE c.revision=0 GROUP BY r.event_slug,r.team_name""")
+            setup.execute("""INSERT OR IGNORE INTO tournament_entrants
+                SELECT r.event_slug,r.user_id,r.display_name,'legacy:'||r.event_slug||':'||r.team_name,r.is_external,'imported'
+                FROM tournament_statistics_roster r JOIN tournament_enrollment_config c ON c.event_slug=r.event_slug
+                WHERE c.revision=0""")
+            setup.execute("""UPDATE tournament_enrollment_config SET revision=1 WHERE revision=0
+                AND EXISTS(SELECT 1 FROM tournament_entrants e WHERE e.event_slug=tournament_enrollment_config.event_slug)""")
             competition_columns = {
                 str(row[1])
                 for row in setup.execute("PRAGMA table_info(competitions)").fetchall()

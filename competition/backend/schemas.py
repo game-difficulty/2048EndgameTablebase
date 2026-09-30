@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class PracticeResultRequest(BaseModel):
@@ -23,6 +24,60 @@ class CreateCompetitionRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     room_code: str | None = None
     projects: list[ProjectInput] | None = None
+    event_slug: str | None = Field(default=None, max_length=64)
+    starts_at: str | None = Field(default=None, max_length=64)
+    yellow_team_id: str | None = Field(default=None, max_length=150)
+    white_team_id: str | None = Field(default=None, max_length=150)
+
+
+class CreateEventRequest(BaseModel):
+    slug: str = Field(min_length=2, max_length=64)
+    name: str = Field(min_length=2, max_length=100)
+    description: str = Field(default='', max_length=1000)
+    rules: str = Field(default='', max_length=10000)
+
+
+class LinkEventRoomRequest(BaseModel):
+    room_code: str = Field(min_length=1, max_length=12)
+
+
+class UpdateEventRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    description: str = Field(default='', max_length=1000)
+    rules: str = Field(default='', max_length=10000)
+    status: str = Field(max_length=20)
+
+
+class StatisticsRosterEntry(BaseModel):
+    user_id: int = Field(gt=0)
+    team_name: str = Field(default='', max_length=40)
+    is_external: bool = False
+    captain: bool = False
+
+
+class EnrollmentRosterRequest(BaseModel):
+    entries: list[StatisticsRosterEntry] = Field(min_length=1, max_length=500)
+    revision: int = Field(ge=0)
+    dry_run: bool = True
+
+
+class EnrollmentActionRequest(BaseModel):
+    action: Literal['signup','withdraw','create_team','invite','accept_invite','decline_invite','cancel_invite',
+                    'leave_team','disband_team','submit_team','unsubmit_team','settings','lock_registration','lock_roster','unlock']
+    revision: int = Field(ge=0)
+    team_id: str | None = Field(default=None, max_length=150)
+    user_id: int | None = Field(default=None, gt=0)
+    name: str | None = Field(default=None, max_length=40)
+    mode: Literal['solo','self_team','organizer_team'] | None = None
+    capacity: int | None = Field(default=None, ge=0, le=10000)
+    registration_open: bool | None = None
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class StatisticsRosterRequest(BaseModel):
+    entries: list[StatisticsRosterEntry] = Field(min_length=20, max_length=20)
+    revision: int = Field(ge=0)
+    dry_run: bool = True
 
 
 class AssignStaffRequest(BaseModel):
