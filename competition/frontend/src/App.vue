@@ -24,7 +24,7 @@ import {
 
 const pathname = ref(window.location.pathname);
 const projectRouteMatch = computed(() => pathname.value.match(/^\/projects(?:\/([^/]+))?\/?$/));
-const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(1[0-8]|[1-9]))?\/?$/));
+const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(20|1[0-9]|[1-9]))?\/?$/));
 const isProjectRoute = computed(() => Boolean(projectRouteMatch.value || practiceRouteMatch.value));
 const projectRouteId = computed(() => (projectRouteMatch.value?.[1]
   ? decodeURIComponent(projectRouteMatch.value[1])
@@ -1587,7 +1587,8 @@ onBeforeUnmount(() => {
                   class="embedded-project-board"
                   :snapshot="projectBoardSnapshot(side)"
                   :mirror-portals="Boolean(sessionPayload(side)?.mirror_portals)"
-                  :irregular-shape="Boolean(sessionPayload(side)?.shape_shifter)"
+                  :irregular-shape="Boolean(sessionPayload(side)?.shape_shifter || sessionPayload(side)?.aftershock)"
+                  :aftershock="Boolean(sessionPayload(side)?.aftershock)"
                   :show-dice-effect="Boolean(sessionPayload(side)?.dice)"
                   :sealed-cells="sessionPayload(side)?.sealed_cells || []"
                   :disabled="!canUseBoard(side)"
@@ -1648,7 +1649,7 @@ onBeforeUnmount(() => {
           <p v-if="match.current_result.corrected" class="result-correction-note">裁判已修订 · {{ match.current_result.correction_reason }}</p>
           <p v-if="match.current_result.reason?.endsWith('_surrendered')">{{ sideName(match.current_result.reason.split('_')[0]) }}认输本局，保留认输时成绩并判负。</p>
           <div class="result-boards"><div v-for="side in ['yellow', 'white']" :key="side"><strong>{{ sideName(side) }}最终盘面</strong>
-            <component :is="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' ? CargoBoard : match.sessions[side]?.public_view?.view_protocol === 'polyomino-board-v1' ? PolyominoBoard : TournamentBoard" v-if="sessionPayload(side)?.board" :snapshot="projectBoardSnapshot(side)" :disabled="true" :mirror-portals="Boolean(sessionPayload(side)?.mirror_portals)" :irregular-shape="Boolean(sessionPayload(side)?.shape_shifter)" :sealed-cells="sessionPayload(side)?.sealed_cells || []" />
+            <component :is="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' ? CargoBoard : match.sessions[side]?.public_view?.view_protocol === 'polyomino-board-v1' ? PolyominoBoard : TournamentBoard" v-if="sessionPayload(side)?.board" :snapshot="projectBoardSnapshot(side)" :disabled="true" :mirror-portals="Boolean(sessionPayload(side)?.mirror_portals)" :irregular-shape="Boolean(sessionPayload(side)?.shape_shifter || sessionPayload(side)?.aftershock)" :aftershock="Boolean(sessionPayload(side)?.aftershock)" :sealed-cells="sessionPayload(side)?.sealed_cells || []" />
           </div></div>
           <p v-if="stageWait">休整剩余 {{ stageWait }} 秒。可提前确认；休整结束且双方确认后继续。</p>
           <div class="confirmation-strip">

@@ -3100,8 +3100,10 @@ class CompetitionService:
         if len(json.dumps({"payload": payload, "checkpoint": checkpoint})) > 1024 * 1024:
             raise CompetitionError("STATE_TOO_LARGE", "Project state is too large.", 413)
         board = payload.get("board")
-        if (not isinstance(board, list) or not 1 <= len(board) <= 12
-                or not all(isinstance(row, list) and 1 <= len(row) <= 12 for row in board)
+        # Aftershock may grow beyond the original rectangle; the 1 MiB packet
+        # limit above bounds this dense view without imposing an arbitrary axis.
+        if (not isinstance(board, list) or not board
+                or not all(isinstance(row, list) and row for row in board)
                 or any(len(row) != len(board[0]) for row in board)
                 or any(type(cell) is not int for row in board for cell in row)
                 or type(payload.get("score")) is not int or payload["score"] < 0

@@ -36,6 +36,10 @@ import special17 from '../assets/project-icons/17.svg?url';
 import special17Dark from '../assets/project-icons/17-dark.svg?url';
 import special18 from '../assets/project-icons/18.svg?url';
 import special18Dark from '../assets/project-icons/18-dark.svg?url';
+import special19 from '../assets/project-icons/19.svg?url';
+import special19Dark from '../assets/project-icons/19-dark.svg?url';
+import special20 from '../assets/project-icons/20.svg?url';
+import special20Dark from '../assets/project-icons/20-dark.svg?url';
 
 const lightIcons = [light01, light02, light03, light04, light05, light06, light07, light08, light09, light10, light11, light12];
 const darkIcons = [dark01, dark02, dark03, dark04, dark05, dark06, dark07, dark08, dark09, dark10, dark11, dark12];
@@ -66,6 +70,8 @@ export function projectIconUrl(projectRef, theme = 'auto') {
     'practice-full-load-4x4': special16Dark,
     'practice-heavy-tiles-4x4': special17Dark,
     'practice-fission-4x4': special18Dark,
+    'practice-aftershock-4x4': special19Dark,
+    'practice-look-back-3x4': special20Dark,
   } : {
     'practice-pair-bond-4x4': special13,
     'practice-chemical-reaction-4x4': special14,
@@ -73,6 +79,8 @@ export function projectIconUrl(projectRef, theme = 'auto') {
     'practice-full-load-4x4': special16,
     'practice-heavy-tiles-4x4': special17,
     'practice-fission-4x4': special18,
+    'practice-aftershock-4x4': special19,
+    'practice-look-back-3x4': special20,
   };
   if (practiceIcons[projectRef]) return practiceIcons[projectRef];
   if (projectRef === refs[3] && typeof window !== 'undefined' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {

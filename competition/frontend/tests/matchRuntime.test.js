@@ -56,6 +56,33 @@ test('fission timers survive a match checkpoint just before splitting', () => {
   assert.deepEqual(resumed.game.transition.fission, original.game.transition.fission);
 });
 
+test('aftershock coordinates and its independent draw state survive a match checkpoint', () => {
+  const item = project(19);
+  const original = new MatchRuntime(bootstrap(item), options);
+  original.game.board = [128,128,0,0, 2,0,0,0, ...Array(8).fill(0)];
+  const moved = original.move('left');
+  assert.ok(moved.payload.last_transition.quake);
+  assert.equal(moved.payload.shape_shifter, true);
+  assert.equal(moved.payload.last_transition.kind, 'reshape');
+  const resumed = new MatchRuntime({ ...bootstrap(item), checkpoint: moved.checkpoint, sequence: moved.sequence }, options);
+  assert.deepEqual(resumed.checkpoint().state.board, moved.checkpoint.state.board);
+  assert.equal(resumed.game.originCol, original.game.originCol);
+  assert.equal(resumed.game.quakeState, original.game.quakeState);
+  assert.deepEqual(resumed.game.move('down').snapshot.board, original.game.move('down').snapshot.board);
+});
+
+test('look-back history and chance state survive a match checkpoint', () => {
+  const item = project(20);
+  const original = new MatchRuntime(bootstrap(item), options);
+  original.game.board = [2,0,0,0, ...Array(8).fill(0)];
+  const moved = original.move('right');
+  assert.equal(moved.checkpoint.state.lookBackHistory.length, 1);
+  const resumed = new MatchRuntime({ ...bootstrap(item), checkpoint: moved.checkpoint, sequence: moved.sequence }, options);
+  assert.deepEqual(resumed.checkpoint().state.lookBackHistory, moved.checkpoint.state.lookBackHistory);
+  assert.equal(resumed.game.lookBackState, original.game.lookBackState);
+  assert.deepEqual(resumed.game.move('left').snapshot.board, original.game.move('left').snapshot.board);
+});
+
 test('undo preserves RNG; restart and pause preserve match elapsed time', () => {
   let now = 0;
   const runtime = new MatchRuntime(bootstrap(project(5)), { now: () => now, elapsedMs: 1000 });

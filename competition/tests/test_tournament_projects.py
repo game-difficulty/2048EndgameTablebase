@@ -119,6 +119,8 @@ def test_formal_catalog_can_be_frozen_into_a_competition(tmp_path) -> None:
         "practice-full-load-4x4",
         "practice-heavy-tiles-4x4",
         "practice-fission-4x4",
+        "practice-aftershock-4x4",
+        "practice-look-back-3x4",
     ]
     assert {project["adapter"]["view_protocol"] for project in room["projects"]} == {
         "2048-board-v2", "cargo-transport-v1", "polyomino-board-v1"
@@ -132,7 +134,9 @@ def test_formal_catalog_can_be_frozen_into_a_competition(tmp_path) -> None:
     dice = next(project for project in room["projects"] if project["project_ref"] == "tournament-dice-wall-3x4")
     assert dice["name"] == "骰子障碍（3×4）"
     assert dice["rules_version"] == "tournament-v2"
-    assert all(project["rules_version"] == "tournament-v4" for project in room["projects"][-6:])
+    assert all(project["rules_version"] == "tournament-v4" for project in room["projects"][-8:-2])
+    assert all(project["rules_version"] == "tournament-v5" for project in room["projects"][-2:])
+    assert room["projects"][-1]["adapter"]["view_protocol"] == "2048-board-v2"
 
 
 def test_seal_adapter_keeps_independent_shared_seal_and_spawn_streams() -> None:

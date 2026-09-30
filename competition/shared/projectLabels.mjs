@@ -17,6 +17,8 @@ const names = {
   'practice-full-load-4x4': 'Full Load',
   'practice-heavy-tiles-4x4': 'Heavy Tiles',
   'practice-fission-4x4': 'Fission',
+  'practice-aftershock-4x4': 'Aftershock',
+  'practice-look-back-3x4': 'Look Back',
   'standard-2048-test': 'Standard 2048',
 };
 const phases = {
@@ -33,5 +35,6 @@ export function competitionPhaseLabel(phase, lang='zh') {
 }
 export function competitionProjectLabel(project, lang='zh') {
   if(!project)return '';
+  if(lang==='zh' && project.project_ref==='tournament-shape-shifter-hard-12')return '随机形状';
   return lang==='zh'?(project.name || project.project_name || ''):(names[project.project_ref] || project.name || project.project_name || 'Custom project');
 }

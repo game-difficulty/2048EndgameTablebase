@@ -104,7 +104,7 @@ const BASE_TOURNAMENT_PROJECTS = Object.freeze([
     practicePath: '/practice/10',
     id: 'tournament-shape-shifter-hard-12',
     key: 'project-10',
-    title: '随机形状棋盘（困难）',
+    title: '随机形状',
     shortTitle: '随机形状',
     description: '每局使用随机生成的12格棋盘，棋盘外区域不可进入。双方都无路可走后比较得分。',
     estimatedMinutes: '待测',
@@ -167,6 +167,14 @@ const NEW_TOURNAMENT_PROJECTS = Object.freeze([
     title: '裂变（4×4）', shortTitle: '裂变',
     description: '1024及以上数字块会在若干步后裂成两块；裂变代替本步出数，无路可走后比得分。',
     rows: 4, cols: 4, spawn4Rate: .1, practiceVariant: 'fission', fissionMinMoves: 16, fissionMaxMoves: 40, adapterRulesVersion: 'tournament-v4' },
+  { order: 19, practicePath: '/practice/19', id: 'practice-aftershock-4x4', key: 'project-19',
+    title: '余震（4×4）', shortTitle: '余震',
+    description: '每步合出至少一个256及以上数字块后，原始四行或四列中的一条随机错位一格；无路可走后比得分。',
+    rows: 4, cols: 4, spawn4Rate: .1, geometryVariant: 'aftershock', adapterRulesVersion: 'tournament-v5' },
+  { order: 20, practicePath: '/practice/20', id: 'practice-look-back-3x4', key: 'project-20',
+    title: '回头看看（3×4）', shortTitle: '回头看看',
+    description: '有效移动偶尔变成撤销上一步，并在恢复后的棋盘生成两个数字；无路可走后比得分。',
+    rows: 3, cols: 4, spawn4Rate: .1, geometryVariant: 'lookback', adapterRulesVersion: 'tournament-v5' },
 ]);
 
 export const TOURNAMENT_PROJECTS = Object.freeze([...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS, ...NEW_TOURNAMENT_PROJECTS]);

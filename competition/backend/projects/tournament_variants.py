@@ -77,7 +77,7 @@ TOURNAMENT_RULES = (
         isolated_island=True, estimated_minutes="待测",
     ),
     VariantRules(
-        "tournament-shape-shifter-hard-12", "随机形状棋盘（困难）", 7, 7,
+        "tournament-shape-shifter-hard-12", "随机形状", 7, 7,
         shape_playable_cells=12, estimated_minutes="待测",
     ),
 )
@@ -121,8 +121,8 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
             "name": name,
             "description": description,
             "project_ref": project_ref,
-            "adapter_rules_version": "tournament-v4",
-            "rules_version": "tournament-v4",
+            "adapter_rules_version": "tournament-v5" if index >= 19 else "tournament-v4",
+            "rules_version": "tournament-v5" if index >= 19 else "tournament-v4",
         }
         for index, project_ref, name, description in (
             (13, "practice-pair-bond-4x4", "出双入对（4×4）", "特殊块相邻可粘合成双格，新双格形成时旧双格消失；双方死亡后按得分结算。"),
@@ -131,6 +131,8 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
             (16, "practice-full-load-4x4", "满载（4×4）", "棋盘数字块超过12个立即结束；按得分结算。"),
             (17, "practice-heavy-tiles-4x4", "越来越重（4×4）", "256只能横移、512只能竖移、1024不能移动；双方死亡后按得分结算。"),
             (18, "practice-fission-4x4", "裂变（4×4）", "1024及以上数字块会分裂成两块并替代该步出数；双方死亡后按得分结算。"),
+            (19, "practice-aftershock-4x4", "余震（4×4）", "合出256及以上数字块后随机平移原始行或列；双方死亡后按得分结算。"),
+            (20, "practice-look-back-3x4", "回头看看（3×4）", "有效移动有机会改为撤销并出两个数；双方死亡后按得分结算。"),
         )
     ]]
 

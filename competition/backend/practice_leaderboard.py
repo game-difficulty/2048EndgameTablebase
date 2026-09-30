@@ -30,6 +30,8 @@ PROJECT_RULES = {
     "practice-full-load-4x4": ("score", 1),
     "practice-heavy-tiles-4x4": ("score", 1),
     "practice-fission-4x4": ("score", 1),
+    "practice-aftershock-4x4": ("score", 1),
+    "practice-look-back-3x4": ("score", 1),
 }
 
 

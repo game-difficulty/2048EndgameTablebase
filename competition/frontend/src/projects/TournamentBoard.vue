@@ -1,7 +1,7 @@
 <template>
   <div
     ref="root"
-    :class="['tournament-board', { mirror: mirrorPortals, irregular: irregularShape }]"
+    :class="['tournament-board', { mirror: mirrorPortals, irregular: irregularShape, 'quake-shape': aftershock, 'quake-active': quakeVisible }]"
     :style="boardStyle"
     tabindex="0"
     @pointerdown="pointerDown"
@@ -11,13 +11,13 @@
     <div
       v-for="(value, index) in board"
       :key="`cell-${index}`"
-      :class="['board-cell', { blocked: value === WALL }]"
+      :class="['board-cell', 'normal-cell', { blocked: value === WALL }]"
       :style="cellPosition(index)"
     />
     <div
       v-for="tile in activeTiles"
       :key="tile.id"
-      :class="['board-tile', tileClass(tile.value), {
+      :class="['board-tile', 'normal-tile', tileClass(tile.value), {
         moving: tile.isAnimating,
         'no-transition': tile.isInterrupting,
         hidden: tile.isHidden,
@@ -26,6 +26,13 @@
       }]"
       :style="tilePosition(tile)"
     ><span>{{ tileLabel(tile.value) }}</span></div>
+    <div v-if="quakeVisible" class="quake-ghost" aria-hidden="true">
+      <div v-for="cell in quakeCells" :key="cell.from" class="board-cell quake-cell" :style="quakePosition(cell.row, cell.col, quakePhase === 2)">
+        <div v-if="quakePhase >= 1 && cell.value > 0" :class="['quake-tile', tileClass(cell.value), { pop: cell.merged }]" :style="{ ...tileStyles[cell.value], fontSize: tileLabelSize(cell.value, cols, fontScale) }">{{ cell.value }}</div>
+      </div>
+      <div v-if="quakePhase === 0" v-for="tile in quakeMoveTiles" :key="tile.from" :class="['board-tile', 'quake-move-tile', tileClass(tile.value)]" :style="quakeTilePosition(tile)"><span>{{ tile.value }}</span></div>
+    </div>
+    <div v-if="lookbackEffect" class="board-lookback-effect" aria-hidden="true">回头看看</div>
     <TransitionGroup name="board-seal" tag="div" class="board-seals" aria-hidden="true">
       <div v-for="index in sealedCells" :key="`seal-${index}`" class="board-seal" :style="cellPosition(index)">
         <svg class="board-seal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
@@ -58,6 +65,7 @@ const props = defineProps({
   snapshot: { type: Object, required: true },
   mirrorPortals: Boolean,
   irregularShape: Boolean,
+  aftershock: Boolean,
   showDiceEffect: Boolean,
   sealedCells: { type: Array, default: () => [] },
   disabled: Boolean,
@@ -86,11 +94,17 @@ const boardStyle = computed(() => {
     '--cell-width': geometry ? `${100 / geometry.width}%` : undefined,
     '--cell-height': geometry ? `${100 / geometry.height}%` : undefined,
     aspectRatio: geometry ? `${geometry.width} / ${geometry.height}` : `${cols.value} / ${rows.value}`,
+    width: props.aftershock && geometry ? `min(100%, 620px, calc(70vh * ${geometry.width / geometry.height}))` : undefined,
   };
 });
 const activeTiles = ref([]);
 const diceReveal = ref(false);
 const fissionEffect = ref(null);
+const lookbackEffect = ref(false);
+const quakeVisible = ref(false);
+const quakeCells = ref([]);
+const quakeMoveTiles = ref([]);
+const quakePhase = ref(0);
 let pointer = null;
 let timers = [];
 let animationEpoch = 0;
@@ -117,6 +131,22 @@ function percentPosition(r, c) {
   return { left: `${gap + c * (width + gap)}%`, top: `${gap + r * (height + gap)}%` };
 }
 function cellPosition(index) { return percentPosition(row(index), col(index)); }
+function quakePosition(absRow, absCol, moved = false) {
+  const originRow = Number(props.snapshot?.originRow || 0);
+  const originCol = Number(props.snapshot?.originCol || 0);
+  return {
+    ...percentPosition(absRow - originRow, absCol - originCol),
+    transition: moved ? `left ${BOARD_POP_DURATION}ms ease-in-out, top ${BOARD_POP_DURATION}ms ease-in-out` : 'none',
+  };
+}
+function quakeTilePosition(tile) {
+  return {
+    ...quakePosition(tile.row, tile.col),
+    transition: `left ${BOARD_SLIDE_DURATION}ms ease-in-out, top ${BOARD_SLIDE_DURATION}ms ease-in-out`,
+    fontSize: tileLabelSize(tile.value, cols.value, props.fontScale),
+    ...props.tileStyles[tile.value],
+  };
+}
 
 function wraps(from, to, direction) {
   if (!props.mirrorPortals) return false;
@@ -203,8 +233,62 @@ watch(() => props.snapshot?.revision, async () => {
   clearTimers();
   diceReveal.value = false;
   fissionEffect.value = null;
+  lookbackEffect.value = false;
+  quakeVisible.value = false;
   const transition = props.snapshot?.transition;
   fastForwardAnimations(true);
+  if (transition?.kind === 'lookback') {
+    syncToBoardRaw(board.value);
+    lookbackEffect.value = true;
+    timers.push(setTimeout(() => { if (epoch === animationEpoch) lookbackEffect.value = false; }, 650));
+    return;
+  }
+  if (['move', 'reshape'].includes(transition?.kind) && transition.quake && props.aftershock) {
+    syncToBoardRaw(board.value);
+    const quake = transition.quake;
+    const merged = new Set((transition.movements || []).filter(item => item.merged).map(item => item.to));
+    quakeCells.value = quake.cells.map(cell => ({
+      ...cell, row: cell.fromRow, col: cell.fromCol, merged: merged.has(cell.from),
+    }));
+    const movements = new Map((transition.movements || []).map(item => [item.from, item]));
+    quakeMoveTiles.value = (transition.before || []).flatMap((value, from) => {
+      if (value <= 0) return [];
+      const movement = movements.get(from);
+      return [{ from, value, row: quake.originRow + Math.floor(from / quake.cols),
+        col: quake.originCol + from % quake.cols,
+        targetRow: quake.originRow + Math.floor((movement?.to ?? from) / quake.cols),
+        targetCol: quake.originCol + (movement?.to ?? from) % quake.cols }];
+    });
+    quakePhase.value = 0;
+    quakeVisible.value = true;
+    await nextTick();
+    if (epoch !== animationEpoch) return;
+    void root.value?.offsetHeight;
+    quakeMoveTiles.value = quakeMoveTiles.value.map(tile => ({ ...tile, row: tile.targetRow, col: tile.targetCol }));
+    timers.push(setTimeout(() => {
+      if (epoch !== animationEpoch) return;
+      quakePhase.value = 1;
+    }, BOARD_SLIDE_DURATION));
+    timers.push(setTimeout(async () => {
+      if (epoch !== animationEpoch) return;
+      quakePhase.value = 2;
+      await nextTick();
+      if (epoch !== animationEpoch) return;
+      void root.value?.offsetHeight;
+      quakeCells.value = quakeCells.value.map(cell => ({ ...cell, row: cell.toRow, col: cell.toCol }));
+    }, BOARD_SPAWN_REVEAL_DELAY));
+    timers.push(setTimeout(() => {
+      if (epoch !== animationEpoch) return;
+      quakeVisible.value = false;
+      if (transition.spawn?.index != null) {
+        activeTiles.value = activeTiles.value.map(tile =>
+          tile.row * cols.value + tile.col === transition.spawn.index
+            ? { ...tile, isNew: true, isInterrupting: false } : tile);
+        timers.push(setTimeout(() => { if (epoch === animationEpoch) fastForwardAnimations(false); }, BOARD_POP_DURATION));
+      }
+    }, BOARD_SPAWN_REVEAL_DELAY + BOARD_POP_DURATION));
+    return;
+  }
   if (transition?.kind !== 'move') {
     syncToBoardRaw(board.value);
     return;
@@ -371,4 +455,5 @@ onBeforeUnmount(() => { animationEpoch += 1; clearTimers(); });
 .board-tile.appear{animation:tile-appear var(--board-pop-duration) ease backwards}
 .tournament-board:not(.irregular) .board-cell.blocked{background:repeating-linear-gradient(135deg,#4d5662 0 8px,#424a55 8px 16px);box-shadow:inset 0 0 0 2px #697482}
 .board-fission-effect{position:absolute;z-index:9;pointer-events:none;width:var(--cell-width,calc((100% - (var(--cols) + 1) * var(--gap))/var(--cols)));height:var(--cell-height,calc((100% - (var(--rows) + 1) * var(--gap))/var(--rows)));display:grid;place-items:center;color:#fff;font-size:clamp(12px,3vw,19px);font-weight:800;text-shadow:0 1px 5px #533a23;animation:board-fission-burst .65s ease-out both}@keyframes board-fission-burst{0%,12%{opacity:0;transform:scale(.6)}36%{opacity:1;transform:scale(1.14)}100%{opacity:0;transform:translateY(-28%) scale(1)}}
+.tournament-board.quake-shape .board-cell.blocked{visibility:hidden}.tournament-board.quake-active{overflow:visible}.quake-active .normal-cell,.quake-active .normal-tile{opacity:0}.quake-ghost{position:absolute;inset:0;z-index:8;pointer-events:none}.quake-tile{width:100%;height:100%;display:grid;place-items:center;border-radius:8px;font-weight:800;line-height:1;user-select:none;-webkit-user-select:none}.quake-tile.value-2{background:#eee4da;color:#776e65}.quake-move-tile{z-index:9}.board-lookback-effect{position:absolute;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 15px;border-radius:20px;background:rgba(62,49,37,.86);color:#fff;font-size:16px;font-weight:750;pointer-events:none;animation:board-fission-burst .65s ease-out both}
 </style>

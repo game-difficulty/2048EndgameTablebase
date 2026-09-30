@@ -1,4 +1,4 @@
-"""Descriptors for client-executed tournament projects 13–18.
+"""Descriptors for client-executed tournament projects 13–20.
 
 The match service accepts versioned client checkpoints for these projects;
 the server adapter supplies frozen project metadata and public-view routing.
@@ -25,10 +25,13 @@ class ClientVariantAdapter:
     rules_version = "tournament-v4"
     rules = ClientVariantRules()
 
-    def __init__(self, project_id: str, display_name: str, *, special_tiles: bool = False):
+    def __init__(self, project_id: str, display_name: str, *, special_tiles: bool = False,
+                 rows: int = 4, cols: int = 4, rules_version: str = "tournament-v4"):
         self.project_id = project_id
         self.display_name = display_name
         self.special_tiles = special_tiles
+        self.rules = ClientVariantRules(rows=rows, cols=cols)
+        self.rules_version = rules_version
 
     @property
     def descriptor(self) -> ProjectDescriptor:
@@ -37,7 +40,8 @@ class ClientVariantAdapter:
         return ProjectDescriptor(self.project_id, self.rules_version, self.display_name, kind, protocol)
 
     def initial_state(self, *, seed: str) -> ProjectState:
-        return ProjectState(tuple((0, 0, 0, 0) for _ in range(4)), 0, 0, False, seed=seed)
+        return ProjectState(tuple(tuple(0 for _ in range(self.rules.cols)) for _ in range(self.rules.rows)),
+                            0, 0, False, seed=seed)
 
     def apply_move(self, state: ProjectState, move: str) -> ProjectState:
         raise NotImplementedError("This project is executed by the versioned match client.")
@@ -54,7 +58,7 @@ class ClientVariantAdapter:
 
     def public_payload(self, state: ProjectState) -> dict[str, Any]:
         return {
-            "board": [list(row) for row in state.board], "rows": 4, "cols": 4,
+            "board": [list(row) for row in state.board], "rows": self.rules.rows, "cols": self.rules.cols,
             "score": state.score, "move_count": state.move_count,
             "elapsed_ms": state.elapsed_ms, "finished": state.finished,
             "outcome": state.outcome,
@@ -75,9 +79,15 @@ CLIENT_VARIANT_DEFINITIONS = (
     ("practice-full-load-4x4", "满载（4×4）", False),
     ("practice-heavy-tiles-4x4", "越来越重（4×4）", False),
     ("practice-fission-4x4", "裂变（4×4）", False),
+    ("practice-aftershock-4x4", "余震（4×4）", False, 4, 4, "tournament-v5"),
+    ("practice-look-back-3x4", "回头看看（3×4）", False, 3, 4, "tournament-v5"),
 )
 
 CLIENT_VARIANT_ADAPTER_FACTORIES = tuple(
-    (lambda selected=item: ClientVariantAdapter(selected[0], selected[1], special_tiles=selected[2]))
+    (lambda selected=item: ClientVariantAdapter(
+        selected[0], selected[1], special_tiles=selected[2],
+        rows=selected[3] if len(selected) > 3 else 4,
+        cols=selected[4] if len(selected) > 4 else 4,
+        rules_version=selected[5] if len(selected) > 5 else "tournament-v4"))
     for item in CLIENT_VARIANT_DEFINITIONS
 )

@@ -71,6 +71,8 @@ def test_new_special_projects_rank_by_standard_score(board, project):
     "practice-full-load-4x4",
     "practice-heavy-tiles-4x4",
     "practice-fission-4x4",
+    "practice-aftershock-4x4",
+    "practice-look-back-3x4",
 ])
 def test_new_score_variants_have_practice_leaderboards(board, project):
     outcome = "tile_limit" if project == "practice-full-load-4x4" else "no_moves"

@@ -3,12 +3,13 @@ import { CargoGame, CARGO_LIMIT_MS } from './cargoEngine.js';
 import { PolyominoGame } from './polyominoEngine.js';
 import { PracticeSpecialGame } from './practiceSpecialEngine.js';
 import { PracticeScoreVariantGame } from './practiceScoreVariants.js';
+import { AftershockGame, LookBackGame } from './geometryVariants.js';
 import { PROJECT_BY_ID } from './catalog.js';
 
 const STATE_KEYS = ['board', 'tiles', 'cargo', 'score', 'moves', 'revision', 'randomState',
   'shapeState', 'sealState', 'nextCargoId', 'nextTileId', 'restartCount', 'rows', 'cols',
   'dice', 'wallIndex', 'sealedCells', 'sealRound', 'finished', 'outcome',
-  'fissionSequence', 'fissionRandomState'];
+  'fissionSequence', 'fissionRandomState', 'originRow', 'originCol', 'quakeState', 'lookBackState'];
 const clone = value => JSON.parse(JSON.stringify(value));
 
 export function matchProject(bootstrap) {
@@ -35,6 +36,8 @@ export class MatchRuntime {
     this.game = this.project.cargoTransport ? new CargoGame(this.project, options)
       : this.project.polyomino ? new PolyominoGame(this.project, options)
         : this.project.specialRule ? new PracticeSpecialGame(this.project, options)
+          : this.project.geometryVariant === 'aftershock' ? new AftershockGame(this.project, options)
+            : this.project.geometryVariant === 'lookback' ? new LookBackGame(this.project, options)
           : this.project.practiceVariant ? new PracticeScoreVariantGame(this.project, options)
             : new TournamentGame(this.project, options);
     this.sequence = Number(bootstrap.sequence || 0);
@@ -62,6 +65,7 @@ export class MatchRuntime {
     const state = {};
     for (const key of STATE_KEYS) if (this.game[key] !== undefined) state[key] = clone(this.game[key]);
     if (this.game.fissionTimers instanceof Map) state.fissionTimers = [...this.game.fissionTimers];
+    if (this.project.geometryVariant === 'lookback') state.lookBackHistory = this.game.history.map(item => ({ ...item, board: item.board.slice() }));
     // This project's undo only needs board/score/moves; compact tuples avoid
     // repeatedly transmitting object keys and inapplicable wall metadata.
     if (this.project.allowUndo) state.undo = this.game.history.map(item => [item.score, item.moves, ...item.board]);
@@ -71,6 +75,7 @@ export class MatchRuntime {
     if (checkpoint?.version !== 1 || !checkpoint.state) throw new Error('对局恢复数据版本不兼容，请刷新客户端。');
     for (const key of STATE_KEYS) if (checkpoint.state[key] !== undefined) this.game[key] = clone(checkpoint.state[key]);
     if (this.game.fissionTimers instanceof Map) this.game.fissionTimers = new Map(checkpoint.state.fissionTimers || []);
+    if (this.project.geometryVariant === 'lookback') this.game.history = clone(checkpoint.state.lookBackHistory || []);
     if (this.project.allowUndo) this.game.history = (checkpoint.state.undo || []).map(([score, moves, ...board]) =>
       ({ score, moves, board, dice: null, wallIndex: null, sealedCells: [], sealRound: 0 }));
     this.game.transition = { kind: 'restore' };
@@ -136,7 +141,8 @@ export class MatchRuntime {
       result_metric: project.resultMetric === 'boardSum' ? 'board_sum' : project.race ? 'race' : 'score',
       allow_restart: Boolean(project.allowRestart), allow_undo: Boolean(project.allowUndo),
       can_undo: Boolean(snapshot.canUndo), evil_spawn: Boolean(project.evilSpawn),
-      mirror_portals: Boolean(project.mirrorPortals), shape_shifter: Boolean(project.shapeShifter),
+      mirror_portals: Boolean(project.mirrorPortals), shape_shifter: Boolean(project.shapeShifter || project.geometryVariant === 'aftershock'),
+      aftershock: project.geometryVariant === 'aftershock',
       isolated_island: Boolean(project.isolatedIsland), wall_index: snapshot.wallIndex,
       target_sum: project.targetSum, target_tile: project.targetTile, target_count: project.targetCount,
       current_target_count: snapshot.targetCount, sealed_cells: snapshot.sealedCells,
