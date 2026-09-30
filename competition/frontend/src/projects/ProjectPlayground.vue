@@ -65,7 +65,7 @@
 
           <section class="game-actions">
             <button v-if="project.allowUndo" type="button" :disabled="!snapshot.canUndo || locked" @click="undo">撤销一步</button>
-            <button v-if="project.allowRestart" type="button" :disabled="locked" @click="restart">重新开始（R）</button>
+            <button type="button" :disabled="locked" @click="restart">重新开始（R）</button>
             <span>方向键 / WASD / 滑动操作</span>
           </section>
         </div>
@@ -295,11 +295,12 @@ function dismissFinish() {
 }
 function keydown(event) {
   if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
-  if (!project.value || locked.value || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) return;
+  if (!project.value || locked.value || event.target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) return;
   const direction = { ArrowUp:'up',w:'up',W:'up',ArrowRight:'right',d:'right',D:'right',ArrowDown:'down',s:'down',S:'down',ArrowLeft:'left',a:'left',A:'left' }[event.key];
   if (direction) { event.preventDefault(); move(direction); }
   if ((event.key === 'z' || event.key === 'Z') && project.value.allowUndo) { event.preventDefault(); undo(); }
-  if (event.key.toLowerCase() === 'r' && project.value.allowRestart && !event.repeat) { event.preventDefault(); restart(); }
+  // Practice may always start a fresh run; match-only restart restrictions do not apply here.
+  if (event.key.toLowerCase() === 'r' && !event.repeat) { event.preventDefault(); restart(); }
 }
 onMounted(() => { createGame(); syncPracticeSession().finally(loadLeaderboard); timer = window.setInterval(() => { now.value = performance.now(); }, 16); window.addEventListener('keydown', keydown); });
 onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTimer); window.clearTimeout(finishTimer); window.clearTimeout(thinkingTimer); window.removeEventListener('keydown', keydown); });

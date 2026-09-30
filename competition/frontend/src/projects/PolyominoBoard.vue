@@ -12,7 +12,7 @@
     <div
       v-for="tile in activeTiles"
       :key="tile.id"
-      :class="['poly-tile', `value-${tile.value}`, tile.kind && `kind-${tile.kind}`, { moving: tile.moving, instant: tile.instant }]"
+      :class="['poly-tile', defaultTileValueClass(tile.value), tile.kind && `kind-${tile.kind}`, { moving: tile.moving, instant: tile.instant }]"
       :style="tileStyle(tile)"
     >
       <span :class="['poly-art', { hidden: tile.hidden, pop: tile.pop && !tile.hidden, appear: tile.appear && !tile.hidden }]">
@@ -26,7 +26,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { tileLabelSize } from './practiceAppearance.js';
+import { defaultTileValueClass, tileLabelSize } from './practiceAppearance.js';
 import {
   BOARD_ANIMATION_DURATION,
   BOARD_MERGE_REVEAL_DELAY,
@@ -252,6 +252,7 @@ onBeforeUnmount(() => { ++animationEpoch; clearTimers(); });
 .poly-piece,.poly-bridge{position:absolute;display:block;background:var(--tile-color)}.poly-piece{border-radius:8px}
 .poly-label{position:absolute;z-index:1;transform:translate(-50%,-50%);font-size:clamp(16px,12cqw,44px);line-height:1;font-weight:800;white-space:nowrap}
 .value-4{--tile-color:#ede0c8}.value-8{--tile-color:#f2b179;color:#f9f6f2}.value-16{--tile-color:#f59563;color:#f9f6f2}.value-32{--tile-color:#f67c5f;color:#f9f6f2}.value-64{--tile-color:#ef5b3c;color:#f9f6f2}.value-128{--tile-color:#edcf72;color:#f9f6f2}.value-256{--tile-color:#edcc61;color:#f9f6f2}
+.value-512{--tile-color:#edc850;color:#f9f6f2}.value-1024,.value-2048{--tile-color:#edc53f;color:#f9f6f2}
 .kind-pair-single,.kind-pair-double{--tile-color:#648b84;color:#fffaf0}
 .kind-chemical-a{--tile-color:#657dac;color:#f9f9ff}
 .kind-chemical-b{--tile-color:#b67269;color:#fff8f4}

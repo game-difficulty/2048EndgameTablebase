@@ -51,7 +51,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ISLAND, WALL } from './engine.js';
-import { tileLabelSize } from './practiceAppearance.js';
+import { defaultTileValueClass, tileLabelSize } from './practiceAppearance.js';
 import {
   BOARD_ANIMATION_DURATION,
   BOARD_MERGE_REVEAL_DELAY,
@@ -427,7 +427,7 @@ function tilePosition(tile) {
 function tileClass(value) {
   if (value === WALL) return 'wall';
   if (value === ISLAND) return 'island';
-  return `value-${Math.min(2048, Number(value) || 0)}`;
+  return defaultTileValueClass(value);
 }
 function tileLabel(value) { return value === WALL || value === ISLAND ? '' : value; }
 

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
-import { resolvePracticeAppearance, tileLabelSize } from '../src/projects/practiceAppearance.js';
+import { defaultTileValueClass, resolvePracticeAppearance, tileLabelSize } from '../src/projects/practiceAppearance.js';
 
 test('practice labels keep the main board size tiers across grid widths', () => {
   assert.equal(tileLabelSize(2, 4), '8.0000cqw');
@@ -34,4 +35,20 @@ test('saved themes select the page mode and retain their text color', () => {
   const dark = resolvePracticeAppearance({ saved_theme }, 'dark');
   assert.equal(dark.tileStyles[2].backgroundColor, '#222222');
   assert.equal(dark.tileStyles[2].color, '#ffffff');
+});
+
+test('all practice boards assign a high-value color class without a saved theme', () => {
+  for (const value of [512, 1024, 2048]) {
+    assert.equal(defaultTileValueClass(value), `value-${value}`);
+  }
+  assert.equal(defaultTileValueClass(4096), 'value-2048');
+  assert.equal(defaultTileValueClass(65536), 'value-2048');
+  for (const component of ['PolyominoBoard.vue', 'TournamentBoard.vue']) {
+    const source = readFileSync(new URL(`../src/projects/${component}`, import.meta.url), 'utf8');
+    for (const value of [512, 1024, 2048]) {
+      const rule = source.match(new RegExp(`\\.value-${value}(?:\\s|,|\\{)[^}]*`));
+      assert.ok(rule, `${component} is missing a ${value} tile rule`);
+      assert.match(rule[0], /(?:--tile-color|background):/, `${component} is missing the ${value} background`);
+    }
+  }
 });

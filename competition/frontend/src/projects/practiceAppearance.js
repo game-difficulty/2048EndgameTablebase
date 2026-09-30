@@ -53,3 +53,9 @@ export function tileLabelSize(value, columns, fontScale = 1) {
   const percent = reference * 100 / 600 * 4 / Math.max(1, Number(columns) || 4) * fontScale;
   return `${percent.toFixed(4)}cqw`;
 }
+
+// Both practice board renderers use the same default color ceiling. Tiles
+// above 2048 retain a solid high-value background even without a user theme.
+export function defaultTileValueClass(value) {
+  return `value-${Math.min(2048, Number(value) || 0)}`;
+}
