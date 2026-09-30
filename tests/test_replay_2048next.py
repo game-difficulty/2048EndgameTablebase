@@ -76,6 +76,7 @@ class Replay2048NextTests(unittest.TestCase):
             ),
         )
         self.assertEqual(record["f1"].tolist(), [0, 4])
+        self.assertEqual(decoder.final_score, 4)
         self.assertEqual(record["f2"].tolist(), [2, 1])
         self.assertEqual(record["f3"].tolist(), [1, 1])
         self.assertEqual(record["f4"].tolist(), [3, 15])
@@ -90,6 +91,7 @@ class Replay2048NextTests(unittest.TestCase):
         self.assertEqual(decoder.variant, "4x4")
         self.assertEqual(len(decoder.record_list), 2)
         self.assertEqual(decoder.record_list["f1"].tolist(), [0, 4])
+        self.assertEqual(decoder.final_score, 4)
         self.assertEqual(decoder.record_list["f2"].tolist(), [2, 1])
 
     def test_codec_rejects_crc_mismatch(self):

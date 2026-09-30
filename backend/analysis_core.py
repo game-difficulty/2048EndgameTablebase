@@ -87,6 +87,7 @@ class ReplayDecoder:
         self.bm = board_mover
         self.vbm = variant_mover
         self.variant = "4x4"
+        self.final_score: int | None = None
         self.record_list: np.typing.NDArray = np.empty(
             0, dtype="uint64,uint8,uint8,uint8"
         )
@@ -263,6 +264,7 @@ class ReplayDecoder:
         self.record_list = np.asarray(
             rows, dtype="uint64,uint32,uint8,uint8,uint8"
         )
+        self.final_score = int(current_score)
 
     @staticmethod
     def _2048next_visual_position(
@@ -366,6 +368,8 @@ class ReplayDecoder:
             board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
             moves_made += 1
 
+        self.final_score = int(current_score)
+
     def _decode_old_format(self, replay_text: str) -> None:
         if "2x4" in replay_text[:12]:
             board, total_space, header, mover = (
@@ -434,7 +438,10 @@ class ReplayDecoder:
             board |= np.uint64(replay_tile) << np.uint64(replay_position << 2)
             moves_made += 1
 
+        self.final_score = int(current_score)
+
     def _decode_test_replay(self, arr) -> None:
+        self.final_score = int(arr["f1"][-1]) if len(arr) else None
         transition_count = max(0, len(arr) - 1)
         self.record_list = np.zeros(
             transition_count, dtype="uint64,uint32,uint8,uint8,uint8"
@@ -500,6 +507,7 @@ class Analyzer:
         decoder.decode()
         self.record_list = decoder.record_list
         self.variant = decoder.variant
+        self.final_score = decoder.final_score
 
         self.target_path = target_path
         self.text_list: list[str] = []

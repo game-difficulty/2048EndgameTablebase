@@ -76,8 +76,8 @@ def test_publish_replay_and_keep_history_when_artifact_is_pruned(tmp_path):
         assert payload["entries"][0]["artifacts"][0]["goodness_of_fit"] == 1.0
         assert "goodness_of_fit" not in job.entries[0]["artifacts"][0]
 
-        # The billed analyst differs from the game owner. Unicode names travel
-        # in an encoded header, and real zero fit must not be treated as missing.
+        # Replay titles use score and stage position, not an internal filename
+        # or a display name that may belong to a different account.
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from urllib.parse import unquote
@@ -87,6 +87,8 @@ def test_publish_replay_and_keep_history_when_artifact_is_pruned(tmp_path):
             _user(db, 2)
             db.execute("UPDATE users SET display_name='游戏/难度' WHERE id=2")
             db.execute("UPDATE analysis_history_jobs SET subject_user_id=2 WHERE job_id='job'")
+            db.execute("UPDATE analysis_history_items SET score=7357 WHERE id=1")
+            db.execute("UPDATE analysis_history_items SET source_run_id='missing-source' WHERE id=1")
         with TestClient(app) as client, patch("backend.analysis_history.current_user_from_request", return_value={"id": 1}):
             for fit, expected in ((1.0, "100.0%"), (0.0, "0.0%"), (None, "—")):
                 with auth_db() as db:
@@ -94,7 +96,7 @@ def test_publish_replay_and_keep_history_when_artifact_is_pruned(tmp_path):
                 response = client.get(f"/api/analysis/replays/{artifact_id}")
                 assert response.status_code == 200
                 assert response.content == replay_path.read_bytes()
-                assert unquote(response.headers["X-Replay-Title"]) == f"游戏/难度 · free10-512 · {expected}"
+                assert unquote(response.headers["X-Replay-Title"]) == f"7,357 分 · 4×4 · 第 11 步 · free10-512 · {expected}"
                 assert analysis_job_payload(job)["items"][0]["artifacts"][0]["goodness_of_fit"] == fit
         with auth_db() as db:
             row = db.execute("SELECT relative_path FROM analysis_replay_artifacts WHERE artifact_id=?",
@@ -103,6 +105,54 @@ def test_publish_replay_and_keep_history_when_artifact_is_pruned(tmp_path):
         detail = get_history("job", 1)
         assert detail["items"][0]["artifacts"][0]["available"] is False
         assert analysis_job_payload(job)["items"][0]["artifacts"][0]["available"] is False
+
+
+def test_archive_history_uses_original_game_score(tmp_path):
+    from backend.human_play.store import database, init_db
+    from backend.analysis_history import _source_run_details
+    with patch.dict(os.environ, {"CLOUD_AUTH_DB": str(tmp_path / "auth.sqlite3"),
+                                 "HUMAN_PLAY_DB": str(tmp_path / "human.sqlite3")}):
+        init_db()
+        with database() as db:
+            db.execute("""INSERT INTO human_runs
+                (id,user_id,browser,variant,request_id,seed,threshold,status,created,
+                 writer,state) VALUES('run-1',1,'browser','3x4','request','seed',0,
+                 'sealed',1,'writer','{"score":133560}')""")
+        assert _source_run_details(["run-1"]) == {
+            "run-1": {"score": 133560, "variant": "3x4"}
+        }
+
+
+def test_source_metadata_missing_database_is_optional_and_never_created(tmp_path, caplog):
+    from backend.analysis_history import _source_run_details
+    source = tmp_path / "missing # source.sqlite3"
+    with patch.dict(os.environ, {"HUMAN_PLAY_DB": str(source)}):
+        assert _source_run_details(["run-1"]) == {}
+    assert not source.exists()
+    assert "Analysis source metadata unavailable" in caplog.text
+
+
+def test_source_metadata_missing_table_or_corrupt_database_is_optional(tmp_path):
+    import sqlite3
+    from backend.analysis_history import _source_run_details
+    source = tmp_path / "source.sqlite3"
+    with sqlite3.connect(source):
+        pass
+    with patch.dict(os.environ, {"HUMAN_PLAY_DB": str(source)}):
+        assert _source_run_details(["run-1"]) == {}
+        source.write_bytes(b"not a sqlite database")
+        assert _source_run_details(["run-1"]) == {}
+
+
+def test_source_metadata_missing_record_and_invalid_state(tmp_path):
+    import sqlite3
+    from backend.analysis_history import _source_run_details
+    source = tmp_path / "source.sqlite3"
+    with sqlite3.connect(source) as db:
+        db.execute("CREATE TABLE human_runs(id TEXT,variant TEXT,state TEXT)")
+        db.execute("INSERT INTO human_runs VALUES('bad','4x4','null')")
+    with patch.dict(os.environ, {"HUMAN_PLAY_DB": str(source)}):
+        assert _source_run_details(["missing", "bad"]) == {"bad": {"score": None, "variant": "4x4"}}
 
 
 def test_free_account_keeps_newest_fifty_replays(tmp_path):

@@ -187,6 +187,7 @@ class ReplayDiscontinuityTests(unittest.TestCase):
         decoder = ReplayDecoder("", bm, vbm)
         decoder._decode_test_replay(snapshots)
 
+        self.assertEqual(decoder.final_score, int(score) + int(next_score))
         self.assertEqual(len(decoder.record_list), 2)
         self.assertEqual(decoder.record_list["f2"].tolist(), [2, 4])
         self.assertEqual(decoder.record_list["f3"].tolist(), [1, 2])

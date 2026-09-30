@@ -367,7 +367,7 @@ def _run_one_file(job: AnalysisJob, item: AnalysisWorkItem, index: int) -> tuple
                  for stage_index, segment in enumerate(published) if segment.get("artifact_id")]
     return ({**_public_entry(item.path, "done"), "pattern": item.pattern,
              "target": target_tile, "artifacts": artifacts,
-             "stage_count": len(published)}, summary)
+             "stage_count": len(published), "score": getattr(analyzer, "final_score", None)}, summary)
 
 
 def _build_job_zip(job: AnalysisJob) -> Path:
@@ -459,9 +459,10 @@ def _run_job(job_id: str) -> None:
                     )
                     entry["poster_eligible"] = summary["aggregate"]["poster_eligible"]
                     set_item_status(item.history_item_id, "done", stage_count=entry.get("stage_count", 0),
-                                    summary_id=entry["summary_id"])
+                                    summary_id=entry["summary_id"], score=entry.get("score"))
                 else:
-                    set_item_status(item.history_item_id, "done", stage_count=entry.get("stage_count", 0))
+                    set_item_status(item.history_item_id, "done", stage_count=entry.get("stage_count", 0),
+                                    score=entry.get("score"))
                     from .analysis_history import enforce_limits
                     enforce_limits(job.user_id)
                 finalize_reservation(

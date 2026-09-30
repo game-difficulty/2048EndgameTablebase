@@ -5,11 +5,14 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import shutil
+import sqlite3
 import time
 import uuid
 from collections import defaultdict, deque
+from contextlib import closing
 from threading import BoundedSemaphore, Lock
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,6 +85,7 @@ def init_schema(db) -> None:
       error_code TEXT,
       stage_count INTEGER NOT NULL DEFAULT 0,
       summary_id INTEGER,
+      score INTEGER,
       UNIQUE(job_id,work_index),
       FOREIGN KEY(job_id) REFERENCES analysis_history_jobs(job_id) ON DELETE CASCADE
     );
@@ -125,6 +129,9 @@ def init_schema(db) -> None:
         db.execute("ALTER TABLE analysis_history_jobs ADD COLUMN subject_user_id INTEGER")
     if "listing_snapshot" not in job_columns:
         db.execute("ALTER TABLE analysis_history_jobs ADD COLUMN listing_snapshot INTEGER NOT NULL DEFAULT 1")
+    item_columns = {row["name"] for row in db.execute("PRAGMA table_info(analysis_history_items)")}
+    if "score" not in item_columns:
+        db.execute("ALTER TABLE analysis_history_items ADD COLUMN score INTEGER")
     artifact_columns = {row["name"] for row in db.execute("PRAGMA table_info(analysis_replay_artifacts)")}
     needs_library_backfill = "summary_id" not in artifact_columns
     for name, sql_type in (
@@ -198,13 +205,13 @@ def set_job_status(job_id: str, status: str, *, done: int, failed: int,
 
 def set_item_status(item_id: int | None, status: str, *, error_code: str | None = None,
                     stage_count: int | None = None, summary_id: int | None = None,
-                    variant: str | None = None) -> None:
+                    variant: str | None = None, score: int | None = None) -> None:
     if not item_id:
         return
     fields = ["status=?", "error_code=?"]
     values: list[Any] = [status, (str(error_code)[:160] if error_code else None)]
     for name, value in (("stage_count", stage_count), ("summary_id", summary_id),
-                        ("variant", variant)):
+                        ("variant", variant), ("score", score)):
         if value is not None:
             fields.append(f"{name}=?")
             values.append(value)
@@ -581,17 +588,49 @@ def _job_payload(db, job, *, include_items: bool) -> dict:
     if include_items:
         items = db.execute("SELECT * FROM analysis_history_items WHERE job_id=? ORDER BY work_index",
                            (job["job_id"],)).fetchall()
+        run_details = _source_run_details([item["source_run_id"] for item in items
+                                          if item["score"] is None or not item["variant"]])
         payload["items"] = []
         for item in items:
+            source = run_details.get(item["source_run_id"], {})
             artifacts = db.execute("""SELECT * FROM analysis_replay_artifacts
                 WHERE history_item_id=? ORDER BY segment_index""", (item["id"],)).fetchall()
             payload["items"].append({
                 **{key: item[key] for key in ("id", "work_index", "source_run_id", "source_filename",
                                                "pattern", "target", "variant", "status", "error_code",
                                                "stage_count", "summary_id")},
+                "score": item["score"] if item["score"] is not None else source.get("score"),
+                "variant": item["variant"] or source.get("variant"),
                 "artifacts": [_artifact_payload(row) for row in artifacts],
             })
     return payload
+
+
+def _source_run_details(run_ids: list[str | None]) -> dict[str, dict]:
+    ids = sorted({str(run_id) for run_id in run_ids if run_id})
+    if not ids:
+        return {}
+    from .human_play.store import db_path
+    details = {}
+    try:
+        # Source metadata is optional; a read must never create a missing database.
+        with closing(sqlite3.connect(db_path().resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as human_db:
+            human_db.row_factory = sqlite3.Row
+            for offset in range(0, len(ids), 500):
+                batch = ids[offset:offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows = human_db.execute(
+                    f"SELECT id,variant,state FROM human_runs WHERE id IN ({placeholders})", batch
+                ).fetchall()
+                for row in rows:
+                    try:
+                        score = int(json.loads(row["state"]).get("score"))
+                    except (AttributeError, TypeError, ValueError):
+                        score = None
+                    details[str(row["id"])] = {"score": score, "variant": row["variant"]}
+    except (sqlite3.Error, OSError):
+        logging.getLogger(__name__).warning("Analysis source metadata unavailable", exc_info=True)
+    return details
 
 
 def get_history(job_id: str, user_id: int) -> dict:
@@ -643,11 +682,11 @@ def _public_summary(summary_id: int | None) -> bool:
 def resolve_artifact(artifact_id: str, user_id: int | None):
     with auth_db() as db:
         init_schema(db)
-        row = db.execute("""SELECT a.*,j.user_id,i.source_filename,u.display_name AS player_name
+        row = db.execute("""SELECT a.*,j.user_id,i.score AS analysis_score,
+            i.source_run_id AS item_source_run_id,i.variant AS item_variant
             FROM analysis_replay_artifacts a
             JOIN analysis_history_items i ON i.id=a.history_item_id
             JOIN analysis_history_jobs j ON j.job_id=i.job_id
-            LEFT JOIN users u ON u.id=COALESCE(a.subject_user_id,j.subject_user_id)
             WHERE a.artifact_id=?""", (artifact_id,)).fetchone()
     if not row or not ((user_id is not None and int(row["user_id"]) == int(user_id))
                        or (row["library_active"] and _public_summary(row["summary_id"]))):
@@ -749,9 +788,18 @@ def replay_route(artifact_id: str, request: Request, token: str = ""):
     response.headers["X-Replay-Variant"] = "1" if row["use_variant"] else "0"
     response.headers["X-Replay-Source"] = "Analysis history"
     fit = row["goodness_of_fit"]
-    title = " · ".join((row["player_name"] or row["source_filename"],
-                        f"{row['pattern']}-{row['target']}",
-                        f"{float(fit) * 100:.1f}%" if fit is not None else "—"))
+    needs_source = row["analysis_score"] is None or not (row["item_variant"] or row["variant"])
+    source = (_source_run_details([row["item_source_run_id"]]).get(row["item_source_run_id"], {})
+              if needs_source else {})
+    score = row["analysis_score"] if row["analysis_score"] is not None else source.get("score")
+    variant = row["item_variant"] or row["variant"] or source.get("variant")
+    title = " · ".join(part for part in (
+        f"{int(score):,} 分" if score is not None else "",
+        str(variant).replace("x", "×") if variant else "",
+        f"第 {int(row['source_start_index']) + 1:,} 步",
+        f"{row['pattern']}-{row['target']}",
+        f"{float(fit) * 100:.1f}%" if fit is not None else "—",
+    ) if part)
     # HTTP headers cannot contain Unicode usernames directly.
     response.headers["X-Replay-Title"] = quote(title, safe="")
     from starlette.background import BackgroundTask
