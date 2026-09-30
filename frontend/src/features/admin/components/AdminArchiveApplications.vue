@@ -6,7 +6,7 @@
     <div v-if="!applications.length" class="p-4 text-text-secondary">{{ zh ? '此用户暂无补录申请' : 'This user has no manual archive requests' }}</div>
     <div v-for="item in applications" :key="item.id" class="border-t border-border-main p-4">
       <div class="flex flex-wrap items-baseline justify-between gap-2"><strong class="text-text-main">#{{ item.id }} · {{ item.variant }} · {{ number(item.score) }}</strong><span class="text-text-secondary">{{ item.status }}</span></div>
-      <div class="mt-1 text-text-secondary">{{ date(item.ended_at) }} · {{ number(item.moves) }} {{ zh ? '步' : 'moves' }} · {{ item.game_over ? (zh ? '死亡终盘' : 'game over') : (zh ? '未死亡局面' : 'unfinished position') }}</div>
+      <div class="mt-1 text-text-secondary">{{ item.started_at ? date(item.started_at) : '—' }} → {{ date(item.ended_at) }} · {{ number(item.moves) }} {{ zh ? '步' : 'moves' }} · {{ item.game_over ? (zh ? '死亡终盘' : 'game over') : (zh ? '未死亡局面' : 'unfinished position') }}</div>
       <div class="mt-2 grid max-w-[23rem] grid-cols-4 gap-1 rounded-lg bg-bg-main p-2">
         <span v-for="(tile,index) in item.board" :key="index" class="grid aspect-square place-items-center rounded bg-bg-card text-xs font-bold text-text-main">{{ tile || '' }}</span>
       </div>

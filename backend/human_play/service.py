@@ -14,7 +14,7 @@ from . import engine, permits
 from .store import database, hash_bytes
 
 PERMIT_SECONDS = 12
-RUN_COLUMNS = "id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,created,ended,writer,epoch,permit_until,monitored,state,display_threshold,visible,source"
+RUN_COLUMNS = "id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,created,ended,writer,epoch,permit_until,monitored,state,display_threshold,visible,source,first_move_at"
 SUMMARY_COLUMNS = "id,user_id,variant,state,ended,reason,eligibility,has_replay,source"
 HISTORY_COLUMNS = "id,variant,ended,reason,has_replay,source,json_extract(state,'$.score') AS score,json_extract(state,'$.board') AS board"
 DEFAULT_TIMER_SPLITS = {variant: [str(value) for value in engine.NODES[variant]] for variant in engine.VARIANTS}
@@ -202,7 +202,7 @@ def reject_snapshot(run, code, local_seq):
         reject(db, run, code, local_seq)
 
 
-def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_hash, local_seq, data, reason="", permit=""):
+def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_hash, local_seq, data, reason="", permit="", first_move_at=None):
     if action not in {"monitor", "append", "reentry", "seal", "live"}:
         raise RunError("invalid_action", 400)
     if len(data) % 5 or len(data) > engine.MAX_BYTES or not 0 <= local_seq <= engine.MAX_MOVES:
@@ -221,6 +221,17 @@ def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_has
                 if len(retained) + len(row[0]) > engine.MAX_BYTES:
                     raise RuntimeError('retained_record_too_large')
                 retained.extend(row[0])
+    # Client-reported wall time, not proof of server-observed start time.
+    # Legacy clients omit it; never infer it from creation or replay duration.
+    if first_move_at is not None:
+        try:
+            first_move_at = float(first_move_at)
+        except (TypeError, ValueError):
+            raise RunError("invalid_first_move_at", 400)
+        if not 1394323200 <= first_move_at <= now + 300 or local_seq <= 0:
+            raise RunError("invalid_first_move_at", 400)
+        if run["first_move_at"] is not None and abs(run["first_move_at"] - first_move_at) > 0.001:
+            raise RunError("first_move_at_conflict", 409)
     if run["status"] == "sealed":
         if action == "seal" and run["reason"] == reason and json.loads(run["state"])["seq"] == local_seq:
             return receipt(run)
@@ -300,6 +311,8 @@ def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_has
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
         assert_snapshot(db, run)
+        if first_move_at is not None:
+            db.execute("UPDATE human_runs SET first_move_at=COALESCE(first_move_at,?) WHERE id=?", (first_move_at, run_id))
         if archive is not None and reason == 'game_over':
             from . import rolling
             rolling.ensure_backfill(db)

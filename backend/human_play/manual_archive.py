@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import struct
 import time
 import uuid
@@ -55,10 +56,14 @@ def init_schema(db) -> None:
         ON human_archive_application_audit(application_id,id);
     """)
 
+    columns = {row[1] for row in db.execute("PRAGMA table_info(human_archive_applications)")}
+    if "claimed_started_at" not in columns:
+        db.execute("ALTER TABLE human_archive_applications ADD COLUMN claimed_started_at REAL")
+
 
 def _payload(row) -> dict:
     return {"id": row["id"], "user_id": row["user_id"], "variant": row["variant"],
-            "ended_at": row["claimed_ended_at"], "score": row["claimed_score"],
+            "started_at": row["claimed_started_at"], "ended_at": row["claimed_ended_at"], "score": row["claimed_score"],
             "status": row["status"], "moves": row["moves"],
             "board": json.loads(row["final_board_json"]),
             "game_over": bool(row["is_game_over"]),
@@ -86,8 +91,8 @@ def _inspect_hpr(raw: bytes, expected_variant: str) -> dict:
     normalized = verse_replay.encode_rpl1(expected_variant, initial_state["board"], moves)
     return {"normalized": normalized, "variant": expected_variant,
             "initial_board": initial_state["board"], "board": state["board"],
-            "score": state["score"], "moves": state["seq"], "elapsed": state["elapsed"],
-            "timed_moves": state["seq"], "nodes": state["nodes"],
+            "score": state["score"], "moves": state["seq"], "elapsed": sum(move[3] for move in moves if move[3] != verse_replay.UNKNOWN_TIMING_MS),
+            "timed_moves": sum(move[3] != verse_replay.UNKNOWN_TIMING_MS for move in moves), "nodes": state["nodes"],
             "spawn_count": state["spawnCount"], "four_count": state["fourCount"],
             "game_over": engine.game_over(state["board"], *engine.VARIANTS[expected_variant]),
             "rate": rate_tracker.result()}
@@ -113,8 +118,21 @@ def inspect_upload(raw: bytes, expected_variant: str, expected_score: int) -> di
     return result
 
 
+def validate_claimed_duration(started_at, ended_at, elapsed_ms):
+    # Unknown-duration markers are already excluded by the replay parser.
+    # Compare at replay precision (milliseconds), avoiding float subtraction drift.
+    if (started_at is None or ended_at is None
+            or not math.isfinite(started_at) or not math.isfinite(ended_at)
+            or not MIN_ENDED_AT <= started_at <= ended_at):
+        raise service.RunError("invalid_started_at", 400)
+    claimed_ms = round(ended_at * 1000) - round(started_at * 1000)
+    if claimed_ms < elapsed_ms:
+        raise service.RunError("archive_duration_too_short", 400,
+                               claimed_duration_ms=claimed_ms, recorded_duration_ms=elapsed_ms)
+
+
 def submit(user_id: int, variant: str, ended_at: float, score: int,
-           filename: str, raw: bytes) -> dict:
+           filename: str, raw: bytes, *, started_at=None) -> dict:
     now = time.time()
     try:
         ended_at = float(ended_at)
@@ -122,7 +140,14 @@ def submit(user_id: int, variant: str, ended_at: float, score: int,
         raise service.RunError("invalid_ended_at", 400) from exc
     if not MIN_ENDED_AT <= ended_at <= now + 300:
         raise service.RunError("invalid_ended_at", 400)
+    try:
+        started_at = float(started_at)
+    except (TypeError, ValueError) as exc:
+        raise service.RunError("invalid_started_at", 400) from exc
+    if not MIN_ENDED_AT <= started_at <= ended_at:
+        raise service.RunError("invalid_started_at", 400)
     result = inspect_upload(raw, variant, score)
+    validate_claimed_duration(started_at, ended_at, result["elapsed"])
     normalized = result["normalized"]
     archive = gzip.compress(normalized, compresslevel=6, mtime=0)
     replay_crc = zlib.crc32(normalized)
@@ -152,11 +177,11 @@ def submit(user_id: int, variant: str, ended_at: float, score: int,
         if any((row["pending_archive"] or row["run_archive"]) == archive for row in candidates):
             raise service.RunError("replay_already_submitted", 409)
         cursor = db.execute("""INSERT INTO human_archive_applications
-            (user_id,variant,claimed_ended_at,claimed_score,status,replay_crc,replay_size,
+            (user_id,variant,claimed_started_at,claimed_ended_at,claimed_score,status,replay_crc,replay_size,
              moves,final_board_json,is_game_over,timing_summary_json,warning_flags_json,
              original_filename,requested_at,updated_at)
-            VALUES(?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,?)""",
-            (user_id, variant, ended_at, score, replay_crc, len(normalized), result["moves"],
+            VALUES(?,?,?,?,?,'pending',?,?,?,?,?,?,?,?,?,?)""",
+            (user_id, variant, started_at, ended_at, score, replay_crc, len(normalized), result["moves"],
              json.dumps(result["board"], separators=(",", ":")), int(result["game_over"]),
              json.dumps(timing, separators=(",", ":")), json.dumps(warnings),
              safe_filename, now, now))
@@ -207,6 +232,7 @@ def _validated_saved(db, application_id: int):
     if (result["score"] != row["claimed_score"] or result["moves"] != row["moves"]
             or result["board"] != json.loads(row["final_board_json"])):
         raise service.RunError("stored_replay_changed", 409)
+    validate_claimed_duration(row["claimed_started_at"], row["claimed_ended_at"], result["elapsed"])
     return dict(row), result
 
 
@@ -238,13 +264,15 @@ def decide(application_id: int, operator_id: int, approved: bool, note: str) -> 
              "elapsed": result["elapsed"], "nodes": result["nodes"], "hash": None,
              "spawnCount": result["spawn_count"], "fourCount": result["four_count"],
              "imported": {"application_id": application_id}}
-    created = max(MIN_ENDED_AT, saved["claimed_ended_at"] - result["elapsed"] / 1000)
+    created = saved["claimed_started_at"] if saved["claimed_started_at"] is not None else max(MIN_ENDED_AT, saved["claimed_ended_at"] - result["elapsed"] / 1000)
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
         current = db.execute("""SELECT a.*,p.archive FROM human_archive_applications a
             JOIN human_archive_application_payloads p ON p.application_id=a.id WHERE a.id=?""",
             (application_id,)).fetchone()
-        if not current or current["status"] != "pending" or current["archive"] != saved["archive"]:
+        if (not current or current["status"] != "pending" or current["archive"] != saved["archive"]
+                or current["claimed_started_at"] != saved["claimed_started_at"]
+                or current["claimed_ended_at"] != saved["claimed_ended_at"]):
             raise service.RunError("archive_application_changed", 409)
         duplicate = db.execute("""SELECT a.id FROM human_archive_applications a
             JOIN human_runs r ON r.id=a.run_id
@@ -265,6 +293,7 @@ def decide(application_id: int, operator_id: int, approved: bool, note: str) -> 
              str(application_id), created, saved["claimed_ended_at"],
              json.dumps(state, separators=(",", ":")), saved["archive"],
              rating.single_rating(saved["variant"], result["board"]), rating.RATING_VERSION))
+        db.execute("UPDATE human_runs SET first_move_at=? WHERE id=?", (saved["claimed_started_at"], run_id))
         db.execute("""UPDATE human_archive_applications SET status='approved',approved_by=?,
             approved_at=?,updated_at=?,review_note=?,run_id=? WHERE id=?""",
             (operator_id, now, now, note, run_id, application_id))

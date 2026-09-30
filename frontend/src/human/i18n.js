@@ -37,7 +37,7 @@ const en = {
   '补录申请':'Archive request', '提交补录申请':'Submit archive request', '提交申请':'Submit request',
   '上传回放后，服务器会核对变体和最终得分；验证通过后交由站长审批。批准的补录局不参加近 168 小时榜及每周 Token 结算。':'The server verifies the replay variant and final score before owner review. Approved manual archives do not enter the rolling 168-hour ranking or weekly Token settlement.',
   '回放必须能够完整解析，且服务器重算分数必须与填写分数一致。':'The replay must parse completely and its server-calculated score must match the submitted score.',
-  '对局结束时间':'Game end time', '最终得分':'Final score', '回放文件':'Replay file',
+  '开始至结束的时长不能小于回放中已记录的步时总和。':'The time from start to finish must be at least the sum of recorded move times.', '对局开始时间':'Game start time', '对局开始时间无效，且不能晚于结束时间。':'Enter a valid start time no later than the end time.', '对局结束时间':'Game end time', '最终得分':'Final score', '回放文件':'Replay file',
   '支持 .vrs、回放代码、Verse 文本回放和本站 .hpr；文件上限 2 MB。':'Supports .vrs, replay codes, Verse text replays and site .hpr files, up to 2 MB.',
   '已批准并归档':'Approved and archived', '申请已拒绝':'Request rejected', '归档资格已撤销':'Archive eligibility revoked',
   '无法读取补录申请，请稍后重试。':'Could not load archive requests. Please retry.',

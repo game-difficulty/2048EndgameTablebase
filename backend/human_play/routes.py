@@ -259,7 +259,8 @@ async def upload(run_id: str, action: str, request: Request):
         result = await run_in_threadpool(call, service.submit, user["id"], request.headers.get("x-human-browser", ""), run_id,
             action=action, writer=request.headers.get("x-human-writer", ""), epoch=epoch,
             start=start, prefix_hash=request.headers.get("x-human-prefix", ""), local_seq=local_seq,
-            data=canonical, reason=request.headers.get("x-human-reason", ""), permit=request.headers.get('x-human-permit', ''))
+            data=canonical, reason=request.headers.get("x-human-reason", ""), permit=request.headers.get('x-human-permit', ''),
+            first_move_at=request.headers.get('x-human-first-move-at'))
         return wire_receipt(request, result)
     finally:
         await release_slot(token)
@@ -323,7 +324,7 @@ def archive_applications(request: Request, response: Response):
 
 @router.post('/me/archive-applications', status_code=201)
 async def archive_application_submit(request: Request, variant: str,
-                                     ended_at: float, score: int,
+                                     ended_at: float, score: int, started_at: float,
                                      filename: str = Query('', max_length=180)):
     from . import manual_archive
     user = await run_in_threadpool(require_user, request)
@@ -341,7 +342,7 @@ async def archive_application_submit(request: Request, variant: str,
         except TimeoutError as exc:
             raise HTTPException(408, 'upload_timeout') from exc
         application = await run_in_threadpool(call, manual_archive.submit, user['id'],
-            variant, ended_at, score, filename, bytes(body))
+            variant, ended_at, score, filename, bytes(body), started_at=started_at)
         return {"application": application}
     finally:
         await release_slot(token)

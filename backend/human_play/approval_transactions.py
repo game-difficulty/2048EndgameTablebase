@@ -71,7 +71,7 @@ def list_transactions(
                WHEN status IN ('revoked','cancelled') THEN 'revoked'
                ELSE 'processing' END AS stage,
              requested AS requested_at, updated AS updated_at, username AS subject,
-             NULL AS variant, NULL AS score, NULL AS moves, NULL AS ended_at,
+             NULL AS variant, NULL AS score, NULL AS moves, NULL AS ended_at, NULL AS started_at,
              NULL AS game_over, counts AS detail_json, error, proof_note AS review_note,
              approved_by AS operator_id
       FROM human_external_claims
@@ -84,7 +84,7 @@ def list_transactions(
                WHEN status IN ('revoked','cancelled') THEN 'revoked'
                ELSE 'processing' END AS stage,
              requested_at, updated_at, original_filename AS subject,
-             variant, claimed_score AS score, moves, claimed_ended_at AS ended_at,
+             variant, claimed_score AS score, moves, claimed_ended_at AS ended_at, claimed_started_at AS started_at,
              is_game_over AS game_over, warning_flags_json AS detail_json,
              '' AS error, review_note, approved_by AS operator_id
       FROM human_archive_applications

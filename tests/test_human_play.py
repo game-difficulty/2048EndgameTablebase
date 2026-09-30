@@ -75,6 +75,49 @@ class HumanPlayTests(unittest.TestCase):
             start=start, prefix_hash=prefix or (states[start]['hash'] if states else initial['hash']),
             local_seq=local_seq if local_seq is not None else start + len(raw)//5, data=raw, reason=reason)
 
+    def test_first_move_time_header_and_legacy_omission(self):
+        import time
+        run = self.new()
+        raw, state, states = self.records(run, count=2)
+        headers = {'Content-Type': 'application/octet-stream', 'X-Human-Browser': BROWSER,
+                   'X-Human-Writer': WRITER, 'X-Human-Epoch': '1', 'X-Human-Start': '0',
+                   'X-Human-Count': str(state['seq']), 'X-Human-Prefix': states[0]['hash'],
+                   'X-Human-Reason': 'restarted', 'X-Human-First-Move-At': 'nan'}
+        url = f"/api/human/runs/{run['run_id']}/seal"
+        self.assertEqual(self.client.post(url, content=raw, headers=headers).status_code, 400)
+        stamp = round(time.time() - 1, 3)
+        headers['X-Human-First-Move-At'] = str(stamp)
+        self.assertEqual(self.client.post(url, content=raw, headers=headers).status_code, 200)
+        with database() as db:
+            self.assertEqual(db.execute('SELECT first_move_at FROM human_runs WHERE id=?', (run['run_id'],)).fetchone()[0], stamp)
+        other = self.new()
+        events, _, _ = self.records(other, count=2)
+        self.send(other, events, reason='restarted')
+        with database() as db:
+            self.assertIsNone(db.execute('SELECT first_move_at FROM human_runs WHERE id=?', (other['run_id'],)).fetchone()[0])
+
+    def test_first_move_time_persists_without_changing_creation_or_replay(self):
+        run = self.new(threshold=0)
+        raw, state, states = self.records(run, until=lambda s: s['score'] > 0)
+        import time
+        start_time = time.time() - 10
+        kwargs = dict(action='monitor', writer=WRITER, epoch=1, start=0,
+                      prefix_hash=states[0]['hash'], local_seq=state['seq'], data=raw)
+        service.submit(1, BROWSER, run['run_id'], first_move_at=start_time, **kwargs)
+        with database() as db:
+            row = db.execute('SELECT first_move_at,created FROM human_runs WHERE id=?', (run['run_id'],)).fetchone()
+            self.assertEqual(row['first_move_at'], start_time)
+            self.assertGreater(row['created'], start_time)
+        # A retry is idempotent; a different timestamp cannot overwrite it.
+        service.submit(1, BROWSER, run['run_id'], first_move_at=start_time, **kwargs)
+        with self.assertRaisesRegex(service.RunError, 'first_move_at_conflict'):
+            service.submit(1, BROWSER, run['run_id'], first_move_at=start_time+1, **kwargs)
+        service.submit(1, BROWSER, run['run_id'], action='seal', writer=WRITER, epoch=1,
+                       start=state['seq'], prefix_hash=state['hash'], local_seq=state['seq'],
+                       data=b'', reason='restarted')
+        with database() as db:
+            self.assertEqual(db.execute('SELECT first_move_at FROM human_runs WHERE id=?', (run['run_id'],)).fetchone()[0], start_time)
+
     def test_rectangular_movement_and_single_merge(self):
         board = [2,2,2,2, 0,0,0,0, 4,0,4,0]
         moved, score = engine.move(board, 3, 4, 3)

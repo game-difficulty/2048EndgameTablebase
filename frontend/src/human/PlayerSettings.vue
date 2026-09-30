@@ -46,7 +46,7 @@
         <div v-for="item in archiveApplications" :key="item.id">
           <strong>{{ item.variant.replace('x',' × ') }} · {{ formatNumber(item.score) }}</strong>
           <span>{{ t(archiveStatus[item.status] || item.status) }}</span>
-          <small>{{ claimDate(item.ended_at) }} · {{ formatNumber(item.moves) }} {{ t('步') }}</small>
+          <small>{{ claimDate(item.started_at) }} → {{ claimDate(item.ended_at) }} · {{ formatNumber(item.moves) }} {{ t('步') }}</small>
           <p v-if="item.review_note">{{ item.review_note }}</p>
         </div>
       </div>
@@ -60,6 +60,7 @@
           <p>{{ t('回放必须能够完整解析，且服务器重算分数必须与填写分数一致。') }}</p>
           <form @submit.prevent="submitArchiveApplication">
             <label>{{ t('棋盘变体') }}<select v-model="archiveForm.variant" required><option v-for="variant in variants" :key="variant" :value="variant">{{ variant.replace('x',' × ') }}</option></select></label>
+            <label>{{ t('对局开始时间') }}<input v-model="archiveForm.startedAt" type="datetime-local" :max="archiveForm.endedAt" required></label>
             <label>{{ t('对局结束时间') }}<input v-model="archiveForm.endedAt" type="datetime-local" required></label>
             <label>{{ t('最终得分') }}<input v-model.number="archiveForm.score" type="number" min="0" max="2000000000" step="1" required></label>
             <label>{{ t('回放文件') }}<input type="file" accept=".vrs,.txt,.hpr,application/octet-stream" required @change="archiveFile=$event.target.files?.[0]||null"></label>
@@ -94,7 +95,7 @@ const section=ref('game'), thresholdError=ref('');
 const verseUsername=ref(''), verseClaim=ref(null), verseBusy=ref(false), verseError=ref('');
 const verseStatus={pending:'等待站长审核',approved:'已批准，等待导入',importing:'正在导入',complete:'继承完成',failed:'导入失败'};
 const archiveApplications=ref([]), archiveDialog=ref(false), archiveBusy=ref(false), archiveError=ref(''), archiveLoadError=ref('');
-const archiveFile=ref(null), archiveForm=reactive({variant:'4x4',endedAt:'',score:0});
+const archiveFile=ref(null), archiveForm=reactive({variant:'4x4',startedAt:'',endedAt:'',score:0});
 const archiveStatus={pending:'等待站长审核',approved:'已批准并归档',rejected:'申请已拒绝',revoked:'归档资格已撤销'};
 const thresholds=reactive({'4x4':0,'3x4':0,'2x4':0,'3x3':0});
 const timerVariant=ref('4x4'),timerError=ref('');
@@ -172,11 +173,11 @@ async function loadArchiveApplications(){
   catch{archiveLoadError.value='无法读取补录申请，请稍后重试。';}
 }
 function openArchiveApplication(){
-  archiveForm.variant='4x4';archiveForm.score=0;archiveForm.endedAt=localDateTimeValue();
+  archiveForm.variant='4x4';archiveForm.score=0;archiveForm.startedAt='';archiveForm.endedAt=localDateTimeValue();
   archiveFile.value=null;archiveError.value='';archiveDialog.value=true;
 }
 function closeArchiveApplication(){if(!archiveBusy.value)archiveDialog.value=false;}
-const archiveErrors={replay_score_mismatch:'回放重算得分与填写分数不一致。',replay_variant_mismatch:'回放变体与所选变体不一致。',replay_already_submitted:'这份回放已经提交或归档。',archive_application_pending_limit:'待审批的补录申请已达到上限。',archive_application_queue_full:'补录审核队列已满，请稍后再试。',archive_application_rate_limit:'今天提交的补录申请过多，请稍后再试。',replay_too_large:'回放文件不能超过 2 MB。',replay_size_invalid:'回放文件无效或超过大小限制。',invalid_ended_at:'对局结束时间无效。'};
+const archiveErrors={archive_duration_too_short:'开始至结束的时长不能小于回放中已记录的步时总和。',replay_score_mismatch:'回放重算得分与填写分数不一致。',replay_variant_mismatch:'回放变体与所选变体不一致。',replay_already_submitted:'这份回放已经提交或归档。',archive_application_pending_limit:'待审批的补录申请已达到上限。',archive_application_queue_full:'补录审核队列已满，请稍后再试。',archive_application_rate_limit:'今天提交的补录申请过多，请稍后再试。',replay_too_large:'回放文件不能超过 2 MB。',replay_size_invalid:'回放文件无效或超过大小限制。',invalid_started_at:'对局开始时间无效，且不能晚于结束时间。',invalid_ended_at:'对局结束时间无效。'};
 async function submitArchiveApplication(){
   if(!archiveFile.value){archiveError.value='请选择回放文件。';return;}
   if(archiveFile.value.size>2*1024*1024){archiveError.value='回放文件不能超过 2 MB。';return;}
@@ -184,7 +185,9 @@ async function submitArchiveApplication(){
   if(!Number.isFinite(endedAt)){archiveError.value='对局结束时间无效。';return;}
   archiveBusy.value=true;archiveError.value='';
   try{
-    const query=new URLSearchParams({variant:archiveForm.variant,ended_at:String(endedAt),score:String(archiveForm.score),filename:archiveFile.value.name});
+    const startedAt=new Date(archiveForm.startedAt).getTime()/1000;
+    if(!Number.isFinite(startedAt)||startedAt>endedAt){archiveError.value='对局开始时间无效，且不能晚于结束时间。';return;}
+    const query=new URLSearchParams({started_at:String(startedAt),variant:archiveForm.variant,ended_at:String(endedAt),score:String(archiveForm.score),filename:archiveFile.value.name});
     const body=await archiveFile.value.arrayBuffer();
     const response=await request('/api/human/me/archive-applications?'+query,{method:'POST',body,binary:true,timeoutMs:25000});
     const result=await response.json();archiveApplications.value.unshift(result.application);archiveDialog.value=false;

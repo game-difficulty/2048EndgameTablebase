@@ -25,7 +25,7 @@ export async function upload(run, events, browser, writer, action, status, keepa
   const packed = await uploadBody(tail.bytes);
   return json(`/api/human/runs/${run.id}/${action}`, {
     method: 'POST', body: packed.body, binary: true, keepalive,
-    headers: { ...packed.headers, 'X-Human-Browser': browser, 'X-Human-Writer': writer, 'X-Human-Epoch': String(status.epoch),
+    headers: { ...packed.headers, ...(Number.isFinite(run.firstMoveAt) && run.firstMoveAt > 0 ? { 'X-Human-First-Move-At': String(run.firstMoveAt / 1000) } : {}), 'X-Human-Browser': browser, 'X-Human-Writer': writer, 'X-Human-Epoch': String(status.epoch),
       'X-Human-Start': String(start), 'X-Human-Count': String(run.seq),
       'X-Human-Prefix': start === 0 ? run.initialHash : tail.prefix || 'missing',
       'X-Human-Reason': run.reason || '', 'X-Human-Permit': run.permit || '' },

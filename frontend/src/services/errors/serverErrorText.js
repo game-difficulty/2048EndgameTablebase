@@ -49,6 +49,8 @@ const messages = {
 };
 
 const codes = {
+  archive_duration_too_short: ['开始至结束的时长不能小于回放中已记录的步时总和。', 'The time from start to finish must be at least the sum of recorded move times.'],
+  invalid_started_at: ['请填写有效的对局开始时间，且不能晚于结束时间。', 'Enter a valid game start time no later than the end time.'],
   AUTH_REQUIRED: ['请先登录后再操作。', 'Please sign in to continue.'],
   INSUFFICIENT_TOKENS: ['额度不足，请查看额度说明。', 'Insufficient tokens. See the quota guide.'],
   PROFILE_CHANGE_COOLDOWN: ['尚未到可修改时间，请稍后再试。', 'This profile field is still on cooldown.'],

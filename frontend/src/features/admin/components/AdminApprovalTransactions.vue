@@ -64,7 +64,7 @@
           <div><dt>{{ copy.stage }}</dt><dd>{{ stageLabel(selected) }}</dd></div>
           <div><dt>{{ copy.requested }}</dt><dd>{{ date(selected.requested_at) }}</dd></div>
           <div><dt>{{ copy.updated }}</dt><dd>{{ date(selected.updated_at) }}</dd></div>
-          <div v-if="selected.kind === 'archive'"><dt>{{ copy.game }}</dt><dd>{{ selected.variant }} · {{ number(selected.score) }} · {{ number(selected.moves) }} {{ copy.moves }}</dd></div>
+          <div v-if="selected.kind === 'archive'"><dt>{{ copy.game }}</dt><dd>{{ selected.variant }} · {{ number(selected.score) }} · {{ number(selected.moves) }} {{ copy.moves }}<small>{{ selected.started_at ? date(selected.started_at) : '—' }} → {{ date(selected.ended_at) }}</small></dd></div>
           <div v-else><dt>{{ copy.records }}</dt><dd>{{ counts(selected.details) }}</dd></div>
         </dl>
         <p v-if="selected.error" class="approval-alert">{{ selected.error }}</p>

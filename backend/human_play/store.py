@@ -97,6 +97,8 @@ def init_db():
         # HPR/gzip already carries CRC32 and length; reviews replay the entire game.
         # Drop only the redundant archive digest, keeping anti-rollback prefix hashes.
         columns = {row["name"] for row in db.execute("PRAGMA table_info(human_runs)")}
+        if "first_move_at" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN first_move_at REAL")
         if "display_threshold" not in columns:
             db.execute("ALTER TABLE human_runs ADD COLUMN display_threshold INTEGER NOT NULL DEFAULT 0")
         if "visible" not in columns:
