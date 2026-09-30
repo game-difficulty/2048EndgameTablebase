@@ -42,14 +42,19 @@ class LuckyBagTests(unittest.TestCase):
         self.assertEqual(len(bags.listing(now=200)), 2)
         self.assertNotEqual(bags.create('run-two', 32768, now=200)['id'], self.bag['id'])
 
-    def test_award_bounds_and_totals_for_every_winner_count(self):
+    def test_prize_slots_exhaust_pool_and_stay_within_bounds(self):
         for pool, low, high in bags.RULES.values():
-            for count in range(11):
-                for _ in range(50):
-                    result = bags.amounts(count, pool, low, high)
-                    self.assertEqual(len(result), count)
-                    self.assertLessEqual(sum(result), pool)
-                    self.assertTrue(all(low <= value <= high for value in result))
+            for _ in range(100):
+                result = bags.amounts(bags.MAX_WINNERS, pool, low, high)
+                self.assertEqual(len(result), bags.MAX_WINNERS)
+                self.assertEqual(sum(result), pool)
+                self.assertTrue(all(low <= value <= high for value in result))
+
+    def test_prize_slots_reject_an_impossible_exact_total(self):
+        for args in ((10, 2_999, 300, 1_000), (10, 10_001, 300, 1_000),
+                     (0, 0, 300, 1_000)):
+            with self.assertRaises(ValueError):
+                bags.amounts(*args)
 
     def test_ten_unique_online_winners_credited_without_claim(self):
         self.enter()
@@ -58,7 +63,7 @@ class LuckyBagTests(unittest.TestCase):
         self.assertTrue(bags.draw(self.bag['id'], set(range(1, 16)), now=280))
         result = bags.listing(1, now=281)[0]
         self.assertEqual((result['participants'], result['winners']), (15, 10))
-        self.assertTrue(3000 <= result['distributed'] <= 5000)
+        self.assertEqual(result['distributed'], 5000)
         with auth_db() as db:
             ledger = list(db.execute("SELECT * FROM token_ledger WHERE event_type='live_lucky_award'"))
             self.assertEqual(len(ledger), 10)
@@ -70,25 +75,28 @@ class LuckyBagTests(unittest.TestCase):
             self.assertEqual(account['paid_balance_units'], 789+result['award']*1000)
             self.assertEqual(db.execute('SELECT count(*) FROM user_entitlements').fetchone()[0], 0)
 
-    def test_absent_users_excluded_and_small_pools_not_fully_distributed(self):
+    def test_absent_users_excluded_and_only_assigned_slots_are_distributed(self):
         self.enter(3)
-        with patch.object(bags.secrets, 'randbelow', return_value=123):
+        slots = [300, 300, 300, 300, 300, 500, 600, 700, 800, 900]
+        with patch.object(bags, 'amounts', return_value=slots) as generate:
             self.assertTrue(bags.draw(self.bag['id'], {1}, now=280))
-        self.assertEqual(bags.listing(1, now=281)[0]['award'], 423)
+        generate.assert_called_once_with(bags.MAX_WINNERS, 5000, 300, 1000)
+        self.assertEqual(bags.listing(1, now=281)[0]['award'], 300)
         result = bags.listing(2, now=281)[0]
-        self.assertEqual((result['joined'], result['present'], result['award'], result['distributed']), (True, False, 0, 423))
+        self.assertEqual((result['joined'], result['present'], result['award'], result['distributed']), (True, False, 0, 300))
 
-    def test_single_winner_can_receive_either_endpoint(self):
-        for pool, low, high in bags.RULES.values():
-            with patch.object(bags.secrets, 'randbelow', return_value=0):
-                self.assertEqual(bags.amounts(1, pool, low, high), [low])
-            with patch.object(bags.secrets, 'randbelow', side_effect=lambda n: n - 1):
-                self.assertEqual(bags.amounts(1, pool, low, high), [high])
+    def test_each_draw_generates_the_maximum_slot_count_before_assignment(self):
+        self.enter(2)
+        slots = [300, 300, 300, 300, 300, 500, 600, 700, 800, 900]
+        with patch.object(bags, 'amounts', return_value=slots) as generate:
+            self.assertTrue(bags.draw(self.bag['id'], {1, 2}, now=280))
+        generate.assert_called_once_with(bags.MAX_WINNERS, 5000, 300, 1000)
+        self.assertEqual(bags.listing(now=281)[0]['distributed'], 600)
 
     def test_amounts_are_shuffled_before_assignment(self):
-        with patch.object(bags.secrets, 'randbelow', side_effect=[0, 100, 200]), \
+        with patch.object(bags.secrets, 'randbelow', side_effect=[0, 100, 0]), \
              patch.object(bags.secrets.SystemRandom, 'shuffle', side_effect=lambda values: values.reverse()) as shuffle:
-            self.assertEqual(bags.amounts(3, 5000, 300, 1000), [500, 400, 300])
+            self.assertEqual(bags.amounts(3, 1200, 300, 1000), [500, 400, 300])
             shuffle.assert_called_once()
 
     def test_no_participants_or_no_present_users(self):

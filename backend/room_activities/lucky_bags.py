@@ -59,7 +59,9 @@ def create_human(run_id, milestone, now=None, room_id=''):
 def create_activity(trigger_key, reward_spec, *, room_id, now=None, milestone=0, namespace=True):
     """Reusable idempotent room giveaway; no AI run or board threshold is required."""
     pool, minimum, maximum = (reward_spec[key] for key in ('pool','minimum','maximum'))
-    if any(type(value) is not int for value in (pool,minimum,maximum)) or not 0 < minimum <= maximum <= pool or pool < MAX_WINNERS*minimum:
+    if (any(type(value) is not int for value in (pool,minimum,maximum))
+            or not 0 < minimum <= maximum <= pool
+            or not MAX_WINNERS * minimum <= pool <= MAX_WINNERS * maximum):
         raise ValueError('invalid_reward_spec')
     if not isinstance(trigger_key,str) or not 1 <= len(trigger_key) <= 200:
         raise ValueError('invalid_activity_trigger')
@@ -113,17 +115,24 @@ def join(bag_id, user_id, now=None, room_id='ai-classic'):
 
 
 def amounts(count, pool, minimum, maximum):
-    """Reserve minimums, then shuffle so every winner has equal expectation."""
-    if count < 0 or minimum < 1 or maximum < minimum or pool < count * minimum:
+    """Generate bounded prize slots that exhaust the pool, then randomize their order."""
+    if (count < 1 or minimum < 1 or maximum < minimum
+            or not count * minimum <= pool <= count * maximum):
         raise ValueError("Invalid lucky-bag bounds")
     remaining = pool
     result = []
     for left in range(count - 1, -1, -1):
-        low = minimum
+        # Leave a feasible bounded total for every slot still to generate.
+        low = max(minimum, remaining - left * maximum)
         high = min(maximum, remaining - left * minimum)
         value = low + secrets.randbelow(high - low + 1)
         result.append(value)
         remaining -= value
+    if remaining:
+        raise AssertionError('lucky-bag pool was not exhausted')
+    # The construction order is deliberately hidden.  A uniform permutation
+    # makes every assigned position exchangeable, so each position has the
+    # same conditional expectation: pool / count.
     secrets.SystemRandom().shuffle(result)
     return result
 
@@ -141,7 +150,10 @@ def draw(bag_id, present_users, now=None, room_id='ai-classic'):
         db.executemany('UPDATE live_lucky_entries SET present=1 WHERE bag_id=? AND user_id=?',
                        [(bag_id, uid) for uid in entrants])
         winners = secrets.SystemRandom().sample(entrants, min(MAX_WINNERS, len(entrants)))
-        prizes = amounts(len(winners), bag['pool'], bag['minimum'], bag['maximum'])
+        # Generate the complete red-envelope set first.  A full draw therefore
+        # always distributes the advertised pool; a smaller draw receives a
+        # random prefix of the already shuffled slots.
+        prizes = amounts(MAX_WINNERS, bag['pool'], bag['minimum'], bag['maximum'])
         stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
         for uid, prize in zip(winners, prizes):
             units = prize * 1000

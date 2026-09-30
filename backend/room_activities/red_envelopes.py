@@ -40,8 +40,10 @@ def init_schema():
 def split_amount(amount, count, mode):
     if mode == 'equal':
         return [amount // count] * count
-    # Uniform positive integer compositions are exchangeable; shuffling also
-    # explicitly decouples the allocation from claim order. No client seed.
+    # Uniform positive integer compositions are exchangeable.  The independent
+    # permutation also makes every claim position a uniform position in the
+    # generated batch, hence every position has expectation amount / count.
+    # No client seed.
     cuts = [0, *sorted(secrets.SystemRandom().sample(range(1, amount), count - 1)), amount]
     shares = [right - left for left, right in zip(cuts, cuts[1:])]
     secrets.SystemRandom().shuffle(shares)
