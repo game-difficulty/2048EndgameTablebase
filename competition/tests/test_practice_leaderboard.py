@@ -35,8 +35,8 @@ def test_score_best_is_one_row_per_player_and_guest_can_read(board):
     assert board.list(project, Principal(1, "选手1"))["my_best"]["elapsed_ms"] == 800
 
 
-def test_race_requires_target_and_sorts_fastest_first(board):
-    project = "tournament-pure2-full-race-3x3"
+@pytest.mark.parametrize("project", ["tournament-pure2-full-race-3x3", "practice-look-back-3x4"])
+def test_race_requires_target_and_sorts_fastest_first(board, project):
     with pytest.raises(CompetitionError):
         result(board, project, 1, 0)
     result(board, project, 1, 0, 5400, "target_reached")
@@ -45,8 +45,8 @@ def test_race_requires_target_and_sorts_fastest_first(board):
     assert result(board, project, 1, 0, 6000, "target_reached")["improved"] is False
 
 
-def test_dice_uses_board_sum_and_unknown_projects_are_rejected(board):
-    project = "tournament-dice-wall-3x4"
+@pytest.mark.parametrize("project", ["tournament-dice-wall-3x4", "practice-fission-4x4"])
+def test_dice_uses_board_sum_and_unknown_projects_are_rejected(board, project):
     board.submit(project, Principal(1, "选手1"), score=900, board_sum=100, elapsed_ms=1000, outcome="no_moves")
     board.submit(project, Principal(2, "选手2"), score=100, board_sum=200, elapsed_ms=1000, outcome="no_moves")
     assert board.list(project)["top"][0]["user_id"] == 2
@@ -72,7 +72,6 @@ def test_new_special_projects_rank_by_standard_score(board, project):
     "practice-heavy-tiles-4x4",
     "practice-fission-4x4",
     "practice-aftershock-4x4",
-    "practice-look-back-3x4",
 ])
 def test_new_score_variants_have_practice_leaderboards(board, project):
     outcome = "tile_limit" if project == "practice-full-load-4x4" else "no_moves"

@@ -29,9 +29,9 @@ PROJECT_RULES = {
     "practice-timed-bomb-4x4": ("score", 2),
     "practice-full-load-4x4": ("score", 1),
     "practice-heavy-tiles-4x4": ("score", 1),
-    "practice-fission-4x4": ("score", 1),
+    "practice-fission-4x4": ("board_sum", 2),
     "practice-aftershock-4x4": ("score", 1),
-    "practice-look-back-3x4": ("score", 1),
+    "practice-look-back-3x4": ("time", 2),
 }
 
 

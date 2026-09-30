@@ -46,11 +46,11 @@ TOURNAMENT_RULES = (
         spawn4_rate=0.5, estimated_minutes="5–20",
     ),
     VariantRules(
-        "tournament-evil-spawn-4x4", "对抗出数（4×4）", 4, 4,
+        "tournament-evil-spawn-4x4", "寸步难行（4×4）", 4, 4,
         evil_spawn=True, estimated_minutes="1–10",
     ),
     VariantRules(
-        "tournament-pure2-full-race-3x3", "纯2满盘竞速（3×3）", 3, 3,
+        "tournament-pure2-full-race-3x3", "极限速通（3×3）", 3, 3,
         spawn4_rate=0, target_sum=1022, allow_restart=True,
         result_metric="race", estimated_minutes="3–10",
     ),
@@ -64,7 +64,7 @@ TOURNAMENT_RULES = (
         dice_wall=True, result_metric="board_sum", estimated_minutes="3–5",
     ),
     VariantRules(
-        "tournament-mirror-64x10-race-4x4", "镜面64砖×10竞速（4×4）", 4, 4,
+        "tournament-mirror-64x10-race-4x4", "镜面领域（4×4）", 4, 4,
         mirror_portals=True, unmergeable=64, target_tile_count=(64, 10),
         allow_restart=True, result_metric="race", estimated_minutes="2–15",
     ),
@@ -73,7 +73,7 @@ TOURNAMENT_RULES = (
         unmergeable=256, estimated_minutes="10–20",
     ),
     VariantRules(
-        "tournament-isolated-island-hard-4x4", "困难孤岛（4×4）", 4, 4,
+        "tournament-isolated-island-hard-4x4", "孤岛（4×4）", 4, 4,
         isolated_island=True, estimated_minutes="待测",
     ),
     VariantRules(
@@ -86,7 +86,7 @@ TOURNAMENT_RULES = (
 def tournament_project_catalog() -> list[dict[str, Any]]:
     return [{
         "key": "project-01",
-        "name": "真华容道（4×4）",
+        "name": "真·华容道（4×4）",
         "description": "前10次有效移动先整理棋盘，随后从上方出现首个特殊块；特殊块整块滑到尽头，从下方中央送出且不能退回入口。无路可走或10分钟到时结束，送出数量多者胜。",
         "project_ref": "tournament-cargo-transport-4x4",
         "adapter_rules_version": "tournament-v2",
@@ -121,8 +121,8 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
             "name": name,
             "description": description,
             "project_ref": project_ref,
-            "adapter_rules_version": "tournament-v5" if index >= 19 else "tournament-v4",
-            "rules_version": "tournament-v5" if index >= 19 else "tournament-v4",
+            "adapter_rules_version": "tournament-v6" if index in (18, 20) else "tournament-v5" if index == 19 else "tournament-v4",
+            "rules_version": "tournament-v6" if index in (18, 20) else "tournament-v5" if index == 19 else "tournament-v4",
         }
         for index, project_ref, name, description in (
             (13, "practice-pair-bond-4x4", "出双入对（4×4）", "特殊块相邻可粘合成双格，新双格形成时旧双格消失；双方死亡后按得分结算。"),
@@ -130,9 +130,9 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
             (15, "practice-timed-bomb-4x4", "定时炸弹（4×4）", "炸弹移动后倒计时减少，归零变墙；双方死亡后按得分结算。"),
             (16, "practice-full-load-4x4", "满载（4×4）", "棋盘数字块超过12个立即结束；按得分结算。"),
             (17, "practice-heavy-tiles-4x4", "越来越重（4×4）", "256只能横移、512只能竖移、1024不能移动；双方死亡后按得分结算。"),
-            (18, "practice-fission-4x4", "裂变（4×4）", "1024及以上数字块会分裂成两块并替代该步出数；双方死亡后按得分结算。"),
-            (19, "practice-aftershock-4x4", "余震（4×4）", "合出256及以上数字块后随机平移原始行或列；双方死亡后按得分结算。"),
-            (20, "practice-look-back-3x4", "回头看看（3×4）", "有效移动有机会改为撤销并出两个数；双方死亡后按得分结算。"),
+            (18, "practice-fission-4x4", "裂变（4×4）", "1024及以上数字块会分裂成两块并替代该步出数；双方死亡后比较盘面和。"),
+            (19, "practice-aftershock-4x4", "余震（4×4）", "一次操作中，只要合出256或更大的数字块，就触发一次余震：从初始四行、四列中随机选一条，向随机方向平移一格。双方死亡后按得分结算。"),
+            (20, "practice-look-back-3x4", "回头看看（3×4）", "有效移动有机会改为撤销并出两个数；可重开，先合出2048者获胜。"),
         )
     ]]
 

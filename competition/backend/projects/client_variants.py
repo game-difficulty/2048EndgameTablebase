@@ -19,6 +19,8 @@ class ClientVariantRules:
     cols: int = 4
     race: bool = False
     result_metric: str = "score"
+    allow_restart: bool = False
+    target_tile_count: tuple[int, int] | None = None
 
 
 class ClientVariantAdapter:
@@ -30,7 +32,10 @@ class ClientVariantAdapter:
         self.project_id = project_id
         self.display_name = display_name
         self.special_tiles = special_tiles
-        self.rules = ClientVariantRules(rows=rows, cols=cols)
+        race = project_id == "practice-look-back-3x4" and rules_version == "tournament-v6"
+        metric = "race" if race else "board_sum" if project_id == "practice-fission-4x4" and rules_version == "tournament-v6" else "score"
+        self.rules = ClientVariantRules(rows=rows, cols=cols, race=race, result_metric=metric,
+                                       allow_restart=race, target_tile_count=(2048, 1) if race else None)
         self.rules_version = rules_version
 
     @property
@@ -50,11 +55,19 @@ class ClientVariantAdapter:
         raise NotImplementedError("This project is executed by the versioned match client.")
 
     def result_value(self, state: ProjectState) -> int:
+        if self.rules.result_metric == "board_sum":
+            return sum(max(0, value) for row in state.board for value in row)
         return state.score
 
     def resolve_winner(self, yellow: ProjectState, white: ProjectState) -> tuple[str, str]:
-        side = "yellow" if yellow.score > white.score else "white" if white.score > yellow.score else "draw"
-        return side, "score"
+        if self.rules.race:
+            yt, wt = yellow.outcome == "target_reached", white.outcome == "target_reached"
+            if yt != wt:
+                return ("yellow" if yt else "white"), "race_target"
+            if yt and wt:
+                return ("yellow" if yellow.elapsed_ms < white.elapsed_ms else "white" if white.elapsed_ms < yellow.elapsed_ms else "draw"), "race_elapsed"
+        y, w = self.result_value(yellow), self.result_value(white)
+        return ("yellow" if y > w else "white" if w > y else "draw"), self.rules.result_metric
 
     def public_payload(self, state: ProjectState) -> dict[str, Any]:
         return {
@@ -78,9 +91,9 @@ CLIENT_VARIANT_DEFINITIONS = (
     ("practice-timed-bomb-4x4", "定时炸弹（4×4）", True),
     ("practice-full-load-4x4", "满载（4×4）", False),
     ("practice-heavy-tiles-4x4", "越来越重（4×4）", False),
-    ("practice-fission-4x4", "裂变（4×4）", False),
+    ("practice-fission-4x4", "裂变（4×4）", False, 4, 4, "tournament-v6"),
     ("practice-aftershock-4x4", "余震（4×4）", False, 4, 4, "tournament-v5"),
-    ("practice-look-back-3x4", "回头看看（3×4）", False, 3, 4, "tournament-v5"),
+    ("practice-look-back-3x4", "回头看看（3×4）", False, 3, 4, "tournament-v6"),
 )
 
 CLIENT_VARIANT_ADAPTER_FACTORIES = tuple(
@@ -90,4 +103,7 @@ CLIENT_VARIANT_ADAPTER_FACTORIES = tuple(
         cols=selected[4] if len(selected) > 4 else 4,
         rules_version=selected[5] if len(selected) > 5 else "tournament-v4"))
     for item in CLIENT_VARIANT_DEFINITIONS
+) + (
+    lambda: ClientVariantAdapter("practice-fission-4x4", "裂变（4×4）"),
+    lambda: ClientVariantAdapter("practice-look-back-3x4", "回头看看（3×4）", rows=3, cols=4, rules_version="tournament-v5"),
 )

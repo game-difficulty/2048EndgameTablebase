@@ -32,7 +32,6 @@
       </div>
       <div v-if="quakePhase === 0" v-for="tile in quakeMoveTiles" :key="tile.from" :class="['board-tile', 'quake-move-tile', tileClass(tile.value)]" :style="quakeTilePosition(tile)"><span>{{ tile.value }}</span></div>
     </div>
-    <div v-if="lookbackEffect" class="board-lookback-effect" aria-hidden="true">回头看看</div>
     <TransitionGroup name="board-seal" tag="div" class="board-seals" aria-hidden="true">
       <div v-for="index in sealedCells" :key="`seal-${index}`" class="board-seal" :style="cellPosition(index)">
         <svg class="board-seal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
@@ -100,7 +99,6 @@ const boardStyle = computed(() => {
 const activeTiles = ref([]);
 const diceReveal = ref(false);
 const fissionEffect = ref(null);
-const lookbackEffect = ref(false);
 const quakeVisible = ref(false);
 const quakeCells = ref([]);
 const quakeMoveTiles = ref([]);
@@ -233,14 +231,18 @@ watch(() => props.snapshot?.revision, async () => {
   clearTimers();
   diceReveal.value = false;
   fissionEffect.value = null;
-  lookbackEffect.value = false;
   quakeVisible.value = false;
   const transition = props.snapshot?.transition;
   fastForwardAnimations(true);
   if (transition?.kind === 'lookback') {
-    syncToBoardRaw(board.value);
-    lookbackEffect.value = true;
-    timers.push(setTimeout(() => { if (epoch === animationEpoch) lookbackEffect.value = false; }, 650));
+    // Restore immediately, keeping DOM nodes at unchanged cells. No curtain,
+    // input lock or animation delay between this input and the next one.
+    const previous = new Map(activeTiles.value.map(tile => [tile.row * cols.value + tile.col, tile]));
+    activeTiles.value = board.value.flatMap((value, index) => {
+      if (!isRenderableTile(value)) return [];
+      const tile = previous.get(index);
+      return [tile ? { ...tile, value, isInterrupting: true } : createTile(index, value)];
+    });
     return;
   }
   if (['move', 'reshape'].includes(transition?.kind) && transition.quake && props.aftershock) {
@@ -455,5 +457,5 @@ onBeforeUnmount(() => { animationEpoch += 1; clearTimers(); });
 .board-tile.appear{animation:tile-appear var(--board-pop-duration) ease backwards}
 .tournament-board:not(.irregular) .board-cell.blocked{background:repeating-linear-gradient(135deg,#4d5662 0 8px,#424a55 8px 16px);box-shadow:inset 0 0 0 2px #697482}
 .board-fission-effect{position:absolute;z-index:9;pointer-events:none;width:var(--cell-width,calc((100% - (var(--cols) + 1) * var(--gap))/var(--cols)));height:var(--cell-height,calc((100% - (var(--rows) + 1) * var(--gap))/var(--rows)));display:grid;place-items:center;color:#fff;font-size:clamp(12px,3vw,19px);font-weight:800;text-shadow:0 1px 5px #533a23;animation:board-fission-burst .65s ease-out both}@keyframes board-fission-burst{0%,12%{opacity:0;transform:scale(.6)}36%{opacity:1;transform:scale(1.14)}100%{opacity:0;transform:translateY(-28%) scale(1)}}
-.tournament-board.quake-shape .board-cell.blocked{visibility:hidden}.tournament-board.quake-active{overflow:visible}.quake-active .normal-cell,.quake-active .normal-tile{opacity:0}.quake-ghost{position:absolute;inset:0;z-index:8;pointer-events:none}.quake-tile{width:100%;height:100%;display:grid;place-items:center;border-radius:8px;font-weight:800;line-height:1;user-select:none;-webkit-user-select:none}.quake-tile.value-2{background:#eee4da;color:#776e65}.quake-move-tile{z-index:9}.board-lookback-effect{position:absolute;z-index:10;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 15px;border-radius:20px;background:rgba(62,49,37,.86);color:#fff;font-size:16px;font-weight:750;pointer-events:none;animation:board-fission-burst .65s ease-out both}
+.tournament-board.quake-shape .board-cell.blocked{visibility:hidden}.tournament-board.quake-active{overflow:visible}.quake-active .normal-cell,.quake-active .normal-tile{opacity:0}.quake-ghost{position:absolute;inset:0;z-index:8;pointer-events:none}.quake-tile{width:100%;height:100%;display:grid;place-items:center;border-radius:8px;font-weight:800;line-height:1;user-select:none;-webkit-user-select:none}.quake-tile.value-2{background:#eee4da;color:#776e65}.quake-move-tile{z-index:9}
 </style>

@@ -19,6 +19,13 @@ export function matchProject(bootstrap) {
   // Respect the geometry frozen in older room pools as well as new v3 rooms.
   if (project.polyomino && bootstrap.rules_version !== 'tournament-v3') project.cols = 4;
   if (project.shapeShifter && bootstrap.rules_version !== 'tournament-v3') project.shapeGenerationSize = 7;
+  if (project.practiceVariant === 'fission' && bootstrap.rules_version === 'tournament-v4') project.resultMetric = 'score';
+  if (project.geometryVariant === 'lookback' && bootstrap.rules_version === 'tournament-v5') {
+    project.race = false;
+    project.allowRestart = false;
+    delete project.targetTile;
+    delete project.targetCount;
+  }
   if (bootstrap.target_tile) project.targetTile = bootstrap.target_tile, project.targetCount = 1;
   return project;
 }

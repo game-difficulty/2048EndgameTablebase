@@ -30,6 +30,26 @@ from competition.tests.test_match_service import prepare_game_a, ready_and_start
 SEED = "31" * 32
 
 
+def test_v6_client_metrics_and_legacy_descriptors():
+    from competition.backend.projects.client_variants import ClientVariantAdapter
+    from competition.backend.projects import ProjectRegistry, TOURNAMENT_ADAPTER_FACTORIES as factories
+    registry = ProjectRegistry()
+    for factory in factories:
+        registry.register(factory)
+    for project, legacy in [("practice-fission-4x4", "tournament-v4"), ("practice-look-back-3x4", "tournament-v5")]:
+        registry.descriptor(project, legacy)
+        registry.descriptor(project, "tournament-v6")
+    fission = ClientVariantAdapter("practice-fission-4x4", "裂变", rules_version="tournament-v6")
+    yellow = ProjectState(board=((512, 512),), score=100, elapsed_ms=3000, finished=True)
+    white = ProjectState(board=((2, 4),), score=9000, elapsed_ms=2000, finished=True)
+    assert fission.result_value(yellow) == 1024
+    assert fission.resolve_winner(yellow, white) == ("yellow", "board_sum")
+    race = ClientVariantAdapter("practice-look-back-3x4", "回头看看", rows=3, rules_version="tournament-v6")
+    assert race.rules.race and race.rules.allow_restart and race.rules.target_tile_count == (2048, 1)
+    assert race.resolve_winner(replace(yellow, outcome="target_reached"), white) == ("yellow", "race_target")
+    assert race.resolve_winner(replace(yellow, outcome="target_reached"), replace(white, outcome="target_reached")) == ("white", "race_elapsed")
+
+
 def adapter(project_ref: str) -> Tournament2048Adapter:
     rules = next(item for item in TOURNAMENT_RULES if item.project_ref == project_ref)
     return Tournament2048Adapter(rules)
@@ -134,8 +154,8 @@ def test_formal_catalog_can_be_frozen_into_a_competition(tmp_path) -> None:
     dice = next(project for project in room["projects"] if project["project_ref"] == "tournament-dice-wall-3x4")
     assert dice["name"] == "骰子障碍（3×4）"
     assert dice["rules_version"] == "tournament-v2"
-    assert all(project["rules_version"] == "tournament-v4" for project in room["projects"][-8:-2])
-    assert all(project["rules_version"] == "tournament-v5" for project in room["projects"][-2:])
+    assert all(project["rules_version"] == "tournament-v4" for project in room["projects"][-8:-3])
+    assert [project["rules_version"] for project in room["projects"][-3:]] == ["tournament-v6", "tournament-v5", "tournament-v6"]
     assert room["projects"][-1]["adapter"]["view_protocol"] == "2048-board-v2"
 
 

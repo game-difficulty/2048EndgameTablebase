@@ -1579,7 +1579,7 @@ onBeforeUnmount(() => {
                   class="embedded-project-board"
                   :snapshot="projectBoardSnapshot(side)"
                   :disabled="!canUseBoard(side)"
-                  :aria-label="`${sideName(side)}真华容道棋盘`"
+                  :aria-label="`${sideName(side)}真·华容道棋盘`"
                   @move="moveGame"
                 />
                 <TournamentBoard

@@ -101,7 +101,7 @@ class CargoTransportAdapter:
         return ProjectDescriptor(
             project_ref=self.project_id,
             rules_version=self.rules_version,
-            display_name="真华容道（4×4）",
+            display_name="真·华容道（4×4）",
             view_kind="cargo-transport",
             view_protocol="cargo-transport-v1",
         )

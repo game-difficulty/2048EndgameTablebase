@@ -19,7 +19,7 @@
       <section class="index-intro"><p>TOURNAMENT PROJECT LAB</p><h1>比赛项目试玩</h1><span>以下页面用于举办方验收规则、选手熟悉操作。试玩成绩不会进入正式比赛。</span></section>
       <div class="project-list">
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" class="project-entry">
-          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.order }}</small><h2>{{ item.title }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><b>开始试玩 →</b></footer>
+          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.order }}</small><h2>{{ practiceTitle(item) }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><b>开始试玩 →</b></footer>
         </a>
       </div>
     </main>
@@ -34,7 +34,7 @@
 
       <header class="project-heading">
         <img class="project-art heading-art" :src="projectIconUrl(project.id, practiceTheme)" alt="" />
-        <div class="heading-copy"><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ project.title }}</h1></div>
+        <div class="heading-copy"><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ practiceTitle(project) }}</h1></div>
         <div class="practice-tag">单人试玩<br><small>{{ !sessionReady ? '正在同步登录状态' : practiceUser ? '已登录' : '游客' }}</small></div>
         <div class="project-summary">{{ project.description }}</div>
       </header>
@@ -59,7 +59,7 @@
             <div v-if="thinking" class="thinking" role="status"><span></span>AI 思考中</div>
             <div v-if="finishVisible" class="finish-panel" role="dialog" aria-label="本次试玩结果">
               <button class="finish-close" type="button" aria-label="关闭结果浮窗" @click="dismissFinish">×</button>
-              <small>{{ snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'tile_limit' ? '方块超限' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT' }}</small><h2>{{ snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'tile_limit' ? '超过12块，本次结束' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束' }}</h2><strong>{{ project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : project.specialRule || project.sealEveryMoves || project.polyomino || project.practiceVariant || project.geometryVariant ? `${snapshot.score.toLocaleString()} 分` : elapsedText }}</strong><span v-if="project.specialRule || project.sealEveryMoves || project.polyomino || project.practiceVariant || project.geometryVariant || project.cargoTransport">用时 {{ elapsedText }}</span><button type="button" @click="restart">再试一次</button>
+              <small>{{ snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'tile_limit' ? '方块超限' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT' }}</small><h2>{{ snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'tile_limit' ? '超过12块，本次结束' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束' }}</h2><strong>{{ project.race ? elapsedText : project.resultMetric === 'boardSum' ? `盘面和 ${snapshot.boardSum.toLocaleString()}` : project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : `${snapshot.score.toLocaleString()} 分` }}</strong><span v-if="!project.race">用时 {{ elapsedText }}</span><button type="button" @click="restart">再试一次</button>
             </div>
           </div>
 
@@ -98,7 +98,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { PRACTICE_PROJECTS, PROJECT_BY_ID } from './catalog.js';
 import { formatElapsed, TournamentGame } from './engine.js';
 import { PolyominoGame } from './polyominoEngine.js';
@@ -130,8 +130,9 @@ function toggleTheme() {
 const competitionHomePath = String(import.meta.env.VITE_COMPETITION_HOME_PATH || '/test');
 const mainSiteUrl = String(import.meta.env.VITE_MAIN_SITE_URL || 'https://2048tables.online/');
 const projects = PRACTICE_PROJECTS;
+function practiceTitle(project) { return project.title.replace(/（\d+×\d+）$/, ''); }
 const project = computed(() => PROJECT_BY_ID[props.projectId] || null);
-const game = ref(null);
+const game = shallowRef(null);
 const snapshot = ref({ board: [], score: 0, moves: 0, elapsedMs: 0 });
 const now = ref(performance.now());
 const locked = ref(false);
@@ -171,7 +172,7 @@ watch(() => snapshot.value.finished, finished => {
 
 function formatRecord(entry) {
   if (leaderboard.value?.metric === 'time') return formatElapsed(entry.result_value);
-  return `${Number(entry.result_value).toLocaleString()}${leaderboard.value?.metric === 'deliveries' ? ' 块' : ' 分'}`;
+  return `${Number(entry.result_value).toLocaleString()}${leaderboard.value?.metric === 'deliveries' ? ' 块' : leaderboard.value?.metric === 'board_sum' ? '' : ' 分'}`;
 }
 async function syncPracticeSession() {
   async function readSession() {
@@ -386,7 +387,7 @@ onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTim
   .project-entry p { grid-column: 1 / -1; grid-row: 3; margin-top: 12px; }
 }
 .practice-account{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#685742;font-size:12px}
-.play-page{grid-template-rows:auto auto;align-items:start}
+.play-page{grid-template-rows:min-content 1fr;align-items:start;align-content:start;row-gap:14px}
 .project-rail{grid-column:1;grid-row:1 / span 2}
 .project-heading{grid-column:2 / 4;grid-row:1;display:grid;grid-template-columns:96px minmax(0,1fr) 210px;align-items:center;column-gap:18px;row-gap:12px;margin:0 0 4px}
 .project-heading .heading-art{grid-column:1;grid-row:1;width:96px;height:96px}

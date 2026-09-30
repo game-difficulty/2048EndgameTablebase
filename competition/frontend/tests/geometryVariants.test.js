@@ -4,6 +4,24 @@ import { PROJECT_BY_ORDER } from '../src/projects/catalog.js';
 import { AftershockGame, LookBackGame, shiftAftershock } from '../src/projects/geometryVariants.js';
 import { nextRandom, seed32 } from '../src/projects/randomStreams.js';
 import { moveBoard } from '../src/projects/engine.js';
+import { MatchRuntime, matchProject } from '../src/projects/matchRuntime.js';
+
+test('look back finishes at 2048 and fission submits board sum, with frozen old match rules preserved', () => {
+  const game = new LookBackGame(PROJECT_BY_ORDER[20], {seed:'race'});
+  game.lookBackState = 0x12345678;
+  game.board = [1024,1024,0,0,...Array(8).fill(0)];
+  const result = game.move('left').snapshot;
+  assert.equal(result.outcome, 'target_reached');
+  assert.equal(result.finished, true);
+  assert.equal(game.project.race, true);
+  const fission = new MatchRuntime({project_ref:PROJECT_BY_ORDER[18].id, rules_version:'tournament-v6',seed:'sum'});
+  fission.game.board = [512,512,...Array(14).fill(0)];
+  fission.game.score = 9000;
+  assert.equal(fission.packet().result_value, 1024);
+  assert.equal(fission.packet().payload.result_metric, 'board_sum');
+  assert.equal(matchProject({project_ref:PROJECT_BY_ORDER[18].id,rules_version:'tournament-v4'}).resultMetric,'score');
+  assert.equal(matchProject({project_ref:PROJECT_BY_ORDER[20].id,rules_version:'tournament-v5'}).race,false);
+});
 
 function shape(state) {
   return Array.from({ length: state.rows }, (_, row) =>
