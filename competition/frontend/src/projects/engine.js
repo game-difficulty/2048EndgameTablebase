@@ -257,7 +257,9 @@ export class TournamentGame {
       const corners = [0, cols - 1, (rows - 1) * cols, rows * cols - 1];
       const edges = board.map((_v, index) => index).filter(index => !corners.includes(index)
         && (index < cols || index >= (rows - 1) * cols || [0, cols - 1].includes(index % cols)));
-      const candidates = this.dice <= 3 ? corners : this.dice <= 5 ? edges : [Math.floor(rows / 2) * cols + Math.floor(cols / 2)];
+      const middle = size => [...new Set([Math.floor((size - 1) / 2), Math.floor(size / 2)])];
+      const centers = middle(rows).flatMap(row => middle(cols).map(col => row * cols + col));
+      const candidates = this.dice <= 3 ? corners : this.dice <= 5 ? edges : centers;
       this.wallIndex = candidates[Math.floor(diceRandom() * candidates.length)];
       board[this.wallIndex] = WALL;
     }
@@ -357,6 +359,18 @@ export class TournamentGame {
     if (this.finished && this.finishedAt == null) this.finishedAt = performance.now();
   }
 
+  moveForRules(board, rules, direction) {
+    return this.project.sealEveryMoves
+      ? moveBoardWithSeals(board, rules, direction, this.sealedCells)
+      : moveBoard(board, rules, direction);
+  }
+
+  spawnAfterMove() {
+    return this.spawn(this.board);
+  }
+
+  moveTransitionExtras() { return {}; }
+
   historyEntry() {
     return {
       board: this.board.slice(), score: this.score, moves: this.moves,
@@ -401,9 +415,7 @@ export class TournamentGame {
   move(direction) {
     if (this.finished || !DIRECTIONS.includes(direction)) return { changed: false, snapshot: this.snapshot() };
     const rules = { ...this.project, rows: this.rows, cols: this.cols };
-    const moved = this.project.sealEveryMoves
-      ? moveBoardWithSeals(this.board, rules, direction, this.sealedCells)
-      : moveBoard(this.board, rules, direction);
+    const moved = this.moveForRules(this.board, rules, direction);
     if (!moved.changed) return { changed: false, snapshot: this.snapshot() };
     if (this.project.allowUndo) this.history.push(this.historyEntry());
     const before = this.board.slice();
@@ -414,11 +426,11 @@ export class TournamentGame {
     const seals = interval > 0 && this.moves % interval === 0 ? this.rotateSeals() : null;
     const finish = spawn => {
       this.revision += 1;
-      this.transition = { kind: 'move', direction, before, movements: moved.movements, spawn, seals };
+      this.transition = { kind: 'move', direction, before, movements: moved.movements, spawn, seals, ...this.moveTransitionExtras() };
       this.settleOutcome();
       return { changed: true, snapshot: this.snapshot() };
     };
-    const spawned = this.spawn(this.board);
+    const spawned = this.spawnAfterMove(moved);
     return spawned?.then ? spawned.then(finish) : finish(spawned);
   }
 

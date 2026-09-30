@@ -3108,7 +3108,7 @@ class CompetitionService:
                 or type(payload.get("move_count")) is not int or payload["move_count"] < 0
                 or checkpoint.get("version") != 1 or not isinstance(checkpoint.get("state"), dict)):
             raise CompetitionError("INVALID_CLIENT_STATE", "Malformed project state.")
-        if finished and outcome not in {"target_reached", "no_moves", "time_limit", "opponent_finished", "surrendered"}:
+        if finished and outcome not in {"target_reached", "no_moves", "tile_limit", "time_limit", "opponent_finished", "surrendered"}:
             raise CompetitionError("INVALID_CLIENT_STATE", "Unknown completion reason.")
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)

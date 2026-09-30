@@ -46,7 +46,7 @@ def test_race_requires_target_and_sorts_fastest_first(board):
 
 
 def test_dice_uses_board_sum_and_unknown_projects_are_rejected(board):
-    project = "tournament-dice-wall-3x3"
+    project = "tournament-dice-wall-3x4"
     board.submit(project, Principal(1, "选手1"), score=900, board_sum=100, elapsed_ms=1000, outcome="no_moves")
     board.submit(project, Principal(2, "选手2"), score=100, board_sum=200, elapsed_ms=1000, outcome="no_moves")
     assert board.list(project)["top"][0]["user_id"] == 2
@@ -65,3 +65,17 @@ def test_new_special_projects_rank_by_standard_score(board, project):
     listed = board.list(project)
     assert listed["metric"] == "score"
     assert [entry["user_id"] for entry in listed["top"]] == [2, 1]
+
+
+@pytest.mark.parametrize("project", [
+    "practice-full-load-4x4",
+    "practice-heavy-tiles-4x4",
+    "practice-fission-4x4",
+])
+def test_new_score_variants_have_practice_leaderboards(board, project):
+    outcome = "tile_limit" if project == "practice-full-load-4x4" else "no_moves"
+    result(board, project, 1, 128, outcome=outcome)
+    assert board.list(project)["top"][0]["result_value"] == 128
+    if project != "practice-full-load-4x4":
+        with pytest.raises(CompetitionError):
+            result(board, project, 2, 64, outcome="tile_limit")

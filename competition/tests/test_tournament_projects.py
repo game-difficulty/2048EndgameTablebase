@@ -41,14 +41,14 @@ def adapter_v2(project_ref: str) -> Tournament2048AdapterV2:
 
 
 def test_v2_uses_shared_spawn_seed_but_side_specific_dice() -> None:
-    item = adapter_v2("tournament-dice-wall-3x3")
+    item = adapter_v2("tournament-dice-wall-3x4")
     yellow = item.initial_state_for_side(seed=SEED, side="yellow")
     white = item.initial_state_for_side(seed=SEED, side="white")
     assert yellow.seed == white.seed == SEED
     assert yellow.rng_counter == white.rng_counter == 2
     assert yellow.extra["side"] == "yellow"
     assert white.extra["side"] == "white"
-    empty = tuple((0, 0, 0) for _ in range(3))
+    empty = tuple((0, 0, 0, 0) for _ in range(3))
     assert item._spawn(empty, yellow.seed, 2) == item._spawn(empty, white.seed, 2)
 
 
@@ -113,6 +113,12 @@ def test_formal_catalog_can_be_frozen_into_a_competition(tmp_path) -> None:
         *(rules.project_ref for rules in TOURNAMENT_RULES),
         "practice-hundred-step-seal-4x4",
         "practice-growing-tiles-4x4",
+        "practice-pair-bond-4x4",
+        "practice-chemical-reaction-4x4",
+        "practice-timed-bomb-4x4",
+        "practice-full-load-4x4",
+        "practice-heavy-tiles-4x4",
+        "practice-fission-4x4",
     ]
     assert {project["adapter"]["view_protocol"] for project in room["projects"]} == {
         "2048-board-v2", "cargo-transport-v1", "polyomino-board-v1"
@@ -123,6 +129,10 @@ def test_formal_catalog_can_be_frozen_into_a_competition(tmp_path) -> None:
     assert {project["project_ref"]: project["rules_version"] for project in room["projects"]}[
         "tournament-shape-shifter-hard-12"
     ] == "tournament-v3"
+    dice = next(project for project in room["projects"] if project["project_ref"] == "tournament-dice-wall-3x4")
+    assert dice["name"] == "骰子障碍（3×4）"
+    assert dice["rules_version"] == "tournament-v2"
+    assert all(project["rules_version"] == "tournament-v4" for project in room["projects"][-6:])
 
 
 def test_seal_adapter_keeps_independent_shared_seal_and_spawn_streams() -> None:
@@ -398,14 +408,24 @@ def test_v3_growing_tiles_has_five_columns_and_moves_across_them() -> None:
 
 
 def test_dice_wall_uses_the_correct_position_class() -> None:
-    item = adapter("tournament-dice-wall-3x3")
-    state = item.initial_state(seed=SEED)
-    die = state.extra["dice"]
-    wall = state.extra["wall_index"]
-    corners = {0, 2, 6, 8}
-    edges = {1, 3, 5, 7}
-    assert state.board[wall // 3][wall % 3] == WALL
-    assert wall in (corners if die <= 3 else edges if die <= 5 else {4})
+    item = adapter("tournament-dice-wall-3x4")
+    corners = {0, 3, 8, 11}
+    edges = {1, 2, 4, 7, 9, 10}
+    centers = {5, 6}
+    seen_dice, seen_centers = set(), set()
+    for sample in range(256):
+        state = item.initial_state(seed=f"{sample:064x}")
+        die = state.extra["dice"]
+        wall = state.extra["wall_index"]
+        assert len(state.board) == 3 and all(len(row) == 4 for row in state.board)
+        assert state.board[wall // 4][wall % 4] == WALL
+        assert sum(value == WALL for row in state.board for value in row) == 1
+        assert wall in (corners if die <= 3 else edges if die <= 5 else centers)
+        seen_dice.add(die)
+        if die == 6:
+            seen_centers.add(wall)
+    assert seen_dice == {1, 2, 3, 4, 5, 6}
+    assert seen_centers == centers
 
 
 def test_undo_restores_board_score_and_move_count_without_rewinding_rng() -> None:

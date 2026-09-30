@@ -57,13 +57,13 @@ const BASE_TOURNAMENT_PROJECTS = Object.freeze([
   {
     order: 6,
     practicePath: '/practice/6',
-    id: 'tournament-dice-wall-3x3',
+    id: 'tournament-dice-wall-3x4',
     key: 'project-06',
-    title: '骰子障碍（3×3）',
+    title: '骰子障碍（3×4）',
     shortTitle: '骰子障碍',
     description: '开局掷骰：1–3在角位、4–5在边位、6在中心放墙。双方死亡后比较盘面和。',
     estimatedMinutes: '3–5 min',
-    rows: 3, cols: 3, spawn4Rate: .1, diceWall: true, resultMetric: 'boardSum',
+    rows: 3, cols: 4, spawn4Rate: .1, diceWall: true, resultMetric: 'boardSum',
   },
   {
     order: 7,
@@ -141,27 +141,36 @@ const ADDITIONAL_TOURNAMENT_PROJECTS = Object.freeze([
   },
 ]);
 
-export const TOURNAMENT_PROJECTS = Object.freeze([...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS]);
-
-// These rules are being trialled on the practice site. They are intentionally
-// absent from TOURNAMENT_PROJECTS until their competition adapters are ready.
-export const PRACTICE_ONLY_PROJECTS = Object.freeze([
-  { order: 13, practicePath: '/practice/13', id: 'practice-pair-bond-4x4', key: 'practice-13',
+const NEW_TOURNAMENT_PROJECTS = Object.freeze([
+  { order: 13, practicePath: '/practice/13', id: 'practice-pair-bond-4x4', key: 'project-13',
     title: '出双入对（4×4）', shortTitle: '出双入对',
     description: '偶尔出现特殊块；两块相邻便粘成双格，新的双格形成时旧双格消失。无路可走后比得分。',
-    rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05, specialRule: 'pair' },
-  { order: 14, practicePath: '/practice/14', id: 'practice-chemical-reaction-4x4', key: 'practice-14',
+    rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05, specialRule: 'pair', adapterRulesVersion: 'tournament-v4' },
+  { order: 14, practicePath: '/practice/14', id: 'practice-chemical-reaction-4x4', key: 'project-14',
     title: '化学反应（4×4）', shortTitle: '化学反应',
     description: '偶尔出现两色特殊块；同色相撞消失，异色相撞合成一格墙。无路可走后比得分。',
-    rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05, specialRule: 'chemical' },
-  { order: 15, practicePath: '/practice/15', id: 'practice-timed-bomb-4x4', key: 'practice-15',
+    rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05, specialRule: 'chemical', adapterRulesVersion: 'tournament-v4' },
+  { order: 15, practicePath: '/practice/15', id: 'practice-timed-bomb-4x4', key: 'project-15',
     title: '定时炸弹（4×4）', shortTitle: '定时炸弹',
     description: '偶尔出现倒计时为12–32的炸弹；每次移动减一，归零变墙。炸弹相撞合并倒计时。无路可走后比得分。',
     rows: 4, cols: 4, spawn4Rate: .1, specialSpawnRate: .05,
-    bombCountdownMin: 12, bombCountdownMax: 32, specialRule: 'bomb' },
+    bombCountdownMin: 12, bombCountdownMax: 32, specialRule: 'bomb', adapterRulesVersion: 'tournament-v4' },
+  { order: 16, practicePath: '/practice/16', id: 'practice-full-load-4x4', key: 'project-16',
+    title: '满载（4×4）', shortTitle: '满载',
+    description: '棋盘最多容纳12个数字块；超过上限立即结束，按得分排名。',
+    rows: 4, cols: 4, spawn4Rate: .1, practiceVariant: 'capacity', tileLimit: 12, adapterRulesVersion: 'tournament-v4' },
+  { order: 17, practicePath: '/practice/17', id: 'practice-heavy-tiles-4x4', key: 'project-17',
+    title: '越来越重（4×4）', shortTitle: '越来越重',
+    description: '256只能横移，512只能竖移，1024不能移动；无路可走后比得分。',
+    rows: 4, cols: 4, spawn4Rate: .1, practiceVariant: 'heavy', adapterRulesVersion: 'tournament-v4' },
+  { order: 18, practicePath: '/practice/18', id: 'practice-fission-4x4', key: 'project-18',
+    title: '裂变（4×4）', shortTitle: '裂变',
+    description: '1024及以上数字块会在若干步后裂成两块；裂变代替本步出数，无路可走后比得分。',
+    rows: 4, cols: 4, spawn4Rate: .1, practiceVariant: 'fission', fissionMinMoves: 16, fissionMaxMoves: 40, adapterRulesVersion: 'tournament-v4' },
 ]);
 
-export const PRACTICE_PROJECTS = Object.freeze([...TOURNAMENT_PROJECTS, ...PRACTICE_ONLY_PROJECTS]);
+export const TOURNAMENT_PROJECTS = Object.freeze([...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS, ...NEW_TOURNAMENT_PROJECTS]);
+export const PRACTICE_PROJECTS = TOURNAMENT_PROJECTS;
 
 export const PROJECT_BY_ID = Object.freeze(Object.fromEntries(
   PRACTICE_PROJECTS.map(project => [project.id, Object.freeze(project)]),

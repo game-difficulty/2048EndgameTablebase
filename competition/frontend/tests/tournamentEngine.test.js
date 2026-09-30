@@ -193,11 +193,34 @@ test('seal and shape setup do not consume numeric spawn tickets', () => {
 });
 
 test('dice sides may differ while their numeric spawn stream stays shared', () => {
-  const project = { rows: 3, cols: 3, diceWall: true };
+  const project = PROJECT_BY_ORDER[6];
+  assert.equal(project.id, 'tournament-dice-wall-3x4');
+  assert.equal(project.rows, 3);
+  assert.equal(project.cols, 4);
   const yellow = new TournamentGame(project, { seed: 'same-seed', side: 'yellow' });
   const white = new TournamentGame(project, { seed: 'same-seed', side: 'white' });
   assert.equal(yellow.randomState, white.randomState);
   assert.equal(yellow.nextSpawnTicket(), white.nextSpawnTicket());
+});
+
+test('3x4 dice wall chooses corners, edges or either center without spawning on the wall', () => {
+  const project = PROJECT_BY_ORDER[6];
+  const corners = new Set([0, 3, 8, 11]);
+  const edges = new Set([1, 2, 4, 7, 9, 10]);
+  const centers = new Set([5, 6]);
+  const seenDice = new Set(), seenCenters = new Set();
+  for (let sample = 0; sample < 256; sample += 1) {
+    const game = new TournamentGame(project, { seed: `dice-${sample}` });
+    assert.equal(game.board.length, 12);
+    assert.equal(game.board[game.wallIndex], WALL);
+    assert.equal(game.board.filter(value => value === WALL).length, 1);
+    assert.equal(game.board.filter(value => value > 0).length, 2);
+    assert.ok((game.dice <= 3 ? corners : game.dice <= 5 ? edges : centers).has(game.wallIndex));
+    seenDice.add(game.dice);
+    if (game.dice === 6) seenCenters.add(game.wallIndex);
+  }
+  assert.deepEqual(seenDice, new Set([1, 2, 3, 4, 5, 6]));
+  assert.deepEqual(seenCenters, centers);
 });
 
 test('hard shape shifter crops twelve connected cells from a 6x6 source', () => {

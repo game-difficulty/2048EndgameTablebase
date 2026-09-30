@@ -37,6 +37,7 @@
       <div class="board-die" :class="`face-${snapshot.dice}`"><i v-for="dot in 9" :key="dot"></i></div>
       <strong>{{ snapshot.dice }} 点</strong>
     </div>
+    <div v-if="fissionEffect != null" class="board-fission-effect" :style="cellPosition(fissionEffect)" aria-hidden="true">裂变</div>
     <slot name="overlay" />
   </div>
 </template>
@@ -89,6 +90,7 @@ const boardStyle = computed(() => {
 });
 const activeTiles = ref([]);
 const diceReveal = ref(false);
+const fissionEffect = ref(null);
 let pointer = null;
 let timers = [];
 let animationEpoch = 0;
@@ -200,6 +202,7 @@ watch(() => props.snapshot?.revision, async () => {
   const epoch = ++animationEpoch;
   clearTimers();
   diceReveal.value = false;
+  fissionEffect.value = null;
   const transition = props.snapshot?.transition;
   fastForwardAnimations(true);
   if (transition?.kind !== 'move') {
@@ -219,6 +222,7 @@ watch(() => props.snapshot?.revision, async () => {
 
   const movements = new Map((transition.movements || []).map(item => [item.from, item]));
   const mergeDestinations = new Set();
+  const fission = transition.fission;
   const nextTiles = [];
   const wrappedTiles = [];
   for (const tile of activeTiles.value) {
@@ -244,7 +248,15 @@ watch(() => props.snapshot?.revision, async () => {
       tile.col = tile.targetCol;
       tile.duration = BOARD_SLIDE_DURATION;
     }
-    if (movement.merged) {
+    if (fission && movement.to === fission.index) {
+      tile.isDying = true;
+      if (!mergeDestinations.has(movement.to)) {
+        mergeDestinations.add(movement.to);
+        nextTiles.push(createTile(fission.index, fission.value, {
+          isInterrupting: false, isMerged: true, isHidden: true,
+        }));
+      }
+    } else if (movement.merged) {
       tile.isDying = true;
       if (!mergeDestinations.has(movement.to)) {
         mergeDestinations.add(movement.to);
@@ -263,6 +275,15 @@ watch(() => props.snapshot?.revision, async () => {
       isNew: true,
       isHidden: true,
     }));
+  }
+  if (fission) {
+    nextTiles.push(createTile(fission.spawnedIndex, fission.value, {
+      isInterrupting: false, isNew: true, isHidden: true,
+    }));
+    fissionEffect.value = fission.index;
+    timers.push(setTimeout(() => {
+      if (epoch === animationEpoch) fissionEffect.value = null;
+    }, 650));
   }
   activeTiles.value = nextTiles;
 
@@ -349,4 +370,5 @@ onBeforeUnmount(() => { animationEpoch += 1; clearTimers(); });
 .board-tile.pop{animation:tile-pop var(--board-pop-duration) ease backwards}
 .board-tile.appear{animation:tile-appear var(--board-pop-duration) ease backwards}
 .tournament-board:not(.irregular) .board-cell.blocked{background:repeating-linear-gradient(135deg,#4d5662 0 8px,#424a55 8px 16px);box-shadow:inset 0 0 0 2px #697482}
+.board-fission-effect{position:absolute;z-index:9;pointer-events:none;width:var(--cell-width,calc((100% - (var(--cols) + 1) * var(--gap))/var(--cols)));height:var(--cell-height,calc((100% - (var(--rows) + 1) * var(--gap))/var(--rows)));display:grid;place-items:center;color:#fff;font-size:clamp(12px,3vw,19px);font-weight:800;text-shadow:0 1px 5px #533a23;animation:board-fission-burst .65s ease-out both}@keyframes board-fission-burst{0%,12%{opacity:0;transform:scale(.6)}36%{opacity:1;transform:scale(1.14)}100%{opacity:0;transform:translateY(-28%) scale(1)}}
 </style>

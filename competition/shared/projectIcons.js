@@ -30,6 +30,12 @@ import special14 from '../assets/project-icons/14.svg?url';
 import special14Dark from '../assets/project-icons/14-dark.svg?url';
 import special15 from '../assets/project-icons/15.svg?url';
 import special15Dark from '../assets/project-icons/15-dark.svg?url';
+import special16 from '../assets/project-icons/16.svg?url';
+import special16Dark from '../assets/project-icons/16-dark.svg?url';
+import special17 from '../assets/project-icons/17.svg?url';
+import special17Dark from '../assets/project-icons/17-dark.svg?url';
+import special18 from '../assets/project-icons/18.svg?url';
+import special18Dark from '../assets/project-icons/18-dark.svg?url';
 
 const lightIcons = [light01, light02, light03, light04, light05, light06, light07, light08, light09, light10, light11, light12];
 const darkIcons = [dark01, dark02, dark03, dark04, dark05, dark06, dark07, dark08, dark09, dark10, dark11, dark12];
@@ -39,7 +45,7 @@ const refs = [
   'tournament-evil-spawn-4x4',
   'tournament-pure2-full-race-3x3',
   'tournament-grand-full-undo-race-3x3',
-  'tournament-dice-wall-3x3',
+  'tournament-dice-wall-3x4',
   'tournament-mirror-64x10-race-4x4',
   'tournament-256-brick-5x5',
   'tournament-isolated-island-hard-4x4',
@@ -57,10 +63,16 @@ export function projectIconUrl(projectRef, theme = 'auto') {
     'practice-pair-bond-4x4': special13Dark,
     'practice-chemical-reaction-4x4': special14Dark,
     'practice-timed-bomb-4x4': special15Dark,
+    'practice-full-load-4x4': special16Dark,
+    'practice-heavy-tiles-4x4': special17Dark,
+    'practice-fission-4x4': special18Dark,
   } : {
     'practice-pair-bond-4x4': special13,
     'practice-chemical-reaction-4x4': special14,
     'practice-timed-bomb-4x4': special15,
+    'practice-full-load-4x4': special16,
+    'practice-heavy-tiles-4x4': special17,
+    'practice-fission-4x4': special18,
   };
   if (practiceIcons[projectRef]) return practiceIcons[projectRef];
   if (projectRef === refs[3] && typeof window !== 'undefined' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {

@@ -17,7 +17,7 @@ PROJECT_RULES = {
     "tournament-evil-spawn-4x4": ("score", 1),
     "tournament-pure2-full-race-3x3": ("time", 1),
     "tournament-grand-full-undo-race-3x3": ("time", 1),
-    "tournament-dice-wall-3x3": ("board_sum", 1),
+    "tournament-dice-wall-3x4": ("board_sum", 1),
     "tournament-mirror-64x10-race-4x4": ("time", 1),
     "tournament-256-brick-5x5": ("score", 1),
     "tournament-isolated-island-hard-4x4": ("score", 1),
@@ -27,6 +27,9 @@ PROJECT_RULES = {
     "practice-pair-bond-4x4": ("score", 2),
     "practice-chemical-reaction-4x4": ("score", 2),
     "practice-timed-bomb-4x4": ("score", 2),
+    "practice-full-load-4x4": ("score", 1),
+    "practice-heavy-tiles-4x4": ("score", 1),
+    "practice-fission-4x4": ("score", 1),
 }
 
 
@@ -72,7 +75,14 @@ class PracticeLeaderboard:
         metric, version = self._rules(project_id)
         if any(type(value) is not int or value < 0 or value > 10**12 for value in (score, board_sum, elapsed_ms)):
             raise CompetitionError("INVALID_PRACTICE_RESULT", "Invalid practice result.")
-        allowed = ("time_limit", "no_moves") if metric == "deliveries" else ("target_reached",) if metric == "time" else ("no_moves",)
+        if metric == "deliveries":
+            allowed = ("time_limit", "no_moves")
+        elif metric == "time":
+            allowed = ("target_reached",)
+        elif project_id == "practice-full-load-4x4":
+            allowed = ("no_moves", "tile_limit")
+        else:
+            allowed = ("no_moves",)
         if outcome not in allowed or (metric == "time" and elapsed_ms == 0):
             raise CompetitionError("INVALID_PRACTICE_RESULT", "This run has not reached a recordable ending.")
         value = board_sum if metric == "board_sum" else elapsed_ms if metric == "time" else score

@@ -44,6 +44,18 @@ for (const item of TOURNAMENT_PROJECTS) test(`${item.order}: local deterministic
   assert.equal(a.packet().sequence, resumed.packet().sequence);
 });
 
+test('fission timers survive a match checkpoint just before splitting', () => {
+  const item = project(18);
+  const original = new MatchRuntime(bootstrap(item), options);
+  original.game.board = [1024,0,0,0, 0,2,0,0, ...Array(8).fill(0)];
+  original.game.fissionTimers = new Map([[0, { sequence: 0, remaining: 1 }]]);
+  original.game.fissionSequence = 1;
+  const resumed = new MatchRuntime({ ...bootstrap(item), checkpoint: original.checkpoint() }, options);
+  assert.deepEqual(resumed.checkpoint(), original.checkpoint());
+  assert.deepEqual(resumed.move('left')?.payload.board, original.move('left')?.payload.board);
+  assert.deepEqual(resumed.game.transition.fission, original.game.transition.fission);
+});
+
 test('undo preserves RNG; restart and pause preserve match elapsed time', () => {
   let now = 0;
   const runtime = new MatchRuntime(bootstrap(project(5)), { now: () => now, elapsedMs: 1000 });

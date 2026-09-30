@@ -45,6 +45,7 @@
             <div><small>{{ project.cargoTransport ? '剩余时间' : '用时' }}</small><strong class="timer">{{ project.cargoTransport ? remainingText : elapsedText }}</strong></div>
             <div><small>{{ project.cargoTransport ? '已送出' : '得分' }}</small><strong>{{ snapshot.score.toLocaleString() }}</strong></div>
             <div><small>步数</small><strong>{{ snapshot.moves }}</strong></div>
+            <div v-if="project.tileLimit"><small>方块数量</small><strong>{{ tileCount }} / {{ project.tileLimit }}</strong></div>
             <div v-if="project.sealEveryMoves"><small>距下次轮换</small><strong>{{ snapshot.nextSealIn }} 步</strong></div>
             <div v-if="project.resultMetric === 'boardSum' || project.targetSum"><small>盘面和</small><strong>{{ snapshot.boardSum }}</strong></div>
             <div v-if="project.targetTile"><small>{{ project.targetTile }} 数量</small><strong>{{ snapshot.targetCount }} / {{ project.targetCount }}</strong></div>
@@ -58,7 +59,7 @@
             <div v-if="thinking" class="thinking" role="status"><span></span>AI 思考中</div>
             <div v-if="finishVisible" class="finish-panel" role="dialog" aria-label="本次试玩结果">
               <button class="finish-close" type="button" aria-label="关闭结果浮窗" @click="dismissFinish">×</button>
-              <small>{{ snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT' }}</small><h2>{{ snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束' }}</h2><strong>{{ project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : project.specialRule || project.sealEveryMoves || project.polyomino ? `${snapshot.score.toLocaleString()} 分` : elapsedText }}</strong><span v-if="project.specialRule || project.sealEveryMoves || project.polyomino || project.cargoTransport">用时 {{ elapsedText }}</span><button type="button" @click="restart">再试一次</button>
+              <small>{{ snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'tile_limit' ? '方块超限' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT' }}</small><h2>{{ snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'tile_limit' ? '超过12块，本次结束' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束' }}</h2><strong>{{ project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : project.specialRule || project.sealEveryMoves || project.polyomino || project.practiceVariant ? `${snapshot.score.toLocaleString()} 分` : elapsedText }}</strong><span v-if="project.specialRule || project.sealEveryMoves || project.polyomino || project.practiceVariant || project.cargoTransport">用时 {{ elapsedText }}</span><button type="button" @click="restart">再试一次</button>
             </div>
           </div>
 
@@ -102,6 +103,7 @@ import { PRACTICE_PROJECTS, PROJECT_BY_ID } from './catalog.js';
 import { formatElapsed, TournamentGame } from './engine.js';
 import { PolyominoGame } from './polyominoEngine.js';
 import { PracticeSpecialGame } from './practiceSpecialEngine.js';
+import { PracticeScoreVariantGame } from './practiceScoreVariants.js';
 import { CargoGame, CARGO_LIMIT_MS } from './cargoEngine.js';
 import TournamentBoard from './TournamentBoard.vue';
 import PolyominoBoard from './PolyominoBoard.vue';
@@ -150,6 +152,7 @@ let finishTimer = null;
 let thinkingTimer = null;
 
 const elapsedText = computed(() => formatElapsed(game.value?.elapsed(now.value) || snapshot.value.elapsedMs));
+const tileCount = computed(() => snapshot.value.board.filter(value => value > 0).length);
 const remainingText = computed(() => formatElapsed(Math.max(0, CARGO_LIMIT_MS - (game.value?.elapsed(now.value) || snapshot.value.elapsedMs))));
 const dicePlacement = computed(() => snapshot.value.dice <= 3 ? '角位放置墙' : snapshot.value.dice <= 5 ? '边位放置墙' : '中心位放置墙');
 const settlement = computed(() => project.value?.cargoTransport ? '无路可走或10分钟结束，按送出数量比较' : project.value?.race ? '先达到目标者获胜' : project.value?.resultMetric === 'boardSum' ? '双方死亡后比较盘面和' : '双方死亡后比较得分');
@@ -241,7 +244,7 @@ async function submitFinishedRun() {
 function createGame() {
   if (!project.value) return;
   runId += 1;
-  game.value = project.value.cargoTransport ? new CargoGame(project.value) : project.value.polyomino ? new PolyominoGame(project.value) : project.value.specialRule ? new PracticeSpecialGame(project.value) : new TournamentGame(project.value);
+  game.value = project.value.cargoTransport ? new CargoGame(project.value) : project.value.polyomino ? new PolyominoGame(project.value) : project.value.specialRule ? new PracticeSpecialGame(project.value) : project.value.practiceVariant ? new PracticeScoreVariantGame(project.value) : new TournamentGame(project.value);
   snapshot.value = game.value.snapshot();
   if (project.value.diceWall) showDice();
 }

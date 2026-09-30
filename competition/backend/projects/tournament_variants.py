@@ -60,7 +60,7 @@ TOURNAMENT_RULES = (
         result_metric="race", estimated_minutes="5–15",
     ),
     VariantRules(
-        "tournament-dice-wall-3x3", "骰子障碍（3×3）", 3, 3,
+        "tournament-dice-wall-3x4", "骰子障碍（3×4）", 3, 4,
         dice_wall=True, result_metric="board_sum", estimated_minutes="3–5",
     ),
     VariantRules(
@@ -115,7 +115,24 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
         "project_ref": "practice-growing-tiles-4x4",
         "adapter_rules_version": "tournament-v3",
         "rules_version": "tournament-v3",
-    }]
+    }, *[
+        {
+            "key": f"project-{index:02d}",
+            "name": name,
+            "description": description,
+            "project_ref": project_ref,
+            "adapter_rules_version": "tournament-v4",
+            "rules_version": "tournament-v4",
+        }
+        for index, project_ref, name, description in (
+            (13, "practice-pair-bond-4x4", "出双入对（4×4）", "特殊块相邻可粘合成双格，新双格形成时旧双格消失；双方死亡后按得分结算。"),
+            (14, "practice-chemical-reaction-4x4", "化学反应（4×4）", "同色特殊块碰撞消失、异色碰撞生成一格墙；双方死亡后按得分结算。"),
+            (15, "practice-timed-bomb-4x4", "定时炸弹（4×4）", "炸弹移动后倒计时减少，归零变墙；双方死亡后按得分结算。"),
+            (16, "practice-full-load-4x4", "满载（4×4）", "棋盘数字块超过12个立即结束；按得分结算。"),
+            (17, "practice-heavy-tiles-4x4", "越来越重（4×4）", "256只能横移、512只能竖移、1024不能移动；双方死亡后按得分结算。"),
+            (18, "practice-fission-4x4", "裂变（4×4）", "1024及以上数字块会分裂成两块并替代该步出数；双方死亡后按得分结算。"),
+        )
+    ]]
 
 
 def _description(rules: VariantRules) -> str:
@@ -124,7 +141,7 @@ def _description(rules: VariantRules) -> str:
         "tournament-evil-spawn-4x4": "AI对抗出数；双方死亡后按得分结算。",
         "tournament-pure2-full-race-3x3": "只生成2，可重开；盘面和达到或超过1022即获胜。",
         "tournament-grand-full-undo-race-3x3": "可重开、可撤销；先达到盘面和2044获胜。",
-        "tournament-dice-wall-3x3": "开局掷骰放置固定墙；双方死亡后按盘面和结算。",
+        "tournament-dice-wall-3x4": "开局掷骰放置固定墙；双方死亡后按盘面和结算。",
         "tournament-mirror-64x10-race-4x4": "中央为墙、外沿传送；64不可合并，先同时拥有10个64获胜。",
         "tournament-256-brick-5x5": "256不可合并；双方死亡后按得分结算。",
         "tournament-isolated-island-hard-4x4": "孤岛只与同类合并且不计分；双方死亡后按得分结算。",
@@ -438,7 +455,12 @@ class Tournament2048Adapter:
                 if index not in corners
                 and (index < cols or index >= (rows - 1) * cols or index % cols in {0, cols - 1})
             ]
-            candidates = corners if die <= 3 else edges if die <= 5 else [(rows // 2) * cols + cols // 2]
+            centers = [
+                row * cols + col
+                for row in range((rows - 1) // 2, rows // 2 + 1)
+                for col in range((cols - 1) // 2, cols // 2 + 1)
+            ]
+            candidates = corners if die <= 3 else edges if die <= 5 else centers
             wall_index = candidates[digest[1] % len(candidates)]
             flat[wall_index] = WALL
             extra.update({"dice": die, "wall_index": wall_index})
