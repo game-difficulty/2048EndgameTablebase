@@ -31,6 +31,22 @@ GIFTS = [
 ]
 GIFT_IDS = {gift[0] for gift in GIFTS}
 RETIRED_GIFT_IDS = {'coffee', 'fireworks', 'merge', 'brilliant'}
+DEFAULT_FEATURED_GIFT_IDS = ('two', 'four', 'heart', 'flowers', 'moai', 'button', 'tea', 'whale', 'rip')
+
+
+def normalize_gift_order(value=None):
+    """Return a complete, unique order containing only active catalogue gifts."""
+    catalogue_ids = [gift[0] for gift in GIFTS]
+    active = ([gift_id for gift_id in DEFAULT_FEATURED_GIFT_IDS if gift_id in GIFT_IDS] +
+              [gift_id for gift_id in catalogue_ids if gift_id not in DEFAULT_FEATURED_GIFT_IDS])
+    known = set(active)
+    result = []
+    if isinstance(value, list):
+        for gift_id in value:
+            if isinstance(gift_id, str) and gift_id in known and gift_id not in result:
+                result.append(gift_id)
+    result.extend(gift_id for gift_id in active if gift_id not in result)
+    return result
 
 
 def init_schema():
@@ -48,7 +64,8 @@ def init_schema():
                 WHERE event_type='admin_topup' AND paid_delta_units>0;
             CREATE TABLE IF NOT EXISTS live_gift_preferences (
                 user_id INTEGER PRIMARY KEY REFERENCES users(id), daily_limit_units INTEGER,
-                entrance_enabled INTEGER NOT NULL DEFAULT 1, last_entrance_at REAL NOT NULL DEFAULT 0
+                entrance_enabled INTEGER NOT NULL DEFAULT 1, last_entrance_at REAL NOT NULL DEFAULT 0,
+                gift_order_json TEXT
             );
             CREATE TABLE IF NOT EXISTS live_gift_daily (
                 user_id INTEGER NOT NULL REFERENCES users(id), day TEXT NOT NULL, spent_units INTEGER NOT NULL,
@@ -67,6 +84,9 @@ def init_schema():
             db.execute("ALTER TABLE live_gift_orders ADD COLUMN target TEXT NOT NULL DEFAULT 'live:ai-classic'")
         db.execute('CREATE INDEX IF NOT EXISTS gift_target_pending ON live_gift_orders(target, delivered_at, created_at)')
         db.execute('CREATE INDEX IF NOT EXISTS gift_target_combo ON live_gift_orders(target, user_id, gift_id, created_at)')
+        preference_columns = {row['name'] for row in db.execute('PRAGMA table_info(live_gift_preferences)')}
+        if 'gift_order_json' not in preference_columns:
+            db.execute("ALTER TABLE live_gift_preferences ADD COLUMN gift_order_json TEXT")
 
 
 
@@ -89,8 +109,13 @@ def day_key(now=None):
 
 def preferences(db, user_id):
     row = db.execute('SELECT * FROM live_gift_preferences WHERE user_id=?', (user_id,)).fetchone()
+    try:
+        saved_order = json.loads(row['gift_order_json']) if row and row['gift_order_json'] else None
+    except (TypeError, ValueError):
+        saved_order = None
     return dict(daily_limit_units=row['daily_limit_units'] if row else None,
-                entrance_enabled=bool(row['entrance_enabled']) if row else True)
+                entrance_enabled=bool(row['entrance_enabled']) if row else True,
+                gift_order=normalize_gift_order(saved_order))
 
 
 def mine(user_id):
@@ -112,6 +137,18 @@ def set_preferences(user_id, daily_limit_units, entrance_enabled):
             ON CONFLICT(user_id) DO UPDATE SET daily_limit_units=excluded.daily_limit_units, entrance_enabled=excluded.entrance_enabled''',
             (user_id, daily_limit_units, int(entrance_enabled)))
     return mine(user_id)
+
+
+def set_gift_order(user_id, gift_ids):
+    if (not isinstance(gift_ids, list) or len(gift_ids) > 128 or
+            any(not isinstance(value, str) or not 1 <= len(value) <= 64 for value in gift_ids)):
+        raise HTTPException(400, 'invalid_gift_order')
+    normalized = normalize_gift_order(gift_ids)
+    with auth_db() as db:
+        db.execute('''INSERT INTO live_gift_preferences(user_id,gift_order_json) VALUES(?,?)
+            ON CONFLICT(user_id) DO UPDATE SET gift_order_json=excluded.gift_order_json''',
+            (user_id, json.dumps(normalized, separators=(',', ':'))))
+    return dict(gift_order=normalized)
 
 
 def order(user_id, request_id, target='live:ai-classic'):

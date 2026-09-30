@@ -6,13 +6,33 @@
         <GiftChoice v-for="gift in commonGifts" :key="gift.id" :gift="gift" :lang="lang" :disabled="sendDisabled" @send="prepareGiftSend" />
       </div>
       <div class="gift-bar-tools">
-        <button class="expand-gifts" :aria-expanded="expanded" :title="t('全部礼物','All gifts')" @click="helpOpen=false;expanded=!expanded"><ChevronUp :size="20" :class="{ rotated:expanded }" /></button>
+        <button class="expand-gifts" :aria-expanded="expanded" :title="t('全部礼物','All gifts')" @click="toggleDrawer"><ChevronUp :size="20" :class="{ rotated:expanded }" /></button>
         <button :title="t('我的礼物与设置','My gifts and settings')" @click="openSettings"><Settings2 :size="17" /></button>
       </div>
     </div>
-    <section v-if="expanded" class="gift-drawer" :aria-label="t('全部礼物','All gifts')" @keydown.esc="expanded=false">
-      <header><Gift :size="18" /><h2>{{ t('全部礼物','All gifts') }}</h2><button @click="expanded=false" :aria-label="t('关闭','Close')"><X :size="17" /></button></header>
-      <div class="gift-grid"><button v-if="redEnvelopes" class="red-gift-choice" @click="expanded=false;emit('red-envelope')"><img src="/live-gifts/red-envelope.webp" alt="" /><b>{{ t('红包','Red envelope') }}</b></button><GiftChoice v-for="gift in catalog.gifts" :key="gift.id" :gift="gift" :lang="lang" :disabled="sendDisabled" @send="prepareGiftSend" /></div>
+    <section v-if="expanded" ref="drawer" class="gift-drawer" :aria-label="t('全部礼物','All gifts')" @keydown.esc="closeDrawer">
+      <header><Gift :size="18" /><h2>{{ sorting ? t('调整礼物顺序','Arrange gifts') : t('全部礼物','All gifts') }}</h2><div class="drawer-actions">
+        <button v-if="!sorting" class="text-action" @click="startSorting">{{ t('调整顺序','Arrange') }}</button>
+        <template v-else><button class="text-action" @click="restoreDefaultOrder">{{ t('恢复默认','Reset') }}</button><button class="text-action" @click="cancelSorting">{{ t('取消','Cancel') }}</button><button class="text-action primary-action" :disabled="savingOrder" @click="saveGiftOrder">{{ savingOrder ? t('保存中…','Saving…') : t('完成','Done') }}</button></template>
+        <button @click="closeDrawer" :aria-label="t('关闭','Close')"><X :size="17" /></button>
+      </div></header>
+      <button v-if="redEnvelopes" class="red-gift-choice fixed-red-choice" :disabled="sorting" @click="closeDrawer();emit('red-envelope')"><img src="/live-gifts/red-envelope.webp" alt="" /><span><b>{{ t('红包','Red envelope') }}</b><small>{{ t('固定在首位，不加入常驻栏','Fixed first · not in the gift bar') }}</small></span><LockKeyhole :size="15" /></button>
+      <template v-if="sorting">
+        <p class="sort-section-title">{{ t('常驻栏 · 前 9 个','Gift bar · first 9') }}</p>
+        <div class="gift-grid sort-grid">
+          <template v-for="(gift,index) in orderedGifts" :key="gift.id">
+            <GiftSortCard :gift="gift" :lang="lang" :index="index" :dragging="draggedId===gift.id" @drag-start="beginSortDrag($event,gift.id)" @move="moveBy(gift.id,$event)" />
+            <p v-if="index===8" class="sort-boundary">{{ t('以下仅在全部礼物中显示','Shown only in All gifts below') }}</p>
+          </template>
+        </div>
+        <p class="sort-hint">{{ t('拖动把手调整；前 9 个会显示在下方礼物栏。','Drag the handle to arrange. The first 9 appear in the gift bar.') }}</p>
+        <p class="sr-only" aria-live="polite">{{ sortAnnouncement }}</p>
+        <Teleport to="body"><div v-if="draggedGift" class="gift-drag-ghost" :style="{left:`${dragPoint.x + 12}px`,top:`${dragPoint.y + 12}px`}"><GiftIcon :id="draggedGift.id" :size="34" /><b>{{ draggedGift[lang] }}</b></div></Teleport>
+      </template>
+      <template v-else>
+        <p class="drawer-note">{{ t('前 9 个礼物显示在下方常驻栏。','The first 9 gifts appear in the gift bar below.') }}</p>
+        <div class="gift-grid"><GiftChoice v-for="gift in orderedGifts" :key="gift.id" :gift="gift" :lang="lang" :disabled="sendDisabled" @send="prepareGiftSend" /></div>
+      </template>
     </section>
     <section v-if="helpOpen" class="gift-drawer contribution-drawer" :aria-label="t('贡献度说明','How contribution works')">
       <header><CircleHelp :size="18" /><h2>{{ t('贡献度说明','How contribution works') }}</h2><button ref="helpClose" @click="helpOpen=false" :aria-label="t('关闭','Close')"><X :size="17" /></button></header>
@@ -47,10 +67,12 @@
 </template>
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
-import { Gift, Settings2, ChevronUp, X, CircleHelp } from '@lucide/vue';
+import { Gift, Settings2, ChevronUp, X, CircleHelp, LockKeyhole } from '@lucide/vue';
 import GiftIcon from './GiftIcon.vue';
 import GiftChoice from './GiftChoice.vue';
+import GiftSortCard from './GiftSortCard.vue';
 import { giftPrice } from './giftPrice.js';
+import { defaultGiftOrder, normalizeGiftOrder, moveGift } from './giftOrder.js';
 import SponsorDialog from '../billing/SponsorDialog.vue';
 import QuotaGuideDialog from '../billing/QuotaGuideDialog.vue';
 import { useGiftClient } from './context.js';
@@ -60,17 +82,20 @@ const props = defineProps({ user: Object, online: Boolean, lang: String, redEnve
 const emit = defineEmits(['login', 'catalog', 'red-envelope']);
 const t = (zh,en) => props.lang === 'zh' ? zh : en;
 const expanded=ref(false);
+const sorting=ref(false), savingOrder=ref(false), draftOrder=ref([]), draggedId=ref(''), dragPoint=ref({x:0,y:0}), sortAnnouncement=ref(''), drawer=ref(null);
 const helpOpen=ref(false), helpClose=ref(null);
 async function showContributionHelp(){expanded.value=false;helpOpen.value=true;await nextTick();helpClose.value?.closest('section')?.scrollIntoView({block:'nearest'});helpClose.value?.focus({preventScroll:true});}
 const panel=ref(null);
 function dismiss(event){
-  if(event.type==='keydown'){if(event.key==='Escape'){expanded.value=false;helpOpen.value=false;}return;}
-  if(!panel.value?.contains(event.target) && !event.target.closest('.live-gift-popover')){expanded.value=false;helpOpen.value=false;}
+  if(event.type==='keydown'){if(event.key==='Escape'){closeDrawer();helpOpen.value=false;}return;}
+  if(!panel.value?.contains(event.target) && !event.target.closest('.live-gift-popover')){closeDrawer();helpOpen.value=false;}
 }
-const commonIds=['two','four','heart','flowers','moai','button','tea','whale','rip'];
-const commonGifts=computed(()=>commonIds.map(id=>catalog.value.gifts.find(g=>g.id===id)).filter(Boolean));
 const sendDisabled=computed(()=>queue.value.length>=5 || uncertain.value);
 const catalog = ref({ gifts: [] }), account = ref(null), selectedId = ref('two'), quantity = ref(1);
+const effectiveOrder=computed(()=>normalizeGiftOrder(sorting.value?draftOrder.value:account.value?.gift_order,catalog.value.gifts));
+const orderedGifts=computed(()=>effectiveOrder.value.map(id=>catalog.value.gifts.find(g=>g.id===id)).filter(Boolean));
+const commonGifts=computed(()=>orderedGifts.value.slice(0,9));
+const draggedGift=computed(()=>catalog.value.gifts.find(g=>g.id===draggedId.value));
 const selected = computed(() => catalog.value.gifts.find(item => item.id === selectedId.value));
 const cost = computed(() => giftPrice(selected.value,quantity.value));
 const name = id => catalog.value.gifts.find(item => item.id === id)?.[props.lang] || id;
@@ -86,13 +111,40 @@ function persist() { try { sessionStorage.setItem(storageKey(), JSON.stringify(q
 async function loadCatalog() { catalog.value = await giftApi('catalog'); emit('catalog', catalog.value.gifts); }
 async function loadAccount() { const id = props.user?.id; if (!id) return; const data = await giftApi('me'); if (props.user?.id === id) account.value = data; }
 watch(() => props.user?.id, async id => {
-  generation++; quick.value = false; queue.value = []; uncertain.value = false; busy.value = false; account.value = null; status.value = '';
+  generation++; cancelSorting(); quick.value = false; queue.value = []; uncertain.value = false; busy.value = false; account.value = null; status.value = '';
   for (const dialog of [confirmDialog, quickDialog, settingsDialog, balanceDialog]) dialog.value?.close();
   if (!id) return;
   try { if (giftClient.target === 'live:ai-classic' && !sessionStorage.getItem(storageKey())) { const legacy = `live:gift-pending:${id}`; const saved = sessionStorage.getItem(legacy); if (saved) { sessionStorage.setItem(storageKey(), saved); sessionStorage.removeItem(legacy); } } const saved = JSON.parse(sessionStorage.getItem(storageKey()) || '[]'); if (Array.isArray(saved)) queue.value = saved.slice(0,5); } catch {}
   try { await loadAccount(); } catch { status.value = t('暂时无法读取额度，请稍后重试。', 'Could not load your balance. Try again shortly.'); }
   if (props.user?.id === id && queue.value.length) { uncertain.value = true; status.value = t('有一笔送礼等待核对，请核对并重试。', 'A gift needs confirmation. Check and retry.'); }
 }, { immediate: true });
+function toggleDrawer(){helpOpen.value=false;if(expanded.value)closeDrawer();else expanded.value=true;}
+function closeDrawer(){endSortDrag();sorting.value=false;draftOrder.value=[];expanded.value=false;}
+function startSorting(){
+  if(!props.user){emit('login');return;}
+  draftOrder.value=normalizeGiftOrder(account.value?.gift_order,catalog.value.gifts);sorting.value=true;sortAnnouncement.value='';
+}
+function cancelSorting(){endSortDrag();sorting.value=false;draftOrder.value=[];sortAnnouncement.value='';}
+function restoreDefaultOrder(){draftOrder.value=defaultGiftOrder(catalog.value.gifts);sortAnnouncement.value=t('已恢复默认顺序，完成后保存','Default order restored. Choose Done to save');}
+function announceMove(id){const index=draftOrder.value.indexOf(id);if(index<0)return;sortAnnouncement.value=index<9?t(`已移至常驻栏第 ${index+1} 位`,`Moved to gift bar position ${index+1}`):t(`已移至全部礼物第 ${index+1} 位`,`Moved to All gifts position ${index+1}`);}
+function moveBy(id,offset){const from=draftOrder.value.indexOf(id);if(from<0)return;draftOrder.value=moveGift(draftOrder.value,id,Math.max(0,Math.min(draftOrder.value.length-1,from+offset)));announceMove(id);nextTick(()=>drawer.value?.querySelector(`[data-sort-index="${draftOrder.value.indexOf(id)}"] .gift-drag-handle`)?.focus());}
+function beginSortDrag(event,id){
+  if(event.button!=null&&event.button!==0)return;event.preventDefault();draggedId.value=id;dragPoint.value={x:event.clientX,y:event.clientY};
+  event.currentTarget.setPointerCapture?.(event.pointerId);window.addEventListener('pointermove',sortPointerMove,{passive:false});window.addEventListener('pointerup',endSortDrag,{once:true});window.addEventListener('pointercancel',endSortDrag,{once:true});
+}
+function sortPointerMove(event){
+  if(!draggedId.value)return;event.preventDefault();dragPoint.value={x:event.clientX,y:event.clientY};
+  const target=document.elementFromPoint(event.clientX,event.clientY)?.closest?.('[data-sort-index]');
+  if(target){const index=Number(target.dataset.sortIndex);if(Number.isInteger(index)&&draftOrder.value[index]!==draggedId.value){draftOrder.value=moveGift(draftOrder.value,draggedId.value,index);announceMove(draggedId.value);}}
+  const scroller=drawer.value?.querySelector('.sort-grid'),rect=scroller?.getBoundingClientRect();if(rect){if(event.clientY<rect.top+45)scroller.scrollTop-=12;else if(event.clientY>rect.bottom-45)scroller.scrollTop+=12;}
+}
+function endSortDrag(){window.removeEventListener('pointermove',sortPointerMove);window.removeEventListener('pointerup',endSortDrag);window.removeEventListener('pointercancel',endSortDrag);draggedId.value='';}
+async function saveGiftOrder(){
+  if(savingOrder.value)return;savingOrder.value=true;
+  try{const result=await giftApi('preferences/order',{gift_ids:normalizeGiftOrder(draftOrder.value,catalog.value.gifts)});account.value={...(account.value||{}),gift_order:result.gift_order};sorting.value=false;draftOrder.value=[];status.value=t('礼物顺序已保存','Gift order saved');}
+  catch{status.value=t('顺序保存失败，请重试。','Could not save gift order. Try again.');}
+  finally{savingOrder.value=false;endSortDrag();}
+}
 function makeRequest() { return { request_id: crypto.randomUUID(), gift_id: selectedId.value, quantity: quantity.value, expected_cost_units: cost.value, quote_version: catalog.value.version }; }
 function prepareGiftSend(id,n) {
   if(!props.user){emit('login');return;}
@@ -163,7 +215,7 @@ async function saveSettings() {
   finally { saving.value = false; }
 }
 onMounted(() => {document.addEventListener('pointerdown',dismiss);document.addEventListener('keydown',dismiss);loadCatalog().catch(() => { status.value = t('礼物暂时无法加载。', 'Gifts are temporarily unavailable.'); });});
-onUnmounted(() => { generation++;document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',dismiss); });
+onUnmounted(() => { generation++;endSortDrag();document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',dismiss); });
 defineExpose({ refreshBalance: () => loadAccount().catch(() => {}), showContributionHelp });
 </script>
 <style scoped>
@@ -173,6 +225,8 @@ button { display:inline-flex;align-items:center;justify-content:center;gap:6px;b
 .gift-bar { display:flex;gap:8px;align-items:stretch; }.gift-leading { flex:0 0 auto;min-width:78px;display:flex;align-items:stretch;gap:8px; }.common-gifts { flex:1;min-width:0;display:flex;justify-content:flex-end;gap:8px;overflow-x:auto; }.common-gifts :deep(.gift-choice) { flex:0 0 70px; }
 .gift-bar-tools { width:100px;flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:5px;align-content:center; }.gift-bar-tools > span { width:100%;text-align:center;font-size:11px;overflow-wrap:anywhere; }.gift-bar-tools small { color:var(--text-secondary);font-size:10px; }.expand-gifts { height:42px; }.rotated { transform:rotate(180deg); }
 .gift-drawer { position:absolute;bottom:calc(100% + 6px);right:0;width:370px;max-width:100%;background:var(--bg-main);border:1px solid var(--border-main);border-radius:8px;box-shadow:0 8px 30px #0005;padding:12px; }
+.gift-drawer>header { position:sticky;top:-12px;z-index:5;margin:-12px -12px 8px;padding:12px;background:var(--bg-main);border-bottom:1px solid var(--border-main); }
+.drawer-actions { margin-left:auto;display:flex;align-items:center;gap:4px; }.drawer-actions button { min-height:28px;padding:5px 7px; }.drawer-actions .text-action { font-size:11px;white-space:nowrap; }.drawer-actions .primary-action { background:var(--accent);color:var(--text-on-accent,#10202f);font-weight:700; }
 .contribution-drawer { padding:16px; background:var(--bg-main); border:1px solid var(--accent); box-shadow:0 16px 42px rgba(0,0,0,.42),0 0 0 1px color-mix(in srgb,var(--accent) 16%,transparent); backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px); }
 .contribution-drawer header { padding-bottom:10px; margin-bottom:0; border-bottom:1px solid var(--border-main); }
 .contribution-drawer header svg { color:var(--accent); }
@@ -181,7 +235,9 @@ button { display:inline-flex;align-items:center;justify-content:center;gap:6px;b
 .contribution-drawer dl>div { display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--border-main);font-size:12px; }.contribution-drawer dl>div:last-child { border-bottom:0; }
 .contribution-drawer dt { font-weight:700; }.contribution-drawer dd { margin:0;text-align:right;color:var(--text-main); }.contribution-drawer .contribution-note { margin-bottom:0;font-size:11px;color:var(--text-secondary); }
 .gift-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;max-height:min(540px,60vh);overflow:auto;overscroll-behavior:contain; }
-.gift-grid .red-gift-choice { flex-direction:column;min-height:95px;background:transparent;border:1px solid transparent;font-size:12px; }.red-gift-choice img { width:54px;height:54px;object-fit:contain; }.gift-grid .red-gift-choice:hover { border-color:#d96851;box-shadow:0 3px 12px #0004; }
+.fixed-red-choice { width:100%;min-height:58px;justify-content:flex-start;margin-bottom:8px;padding:5px 10px;background:color-mix(in srgb,#d96851 9%,var(--bg-card));border-color:color-mix(in srgb,#d96851 40%,var(--border-main));text-align:left; }.fixed-red-choice img { width:46px;height:46px;object-fit:contain; }.fixed-red-choice span { min-width:0;display:flex;flex:1;flex-direction:column;align-items:flex-start;gap:2px; }.fixed-red-choice small { color:var(--text-secondary);font-size:10px; }.fixed-red-choice>svg { color:var(--text-secondary); }.fixed-red-choice:not(:disabled):hover { border-color:#d96851;box-shadow:0 3px 12px #0004; }
+.drawer-note,.sort-section-title,.sort-hint { margin:5px 2px 8px;color:var(--text-secondary);font-size:10px;line-height:1.4; }.sort-section-title { color:var(--text-main);font-size:11px;font-weight:700; }.sort-grid { max-height:min(500px,55vh);padding-right:2px; }.sort-boundary { grid-column:1/-1;position:sticky;top:0;z-index:3;margin:3px 0;padding:7px 5px;border-top:1px solid var(--accent);border-bottom:1px solid var(--border-main);background:var(--bg-main);color:var(--text-secondary);font-size:10px;text-align:center; }.sort-hint { margin-top:8px; }
+.gift-drag-ghost { position:fixed;z-index:150;pointer-events:none;display:flex;max-width:150px;align-items:center;gap:7px;padding:7px 9px;border:1px solid var(--accent);border-radius:6px;background:var(--bg-main);color:var(--text-main);box-shadow:0 8px 24px #0007;transform:translate(-10%,-15%);font-size:11px; }
 .send-gift { background:var(--accent);color:var(--text-on-accent,#10202f);font-weight:700; }
 .quick-row { display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px; }.quick-row label,.check-label { display:flex;gap:6px;align-items:center; }
 .gift-note { margin:4px 0;font-size:11px;line-height:20px;color:var(--text-secondary);max-width:100%;overflow-wrap:anywhere; }

@@ -771,6 +771,17 @@ async def gift_preferences(request: Request):
     return await asyncio.to_thread(gifts.set_preferences, user['id'], body.get('daily_limit_units'), body.get('entrance_enabled'))
 
 
+@router.post('/rooms/{room_id}/gifts/preferences/order')
+@router.post('/gifts/preferences/order')
+async def gift_order_preferences(request: Request):
+    hub = resolve_hub(request)
+    if not hub.room.public()['capabilities'].get('gifts', False):
+        raise HTTPException(404, 'room_capability_disabled')
+    user = require_user(request)
+    body = await gift_body(request)
+    return await asyncio.to_thread(gifts.set_gift_order, user['id'], body.get('gift_ids'))
+
+
 @router.get('/rooms/{room_id}/gifts/orders/{request_id}')
 @router.get('/gifts/orders/{request_id}')
 async def gift_order(request_id: str, request: Request):

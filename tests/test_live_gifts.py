@@ -61,6 +61,26 @@ class LiveGiftTests(unittest.TestCase):
         self.assertEqual(event['combo_count'], 1)
         self.assertFalse(event['bulk_effect'])
 
+    def test_gift_order_is_account_owned_normalized_and_does_not_change_quotes(self):
+        catalog_before, _ = gifts.catalogue()
+        default_order = gifts.mine(1)['gift_order']
+        self.assertEqual(default_order[:9], list(gift_service.DEFAULT_FEATURED_GIFT_IDS))
+        requested = ['laugh-win', 'two', 'laugh-win', 'retired-gift']
+        result = gifts.set_gift_order(1, requested)
+        self.assertEqual(result['gift_order'][:2], ['laugh-win', 'two'])
+        self.assertEqual(len(result['gift_order']), len(gift_service.GIFTS))
+        self.assertEqual(gifts.mine(1)['gift_order'], result['gift_order'])
+        catalog_after, _ = gifts.catalogue()
+        self.assertEqual(catalog_after['version'], catalog_before['version'])
+        with self.assertRaises(HTTPException) as error:
+            gifts.set_gift_order(1, 'not-a-list')
+        self.assertEqual(error.exception.detail, 'invalid_gift_order')
+
+    def test_corrupt_gift_order_falls_back_to_complete_default(self):
+        with auth_db() as db:
+            db.execute('INSERT INTO live_gift_preferences(user_id,gift_order_json) VALUES(1,?)', ('{bad json',))
+        self.assertEqual(gifts.mine(1)['gift_order'][:9], list(gift_service.DEFAULT_FEATURED_GIFT_IDS))
+
     def test_reaction_gifts_prices_delivery_and_bulk_spotlight(self):
         before = get_token_balance(1)
         total = 0
