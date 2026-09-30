@@ -6,7 +6,7 @@ const BASE_TOURNAMENT_PROJECTS = Object.freeze([
     key: 'project-01',
     title: '真·华容道（4×4）',
     shortTitle: '真·华容道',
-    description: '前10次有效移动先整理棋盘，随后从上方出现首个特殊块；特殊块整块滑到尽头，从下方中央送出。无路可走时结束，送出越多越好。',
+    description: '前10次有效移动先整理棋盘，随后从上方出现首个特殊块；特殊块整块滑到尽头，从下方中央送出。无路可走或10分钟到时结束，送出越多越好。',
     estimatedMinutes: '10 min',
     rows: 4, cols: 4, cargoTransport: true,
   },
@@ -37,8 +37,8 @@ const BASE_TOURNAMENT_PROJECTS = Object.freeze([
     practicePath: '/practice/4',
     id: 'tournament-pure2-full-race-3x3',
     key: 'project-04',
-    title: '极限速通（3×3）',
-    shortTitle: '极限速通',
+    title: '纯2满盘竞速（3×3）',
+    shortTitle: '纯2满盘竞速',
     description: '只生成2，允许重开。先将盘面和达到或超过1022即完成。',
     estimatedMinutes: '3–10 min',
     rows: 3, cols: 3, spawn4Rate: 0, targetSum: 1022, targetAtLeast: true, allowRestart: true, race: true,
@@ -48,8 +48,8 @@ const BASE_TOURNAMENT_PROJECTS = Object.freeze([
     practicePath: '/practice/5',
     id: 'tournament-grand-full-undo-race-3x3',
     key: 'project-05',
-    title: '大满盘撤销竞速（3×3）',
-    shortTitle: '大满盘撤销竞速',
+    title: '极限速通（3×3）',
+    shortTitle: '极限速通',
     description: '标准出数，允许重开和撤销。先将盘面和精确做到2044即完成。',
     estimatedMinutes: '5–15 min',
     rows: 3, cols: 3, spawn4Rate: .1, targetSum: 2044, allowRestart: true, allowUndo: true, race: true,
@@ -177,15 +177,17 @@ const NEW_TOURNAMENT_PROJECTS = Object.freeze([
     rows: 3, cols: 4, spawn4Rate: .1, geometryVariant: 'lookback', race: true, targetTile: 2048, targetCount: 1, allowRestart: true, adapterRulesVersion: 'tournament-v6' },
 ]);
 
-export const TOURNAMENT_PROJECTS = Object.freeze([...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS, ...NEW_TOURNAMENT_PROJECTS]);
+export const ALL_PROJECTS = Object.freeze([...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS, ...NEW_TOURNAMENT_PROJECTS]);
+const VISIBLE_PROJECT_ORDERS = new Set([1, 3, 5, 6, 7, 9, 11, 13, 14, 16, 17, 19]);
+export const TOURNAMENT_PROJECTS = Object.freeze(ALL_PROJECTS.filter(project => VISIBLE_PROJECT_ORDERS.has(project.order)));
 export const PRACTICE_PROJECTS = TOURNAMENT_PROJECTS;
 
 export const PROJECT_BY_ID = Object.freeze(Object.fromEntries(
-  PRACTICE_PROJECTS.map(project => [project.id, Object.freeze(project)]),
+  ALL_PROJECTS.map(project => [project.id, Object.freeze(project)]),
 ));
 
 export const PROJECT_BY_ORDER = Object.freeze(Object.fromEntries(
-  PRACTICE_PROJECTS.map(project => [project.order, project]),
+  ALL_PROJECTS.map(project => [project.order, project]),
 ));
 
 export const PROJECT_BY_TITLE = Object.freeze(Object.fromEntries(

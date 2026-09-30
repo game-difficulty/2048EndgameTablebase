@@ -19,7 +19,7 @@
       <section class="index-intro"><p>TOURNAMENT PROJECT LAB</p><h1>比赛项目试玩</h1><span>以下页面用于举办方验收规则、选手熟悉操作。试玩成绩不会进入正式比赛。</span></section>
       <div class="project-list">
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" class="project-entry">
-          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.order }}</small><h2>{{ practiceTitle(item) }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><b>开始试玩 →</b></footer>
+          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.order }}</small><h2>{{ practiceTitle(item) }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><span class="metric-tag">{{ item.race ? 'Faster' : 'Higher' }}</span><b>开始试玩 →</b></footer>
         </a>
       </div>
     </main>
@@ -99,7 +99,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
-import { PRACTICE_PROJECTS, PROJECT_BY_ID } from './catalog.js';
+import { PRACTICE_PROJECTS } from './catalog.js';
 import { formatElapsed, TournamentGame } from './engine.js';
 import { PolyominoGame } from './polyominoEngine.js';
 import { PracticeSpecialGame } from './practiceSpecialEngine.js';
@@ -131,7 +131,7 @@ const competitionHomePath = String(import.meta.env.VITE_COMPETITION_HOME_PATH ||
 const mainSiteUrl = String(import.meta.env.VITE_MAIN_SITE_URL || 'https://2048tables.online/');
 const projects = PRACTICE_PROJECTS;
 function practiceTitle(project) { return project.title.replace(/（\d+×\d+）$/, ''); }
-const project = computed(() => PROJECT_BY_ID[props.projectId] || null);
+const project = computed(() => projects.find(item => item.id === props.projectId) || null);
 const game = shallowRef(null);
 const snapshot = ref({ board: [], score: 0, moves: 0, elapsedMs: 0 });
 const now = ref(performance.now());

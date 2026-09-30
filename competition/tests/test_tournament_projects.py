@@ -130,32 +130,27 @@ def test_formal_catalog_can_be_frozen_into_a_competition(tmp_path) -> None:
     )
     assert [project["project_ref"] for project in room["projects"]] == [
         "tournament-cargo-transport-4x4",
-        *(rules.project_ref for rules in TOURNAMENT_RULES),
+        "tournament-evil-spawn-4x4",
+        "tournament-grand-full-undo-race-3x3",
+        "tournament-dice-wall-3x4",
+        "tournament-mirror-64x10-race-4x4",
+        "tournament-isolated-island-hard-4x4",
         "practice-hundred-step-seal-4x4",
-        "practice-growing-tiles-4x4",
         "practice-pair-bond-4x4",
         "practice-chemical-reaction-4x4",
-        "practice-timed-bomb-4x4",
         "practice-full-load-4x4",
         "practice-heavy-tiles-4x4",
-        "practice-fission-4x4",
         "practice-aftershock-4x4",
-        "practice-look-back-3x4",
     ]
     assert {project["adapter"]["view_protocol"] for project in room["projects"]} == {
         "2048-board-v2", "cargo-transport-v1", "polyomino-board-v1"
     }
-    assert {project["project_ref"]: project["rules_version"] for project in room["projects"]}[
-        "practice-growing-tiles-4x4"
-    ] == "tournament-v3"
-    assert {project["project_ref"]: project["rules_version"] for project in room["projects"]}[
-        "tournament-shape-shifter-hard-12"
-    ] == "tournament-v3"
     dice = next(project for project in room["projects"] if project["project_ref"] == "tournament-dice-wall-3x4")
     assert dice["name"] == "骰子障碍（3×4）"
     assert dice["rules_version"] == "tournament-v2"
-    assert all(project["rules_version"] == "tournament-v4" for project in room["projects"][-8:-3])
-    assert [project["rules_version"] for project in room["projects"][-3:]] == ["tournament-v6", "tournament-v5", "tournament-v6"]
+    assert len(room["projects"]) == 12
+    assert all(project["rules_version"] == "tournament-v4" for project in room["projects"][-5:-1])
+    assert room["projects"][-1]["rules_version"] == "tournament-v5"
     assert room["projects"][-1]["adapter"]["view_protocol"] == "2048-board-v2"
 
 

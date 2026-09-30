@@ -50,12 +50,12 @@ TOURNAMENT_RULES = (
         evil_spawn=True, estimated_minutes="1–10",
     ),
     VariantRules(
-        "tournament-pure2-full-race-3x3", "极限速通（3×3）", 3, 3,
+        "tournament-pure2-full-race-3x3", "纯2满盘竞速（3×3）", 3, 3,
         spawn4_rate=0, target_sum=1022, allow_restart=True,
         result_metric="race", estimated_minutes="3–10",
     ),
     VariantRules(
-        "tournament-grand-full-undo-race-3x3", "大满盘撤销竞速（3×3）", 3, 3,
+        "tournament-grand-full-undo-race-3x3", "极限速通（3×3）", 3, 3,
         target_sum=2044, allow_restart=True, allow_undo=True,
         result_metric="race", estimated_minutes="5–15",
     ),
@@ -84,10 +84,10 @@ TOURNAMENT_RULES = (
 
 
 def tournament_project_catalog() -> list[dict[str, Any]]:
-    return [{
+    catalog = [{
         "key": "project-01",
         "name": "真·华容道（4×4）",
-        "description": "前10次有效移动先整理棋盘，随后从上方出现首个特殊块；特殊块整块滑到尽头，从下方中央送出且不能退回入口。无路可走时结束，送出数量多者胜。",
+        "description": "前10次有效移动先整理棋盘，随后从上方出现首个特殊块；特殊块整块滑到尽头，从下方中央送出。无路可走或10分钟到时结束，送出越多越好。",
         "project_ref": "tournament-cargo-transport-4x4",
         "adapter_rules_version": "tournament-v2",
         "rules_version": "tournament-v2",
@@ -104,7 +104,7 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
     ], {
         "key": "project-11",
         "name": "百步封锁（4×4）",
-        "description": "开局封住3格，此后每100步轮换；双方死亡后按得分结算。",
+        "description": "开局先随机封住3格，再生成初始数字；之后每100个有效移动轮换封锁。封住的数字保留，且不会在封锁格出数。无路可走后比较得分。",
         "project_ref": "practice-hundred-step-seal-4x4",
         "adapter_rules_version": "tournament-v2",
         "rules_version": "tournament-v2",
@@ -125,28 +125,30 @@ def tournament_project_catalog() -> list[dict[str, Any]]:
             "rules_version": "tournament-v6" if index in (18, 20) else "tournament-v5" if index == 19 else "tournament-v4",
         }
         for index, project_ref, name, description in (
-            (13, "practice-pair-bond-4x4", "出双入对（4×4）", "特殊块相邻可粘合成双格，新双格形成时旧双格消失；双方死亡后按得分结算。"),
-            (14, "practice-chemical-reaction-4x4", "化学反应（4×4）", "同色特殊块碰撞消失、异色碰撞生成一格墙；双方死亡后按得分结算。"),
+            (13, "practice-pair-bond-4x4", "出双入对（4×4）", "偶尔出现特殊块；两块相邻便粘成双格，新的双格形成时旧双格消失。无路可走后比得分。"),
+            (14, "practice-chemical-reaction-4x4", "化学反应（4×4）", "偶尔出现两色特殊块；同色相撞消失，异色相撞合成一格墙。无路可走后比得分。"),
             (15, "practice-timed-bomb-4x4", "定时炸弹（4×4）", "炸弹移动后倒计时减少，归零变墙；双方死亡后按得分结算。"),
-            (16, "practice-full-load-4x4", "满载（4×4）", "棋盘数字块超过12个立即结束；按得分结算。"),
-            (17, "practice-heavy-tiles-4x4", "越来越重（4×4）", "256只能横移、512只能竖移、1024不能移动；双方死亡后按得分结算。"),
+            (16, "practice-full-load-4x4", "满载（4×4）", "棋盘最多容纳12个数字块；超过上限立即结束，按得分排名。"),
+            (17, "practice-heavy-tiles-4x4", "越来越重（4×4）", "256只能横移，512只能竖移，1024不能移动；无路可走后比得分。"),
             (18, "practice-fission-4x4", "裂变（4×4）", "1024及以上数字块会分裂成两块并替代该步出数；双方死亡后比较盘面和。"),
-            (19, "practice-aftershock-4x4", "余震（4×4）", "一次操作中，只要合出256或更大的数字块，就触发一次余震：从初始四行、四列中随机选一条，向随机方向平移一格。双方死亡后按得分结算。"),
+            (19, "practice-aftershock-4x4", "余震（4×4）", "一次操作中，只要合出256或更大的数字块，就触发一次余震：从初始四行、四列中随机选一条，向随机方向平移一格。无路可走后比得分。"),
             (20, "practice-look-back-3x4", "回头看看（3×4）", "有效移动有机会改为撤销并出两个数；可重开，先合出2048者获胜。"),
         )
     ]]
+    visible_keys = {f"project-{index:02d}" for index in (1, 3, 5, 6, 7, 9, 11, 13, 14, 16, 17, 19)}
+    return [project for project in catalog if project["key"] in visible_keys]
 
 
 def _description(rules: VariantRules) -> str:
     details = {
         "tournament-spawn4-50-3x3": "50%概率生成4；双方死亡后按得分结算。",
-        "tournament-evil-spawn-4x4": "AI对抗出数；双方死亡后按得分结算。",
+        "tournament-evil-spawn-4x4": "每步由 EvilGen 选择更难的出数位置。一局定胜负，双方都无路可走后比较得分。",
         "tournament-pure2-full-race-3x3": "只生成2，可重开；盘面和达到或超过1022即获胜。",
-        "tournament-grand-full-undo-race-3x3": "可重开、可撤销；先达到盘面和2044获胜。",
-        "tournament-dice-wall-3x4": "开局掷骰放置固定墙；双方死亡后按盘面和结算。",
-        "tournament-mirror-64x10-race-4x4": "中央为墙、外沿传送；64不可合并，先同时拥有10个64获胜。",
+        "tournament-grand-full-undo-race-3x3": "标准出数，允许重开和撤销。先将盘面和精确做到2044即完成。",
+        "tournament-dice-wall-3x4": "开局掷骰：1–3在角位、4–5在边位、6在中心放墙。双方死亡后比较盘面和。",
+        "tournament-mirror-64x10-race-4x4": "中央十字是墙，四条外沿是传送门：左右相通、上下相通。64不可合并，先同时拥有10个64获胜。",
         "tournament-256-brick-5x5": "256不可合并；双方死亡后按得分结算。",
-        "tournament-isolated-island-hard-4x4": "孤岛只与同类合并且不计分；双方死亡后按得分结算。",
+        "tournament-isolated-island-hard-4x4": "会生成只与同类合并的孤岛特殊块，合并孤岛不计分。双方都无路可走后比较得分。",
         "tournament-shape-shifter-hard-12": "每局使用随机12格棋盘；棋盘外区域不可进入，双方死亡后按得分结算。",
     }
     return details[rules.project_ref]
