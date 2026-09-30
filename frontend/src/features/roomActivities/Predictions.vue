@@ -21,20 +21,19 @@
       <fieldset class="amounts" :disabled="busy || !!pending || !canBet"><legend>{{ t('下注金额（Token）','Stake (Token)') }}</legend><button v-for="value in amounts" :key="value" type="button" :aria-pressed="amount === value" @click="amount=value">{{ value.toLocaleString() }}</button></fieldset>
       <p v-if="selection && canBet" class="note">{{ name(selection) }} · {{ amount.toLocaleString() }} Token · {{ t('最多损失本次投入','Maximum loss: this stake') }}</p>
       <button v-if="!user" class="submit" @click="close();emit('login')">{{ t('登录下注','Sign in to predict') }}</button>
-      <button v-else-if="canBet || (pending && pending.kind !== 'target65536')" class="submit" :disabled="busy || !connected || (pending && pending.kind === 'target65536') || (!pending && (!selection || data.paid_balance_units < amount*1000))" @click="submit('winner')">{{ busy ? t('正在确认…','Confirming…') : pending && pending.kind !== 'target65536' ? t('核对并重试（不会重复扣款）','Check and retry (no duplicate charge)') : t('确认最高分下注','Confirm highest-score stake') }}</button>
+      <button v-else-if="canBet || (pending && pending.kind !== 'target65536')" class="submit" :disabled="busy || !connected || (pending && pending.kind === 'target65536') || (!pending && (!selection || data.paid_balance_units < amount*1000))" @click="submit('winner')">{{ submitLabel('winner') }}</button>
       <section v-if="market.result" class="result" role="status"><h3>{{ t('最高分结算','Highest-score result') }}</h3><p>{{ t('本金返还','Principal') }}: {{ tokens(market.result.principal) }} · {{ t('净收益','Profit') }}: {{ tokens(market.result.profit) }}</p><p>{{ t('退款','Refund') }}: {{ tokens(market.result.refund) }} · {{ t('实际损失','Loss') }}: {{ tokens(market.result.loss) }} Token</p></section>
       </section>
       <section v-if="targetBet" class="target-bet" aria-labelledby="prediction-target-title">
         <h3 id="prediction-target-title">{{ t('独立加注 · 65536','Side bet · 65536') }}</h3>
-        <p v-if="targetReturnsPrincipal" class="note">{{ t('本批已有旧规则加注，继续按下注时的规则结算：65k 奖励 8 倍，65k+32k 奖励 50 倍，本金另退。','This batch already contains a side bet under the previous rules. It will keep that promise: 8× for 65k or 50× for 65k+32k, with principal returned separately.') }}</p>
-        <p v-else class="note">{{ t('给已下注的同一位 AI 加注。合成 65k，到账加注额的 8 倍；合成 65k+32k，升级为 50 倍。两档不叠加，达标即时到账，升级补差额，本金不退。','Back the same AI you selected. Make 65k to receive 8× your side stake, or 65k+32k to upgrade the total to 50×. Tiers do not stack; rewards are paid immediately and upgrades pay only the difference. Principal is not returned.') }}</p>
+        <p class="note">{{ t('给已下注的同一位 AI 加注。合成 65k，到账加注额的 8 倍；合成 65k+32k，升级为 50 倍。两档不叠加，达标即时到账，升级补差额，本金不退。','Back the same AI you selected. Make 65k to receive 8× your side stake, or 65k+32k to upgrade the total to 50×. Tiers do not stack; rewards are paid immediately and upgrades pay only the difference. Principal is not returned.') }}</p>
         <dl><div><dt>{{ t('加注选手','Side-bet player') }}</dt><dd>{{ market.mine ? name(market.mine.option_id) : t('请先完成最高分下注','Place a highest-score stake first') }}</dd></div>
           <div><dt>{{ t('个人加注','Your side stake') }}</dt><dd>{{ tokens(targetBet.mine?.units) }} Token</dd></div>
           <div v-if="targetOutcome"><dt>{{ t('达标状态','Target status') }}</dt><dd>{{ targetOutcome === 'reached_combo' ? t('65536＋32768 · 50 倍奖励','65536 + 32768 · 50× reward') : targetOutcome === 'reached' ? t('65536 · 8 倍奖励','65536 · 8× reward') : t('已结束，未达标','Ended without reaching target') }}{{ targetBet.result && targetBet.result.profit > 0 ? t(' · 已到账',' · Credited') : '' }}</dd></div></dl>
         <p class="note">{{ t('独立扣除常驻额度，不计入最高分奖池。截止时间相同，已达标或已结束的选手不可再加注。','Charged separately from permanent Tokens; excluded from the highest-score pool. The same deadline applies. No more side bets once this AI reaches the target or ends.') }}</p>
         <fieldset class="amounts" :disabled="busy || !!pending || !canTargetBet"><legend>{{ t('65536 加注金额（Token）','65536 side stake (Token)') }}</legend><button v-for="value in amounts" :key="value" type="button" :aria-pressed="targetAmount === value" @click="targetAmount=value">{{ value.toLocaleString() }}</button></fieldset>
-        <p v-if="canTargetBet" class="note">{{ t('本次加注','This side stake') }} {{ targetAmount.toLocaleString() }} Token<br />{{ t('65536 达标到账','65536 payout') }} {{ (targetAmount*((targetBet.reward_multiplier ?? 8)+(targetReturnsPrincipal?1:0))).toLocaleString() }} Token<br />{{ t('65536＋32768 达标到账','65536 + 32768 payout') }} {{ (targetAmount*((targetBet.bonus_reward_multiplier ?? 50)+(targetReturnsPrincipal?1:0))).toLocaleString() }} Token</p>
-        <button v-if="user && (canTargetBet || pending?.kind === 'target65536')" class="submit" :disabled="busy || !connected || (pending && pending.kind !== 'target65536') || (!pending && data.paid_balance_units < targetAmount*1000)" @click="submit('target65536')">{{ busy ? t('正在确认…','Confirming…') : pending?.kind === 'target65536' ? t('核对并重试加注（不会重复扣款）','Check and retry side bet (no duplicate charge)') : t('确认 65536 加注','Confirm 65536 side bet') }}</button>
+        <p v-if="canTargetBet" class="note">{{ t('本次追加','This top-up') }} {{ targetAmount.toLocaleString() }} Token<br /><template v-if="targetCurrentAmount">{{ t('加注后累计','Total side stake after top-up') }} {{ targetProjectedAmount.toLocaleString() }} Token<br /></template>{{ t('65536 达标总到账','Total 65536 payout') }} {{ targetPayout.toLocaleString() }} Token<br />{{ t('65536＋32768 达标总到账','Total 65536 + 32768 payout') }} {{ targetBonusPayout.toLocaleString() }} Token</p>
+        <button v-if="user && (canTargetBet || pending?.kind === 'target65536')" class="submit" :disabled="busy || !connected || (pending && pending.kind !== 'target65536') || (!pending && data.paid_balance_units < targetAmount*1000)" @click="submit('target65536')">{{ submitLabel('target65536') }}</button>
         <section v-if="targetBet.result" class="result" role="status"><h3>{{ t('65536 加注结算','65536 side-bet result') }}</h3><p>{{ t('返还本金','Returned principal') }}: {{ tokens(targetBet.result.principal) }} · {{ t('奖励','Reward') }}: {{ tokens(targetBet.result.profit) }}</p><p>{{ t('退款','Refund') }}: {{ tokens(targetBet.result.refund) }} · {{ t('实际损失','Loss') }}: {{ tokens(targetBet.result.loss) }} Token</p></section>
       </section>
     </div>
@@ -52,31 +51,19 @@
     <ol>
       <li>{{ t('每批开始后 10 分钟内，选择最终得分最高的选手。若胜负提前确定则提前封盘。暂停或离线期间不接单，恢复后不延长截止时间。','Choose the final highest scorer within 10 minutes of batch start. Entries close early if the outcome is certain. Pauses and disconnects suspend entries without extending the deadline.') }}</li>
       <li>{{ t('仅使用常驻额度。每人每批选择一位选手，可追加，不能换选手或撤回。同一账户的追加合并计算。','Permanent Tokens only. One player per account per batch; top-ups are allowed, switching and withdrawals are not. Top-ups are combined per account.') }}</li>
-      <template v-if="legacyRules">
-        <li>{{ t('本批已有旧规则下注，将继续按下注时的规则结算：从每个输家账户最多匹配赢家本金总额，未匹配部分退回本人。','This funded batch keeps the rules accepted when its stakes were placed: each losing account is matched up to the combined winning stakes, and unmatched funds are refunded.') }}</li>
-        <li>{{ t('奖金按所有赢家的下注金额比例分配。并列最高的选手都算获胜，其下注者不互相赔付。','Prizes are proportional to winning stakes. All tied highest scorers win, and their backers do not pay one another.') }}</li>
-      </template>
-      <template v-else>
-        <li>{{ t('不同选项按总下注额匹配。唯一赢家与每个落败选项之间的匹配额，均为双方总下注额的较小值；选项内部按个人下注占比分配收益或损失，未匹配本金退回。','Options are matched by their total stakes. A sole winner matches each losing option by the smaller of their two totals. Profit and loss are allocated within each option in proportion to individual stakes; unmatched principal is refunded.') }}</li>
-        <li>{{ t('并列最高的选项合并为获胜方，彼此不赔付。每个落败选项只与获胜联合池匹配一次，最多损失该选项的总下注；奖金按全部赢家的下注比例分配。','Tied highest options form one winning pool and do not pay one another. Each losing option is matched once against that pool and can lose no more than its total stake. All winners share the profit in proportion to their stakes.') }}</li>
-        <li>{{ t('结算只取决于各选项总下注额；把同一金额拆成更多账户或更多次追加，不会改变任何选项的匹配金额。','Settlement depends only on each option’s total stake. Splitting the same amount across more accounts or top-ups does not change any option’s matched amount.') }}</li>
-      </template>
+      <li>{{ t('封盘时，系统只按三个选项的总额，把本金预先分配到三组可能的两两对手盘。同一份本金最多进入一组对手盘，未匹配部分保留待退。','At close, the system uses only the three option totals to split principal among the three possible head-to-head pools. Each unit of principal enters at most one pool; unmatched principal remains refundable.') }}</li>
+      <li>{{ t('结算时，一组对手盘只有一方押中，资金才从未押中方转给押中方。双方都押中（并列）或都未押中时，该组本金原额退回。','A head-to-head pool transfers only when exactly one side is correct. If both are correct in a tie, or both are incorrect, that pool is returned unchanged.') }}</li>
+      <li>{{ t('每个选项内按个人下注比例分配。每人最多损失自己的下注；拆分账户或追加不改变选项总匹配额。两两输赢完全镜像，因此各选项命中率相等时，即使出现并列，每位玩家的期望净收益仍为零。','Allocation within each option is proportional to individual stakes. No one can lose more than their stake, and splitting accounts or top-ups cannot change the option’s matched total. Pairwise gains and losses are exact mirrors, so equal hit rates give every player zero expected net profit, including ties.') }}</li>
       <li>{{ t('例如你押 100，唯一对手押 10000，你赢：净赢 100，加本金到账 200，对手退回 9900。','You stake 100 and the only opponent stakes 10000. If you win, profit is 100, total return is 200, and the opponent gets 9900 back.') }}</li>
       <li>{{ t('无人押中或技术性作废：全额退款。三位全部并列或没有输家下注：各自取回本金，净收益为零。系统不抽成。','No winning bets or a technical void: full refunds. All three tie, or no losing bets: stakes return with zero profit. No platform fee.') }}</li>
     </ol>
     <h3>{{ t('65536 独立加注','65536 side bet') }}</h3>
     <ol>
-      <li>{{ t('先完成最高分下注，才可为同一位 AI 单独加注。金额为 100／500／1000／5000 Token，可追加；仅扣除常驻额度，不能撤回或换选手。','First place a highest-score stake, then optionally back the same AI with a separate side bet. Amounts: 100 / 500 / 1000 / 5000 permanent Tokens; top-ups are allowed, withdrawals and switching are not.') }}</li>
+      <li>{{ t('先完成最高分下注，才可为同一位 AI 单独加注。金额为 100／1000／5000／10000 Token，可追加；仅扣除常驻额度，不能撤回或换选手。','First place a highest-score stake, then optionally back the same AI with a separate side bet. Amounts: 100 / 1000 / 5000 / 10000 permanent Tokens; top-ups are allowed, withdrawals and switching are not.') }}</li>
       <li>{{ t('沿用开局后 10 分钟及提前封盘规则。暂停或离线不接单；该 AI 已合成 65536 棋块或本局已结束时，不再接受加注。65536 指棋块数值，不是得分。','The same 10-minute window and early closure rules apply. No entries while paused or offline, or once this AI creates a 65536 tile or ends. The target is a tile value, not the score.') }}</li>
       <li>{{ t('本局达到 65536 即成功，与最高分名次无关。之后若同一盘面同时包含一个 65536 棋块和一个 32768 棋块，奖励升级到组合档；曾分别达到两个数值不算组合达标。达标记录会保留，后续继续合并不影响资格。每位 AI 独立判定，不限本批第一位达标者。','Reaching 65536 is a hit regardless of final ranking. Having a 65536 tile and a 32768 tile together on the same board upgrades the reward. Reaching the two values at separate times does not qualify. Once earned, eligibility survives later merges. Each AI qualifies independently, not just the first one.') }}</li>
-      <template v-if="targetReturnsPrincipal">
-        <li>{{ t('本批已有旧规则加注：65536 档返还本金并另发放 8 倍奖励；加注 100，总到账 900。','This batch contains a side bet under the previous rules: the 65536 tier returns principal plus an 8× reward. Stake 100, receive 900 in total.') }}</li>
-        <li>{{ t('65536＋32768 档返还本金并另发放 50 倍奖励；加注 100，先到账 900，升级再到账 4200，累计 5100。','The 65536 + 32768 tier returns principal plus a 50× reward. Stake 100, receive 900 first and another 4200 on upgrade, totaling 5100.') }}</li>
-      </template>
-      <template v-else>
-        <li>{{ t('65536 档：本金不返还，达标后发放累计加注金额的 8 倍常驻额度。加注 100，到账 800。','65536 tier: principal is not returned. Reaching the target pays 8× the cumulative side stake in permanent Tokens. Stake 100, receive 800.') }}</li>
-        <li>{{ t('65536＋32768 档：本金不返还，达标后发放累计加注金额的 50 倍常驻额度。加注 100，到账 5000。两档取最高档，不叠加；达标时即时到账，升级时仅补差额。例如加注 100，先到账 800，升级后再到账 4200，累计 5000。未达到 65536 则加注不返还。','65536 + 32768 tier: principal is not returned. Reaching the target pays 50× the cumulative side stake in permanent Tokens. Stake 100, receive 5000. Tiers do not stack; rewards are paid immediately and upgrades pay only the difference. For a stake of 100, receive 800 first and another 4200 on upgrade, totaling 5000. No 65536 tile means no return.') }}</li>
-      </template>
+      <li>{{ t('65536 档：本金不返还，达标后发放累计加注金额的 8 倍常驻额度。加注 100，到账 800。','65536 tier: principal is not returned. Reaching the target pays 8× the cumulative side stake in permanent Tokens. Stake 100, receive 800.') }}</li>
+      <li>{{ t('65536＋32768 档：本金不返还，达标后发放累计加注金额的 50 倍常驻额度。加注 100，到账 5000。两档取最高档，不叠加；达标时即时到账，升级时仅补差额。例如加注 100，先到账 800，升级后再到账 4200，累计 5000。未达到 65536 则加注不返还。','65536 + 32768 tier: principal is not returned. Reaching the target pays 50× the cumulative side stake in permanent Tokens. Stake 100, receive 5000. Tiers do not stack; rewards are paid immediately and upgrades pay only the difference. For a stake of 100, receive 800 first and another 4200 on upgrade, totaling 5000. No 65536 tile means no return.') }}</li>
       <li>{{ t('加注独立核算，不进入或消耗最高分奖池；奖励由系统发放，不受最高分下注的赔付上限约束。最高分无人押中不影响加注结果；技术性作废时，最高分下注及尚未兑付的加注全额退款；已到账的加注奖励保留，不重复退款。','Side bets neither fund nor draw from the highest-score pool. Rewards come from the system and are not subject to that pool’s payout caps. No highest-score winner does not void side bets. A technical void refunds the highest-score stake and any unpaid side stake. Already credited side-bet rewards are retained, without a second refund.') }}</li>
     </ol><button class="submit" @click="hideRules">{{ t('返回下注','Back to predictions') }}</button>
   </dialog>
@@ -96,14 +83,16 @@ const { dismissed, dismiss } = useActivityDismissals('prediction');
 const dockOpen = computed(() => predictionIsOpen(props.state?.market, now.value, props.connected, props.online));
 const t=(zh,en)=>props.lang==='zh'?zh:en;
 const data=ref({market:null}),dialog=ref(null),rules=ref(null),help=ref(null),entry=ref(null),opened=ref(false),rulesOpen=ref(false);
-const amount=ref(100),targetAmount=ref(100),selection=ref(''),pending=ref(null),busy=ref(false),error=ref(''),now=ref(Date.now()/1000);
-let offset=0,timer,generation=0,version=0,lastRefresh=0,fetching=false,refreshAgain=false,restoreFocus;
-const market=computed(()=>data.value.market),amounts=computed(()=>data.value.amounts || [100,500,1000,5000]);
-const legacyRules=computed(()=>market.value?.rules==='matched-accounts-v1');
+const amount=ref(100),targetAmount=ref(100),selection=ref(''),pending=ref(null),busy=ref(false),slowConfirm=ref(false),submittingKind=ref(''),error=ref(''),now=ref(Date.now()/1000);
+let offset=0,timer,slowConfirmTimer,generation=0,version=0,lastRefresh=0,fetching=false,refreshAgain=false,restoreFocus;
+const market=computed(()=>data.value.market),amounts=computed(()=>data.value.amounts || [100,1000,5000,10000]);
 const remaining=computed(()=>Math.max(0,Math.ceil((market.value?.deadline || 0)-now.value)));
 const canBet=computed(()=>predictionIsOpen(market.value, now.value, props.connected, props.online));
 const targetBet=computed(()=>market.value?.target_bet);
-const targetReturnsPrincipal=computed(()=>targetBet.value?.rules==='target-principal-return-v1');
+const targetCurrentAmount=computed(()=>Number(targetBet.value?.mine?.units || 0)/1000);
+const targetProjectedAmount=computed(()=>targetCurrentAmount.value+targetAmount.value);
+const targetPayout=computed(()=>targetProjectedAmount.value*(targetBet.value?.reward_multiplier ?? 8));
+const targetBonusPayout=computed(()=>targetProjectedAmount.value*(targetBet.value?.bonus_reward_multiplier ?? 50));
 const targetOutcome=computed(()=>targetBet.value?.outcomes?.[market.value?.mine?.option_id]);
 const canTargetBet=computed(()=>canBet.value && !!market.value?.mine && !!targetBet.value && !targetOutcome.value);
 function marketCaption(value) {
@@ -114,6 +103,13 @@ const caption=computed(()=>marketCaption(market.value));
 const startedTime=value=>value == null ? '—' : new Date(value*1000).toLocaleString(props.lang==='zh'?'zh-CN':'en-GB',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const tokens=units=>(Number(units || 0)/1000).toLocaleString(undefined,{maximumFractionDigits:1});
 const name=id=>market.value?.options.find(p=>p.id===id)?.name || room.participants?.find(p=>p.id===id)?.name || id;
+const submitAmount=kind=>pending.value && (pending.value.kind || 'winner')===kind ? pending.value.amount : kind==='target65536' ? targetAmount.value : amount.value;
+function submitLabel(kind){
+  const value=submitAmount(kind).toLocaleString();
+  if(busy.value && submittingKind.value===kind)return slowConfirm.value?t(`仍在确认 · ${value} Token · 请勿重复点击`,`Still confirming · ${value} Token · Do not click again`):t(`正在提交 · ${value} Token…`,`Submitting · ${value} Token…`);
+  if(pending.value && (pending.value.kind || 'winner')===kind)return t(`核对并重试 · ${value} Token（不会重复扣款）`,`Check and retry · ${value} Token (no duplicate charge)`);
+  return kind==='target65536'?t(`确认追加 · ${value} Token`,`Confirm top-up · ${value} Token`):t(`确认最高分下注 · ${value} Token`,`Confirm highest-score stake · ${value} Token`);
+}
 const storageKey=()=>`room:prediction-pending:${room.id}:${props.user?.id}`;
 function persist(){try{if(pending.value)sessionStorage.setItem(storageKey(),JSON.stringify(pending.value));else sessionStorage.removeItem(storageKey());}catch{}}
 function loadPending(){pending.value=null;try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved?.request_id){pending.value=saved;selection.value=saved.option_id;if(saved.kind==='target65536')targetAmount.value=saved.amount;else amount.value=saved.amount;}}catch{}}
@@ -147,20 +143,20 @@ const rulesBackdrop=e=>{if(e.target===rules.value && (e.clientX<rules.value.getB
 async function submit(kind='winner'){
   if(busy.value || rulesOpen.value || !props.user || (pending.value && (pending.value.kind || 'winner')!==kind) || (!pending.value && !(kind==='target65536'?canTargetBet.value:canBet.value)))return;
   if(!pending.value){pending.value={request_id:crypto.randomUUID(),market_id:market.value.id,option_id:kind==='target65536'?market.value.mine.option_id:selection.value,amount:kind==='target65536'?targetAmount.value:amount.value,kind};persist();}
-  const current=generation;busy.value=true;error.value='';++version;
+  const current=generation;busy.value=true;submittingKind.value=kind;slowConfirm.value=false;clearTimeout(slowConfirmTimer);slowConfirmTimer=setTimeout(()=>{if(busy.value && submittingKind.value===kind)slowConfirm.value=true;},2000);error.value='';++version;
   try{await api(pending.value);if(current!==generation)return;pending.value=null;persist();emit('balance');await refresh();}
   catch(e){if(current!==generation)return;
     const definitive=['prediction_closed','prediction_insufficient_permanent','prediction_cannot_switch','prediction_invalid_stake','prediction_invalid_option','prediction_not_found','prediction_main_required','prediction_target_closed','prediction_invalid_kind'];
     if(definitive.includes(e.detail)){pending.value=null;persist();}
     const messages={prediction_closed:['下注已截止或直播暂停，请刷新。','Entries are closed or suspended. Please refresh.'],prediction_insufficient_permanent:['常驻额度不足。','Not enough permanent Tokens.'],prediction_cannot_switch:['本批只能追加已选选手。','You can only add to your chosen player.'],prediction_main_required:['请先完成最高分下注，再为同一位 AI 加注。','Place a highest-score stake before backing the same AI with a side bet.'],prediction_target_closed:['该 AI 已达标或已结束，不能再加注。','This AI has reached the target or ended; side bets are closed.']};
     error.value=t(...(messages[e.detail]||['尚未确认，请使用同一请求重试，不会重复扣款。','Not yet confirmed. Retry the same request safely without duplicate charges.']));
-  }finally{if(current===generation)busy.value=false;}
+  }finally{clearTimeout(slowConfirmTimer);if(current===generation){busy.value=false;slowConfirm.value=false;submittingKind.value='';}}
 }
 watch(()=>props.state,state=>{if(!state)return;if(opened.value){refresh();}else if(!pending.value)install(state);},{immediate:true});
-watch(()=>props.user?.id,()=>{generation++;version++;busy.value=false;fetching=false;close();data.value={market:props.state?.market||null};loadPending();});
+watch(()=>props.user?.id,()=>{generation++;version++;clearTimeout(slowConfirmTimer);busy.value=false;slowConfirm.value=false;submittingKind.value='';fetching=false;close();data.value={market:props.state?.market||null};loadPending();});
 watch(()=>props.connected,connected=>{if(connected && opened.value)refresh();});
 onMounted(()=>{loadPending();timer=setInterval(()=>{now.value=Date.now()/1000+offset;if(opened.value && !busy.value && props.connected && Date.now()-lastRefresh>5000)refresh();},500);});
-onUnmounted(()=>{generation++;clearInterval(timer);});
+onUnmounted(()=>{generation++;clearInterval(timer);clearTimeout(slowConfirmTimer);});
 defineExpose({close});
 </script>
 <style scoped>
@@ -174,6 +170,11 @@ defineExpose({close});
 .prediction-columns .target-bet { margin:0;padding:0 0 0 24px;border:0;border-left:1px solid var(--border-main); }
 .prediction-columns h3 { margin:0 0 16px;font-size:16px; }
 .prediction-dialog.rules-dialog { width:600px; }
+.prediction-dialog { -webkit-text-size-adjust:none;text-size-adjust:none; }
+.prediction-dialog .amounts button { flex:1 0 70px;white-space:nowrap;line-height:1.2; }
+.prediction-dialog .amounts { flex-wrap:wrap; }
+.prediction-dialog .submit { font-size:13px;line-height:1.3; }
+.prediction-dialog dd { min-width:0;overflow-wrap:anywhere; }
 .recent-results table { width:100%;border-collapse:collapse;table-layout:fixed;margin-top:12px; }
 .recent-results th,.recent-results td { padding:9px 8px;border-bottom:1px solid var(--border-main);text-align:right;overflow-wrap:anywhere;font-variant-numeric:tabular-nums; }
 .recent-results th:first-child,.recent-results td:first-child { width:45%;text-align:left; }

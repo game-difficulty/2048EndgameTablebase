@@ -7,15 +7,13 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from backend.auth.db import auth_db
 
-AMOUNTS = (100, 500, 1000, 5000)
+AMOUNTS = (100, 1000, 5000, 10000)
 UNIT = 1000
-LEGACY_RULE_VERSION = 'matched-accounts-v1'
-RULE_VERSION = 'matched-option-pools-v2'
+RULE_VERSION = 'matched-pairwise-pools-v3'
 TARGET = 65536
 TARGET_REWARD = 8  # Total payout multiplier; the side-bet principal is not returned.
 BONUS_TARGET = 32768  # Must coexist with TARGET on the same board.
 BONUS_REWARD = 50  # Highest tier only, not added to TARGET_REWARD.
-TARGET_LEGACY_RULE_VERSION = 'target-principal-return-v1'
 TARGET_RULE_VERSION = 'target-no-principal-v2'
 
 
@@ -72,19 +70,8 @@ def init_schema():
         market_columns = {row['name'] for row in db.execute('PRAGMA table_info(room_prediction_markets)')}
         if 'target_rules' not in market_columns:
             db.execute('ALTER TABLE room_prediction_markets ADD COLUMN target_rules TEXT')
-        # Never change the payout promise for a side bet already in escrow.
-        db.execute('''UPDATE room_prediction_markets SET target_rules=CASE
-            WHEN EXISTS (SELECT 1 FROM room_prediction_target_stakes s
-                         WHERE s.market_id=room_prediction_markets.id)
-            THEN ? ELSE ? END WHERE target_rules IS NULL''',
-            (TARGET_LEGACY_RULE_VERSION, TARGET_RULE_VERSION))
-        # A funded market keeps the rules accepted when its first stake was escrowed.
-        # Unfunded, unsettled markets can safely adopt the new option-pool rules.
-        db.execute('''UPDATE room_prediction_markets SET rules=?
-            WHERE settled IS NULL AND rules=?
-              AND NOT EXISTS (SELECT 1 FROM room_prediction_stakes s WHERE s.market_id=room_prediction_markets.id)
-              AND NOT EXISTS (SELECT 1 FROM room_prediction_target_stakes s WHERE s.market_id=room_prediction_markets.id)''',
-            (RULE_VERSION, LEGACY_RULE_VERSION))
+        db.execute('UPDATE room_prediction_markets SET target_rules=? WHERE target_rules IS NULL',
+                   (TARGET_RULE_VERSION,))
 
 
 def ensure_market(room_id, batch):
@@ -115,6 +102,8 @@ def record_targets(room_id, market_id, outcomes, now=None):
                             (market_id,room_id)).fetchone()
         if not market or market['settled'] is not None:
             return
+        if market['target_rules'] != TARGET_RULE_VERSION:
+            raise ValueError('unknown_prediction_target_rules')
         options = {p['id'] for p in json.loads(market['options'])}
         for option, outcome in outcomes.items():
             if option not in options or outcome not in ('reached','missed','reached_combo'):
@@ -141,7 +130,7 @@ def _award_target_tier(db, room_id, market_id, market, option, reward, now):
     event_id = f'prediction-reward:{market_id}:{option}:{reward}'
     if db.execute('SELECT 1 FROM room_prediction_announcements WHERE id=?', (event_id,)).fetchone():
         return
-    # Request rowids preserve the first committed side-bet order, including legacy bets.
+    # Request rowids preserve the first committed side-bet order.
     stakes = db.execute('''SELECT s.*,u.display_name,
         (SELECT MIN(r.rowid) FROM room_prediction_target_requests r
          WHERE r.market_id=s.market_id AND r.user_id=s.user_id) AS first_request
@@ -150,27 +139,26 @@ def _award_target_tier(db, room_id, market_id, market, option, reward, now):
     if not stakes:
         return
     stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
-    returns_principal = _target_returns_principal(market)
     for stake in stakes:
         uid, units = stake['user_id'], stake['units']
         previous = db.execute('SELECT principal,profit,refund FROM room_prediction_target_settlements WHERE market_id=? AND user_id=?',
                               (market_id,uid)).fetchone()
         paid = sum(previous) if previous else 0
-        delta = units * (reward + int(returns_principal)) - paid
+        delta = units * reward - paid
         if delta > 0:
             _credit(db,uid,delta,'room_prediction_target_settlement',event_id,
                     dict(room_id=room_id,market_id=market_id,option_id=option,reward_multiplier=reward,
-                         target_rules=market['target_rules'],
-                         principal=units if returns_principal else 0,
+                         target_rules=TARGET_RULE_VERSION,
+                         principal=0,
                          profit=units*reward,refund=0,loss=0),stamp)
             db.execute('''INSERT INTO room_prediction_target_settlements VALUES(?,?,?,?,0,0)
                 ON CONFLICT(market_id,user_id) DO UPDATE SET principal=excluded.principal,profit=excluded.profit,
-                refund=0,loss=0''', (market_id,uid,units if returns_principal else 0,units*reward))
+                refund=0,loss=0''', (market_id,uid,0,units*reward))
     player = next(p for p in json.loads(market['options']) if p['id'] == option)
     event = dict(type='prediction_reward',id=event_id,at=now,market_id=market_id,option_id=option,
                  player_name=player['name'],tier='65k+32k' if reward == BONUS_REWARD else '65k',
                  names=[s['display_name'] for s in stakes[:3]],recipient_count=len(stakes),
-                 total_units=sum(s['units'] for s in stakes)*(reward + int(returns_principal)))
+                 total_units=sum(s['units'] for s in stakes)*reward)
     db.execute('INSERT INTO room_prediction_announcements VALUES(?,?,?,?,?,?,0)',
                (event_id,room_id,market_id,option,reward,json.dumps(event,ensure_ascii=False)))
 
@@ -194,36 +182,6 @@ def _target_outcomes(db, market_id):
             for row in db.execute('SELECT option_id,outcome,combo_reached FROM room_prediction_target_outcomes WHERE market_id=?', (market_id,))}
 
 
-def _target_returns_principal(market):
-    rules = market['target_rules'] or TARGET_LEGACY_RULE_VERSION
-    if rules == TARGET_LEGACY_RULE_VERSION:
-        return True
-    if rules == TARGET_RULE_VERSION:
-        return False
-    raise ValueError('unknown_prediction_target_rules')
-
-
-def _allocate_legacy(stakes, winners, void=False):
-    """The account-capped v1 rules, retained only for already-funded markets."""
-    winning = [s for s in stakes if s['option_id'] in winners]
-    total = sum(s['units'] for s in winning)
-    if void or not total:
-        return {s['user_id']: dict(principal=0, profit=0, refund=s['units'], loss=0) for s in stakes}
-    losing = [s for s in stakes if s['option_id'] not in winners]
-    pool = sum(min(s['units'], total) for s in losing)
-    result = {s['user_id']: dict(principal=0, profit=0, refund=max(0, s['units']-total),
-                               loss=min(s['units'], total)) for s in losing}
-    remainders = []
-    for s in winning:
-        profit, remainder = divmod(s['units'] * pool, total)
-        result[s['user_id']] = dict(principal=s['units'], profit=profit, refund=0, loss=0)
-        remainders.append((-remainder, s['user_id']))
-    left = pool - sum(r['profit'] for r in result.values())
-    for _, uid in sorted(remainders)[:left]:
-        result[uid]['profit'] += 1
-    return result
-
-
 def _proportional(total, stakes):
     """Allocate integer ``total`` by stake with deterministic largest remainders."""
     denominator = sum(s['units'] for s in stakes)
@@ -241,36 +199,84 @@ def _proportional(total, stakes):
     return allocated
 
 
+def _pairwise_match_amounts(stakes_by_option):
+    """Maximize disjoint two-option matches without using any stake twice."""
+    totals = {option: sum(stake['units'] for stake in stakes)
+              for option, stakes in stakes_by_option.items() if stakes}
+    options = sorted(totals)
+    if len(options) < 2:
+        return {}
+    if len(options) == 2:
+        pair = tuple(options)
+        return {pair: min(totals.values())}
+    if len(options) != 3:
+        raise ValueError('invalid_prediction_option_count')
+
+    largest = max(options, key=lambda option: (totals[option], option))
+    others = [option for option in options if option != largest]
+    if totals[largest] >= sum(totals[option] for option in others):
+        return {tuple(sorted((largest, option))): totals[option] for option in others
+                if totals[option]}
+
+    degrees = dict(totals)
+    if sum(degrees.values()) % 2:
+        # One minimal accounting unit cannot be paired. Removing it from the
+        # largest pool keeps all triangle inequalities valid and deterministic.
+        degrees[largest] -= 1
+    a, b, c = options
+    matches = {
+        (a, b): (degrees[a] + degrees[b] - degrees[c]) // 2,
+        (a, c): (degrees[a] + degrees[c] - degrees[b]) // 2,
+        (b, c): (degrees[b] + degrees[c] - degrees[a]) // 2,
+    }
+    return {pair: amount for pair, amount in matches.items() if amount > 0}
+
+
+def _pairwise_account_allocations(stakes_by_option, matches):
+    """Assign each account's stake to fixed pairwise pools at most once."""
+    allocations = {}
+    for option, stakes in stakes_by_option.items():
+        remaining = {stake['user_id']: stake['units'] for stake in stakes}
+        incident = sorted((pair, amount) for pair, amount in matches.items() if option in pair)
+        for pair, amount in incident:
+            available = [dict(user_id=uid, units=units) for uid, units in remaining.items()]
+            share = _proportional(amount, available)
+            allocations[(pair, option)] = share
+            for uid, units in share.items():
+                remaining[uid] -= units
+                if remaining[uid] < 0:
+                    raise AssertionError('prediction_pairwise_overallocation')
+    return allocations
+
+
 def allocate(stakes, winners, void=False):
-    """Settle v2 by option totals; account count never changes matched value."""
+    """Settle v3 through fixed pairwise pools; equal hit rates imply zero EV."""
     if void:
         return {s['user_id']: dict(principal=0, profit=0, refund=s['units'], loss=0) for s in stakes}
-    winning = [s for s in stakes if s['option_id'] in winners]
-    winning_total = sum(s['units'] for s in winning)
-    if not winning_total:
-        return {s['user_id']: dict(principal=0, profit=0, refund=s['units'], loss=0) for s in stakes}
-
-    result = {s['user_id']: dict(principal=s['units'], profit=0, refund=0, loss=0) for s in winning}
-    losing_by_option = {}
+    stakes_by_option = {}
     for stake in stakes:
-        if stake['option_id'] not in winners:
-            losing_by_option.setdefault(stake['option_id'], []).append(stake)
+        stakes_by_option.setdefault(stake['option_id'], []).append(stake)
+    matches = _pairwise_match_amounts(stakes_by_option)
+    allocations = _pairwise_account_allocations(stakes_by_option, matches)
+    result = {}
+    for stake in stakes:
+        if stake['option_id'] in winners:
+            result[stake['user_id']] = dict(principal=stake['units'], profit=0, refund=0, loss=0)
+        else:
+            result[stake['user_id']] = dict(principal=0, profit=0, refund=stake['units'], loss=0)
 
-    for option_stakes in losing_by_option.values():
-        option_total = sum(s['units'] for s in option_stakes)
-        matched = min(option_total, winning_total)
-        losses = _proportional(matched, option_stakes)
-        profits = _proportional(matched, winning)
-        for stake in option_stakes:
-            loss = losses[stake['user_id']]
-            result[stake['user_id']] = dict(
-                principal=0,
-                profit=0,
-                refund=stake['units'] - loss,
-                loss=loss,
-            )
-        for stake in winning:
-            result[stake['user_id']]['profit'] += profits[stake['user_id']]
+    for pair, amount in matches.items():
+        first, second = pair
+        first_wins = first in winners
+        second_wins = second in winners
+        if first_wins == second_wins:
+            continue
+        winning_option, losing_option = (first, second) if first_wins else (second, first)
+        for uid, units in allocations[(pair, winning_option)].items():
+            result[uid]['profit'] += units
+        for uid, units in allocations[(pair, losing_option)].items():
+            result[uid]['refund'] -= units
+            result[uid]['loss'] += units
     return result
 
 
@@ -349,18 +355,17 @@ def settle(room_id, market_id, winners=(), void=False, now=None):
         market = db.execute('SELECT * FROM room_prediction_markets WHERE id=? AND room_id=?', (market_id,room_id)).fetchone()
         if not market or market['settled'] is not None:
             return False
+        if market['target_rules'] != TARGET_RULE_VERSION:
+            raise ValueError('unknown_prediction_target_rules')
         options = {p['id'] for p in json.loads(market['options'])}
         if not void and (not winners or not set(winners) <= options):
             raise ValueError('invalid_prediction_result')
         stakes = [dict(r) for r in db.execute('SELECT * FROM room_prediction_stakes WHERE market_id=?', (market_id,))]
         reason = 'technical_void' if void else 'no_winners' if not any(s['option_id'] in winners for s in stakes) else 'result'
-        rules = market['rules'] or LEGACY_RULE_VERSION
-        if rules == RULE_VERSION:
-            payouts = allocate(stakes, set(winners), void)
-        elif rules == LEGACY_RULE_VERSION:
-            payouts = _allocate_legacy(stakes, set(winners), void)
-        else:
+        rules = market['rules']
+        if rules != RULE_VERSION:
             raise ValueError('unknown_prediction_rules')
+        payouts = allocate(stakes, set(winners), void)
         stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
         for uid, parts in payouts.items():
             payout = parts['principal'] + parts['profit'] + parts['refund']
@@ -371,9 +376,8 @@ def settle(room_id, market_id, winners=(), void=False, now=None):
         outcomes = _target_outcomes(db, market_id)
         for stake in db.execute('SELECT * FROM room_prediction_target_stakes WHERE market_id=?', (market_id,)).fetchall():
             uid, units = stake['user_id'], stake['units']
-            # A milestone already paid its result in real time. New side bets do
-            # not return principal; funded legacy batches retain their promise.
-            # Do not pay again at batch end or claw back earned rewards on a later void.
+            # A milestone already paid its result in real time. Do not pay again
+            # at batch end or claw back earned rewards on a later void.
             if db.execute('SELECT 1 FROM room_prediction_target_settlements WHERE market_id=? AND user_id=?',
                           (market_id,uid)).fetchone():
                 continue
@@ -384,9 +388,7 @@ def settle(room_id, market_id, winners=(), void=False, now=None):
             elif stake['option_id'] not in outcomes:
                 raise ValueError('prediction_target_result_missing')
             elif reward:
-                returns_principal = _target_returns_principal(market)
-                parts = dict(principal=units if returns_principal else 0,
-                             profit=units*reward, refund=0, loss=0)
+                parts = dict(principal=0, profit=units*reward, refund=0, loss=0)
             else:
                 parts = dict(principal=0, profit=0, refund=0, loss=units)
             _credit(db,uid,parts['principal']+parts['profit']+parts['refund'],
