@@ -19,7 +19,7 @@
       <section class="index-intro"><p>TOURNAMENT PROJECT LAB</p><h1>比赛项目试玩</h1><span>以下页面用于举办方验收规则、选手熟悉操作。试玩成绩不会进入正式比赛。</span></section>
       <div class="project-list">
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" class="project-entry">
-          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.order }}</small><h2>{{ practiceTitle(item) }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><span class="metric-tag">{{ item.race ? 'Faster' : 'Higher' }}</span><b>开始试玩 →</b></footer>
+          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.displayOrder }}</small><h2>{{ practiceTitle(item) }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><span class="metric-tag">{{ item.race ? 'Faster' : 'Higher' }}</span><b>开始试玩 →</b></footer>
         </a>
       </div>
     </main>
@@ -28,13 +28,13 @@
       <aside class="project-rail">
         <a href="/practice" class="rail-back">← 全部项目</a>
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" :class="{ active: item.id === project.id }">
-          <img class="project-art rail-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>{{ item.order }}</small><span>{{ item.shortTitle }}</span>
+          <img class="project-art rail-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>{{ item.displayOrder }}</small><span>{{ item.shortTitle }}</span>
         </a>
       </aside>
 
       <header class="project-heading">
         <img class="project-art heading-art" :src="projectIconUrl(project.id, practiceTheme)" alt="" />
-        <div class="heading-copy"><p>PROJECT {{ project.order }} · PRACTICE</p><h1>{{ practiceTitle(project) }}</h1></div>
+        <div class="heading-copy"><p>PROJECT {{ project.displayOrder }} · PRACTICE</p><h1>{{ practiceTitle(project) }}</h1></div>
         <div class="practice-tag">单人试玩<br><small>{{ !sessionReady ? '正在同步登录状态' : practiceUser ? '已登录' : '游客' }}</small></div>
         <div class="project-summary">{{ project.description }}</div>
       </header>

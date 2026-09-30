@@ -177,8 +177,14 @@ const NEW_TOURNAMENT_PROJECTS = Object.freeze([
     rows: 3, cols: 4, spawn4Rate: .1, geometryVariant: 'lookback', race: true, targetTile: 2048, targetCount: 1, allowRestart: true, adapterRulesVersion: 'tournament-v6' },
 ]);
 
-export const ALL_PROJECTS = Object.freeze([...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS, ...NEW_TOURNAMENT_PROJECTS]);
 const VISIBLE_PROJECT_ORDERS = new Set([1, 3, 5, 6, 7, 9, 11, 13, 14, 16, 17, 19]);
+// Keep legacy order/path/key stable for saved links and match records. The
+// public number follows the current pool, with hidden projects placed last.
+export const ALL_PROJECTS = Object.freeze(
+  [...BASE_TOURNAMENT_PROJECTS, ...ADDITIONAL_TOURNAMENT_PROJECTS, ...NEW_TOURNAMENT_PROJECTS]
+    .sort((a, b) => Number(VISIBLE_PROJECT_ORDERS.has(b.order)) - Number(VISIBLE_PROJECT_ORDERS.has(a.order)) || a.order - b.order)
+    .map((project, index) => Object.freeze({ ...project, displayOrder: index + 1 })),
+);
 export const TOURNAMENT_PROJECTS = Object.freeze(ALL_PROJECTS.filter(project => VISIBLE_PROJECT_ORDERS.has(project.order)));
 export const PRACTICE_PROJECTS = TOURNAMENT_PROJECTS;
 

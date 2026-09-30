@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TOURNAMENT_PROJECTS } from '../src/projects/catalog.js';
+import { ALL_PROJECTS, TOURNAMENT_PROJECTS, PROJECT_BY_ORDER } from '../src/projects/catalog.js';
 import { competitionProjectLabel, competitionPhaseLabel } from '../../shared/projectLabels.mjs';
+
+test('visible projects are numbered first without changing stable practice routes', () => {
+  assert.deepEqual(TOURNAMENT_PROJECTS.map(project => project.displayOrder), Array.from({length:12}, (_, i) => i + 1));
+  assert.deepEqual(ALL_PROJECTS.slice(12).map(project => project.displayOrder), [13,14,15,16,17,18,19,20]);
+  assert.deepEqual(ALL_PROJECTS.slice(12).map(project => project.order), [2,4,8,10,12,15,18,20]);
+  assert.equal(PROJECT_BY_ORDER[5].displayOrder, 3);
+  assert.equal(PROJECT_BY_ORDER[5].practicePath, '/practice/5');
+  assert.equal(PROJECT_BY_ORDER[19].displayOrder, 12);
+});
 
 test('every formal project has an English display name',()=>{
   for(const project of TOURNAMENT_PROJECTS){
