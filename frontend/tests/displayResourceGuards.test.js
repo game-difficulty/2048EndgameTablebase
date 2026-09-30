@@ -69,7 +69,7 @@ test('lobby deduplicates requests, aborts on hiding/unmount and ignores stale re
   let mounted, unmounted, id = 0;
   const doc = { hidden: false, documentElement: { dataset: {} }, addEventListener() {}, removeEventListener() {} };
   const context = vm.createContext({
-    document: doc, AbortController, ref: value => ({ value }), watch() {},
+    document: doc, navigator: { language: 'zh-CN' }, AbortController, ref: value => ({ value }), watch() {},
     liveLanguage: () => 'zh', saveLiveLanguage() {},
     onMounted: callback => { mounted = callback; }, onUnmounted: callback => { unmounted = callback; },
     setInterval: () => 1, clearInterval() {},
