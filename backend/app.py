@@ -224,23 +224,17 @@ async def _analysis_storage_loop() -> None:
 
 
 async def _gamer_validation_loop() -> None:
-    next_cleanup = 0.0
-    while True:
-        if time.monotonic() >= next_cleanup:
-            await asyncio.to_thread(cleanup_stale_ranked_runs)
-            next_cleanup = time.monotonic() + 3600
-        processed = await asyncio.to_thread(process_one_pending_run)
-        await asyncio.sleep(0.05 if processed else 1.0)
+    from backend.validation_worker import run_validation_loop
+    await run_validation_loop('Gamer', cleanup=cleanup_stale_ranked_runs,
+                              process=process_one_pending_run,
+                              recover=prepare_gamer_validation_queue)
 
 
 async def _minigame_validation_loop() -> None:
-    next_cleanup = 0.0
-    while True:
-        if time.monotonic() >= next_cleanup:
-            await asyncio.to_thread(cleanup_stale_minigame_ranked_runs)
-            next_cleanup = time.monotonic() + 3600
-        processed = await asyncio.to_thread(process_one_pending_minigame_run)
-        await asyncio.sleep(0.05 if processed else 1.0)
+    from backend.validation_worker import run_validation_loop
+    await run_validation_loop('Minigame', cleanup=cleanup_stale_minigame_ranked_runs,
+                              process=process_one_pending_minigame_run,
+                              recover=prepare_minigame_validation_queue)
 
 
 @asynccontextmanager
