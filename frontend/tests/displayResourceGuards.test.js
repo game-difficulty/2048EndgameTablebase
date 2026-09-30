@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { createLocalStorageStore } from '../src/services/storage/localStorageStore.js';
+import { createSessionStorageStore } from '../src/services/storage/sessionStorageStore.js';
 import { shouldRefreshLiveClock } from '../src/live/displayClock.js';
 
-test('write-only persistence serializes once and preserves an independent saved snapshot', () => {
+for (const createStore of [createLocalStorageStore, createSessionStorageStore]) test(`${createStore.name} write-only persistence serializes once and preserves an independent saved snapshot`, () => {
   const previous = globalThis.window;
   const saved = new Map();
   globalThis.window = { localStorage: { setItem: (k,v) => saved.set(k,v), getItem: k => saved.get(k), removeItem: k => saved.delete(k) } };
+  globalThis.window.sessionStorage = globalThis.window.localStorage;
   try {
-    const store = createLocalStorageStore({ key: 'write-only' });
+    const store = createStore({ key: 'write-only' });
     let serialized = 0;
     const records = [1, 2];
     const data = { records, toJSON() { serialized++; return { records }; } };

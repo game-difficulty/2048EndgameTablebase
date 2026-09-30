@@ -36,8 +36,8 @@ export function createSessionStorageStore({
     }
   };
 
-  const write = (value) => {
-    const next = cloneValue(value);
+  const write = (value, { returnSnapshot = true } = {}) => {
+    const next = returnSnapshot ? cloneValue(value) : value;
     if (storageAvailable()) {
       window.sessionStorage.setItem(storageKey, JSON.stringify({
         version,
@@ -45,7 +45,7 @@ export function createSessionStorageStore({
         updatedAt: new Date().toISOString(),
       }));
     }
-    return cloneValue(next);
+    return returnSnapshot ? cloneValue(next) : undefined;
   };
 
   const remove = () => {
