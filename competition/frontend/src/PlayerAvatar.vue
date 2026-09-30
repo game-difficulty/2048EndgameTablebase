@@ -20,7 +20,7 @@ watch(avatarUrl, () => { failed.value = false; });
 <template>
   <span class="player-avatar" aria-hidden="true">
     <img v-if="avatarUrl && !failed" :src="avatarUrl" alt="" @error="failed = true" />
-    <span v-else>{{ $t(initials) }}</span>
+    <span v-else>{{ initials }}</span>
   </span>
 </template>
 

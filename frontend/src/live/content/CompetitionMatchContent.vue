@@ -76,7 +76,7 @@ import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from
 import { projectViewRenderer } from './projectViewRegistry.js';
 import { projectIconUrl } from '../../../../competition/shared/projectIcons.js';
 import { projectionIsOlder, receivedProjectView } from '../../../../competition/shared/projectStateOrder.mjs';
-import { competitionProjectLabel } from '../../../../competition/shared/projectLabels.mjs';
+import { competitionPhaseLabel, competitionProjectLabel, competitionProjectDescription } from '../../../../competition/shared/projectLabels.mjs';
 import { projectResultValue } from '../../../../competition/shared/projectMetrics.mjs';
 import CompetitionRosterHud from './CompetitionRosterHud.vue';
 const props=defineProps({lang:String,streamState:String});
@@ -92,7 +92,7 @@ const readyWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.ready
 const predictionWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.prediction_window?.minimum_until||'')-currentServerNow())/1000))||0);
 const stage=computed(()=>{const value=match.value?.phase||'';if(['DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(value))return'draft';if(value==='LINEUP')return'lineup';if(value.endsWith('_READY'))return'ready';if(value.endsWith('_RESULT'))return'game-result';if(value==='FINISHED'||value==='CANCELLED')return'result';return'game'});
 const phaseLabels={DRAW:['抽签','DRAW'],FIRST_PICK_BAN:['先手选禁','FIRST PICK / BAN'],SECOND_PICK_BAN:['后手选禁','SECOND PICK / BAN'],BLIND_PICK:['双方盲选','BLIND PICK'],C_DRAW:['项目 C 抽签','PROJECT C DRAW'],LINEUP:['秘密布阵','SECRET LINEUP'],FINISHED:['全场结束','FINAL']};
-const phaseLabel=computed(()=>{const value=match.value?.phase||'';const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`GAME ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('单局结果','RESULT')}[gamePhase[2]]}`;return value.replaceAll('_',' ')});
+const phaseLabel=computed(()=>{const value=match.value?.phase||'';const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`${t('项目','GAME')} ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('单局结果','RESULT')}[gamePhase[2]]}`;return competitionPhaseLabel(value,props.lang)});
 const phaseActor=computed(()=>{const side=match.value?.phase_timing?.active_side;if(!side)return'';const name=team(side).name||(side==='yellow'?t('黄方','Yellow'):t('白方','White'));return`${name} · ${t('操作中','ON TURN')}`});
 const currentServerNow=()=>serverAnchor.value+(now.value-receivedAt.value);
 const phaseCountdown=computed(()=>{const deadline=Date.parse(match.value?.phase_timing?.deadline_at||'');if(!Number.isFinite(deadline))return'';const seconds=Math.max(0,Math.ceil((deadline-currentServerNow())/1000));return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`});
@@ -101,7 +101,7 @@ const team=side=>{const value=match.value?.teams?.[side]||{};return {...value,na
 const sideLabel=side=>side==='yellow'?t('黄方','Yellow'):t('白方','White');
 const projectName=key=>key?competitionProjectLabel(match.value?.projects?.find(item=>item.key===key),props.lang)||key:t('待定','TBD');
 const gameIcon=game=>projectIconUrl(match.value?.projects?.find(item=>item.key===(game?.project_key||game?.project_ref))?.project_ref||game?.project_ref,'dark');
-const currentRule=computed(()=>match.value?.projects?.find(item=>item.key===current.value?.project_key)?.description||t('玩法说明待公布','Rules pending'));
+const currentRule=computed(()=>competitionProjectDescription(match.value?.projects?.find(item=>item.key===current.value?.project_key),props.lang)||t('玩法说明待公布','Rules pending'));
 const projectMark=key=>key===draft.value.project_a?'A':key===draft.value.project_b?'B':key===draft.value.project_c?'C':key===draft.value.ban_m?`${sideLabel(draft.value.first_side)} BAN`:key===draft.value.ban_n?`${sideLabel(draft.value.first_side==='yellow'?'white':'yellow')} BAN`:'';
 const projectClass=key=>({picked:['A','B','C'].includes(projectMark(key)),banned:projectMark(key).includes('BAN')});
 const blindStatus=computed(()=>`${t('黄方','Yellow')} ${draft.value.blind_submissions?.yellow?t('已密封','sealed'):t('等待','waiting')} · ${t('白方','White')} ${draft.value.blind_submissions?.white?t('已密封','sealed'):t('等待','waiting')}`);
@@ -133,7 +133,7 @@ function receive(data){
   serverAnchor.value=Number.isFinite(liveServerTime)?liveServerTime:Number.isFinite(competitionServerTime)?competitionServerTime:receivedAt.value;
 }
 function resume(){const resumedAt=Date.now();serverAnchor.value+=resumedAt-receivedAt.value;receivedAt.value=resumedAt;now.value=resumedAt}
-function getPipFrame(){const currentMatch=match.value;return{key:`${currentMatch?.generation}:${currentMatch?.content_sequence}`,width:960,height:540,draw(ctx){ctx.fillStyle='#111c30';ctx.fillRect(0,0,960,540);ctx.fillStyle='#f8fafc';ctx.textAlign='center';ctx.font='700 30px sans-serif';ctx.fillText(currentMatch?.name||'2048 Competition',480,105);ctx.font='800 86px sans-serif';ctx.fillText(`${currentMatch?.score?.yellow||0}  :  ${currentMatch?.score?.white||0}`,480,270);ctx.font='600 24px sans-serif';ctx.fillStyle='#aebbd0';ctx.fillText((currentMatch?.phase||'').replaceAll('_',' '),480,345)}}}
+function getPipFrame(){const currentMatch=match.value,lang=props.lang;return{key:`${currentMatch?.generation}:${currentMatch?.content_sequence}:${lang}`,width:960,height:540,draw(ctx){ctx.fillStyle='#111c30';ctx.fillRect(0,0,960,540);ctx.fillStyle='#f8fafc';ctx.textAlign='center';ctx.font='700 30px sans-serif';ctx.fillText(currentMatch?.name||(lang==='zh'?'2048 赛事':'2048 Competition'),480,105);ctx.font='800 86px sans-serif';ctx.fillText(`${currentMatch?.score?.yellow||0}  :  ${currentMatch?.score?.white||0}`,480,270);ctx.font='600 24px sans-serif';ctx.fillStyle='#aebbd0';ctx.fillText(competitionPhaseLabel(currentMatch?.phase,lang),480,345)}}}
 onMounted(()=>timer=setInterval(()=>{if(shouldRefreshLiveClock())now.value=Date.now()},250));onUnmounted(()=>clearInterval(timer));defineExpose({receive,resume,getPipFrame});
 const PlayerAvatar=defineComponent({props:['player'],setup(p){const failed=ref(false);watch(()=>p.player?.avatar_url,()=>{failed.value=false});return()=>h('span',{class:'live-player-avatar','aria-hidden':'true'},p.player?.avatar_url&&!failed.value?h('img',{src:p.player.avatar_url,alt:'',onError:()=>{failed.value=true}}):h('span',String(p.player?.display_name||'?').trim().slice(0,2).toUpperCase()))}});
 const TeamRoster=defineComponent({props:['side','team','lang'],setup(p){return()=>h('aside',{class:['roster',p.side]},[h('small',p.side==='yellow'?(p.lang==='zh'?'黄方阵容':'YELLOW TEAM'):(p.lang==='zh'?'白方阵容':'WHITE TEAM')),...(p.team?.roster||[]).map(player=>h('div',{class:{captain:player.is_captain}},[h(PlayerAvatar,{player}),h('span',player.display_name),player.is_captain?h('em',p.lang==='zh'?'队长':'CPT'):null]))])}});

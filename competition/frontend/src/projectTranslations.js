@@ -21,6 +21,7 @@ const english = [
  ['Aftershock','A move that creates a tile of 256 or higher triggers one aftershock: one of the original four rows or four columns shifts one cell in a random direction. Compare scores when no legal moves remain.'],
  ['Look Back','A valid move may undo the previous move and spawn two tiles on the restored board. Restarts are allowed. Be the first to make 2048.'],
 ];
+export const englishProjectNames=Object.fromEntries(ALL_PROJECTS.map(project=>[project.id,english[project.order-1][0]]));
 export const projectMessages=Object.fromEntries(ALL_PROJECTS.flatMap(project=>{
  const [name,description]=english[project.order-1];
  const dimensions=project.title.match(/（([^）]+)）$/)?.[1];
