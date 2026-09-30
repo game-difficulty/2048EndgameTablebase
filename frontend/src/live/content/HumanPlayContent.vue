@@ -28,6 +28,7 @@
   </section>
 </template>
 <script setup>
+import { shouldRefreshLiveClock } from '../displayClock.js';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import HumanBoard from '../../human/HumanBoard.vue';
 import { NODE_TILES, move } from '../../human/engine.js';
@@ -70,7 +71,7 @@ function receive(data){
 }
 function resume(){transition.value=null;run.value=run.value?{...run.value,board:[...run.value.board]}:null;touchClock()}
 function getPipFrame(){const current=run.value,key=`${current?.run_id}:${current?.seq}:${props.streamState}:${JSON.stringify(current?.appearance||{})}`;return{key,width:960,height:540,draw(ctx){const styles=getComputedStyle(document.documentElement);ctx.fillStyle=styles.getPropertyValue('--board-bg').trim()||'#1e293b';ctx.fillRect(0,0,960,540);ctx.fillStyle=styles.getPropertyValue('--text-main').trim()||'#fff';ctx.font='700 26px sans-serif';ctx.fillText(`${room.streamer?.display_name||'Player'} · ${number(current?.score)}`,40,46);const r=current?.rows||rows.value,c=current?.cols||cols.value,size=Math.min(430/r,600/c),ox=(960-c*size)/2,oy=70;for(let i=0;i<r*c;i++){const v=current?.board?.[i]||0,color=v?(liveAppearanceTileStyle(current?.appearance,v)||liveTileColors(v)):{background:styles.getPropertyValue('--color-empty').trim()||'rgba(15, 23, 42, 0.4)',color:styles.getPropertyValue('--text-secondary').trim()||'#94a3b8'},x=ox+(i%c)*size,y=oy+Math.floor(i/c)*size;ctx.fillStyle=color.background;ctx.fillRect(x+4,y+4,size-8,size-8);if(v){ctx.fillStyle=color.color;ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`700 ${Math.max(14,size*(v>=10000?.25:v>=1000?.32:.4))}px sans-serif`;ctx.fillText(String(v),x+size/2,y+size/2)}}}}}
-onMounted(()=>{clockTimer=setInterval(()=>{clock.value=Date.now()},250)});onUnmounted(()=>clearInterval(clockTimer));
+onMounted(()=>{clockTimer=setInterval(()=>{if(shouldRefreshLiveClock(props.pipActive))clock.value=Date.now()},250)});onUnmounted(()=>clearInterval(clockTimer));
 defineExpose({receive,resume,getPipFrame});
 </script>
 <style scoped>

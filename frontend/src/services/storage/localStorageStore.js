@@ -81,16 +81,16 @@ export function createLocalStorageStore({
 
   const read = () => cloneValue(readEnvelope().value);
 
-  const write = (value) => {
+  const write = (value, { returnSnapshot = true } = {}) => {
     const envelope = {
       version,
-      value: cloneValue(value),
+      value: returnSnapshot ? cloneValue(value) : value,
       updatedAt: new Date().toISOString(),
     };
     if (canUseLocalStorage()) {
       window.localStorage.setItem(storageKey, JSON.stringify(envelope));
     }
-    return cloneValue(envelope.value);
+    return returnSnapshot ? cloneValue(envelope.value) : undefined;
   };
 
   const update = (updater) => {

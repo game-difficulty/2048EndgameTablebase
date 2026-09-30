@@ -23,6 +23,7 @@
 </template>
 
 <script setup>
+import { shouldRefreshLiveClock } from '../displayClock.js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { projectPerformanceMetric } from '../../../../competition/shared/projectMetrics.mjs';
 import { liveTileColors } from '../tilePalette.js';
@@ -139,7 +140,7 @@ watch(() => [payload.value.elapsed_ms, props.suspended], ([elapsed]) => {
   now.value = receivedAt.value;
 });
 
-onMounted(() => { timer = setInterval(() => { now.value = performance.now(); }, 50); });
+onMounted(() => { timer = setInterval(() => { if (!payload.value.finished && !props.suspended && shouldRefreshLiveClock()) now.value = performance.now(); }, 50); });
 onBeforeUnmount(() => { ++epoch; clearTimers(); clearInterval(timer); });
 </script>
 

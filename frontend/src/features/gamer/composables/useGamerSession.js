@@ -241,6 +241,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
 
   let animIdCounter = 0;
   let boardFrameRevision = 0;
+  let disposed = false;
   let aiContinuationTimer = null;
   let aiRunning = false;
   let evilCoreModule = null;
@@ -291,7 +292,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
       aiTableEnabled: aiTableEnabled.value,
       aiTableSelection: aiTableSelection.value,
       bestScore: Number(score.value.best) || 0,
-    });
+    }, { returnSnapshot: false });
     gamerSessionStore.write({
       board: board.value.slice(0, 16),
       metadata: null,
@@ -305,7 +306,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
         ...ranked.value,
         rngState: rankedRng?.exportState?.() || ranked.value.rngState || null,
       },
-    });
+    }, { returnSnapshot: false });
   };
 
   const clearPersistTimer = () => {
@@ -403,11 +404,12 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
   const heartbeatCurrentRankedRun = async ({ immediateRetry = false } = {}) => {
     clearRankedHeartbeatTimer();
     const runId = ranked.value.runId;
+    if (disposed) return false;
     const leaseToken = ranked.value.leaseToken;
     if (!runId || !leaseToken || !rankedRunLock?.isHeld(runId)) return false;
     try {
       const payload = await heartbeatRankedRun(runId, leaseToken);
-      if (runId !== ranked.value.runId || leaseToken !== ranked.value.leaseToken) return false;
+      if (disposed || runId !== ranked.value.runId || leaseToken !== ranked.value.leaseToken) return false;
       if (String(payload.status) !== 'active') {
         loseRankedOwnership(payload.error_code || 'lease_lost');
         return false;
@@ -416,7 +418,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
       rankedHeartbeatTimer = window.setTimeout(heartbeatCurrentRankedRun, 15000);
       return true;
     } catch (error) {
-      if (runId !== ranked.value.runId || leaseToken !== ranked.value.leaseToken) return false;
+      if (disposed || runId !== ranked.value.runId || leaseToken !== ranked.value.leaseToken) return false;
       if ([401, 403, 404, 409].includes(Number(error?.status))) {
         loseRankedOwnership(error?.code || 'lease_lost');
         return false;
@@ -548,17 +550,16 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
   const appendRankedRecord = (record, byteCost) => {
     if (!ranked.value.runId || !ranked.value.eligible) return;
     const nextBytes = Number(ranked.value.byteEstimate || 40) + Number(byteCost || 0);
-    const nextRecords = [...ranked.value.records, record];
     if (nextBytes > 500 * 1024) {
       disqualifyRanked('record_too_large');
       return;
     }
     ranked.value = {
       ...ranked.value,
-      records: nextRecords,
       byteEstimate: nextBytes,
     };
   };
+    ranked.value.records.push(record);
 
   const appendRankedMove = ({ direction, spawn, source }) => {
     if (!ranked.value.runId || !ranked.value.eligible) return;
@@ -736,13 +737,14 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     if (!runId || !['pending', 'validating'].includes(ranked.value.status)) return;
     try {
       const payload = await fetchRankedRun(runId);
-      if (runId !== ranked.value.runId) return;
+      if (disposed || runId !== ranked.value.runId) return;
       applyRankedServerStatus(payload);
+    if (disposed) return;
       if (['pending', 'validating'].includes(String(payload.status))) {
         rankedPollTimer = window.setTimeout(pollRankedRun, 2000);
       }
     } catch (_error) {
-      if (runId === ranked.value.runId) {
+      if (!disposed && runId === ranked.value.runId) {
         rankedPollTimer = window.setTimeout(pollRankedRun, 5000);
       }
     }
@@ -1440,6 +1442,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     if (evilGen?.delete) {
       evilGen.delete();
       evilGen = null;
+    disposed = true;
     }
     persistState({ immediate: true });
   });

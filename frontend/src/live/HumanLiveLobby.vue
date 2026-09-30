@@ -26,7 +26,7 @@ import { liveEmptyTileColors, liveTileColors } from './tilePalette.js';
 import { liveAppearanceTileStyle } from '../human/liveAppearance.js';
 import { getTileLabelStyle } from '../components/tileLabelStyle.js';
 const lang = ref(navigator.language.startsWith('zh') ? 'zh' : 'en');
-const rooms = ref([]), error = ref(false); let timer, stopped = false;
+const rooms = ref([]), error = ref(false); let timer, controller, stopped = false;
 const t = (zh,en) => lang.value === 'zh' ? zh : en;
 const title = room => room.title?.[lang.value] || room.title?.en || room.streamer?.display_name || room.id;
 const dims = variant => ({'4x4':[4,4],'3x4':[3,4],'2x4':[2,4],'3x3':[3,3]}[variant] || [4,4]);
@@ -43,9 +43,28 @@ const tile = (room,value) => value
   ? (liveAppearanceTileStyle(room.appearance,value) || liveTileColors(value))
   : liveEmptyTileColors();
 const tileLabel = value => value ? getTileLabelStyle({ value }) : undefined;
-async function load(){ try { const response=await fetch('/api/live/lobby',{cache:'no-store'}); if(!response.ok) throw Error(); const data=await response.json(); if(!stopped){rooms.value=data.rooms||[];error.value=false;} } catch { if(!stopped) error.value=true; } }
-onMounted(()=>{document.documentElement.dataset.theme='dark';load();timer=setInterval(load,10000);});
-onUnmounted(()=>{stopped=true;clearInterval(timer);});
+async function load() {
+  if (stopped || document.hidden || controller) return;
+  const request = new AbortController(); controller = request;
+  const timeout = setTimeout(() => request.abort(), 8000);
+  try {
+    const response = await fetch('/api/live/lobby', { cache: 'no-store', signal: request.signal });
+    if (!response.ok) throw Error();
+    const data = await response.json();
+    if (!stopped && controller === request) { rooms.value = data.rooms || []; error.value = false; }
+  } catch {
+    if (!stopped && controller === request && !document.hidden) error.value = true;
+  } finally {
+    clearTimeout(timeout);
+    if (controller === request) controller = null;
+  }
+}
+function visibility() {
+  if (document.hidden) { controller?.abort(); controller = null; }
+  else void load();
+}
+onMounted(()=>{document.documentElement.dataset.theme='dark';load();timer=setInterval(load,10000);document.addEventListener('visibilitychange',visibility);});
+onUnmounted(()=>{stopped=true;clearInterval(timer);controller?.abort();controller=null;document.removeEventListener('visibilitychange',visibility);});
 </script>
 <style scoped>
 .lobby-shell{min-height:100vh;background:radial-gradient(circle at 12% 0,#223251 0,transparent 38%),var(--bg-main);color:var(--text-main)}

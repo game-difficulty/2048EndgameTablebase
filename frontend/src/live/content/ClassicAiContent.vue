@@ -132,6 +132,7 @@
   </section>
 </template>
 <script setup>
+import { shouldRefreshLiveClock } from '../displayClock.js';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { Clock, History, RefreshCw, PanelLeftOpen, PanelLeftClose, PanelRightOpen, PanelRightClose, Copy, ExternalLink, Trophy, WifiOff, LoaderCircle } from '@lucide/vue';
 import BaseBoard from '../../components/BaseBoard.vue';
@@ -234,7 +235,7 @@ async function copyHex() {
 function getPipFrame() { return boardPipFrame({slots:[{lane:0,run:run.value,status:'running'}],state:props.streamState,lang:props.lang,title:room.title[props.lang] || room.title.en}); }
 defineExpose({ receive, resume, getPipFrame });
 let tick;
-onMounted(() => { tick = setInterval(() => now.value = Date.now(), 500); });
+onMounted(() => { tick = setInterval(() => { if (shouldRefreshLiveClock(props.pipActive)) now.value = Date.now(); }, 500); });
 onUnmounted(() => { clearInterval(tick); historyRequest++; });
 </script>
 <style scoped>

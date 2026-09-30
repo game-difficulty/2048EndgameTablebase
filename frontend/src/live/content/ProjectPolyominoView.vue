@@ -7,6 +7,7 @@
 </template>
 
 <script setup>
+import { shouldRefreshLiveClock } from '../displayClock.js';
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue';
 import { projectPerformanceMetric } from '../../../../competition/shared/projectMetrics.mjs';
 import PolyominoBoard from '../../../../competition/frontend/src/projects/PolyominoBoard.vue';
@@ -34,7 +35,7 @@ const projectTime = computed(() => {
   return `${minutes}:${seconds}.${centiseconds}`;
 });
 watch(() => [payload.value.elapsed_ms, props.suspended], () => { receivedAt.value = performance.now(); now.value = receivedAt.value; }, { immediate: true });
-onMounted(() => { interval = setInterval(() => { now.value = performance.now(); }, 16); });
+onMounted(() => { interval = setInterval(() => { if (!payload.value.finished && !props.suspended && shouldRefreshLiveClock()) now.value = performance.now(); }, 50); });
 onBeforeUnmount(() => clearInterval(interval));
 </script>
 

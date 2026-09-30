@@ -25,6 +25,7 @@
   </section>
 </template>
 <script setup>
+import { shouldRefreshLiveClock } from '../displayClock.js';
 import { computed, ref, shallowRef, onMounted, onUnmounted } from 'vue';
 import { useRoom } from '../roomContext.js';
 import { boardPipFrame } from './boardPipFrame.js';
@@ -112,7 +113,7 @@ function getPipFrame() {
     state:props.streamState,lang:props.lang,title:room.title[props.lang] || room.title.en,now:Date.now()+serverOffset});
 }
 defineExpose({ receive, resume, getPipFrame });
-onMounted(() => { timer = setInterval(() => { now.value = Date.now()+serverOffset; }, 500); });
+onMounted(() => { timer = setInterval(() => { if (shouldRefreshLiveClock(props.pipActive)) now.value = Date.now()+serverOffset; }, 500); });
 onUnmounted(() => { clearInterval(timer); if (playbackTimer !== null) clearTimeout(playbackTimer); });
 </script>
 <style scoped>

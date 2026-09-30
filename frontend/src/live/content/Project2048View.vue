@@ -27,6 +27,7 @@
 </template>
 
 <script setup>
+import { shouldRefreshLiveClock } from '../displayClock.js';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { projectPerformanceMetric } from '../../../../competition/shared/projectMetrics.mjs';
 import { liveEmptyTileColors, liveTileColors } from '../tilePalette.js';
@@ -61,7 +62,7 @@ function buildMoving(transition){const result=[];(transition.movements||[]).forE
 function movingStyle(item){const point=started.value?positionPoint(item.tr,item.tc):positionPoint(item.fr,item.fc);return{...point,...tile(item.value),...labelSize(item.value),transition:`left ${item.duration}ms ease-in-out ${item.delay}ms, top ${item.duration}ms ease-in-out ${item.delay}ms`}}
 watch(()=>[payload.value.elapsed_ms,props.suspended],()=>{elapsedAnchor.value=Number(payload.value.elapsed_ms||0);receivedAt.value=performance.now();now.value=receivedAt.value},{immediate:true});
 watch(()=>props.view?.sequence,()=>{clearTimers();hidden.value=new Set();pops.value=new Set();appear.value=null;moving.value=[];started.value=false;const transition=payload.value.last_transition;if(transition?.kind!=='move')return;const destinations=new Set((transition.movements||[]).map(item=>item.to));if(transition.spawn?.index!=null)destinations.add(transition.spawn.index);hidden.value=destinations;moving.value=buildMoving(transition);requestAnimationFrame(()=>requestAnimationFrame(()=>{started.value=true}));timers.push(setTimeout(()=>{const spawn=transition.spawn?.index;hidden.value=new Set(spawn==null?[]:[spawn]);pops.value=new Set((transition.movements||[]).filter(item=>item.merged).map(item=>item.to));moving.value=[]},100));timers.push(setTimeout(()=>{hidden.value=new Set();appear.value=transition.spawn?.index??null},125));timers.push(setTimeout(()=>{pops.value=new Set();appear.value=null},300))},{immediate:true});
-onMounted(()=>interval=setInterval(()=>{now.value=performance.now()},16));
+onMounted(()=>interval=setInterval(()=>{if(!payload.value.finished&&!props.suspended&&shouldRefreshLiveClock())now.value=performance.now()},50));
 onBeforeUnmount(()=>{clearInterval(interval);clearTimers()});
 </script>
 

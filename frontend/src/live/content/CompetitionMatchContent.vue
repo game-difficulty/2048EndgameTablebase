@@ -70,6 +70,7 @@
   </section>
 </template>
 <script setup>
+import { shouldRefreshLiveClock } from '../displayClock.js';
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue';
 import { projectViewRenderer } from './projectViewRegistry.js';
 import { projectIconUrl } from '../../../../competition/shared/projectIcons.js';
@@ -130,7 +131,7 @@ function receive(data){
 }
 function resume(){const resumedAt=Date.now();serverAnchor.value+=resumedAt-receivedAt.value;receivedAt.value=resumedAt;now.value=resumedAt}
 function getPipFrame(){const currentMatch=match.value;return{key:`${currentMatch?.generation}:${currentMatch?.content_sequence}`,width:960,height:540,draw(ctx){ctx.fillStyle='#111c30';ctx.fillRect(0,0,960,540);ctx.fillStyle='#f8fafc';ctx.textAlign='center';ctx.font='700 30px sans-serif';ctx.fillText(currentMatch?.name||'2048 Competition',480,105);ctx.font='800 86px sans-serif';ctx.fillText(`${currentMatch?.score?.yellow||0}  :  ${currentMatch?.score?.white||0}`,480,270);ctx.font='600 24px sans-serif';ctx.fillStyle='#aebbd0';ctx.fillText((currentMatch?.phase||'').replaceAll('_',' '),480,345)}}}
-onMounted(()=>timer=setInterval(()=>now.value=Date.now(),250));onUnmounted(()=>clearInterval(timer));defineExpose({receive,resume,getPipFrame});
+onMounted(()=>timer=setInterval(()=>{if(shouldRefreshLiveClock())now.value=Date.now()},250));onUnmounted(()=>clearInterval(timer));defineExpose({receive,resume,getPipFrame});
 const PlayerAvatar=defineComponent({props:['player'],setup(p){const failed=ref(false);watch(()=>p.player?.avatar_url,()=>{failed.value=false});return()=>h('span',{class:'live-player-avatar','aria-hidden':'true'},p.player?.avatar_url&&!failed.value?h('img',{src:p.player.avatar_url,alt:'',onError:()=>{failed.value=true}}):h('span',String(p.player?.display_name||'?').trim().slice(0,2).toUpperCase()))}});
 const TeamRoster=defineComponent({props:['side','team','lang'],setup(p){return()=>h('aside',{class:['roster',p.side]},[h('small',p.side==='yellow'?(p.lang==='zh'?'黄方阵容':'YELLOW TEAM'):(p.lang==='zh'?'白方阵容':'WHITE TEAM')),...(p.team?.roster||[]).map(player=>h('div',{class:{captain:player.is_captain}},[h(PlayerAvatar,{player}),h('span',player.display_name),player.is_captain?h('em',p.lang==='zh'?'队长':'CPT'):null]))])}});
 const PlayerLine=defineComponent({props:['side','player','sealed','lang'],setup(p){return()=>h('section',{class:p.side},p.player?[h(PlayerAvatar,{player:p.player}),h('span',p.player.display_name)]:[h('b','—'),h('span',p.sealed?(p.lang==='zh'?'已密封':'Sealed'):(p.lang==='zh'?'布阵中':'Selecting'))])}});
