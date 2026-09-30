@@ -27,7 +27,6 @@ def public_payload(state: ProjectState) -> dict[str, Any]:
             "score": state.score, "move_count": state.move_count,
             "elapsed_ms": state.elapsed_ms, "finished": state.finished,
             "outcome": state.outcome,
-            "refund_reserve_ms": int(state.extra.get('refund_reserve_ms', 0)) if not state.finished else 0,
             "awaiting_client": state.extra.get("checkpoint") is None}
 
 

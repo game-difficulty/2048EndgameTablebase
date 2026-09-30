@@ -9,24 +9,64 @@ from competition.backend.db import CompetitionDatabase
 from competition.backend.service import CompetitionService
 
 
-def test_higher_refund_restores_budget_even_past_original_zero(tmp_path):
-    service,players=setup_game(tmp_path,'tournament-cargo-transport-4x4')
-    service.sync_client_game('MATCH5',players[3],**packet(service,players[3],finished=True,value=2,elapsed=1000))
-    final=packet(service,players[0],finished=True,value=3,elapsed=70000)
-    final['checkpoint']['metric_history']=[[0,0],[1500,3]]
+def set_yellow_budget(service, elapsed_seconds):
+    import json
     with service.database.transaction(immediate=True) as db:
-        import json
         row=db.execute("SELECT * FROM competition_game_sessions WHERE side='yellow'").fetchone()
         extra=json.loads(row['adapter_state_json']);extra['project_clock_start_ms']=60000
         db.execute('UPDATE competition_game_sessions SET adapter_state_json=? WHERE instance_id=?',(json.dumps(extra),row['instance_id']))
-        db.execute("UPDATE competition_team_clocks SET remaining_ms_base=60000,running_since=? WHERE side='yellow'",((datetime.now(timezone.utc)-timedelta(seconds=70)).isoformat(),))
+        db.execute("UPDATE competition_team_clocks SET remaining_ms_base=60000,running_since=? WHERE side='yellow'",((datetime.now(timezone.utc)-timedelta(seconds=elapsed_seconds)).isoformat(),))
+
+
+def test_higher_refund_is_only_credited_after_normal_completion(tmp_path):
+    service,players=setup_game(tmp_path,'tournament-cargo-transport-4x4')
+    service.sync_client_game('MATCH5',players[3],**packet(service,players[3],finished=True,value=2,elapsed=1000))
+    set_yellow_budget(service,0)
+    progress=packet(service,players[0],value=3,elapsed=2000)
+    progress['checkpoint']['metric_history']=[[0,0],[1500,3]]
+    service.sync_client_game('MATCH5',players[0],**progress)
+    with service.database.transaction() as db:
+        assert db.execute("SELECT remaining_ms_base FROM competition_team_clocks WHERE side='yellow'").fetchone()[0]==60000
+        assert db.execute("SELECT COUNT(*) FROM competition_time_refunds").fetchone()[0]==0
+    final=packet(service,players[0],sequence=2,finished=True,value=3,elapsed=50000)
+    final['checkpoint']['metric_history']=[[0,0],[1500,3]]
+    set_yellow_budget(service,50)
     result=service.sync_client_game('MATCH5',players[0],**final)['competition']
-    assert result['match']['current_result']['yellow_refund_ms']==68500
+    assert result['match']['current_result']['yellow_refund_ms']==48500
     assert result['match']['clocks']['yellow']['remaining_ms']==58500
     assert result['match']['current_result']['winner_side']=='yellow'
     assert result['match']['series_points']=={'yellow':2,'white':0}
     duplicate=service.sync_client_game('MATCH5',players[0],**final)['competition']
     assert duplicate['match']['clocks']['yellow']['remaining_ms']==58500
+
+
+def test_higher_lead_cannot_rescue_exhausted_team_budget(tmp_path):
+    service,players=setup_game(tmp_path,'tournament-cargo-transport-4x4')
+    service.sync_client_game('MATCH5',players[3],**packet(service,players[3],finished=True,value=2,elapsed=1000))
+    final=packet(service,players[0],finished=True,value=3,elapsed=70000)
+    final['checkpoint']['metric_history']=[[0,0],[1500,3]]
+    set_yellow_budget(service,70)
+    response=service.sync_client_game('MATCH5',players[0],**final)
+    result=response['competition']
+    assert response['stopped']
+    assert result['status']=='FINISHED'
+    assert result['match']['finish_reason']=='yellow_clock_expired'
+    assert result['match']['series_score']['white']==3
+    assert result['match']['clocks']['yellow']['remaining_ms']==0
+    with service.database.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM competition_time_refunds").fetchone()[0]==0
+
+
+@pytest.mark.parametrize('elapsed', [60000, 60001])
+def test_completion_at_or_after_zero_is_not_accepted_for_refund(tmp_path, elapsed):
+    service,players=setup_game(tmp_path,'tournament-cargo-transport-4x4')
+    service.sync_client_game('MATCH5',players[3],**packet(service,players[3],finished=True,value=2,elapsed=1000))
+    set_yellow_budget(service,0)
+    final=packet(service,players[0],finished=True,value=3,elapsed=elapsed)
+    final['checkpoint']['metric_history']=[[0,0],[1500,3]]
+    with pytest.raises(CompetitionError) as error:
+        service.sync_client_game('MATCH5',players[0],**final)
+    assert error.value.code=='TEAM_CLOCK_EXPIRED'
 
 
 def test_ready_timeout_and_rest_advance_without_captains(tmp_path):

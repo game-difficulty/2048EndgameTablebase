@@ -49,8 +49,6 @@ export class MatchRuntime {
             : new TournamentGame(this.project, options);
     this.sequence = Number(bootstrap.sequence || 0);
     this.metricHistory = [];
-    this.originalBudget = bootstrap.original_team_budget_ms ?? bootstrap.team_remaining_at_start_ms;
-    this.opponentResult = null;
     if (bootstrap.checkpoint) this.restore(bootstrap.checkpoint);
     if (!this.project.race && !this.metricHistory.length) {
       const initial = this.game.snapshot();
@@ -64,21 +62,7 @@ export class MatchRuntime {
     return this.frozenElapsed ?? Math.min(this.budget(), Math.max(0, this.baseElapsed + (this.running ? this.now() - this.clockAt : 0)));
   }
   budget() {
-    return (this.originalBudget ?? Infinity) + (this.decisiveAt() != null ? 300000 : 0);
-  }
-  decisiveAt() {
-    const other=this.opponentResult;
-    if (this.project.race || !other?.finished || other.outcome==='surrendered') return null;
-    const threshold=other.result_value ?? (this.project.resultMetric==='boardSum' ? other.board_sum : other.score);
-    let value=0;
-    for(const [at,metric] of this.metricHistory){
-      if(at<=other.elapsed_ms)value=metric;
-      else if(metric>threshold){
-        const decisive = value>threshold ? other.elapsed_ms : at;
-        return decisive <= this.originalBudget ? decisive : null;
-      }
-    }
-    return value>threshold && other.elapsed_ms <= this.originalBudget ? other.elapsed_ms : null;
+    return this.bootstrap.team_remaining_at_start_ms ?? Infinity;
   }
   playable() { return this.running && !this.completed() && this.elapsed() < this.budget(); }
   setClock(elapsed, running) {
@@ -167,7 +151,6 @@ export class MatchRuntime {
     const payload = {
       ...snapshot, board, move_count: snapshot.moves, elapsed_ms: this.elapsed(),
       finished: this.completed(), outcome: this.completed() ? snapshot.outcome : null,
-      refund_reserve_ms: !this.completed() && this.decisiveAt() != null ? 300000 : 0,
       board_sum: snapshot.boardSum, last_transition: snapshot.transition,
       result_metric: project.resultMetric === 'boardSum' ? 'board_sum' : project.race ? 'race' : 'score',
       allow_restart: Boolean(project.allowRestart), allow_undo: Boolean(project.allowUndo),

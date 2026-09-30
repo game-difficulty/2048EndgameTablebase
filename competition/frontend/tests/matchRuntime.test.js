@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MatchRuntime, LatestStateSender } from '../src/projects/matchRuntime.js';
-import { TOURNAMENT_PROJECTS } from '../src/projects/catalog.js';
+import { ALL_PROJECTS as TOURNAMENT_PROJECTS } from '../src/projects/catalog.js';
 import { projectionIsOlder, receivedProjectView } from '../../shared/projectStateOrder.mjs';
 
 const bootstrap = project => ({ instance_id: 'game:yellow', project_ref: project.id,
@@ -9,22 +9,24 @@ const bootstrap = project => ({ instance_id: 'game:yellow', project_ref: project
 const options = { now: () => 0, evilSpawn: async board => ({ index: board.indexOf(0), value: 2 }) };
 const project = order => TOURNAMENT_PROJECTS.find(item => item.order === order);
 
-test('Higher refund reserve rescues original zero without mutating queued timelines', () => {
+test('Higher time is never extended in play; checkpoint timelines remain immutable', () => {
   let time=0;
-  const runtime=new MatchRuntime({...bootstrap(project(1)),original_team_budget_ms:60000},{now:()=>time});
+  const runtime=new MatchRuntime({...bootstrap(project(1)),team_remaining_at_start_ms:60000},{now:()=>time});
   const first=runtime.accept();
   time=1500;runtime.game.score=3;runtime.accept();
-  runtime.opponentResult={finished:true,outcome:'no_moves',score:2,elapsed_ms:1000};
-  assert.equal(runtime.decisiveAt(),1500);
-  time=70000;
+  time=59999;
   assert.equal(runtime.playable(),true);
-  assert.equal(runtime.elapsed(),70000);
-  assert.equal(runtime.budget(),360000);
+  time=60000;
+  assert.equal(runtime.playable(),false);
+  assert.equal(runtime.move('down'),null);
+  assert.equal(runtime.action('surrender'),null);
+  time=70000;
+  assert.equal(runtime.elapsed(),60000);
+  assert.equal(runtime.budget(),60000);
   assert.deepEqual(first.checkpoint.metric_history,[[0,0]]);
-  const resumed=new MatchRuntime({...bootstrap(project(1)),original_team_budget_ms:60000,checkpoint:runtime.checkpoint()}, {elapsedMs:70000,now:()=>time});
-  resumed.opponentResult=runtime.opponentResult;
-  assert.equal(resumed.decisiveAt(),1500);
-  assert.equal(resumed.elapsed(),70000);
+  const resumed=new MatchRuntime({...bootstrap(project(1)),team_remaining_at_start_ms:60000,checkpoint:runtime.checkpoint()}, {elapsedMs:70000,now:()=>time});
+  assert.equal(resumed.playable(),false);
+  assert.equal(resumed.elapsed(),60000);
 });
 
 test('surrender freezes time and preserves the current score and board', () => {

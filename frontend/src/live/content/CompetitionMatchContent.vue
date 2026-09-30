@@ -51,7 +51,7 @@
       <aside class="series-panel"><small>{{ t('当前项目','CURRENT PROJECT') }}</small><img v-if="gameIcon(current)" class="current-icon" :src="gameIcon(current)" alt="" /><h2>{{ projectName(current?.project_key) }}</h2><div class="series-track"><span v-for="game in match.games" :key="game.game_key" :class="{active:game.game_key===match.current_game,done:game.result}">{{ game.game_key }}</span></div><p>{{ gameState }}</p><dl><template v-for="game in match.games" :key="game.game_key"><dt>{{ game.game_key }}</dt><dd>{{ resultText(game.result) }}</dd></template></dl></aside>
       <ProjectPane side="white" :view="views.white" :status="session('white')" :player="currentPlayer('white')" :lang="lang" :suspended="match?.suspended" />
       <CompetitionRosterHud v-model:collapsed="hudCollapsed.white" side="white" :team="team('white')" :active-player="currentPlayer('white')" :finished="session('white').finished" :lang="lang" />
-      <p class="game-rule-strip"><b>{{ t('当前玩法','RULES') }}</b><span>{{ currentRule }} <em v-if="sides.some(side=>views[side]?.payload?.refund_reserve_ms)">{{ t('领先方可用时间含最多5分钟补时额度，完赛后按实际差额结算。','The leading side has up to 5 minutes of provisional refund time; the actual difference is settled on completion.') }}</em></span></p>
+      <p class="game-rule-strip"><b>{{ t('当前玩法','RULES') }}</b><span>{{ currentRule }}</span></p>
     </div>
 
     <div v-else-if="stage==='game-result'" class="game-result-layout">

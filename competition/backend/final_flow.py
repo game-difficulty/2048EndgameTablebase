@@ -9,11 +9,16 @@ def points(control):
 
 def refund_decision(winner, loser):
     """Times are client active elapsed milliseconds since the shared game start."""
-    if winner.outcome == 'surrendered' or loser.outcome == 'surrendered':
+    if winner.outcome not in ('no_moves', 'tile_limit', 'target_reached') or loser.outcome == 'surrendered':
         return None
     threshold = int(loser.extra.get('result_value', loser.score))
     history = (winner.extra.get('checkpoint') or {}).get('metric_history', [])
     end, other_end = int(winner.elapsed_ms), int(loser.elapsed_ms)
+    # Refunds are settled only after normal completion, never borrowed to play
+    # beyond the team's available time or used to reverse a timeout forfeiture.
+    budget = winner.extra.get('project_clock_start_ms')
+    if budget is not None and end >= int(budget):
+        return None
     if end < other_end:
         return None
     current = 0

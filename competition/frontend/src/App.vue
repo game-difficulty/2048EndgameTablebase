@@ -396,11 +396,6 @@ function synchronizeRuntime(nextRoom) {
     localPacket.value = localRuntime.packet();
   }
   localRuntime?.setClock(clock.elapsed_ms, clock.running);
-  if(localRuntime) {
-    const other=nextRoom.match.sessions?.[bootstrap.side==='yellow'?'white':'yellow'];
-    localRuntime.opponentResult=other?.public_view?.payload;
-    localRuntime.originalBudget=bootstrap.original_team_budget_ms ?? bootstrap.team_remaining_at_start_ms;
-  }
   if (own.finished && !localPacket.value?.finished) {
     // Clock expiry / referee decisions remain authoritative match controls.
     localRuntime.game.finished = true;
@@ -1248,7 +1243,7 @@ onBeforeUnmount(() => {
           <div class="game-hud-side yellow">
             <button class="game-hud-back" type="button" aria-label="返回比赛列表" @click="navigate(competitionHomePath)">←</button>
             <strong class="game-hud-series" :aria-label="`黄方局分 ${match.series_score.yellow}`">{{ match.series_score.yellow }}</strong>
-            <span class="game-hud-team">黄方<small :title="sessionPayload('yellow')?.refund_reserve_ms ? '当前可用时间含最多 5 分钟补时额度，结束时按实际差额结算。' : ''">{{ sessionPayload('yellow')?.refund_reserve_ms ? '含补时额度' : '包干时间' }}</small></span>
+            <span class="game-hud-team">黄方<small>包干时间</small></span>
             <strong class="game-hud-clock">{{ formatTeamClock(teamClockMs('yellow')) }}</strong>
           </div>
           <div class="game-hud-center">
@@ -1258,7 +1253,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="game-hud-side white">
             <strong class="game-hud-clock">{{ formatTeamClock(teamClockMs('white')) }}</strong>
-            <span class="game-hud-team">白方<small :title="sessionPayload('white')?.refund_reserve_ms ? '当前可用时间含最多 5 分钟补时额度，结束时按实际差额结算。' : ''">{{ sessionPayload('white')?.refund_reserve_ms ? '含补时额度' : '包干时间' }}</small></span>
+            <span class="game-hud-team">白方<small>包干时间</small></span>
             <strong class="game-hud-series" :aria-label="`白方局分 ${match.series_score.white}`">{{ match.series_score.white }}</strong>
             <span class="game-hud-stage"><i :class="['connection-dot', connection]"></i>{{ match.suspension.active ? '暂停' : statusText[room.status] }}</span>
           </div>

@@ -915,7 +915,6 @@ class CompetitionService:
                 "side": str(row["side"]), "seed": str(row["seed_hex"]),
                 "sequence": int(state.extra.get("client_sequence", 0)),
                 "team_remaining_at_start_ms": state.extra.get("project_clock_start_ms", 0),
-                "original_team_budget_ms": state.extra.get("project_clock_start_ms",0)-state.extra.get('refund_reserve_ms',0),
                 "checkpoint": state.extra.get("checkpoint"),
                 "race_stop_requested": bool(state.extra.get("race_stop_at")),
                 "target_tile": getattr(adapter, "target_tile", None),
@@ -998,9 +997,8 @@ class CompetitionService:
         for side,state,other in [('yellow',yellow_state,white_state),('white',white_state,yellow_state)]:
             decision=refund_decision(state,other) if winner==side and not bool(getattr(getattr(adapter,'rules',None),'race',False)) else None
             amount=decision[1] if decision else 0
-            reserved=int(state.extra.get('refund_reserve_ms',0))
-            if amount or reserved:
-                db.execute('UPDATE competition_team_clocks SET remaining_ms_base=MAX(0,remaining_ms_base+?),revision=revision+1 WHERE competition_id=? AND side=?',(amount-reserved,competition_id,side))
+            if amount:
+                db.execute('UPDATE competition_team_clocks SET remaining_ms_base=MAX(0,remaining_ms_base+?),revision=revision+1 WHERE competition_id=? AND side=?',(amount,competition_id,side))
                 db.execute('INSERT INTO competition_time_refunds VALUES(?,?,?,?,?)',(competition_id,game_key,side,decision[0] if decision else 0,amount))
         db.execute(
             """
@@ -1181,37 +1179,6 @@ class CompetitionService:
         )
         return self._change_draft_status(db, room, CompetitionStatus.FINISHED.value)
 
-    def _reserve_higher_time(self, db, room, now, candidate=None):
-        from dataclasses import replace
-        from .final_flow import refund_decision
-        cid=room['id']
-        control=self._match_control_row(db,cid)
-        sessions=db.execute('SELECT * FROM competition_game_sessions WHERE competition_id=? AND game_key=?',(cid,control['current_game_key'])).fetchall()
-        if len(sessions)!=2:
-            return
-        for own in sessions:
-            extra=json.loads(own['adapter_state_json'])
-            if own['state']!='playing' or extra.get('refund_reserve_ms'):
-                continue
-            adapter=self._adapter_for_session_row(own)
-            if bool(getattr(getattr(adapter,'rules',None),'race',False)):
-                continue
-            other=next(s for s in sessions if s['side']!=own['side'])
-            if other['state']!='completed':
-                continue
-            state=self._session_state(own,db,now=now)
-            if candidate and candidate['instance_id']==own['instance_id']:
-                state=replace(state,elapsed_ms=candidate['elapsed_ms'],extra={**state.extra,'checkpoint':candidate['checkpoint'],'result_value':candidate['result_value']})
-            decision=refund_decision(state,self._session_state(other,db,now=now))
-            if decision is None or decision[0] > int(extra['project_clock_start_ms']):
-                continue
-            # Reserve the maximum recoverable interval before checking expiry;
-            # unused time is removed atomically when the game result is published.
-            extra['refund_reserve_ms']=300000
-            extra['project_clock_start_ms']+=300000
-            db.execute('UPDATE competition_team_clocks SET remaining_ms_base=remaining_ms_base+300000,revision=revision+1 WHERE competition_id=? AND side=?',(cid,own['side']))
-            db.execute('UPDATE competition_game_sessions SET adapter_state_json=? WHERE instance_id=?',(json.dumps(extra),own['instance_id']))
-
     def _settle_game_clocks(
         self,
         db: sqlite3.Connection,
@@ -1220,7 +1187,6 @@ class CompetitionService:
         now: datetime,
     ) -> tuple[sqlite3.Row, bool]:
         competition_id = str(room["id"])
-        self._reserve_higher_time(db,room,now)
         clocks = db.execute(
             "SELECT * FROM competition_team_clocks WHERE competition_id = ?",
             (competition_id,),
@@ -3232,13 +3198,11 @@ class CompetitionService:
             self._ensure_not_suspended(db, competition_id)
             if not secrets.compare_digest(str(control["phase_token"]), str(phase_token or "")):
                 raise CompetitionError("STALE_PHASE", "Refresh the current match phase.", 409)
-            self._reserve_higher_time(db,room,now,{'instance_id':instance_id,'checkpoint':checkpoint,'elapsed_ms':elapsed_ms,'result_value':result_value})
-            extra=json.loads(db.execute('SELECT adapter_state_json FROM competition_game_sessions WHERE instance_id=?',(instance_id,)).fetchone()[0])
             room, settled = self._settle_game_clocks(db, room, now=now)
             if settled:
                 return {"instance_id": instance_id, "accepted_sequence": accepted,
                         "stopped": True, "competition": self._snapshot(db, room, principal)}
-            if elapsed_ms > int(extra['project_clock_start_ms']):
+            if elapsed_ms >= int(extra['project_clock_start_ms']):
                 raise CompetitionError('TEAM_CLOCK_EXPIRED', 'The team time budget has expired.', 409)
             if outcome == 'surrendered':
                 opponent = db.execute("SELECT state,outcome_reason FROM competition_game_sessions WHERE competition_id=? AND game_key=? AND side!=?", (competition_id, game_key, session['side'])).fetchone()
