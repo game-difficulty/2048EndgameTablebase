@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ref } from 'vue';
 import * as engine from '../src/human/engine.js';
 import { needsReplayUpload } from '../src/human/archivePolicy.js';
+import { EventBuffer } from '../src/human/eventBuffer.js';
 
 // Exercise the real session state machine with deferred network replies. No sleep,
 // database, or production API is needed to reproduce acknowledgement races.
@@ -98,6 +99,24 @@ async function move(session) {
 async function cross(session) {
   while (session.run.value.score <= f.threshold) await move(session);
 }
+
+test('live checkpoints copy events only at a milestone and do not copy while uploading', async t => {
+  const session = await setup(t, Number.MAX_SAFE_INTEGER);
+  await move(session);
+  const clone = mock.method(EventBuffer.prototype, 'clone');
+  session.liveCheckpoint();
+  assert.equal(clone.mock.callCount(), 0);
+  session.run.value = { ...session.run.value, nodes: { 32768: { seq: session.run.value.seq } } };
+  const pending = hold('live');
+  const upload = session.liveCheckpoint();
+  await pending.entered.promise;
+  assert.equal(clone.mock.callCount(), 1);
+  const duplicate = session.liveCheckpoint();
+  assert.equal(clone.mock.callCount(), 1);
+  assert.equal(duplicate, upload);
+  pending.resolve();
+  await upload;
+});
 
 test('move saving stays guarded without marking page controls as a long operation', async t => {
   const s = await setup(t);

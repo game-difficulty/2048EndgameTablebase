@@ -144,10 +144,12 @@ const paginationItems = computed(() => {
   return items;
 });
 const previewDims = computed(() => ({'4x4':[4,4],'3x4':[3,4],'2x4':[2,4],'3x3':[3,3]})[preview.value?.variant] || [4,4]);
-let themeObserver, resourcesActive = false;
+let themeObserver, resourcesActive = false, posterGeneration = 0;
 function activateResources() {
   if (resourcesActive) return;
   resourcesActive = true;
+  posterDark.value = document.documentElement.dataset.theme === 'dark';
+  posterThemeVersion.value += 1;
   themeObserver = new MutationObserver(() => {
     posterDark.value = document.documentElement.dataset.theme === 'dark';
     posterThemeVersion.value += 1;
@@ -159,6 +161,7 @@ function activateResources() {
   window.addEventListener('resize', positionPreview);
 }
 function deactivateResources({ releasePoster = false } = {}) {
+  posterGeneration += 1;
   if (posterFrame) { cancelAnimationFrame(posterFrame); posterFrame = 0; }
   closePreview();
   if (resourcesActive) {
@@ -270,17 +273,24 @@ async function loadBestTen(force = false) {
   } catch { if (serial === bestSerial) { bestMeta.value = null; bestTen.value = []; } }
   finally { if (serial === bestSerial) bestLoading.value = false; }
 }
-async function renderPoster(canvas = posterCanvas.value, outputWidth = POSTER_PREVIEW_WIDTH, outputHeight = POSTER_PREVIEW_HEIGHT) {
+async function renderPoster(canvas = null, outputWidth = POSTER_PREVIEW_WIDTH, outputHeight = POSTER_PREVIEW_HEIGHT) {
+  const previewRender = !canvas;
+  const generation = posterGeneration;
   await nextTick();
+  canvas ||= posterCanvas.value;
+  const shouldRender = () => !previewRender || (resourcesActive && tab.value === 'profile'
+    && generation === posterGeneration && canvas === posterCanvas.value);
+  if (!shouldRender()) return;
   if (!canvas || !bestTen.value.length) return;
   await drawBestTenPoster({ canvas, name: profile.value?.player.display_name,
     userId: profile.value?.player.id, variant: bestVariant.value, entries: bestTen.value,
     pbScore: bestMeta.value?.pb_score, pbRank: bestMeta.value?.pb_rank,
     rating: bestMeta.value?.rating, raRank: bestMeta.value?.ra_rank, dark: posterDark.value,
-    language: language.value, tilePalette: currentTilePalette(), outputWidth, outputHeight });
+    language: language.value, tilePalette: currentTilePalette(), outputWidth, outputHeight, shouldRender });
 }
 function schedulePosterRender() {
-  if (posterFrame || tab.value !== 'profile') return;
+  posterGeneration += 1;
+  if (!resourcesActive || posterFrame || tab.value !== 'profile') return;
   posterFrame = requestAnimationFrame(() => { posterFrame = 0; void renderPoster(); });
 }
 watch([bestTen, bestVariant, () => profile.value?.player, posterDark, posterThemeVersion, language], schedulePosterRender, { flush: 'post' });

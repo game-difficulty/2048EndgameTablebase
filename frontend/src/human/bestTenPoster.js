@@ -233,8 +233,9 @@ function closingCard(ctx, palette, copy) {
 
 export async function drawBestTenPoster({ canvas = document.createElement('canvas'), name, userId, variant,
   entries, pbScore, pbRank, rating, raRank, dark = false, language = 'zh', tilePalette = null,
-  outputWidth = 1600, outputHeight = 2700 }) {
+  outputWidth = 1600, outputHeight = 2700, shouldRender = () => true }) {
   await document.fonts.ready;
+  if (!shouldRender()) return null;
   canvas.width = outputWidth; canvas.height = outputHeight;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('canvas_unavailable');

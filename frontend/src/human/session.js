@@ -359,6 +359,7 @@ export function useHumanSession(user, policies) {
   }
   function sync(keepalive = false) {
     if (!run.value || !high() || run.value.reason) return;
+    if (networkJob?.generation === generation) return networkJob.promise;
     if (!run.value.monitored) return startMonitoring();
     const snapshot = { ...run.value }, frozenEvents = events.clone();
     const status = { seq: snapshot.serverSeq || 0, epoch: snapshot.epoch };
@@ -426,8 +427,10 @@ export function useHumanSession(user, policies) {
   }
   function liveCheckpoint() {
     if (!run.value || run.value.reason || run.value.guest || high()) return;
-    const snapshot = { ...run.value }, frozenEvents = events.clone();
+    if (networkJob?.generation === generation) return networkJob.promise;
+    const snapshot = { ...run.value };
     if (![32768, 65536].some(value => snapshot.nodes?.[value]?.seq === snapshot.seq)) return;
+    const frozenEvents = events.clone();
     const status = { seq: snapshot.serverSeq || 0, epoch: snapshot.epoch };
     return background(context => synchronize(context, 'live', snapshot, frozenEvents, status));
   }
