@@ -815,7 +815,9 @@ async def chat(request: Request):
     if not isinstance(content, str):
         raise HTTPException(400, 'invalid_message')
     content = content.strip()
-    if not 1 <= len(content) <= 32 or any(unicodedata.category(c).startswith('C') for c in content):
+    from .chat_length import chat_length, LIMIT
+    if not 1 <= chat_length(content) <= LIMIT or any(
+            unicodedata.category(c).startswith('C') and c != '\u200d' for c in content):
         raise HTTPException(400, 'invalid_message')
     hub.limit(('chat-ip', client_ip(request)), 20)
     hub.limit(('chat', actor.actor_key), 5)

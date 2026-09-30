@@ -26,6 +26,7 @@
 import { shouldRefreshLiveClock } from '../displayClock.js';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { projectPerformanceMetric } from '../../../../competition/shared/projectMetrics.mjs';
+import { CARGO_SHAPES } from '../../../../competition/shared/cargoShapes.mjs';
 import { liveTileColors } from '../tilePalette.js';
 
 const props = defineProps({ view: { type: Object, required: true }, lang: { type: String, default: 'zh' }, suspended: Boolean });
@@ -36,13 +37,6 @@ const visualCargo = ref(null), cargoInstant = ref(true);
 const hidden = ref(new Set()), pops = ref(new Set()), appear = ref(null), moving = ref([]), started = ref(false);
 const now = ref(performance.now()), receivedAt = ref(performance.now()), elapsedAnchor = ref(0);
 let timer = null, timers = [], epoch = 0;
-const SHAPES = [
-  [[0, 0], [0, 1], [1, 0], [1, 1]],
-  [[0, 0], [0, 1], [1, 0]],
-  [[0, 0], [0, 1], [1, 1]],
-  [[0, 1], [1, 0], [1, 1]],
-  [[0, 0], [1, 0], [1, 1]],
-];
 const GAP = 2.25, CELL = (100 - GAP * 5) / 4, PITCH = CELL + GAP, BOX = CELL * 2 + GAP;
 const t = (zh, en) => props.lang === 'zh' ? zh : en;
 const tileColor = value => liveTileColors(value);
@@ -54,16 +48,21 @@ const cargoPosition = cargo => ({
   left: `${GAP + cargo.col * PITCH}%`, top: `${(50 + GAP + cargo.row * PITCH) / 175 * 100}%`,
   width: `${BOX}%`, height: `${BOX / 175 * 100}%`,
 });
-const shapeCells = cargo => SHAPES[cargo.shape] || [];
+const shapeCells = cargo => CARGO_SHAPES[cargo.shape]?.cells || [];
 function cargoLabelStyle(cargo) {
   if (cargo.shape === 0) return null;
   const cells = shapeCells(cargo);
   const joint = cells.find(([row, col]) => cells.filter(([otherRow, otherCol]) =>
     Math.abs(row - otherRow) + Math.abs(col - otherCol) === 1).length === 2);
-  return joint ? {
-    left: `${(joint[1] * PITCH + CELL / 2) / BOX * 100}%`,
-    top: `${(joint[0] * PITCH + CELL / 2) / BOX * 100}%`,
-  } : null;
+  if (!cells.length) return null;
+  const center = joint || [
+    cells.reduce((sum, cell) => sum + cell[0], 0) / cells.length,
+    cells.reduce((sum, cell) => sum + cell[1], 0) / cells.length,
+  ];
+  return {
+    left: `${(center[1] * PITCH + CELL / 2) / BOX * 100}%`,
+    top: `${(center[0] * PITCH + CELL / 2) / BOX * 100}%`,
+  };
 }
 const partPosition = ([row, col]) => ({
   left: `${col * PITCH / BOX * 100}%`, top: `${row * PITCH / BOX * 100}%`,

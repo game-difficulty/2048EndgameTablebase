@@ -141,13 +141,13 @@
               v-model="draft"
               maxlength="64"
               :placeholder="
-                t('聊一句，最多 32 字', 'Say something, up to 32 characters')
+                t('聊一句', 'Say something')
               "
               :aria-label="t('聊天内容', 'Chat message')"
-            /><small>{{ [...draft].length }}/32</small
+            /><small>{{ chatLength(draft) }}/{{ CHAT_LIMIT }}</small
             ><button
               type="submit"
-              :disabled="sending || !draft.trim() || [...draft].length > 32"
+              :disabled="sending || !draft.trim() || chatLength(draft) > CHAT_LIMIT"
               :title="t('发送', 'Send')"
             >
               <Send :size="18" />
@@ -194,6 +194,7 @@
 
 <script setup>
 import { serverErrorText } from '../services/errors/serverErrorText.js';
+import { chatLength, CHAT_LIMIT } from './chatLength.js';
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import {
   Radio,

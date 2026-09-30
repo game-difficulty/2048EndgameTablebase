@@ -2,6 +2,7 @@
 // untouched; numeric tiles, specials, dominoes and walls share one occupancy
 // model so every accepted swipe is resolved as a single board transaction.
 import { nextRandom, seed32, ticketFloat } from './randomStreams.js';
+import { settleRigidTiles } from './rigidMovement.js';
 
 const VECTORS = { up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1] };
 const clone = tile => ({ ...tile, cells: tile.cells.slice() });
@@ -36,6 +37,21 @@ function mergeable(tile, target) {
 
 export function slideSpecialTiles(tiles, direction, rows = 4, cols = 4) {
   if (!VECTORS[direction]) return { changed: false, tiles: copy(tiles), score: 0, movements: [], merges: [], removals: [] };
+  // Bonded pieces use the same complete-occupancy solver as cargo and growing
+  // tiles. Single-cell chemical/bomb reactions retain their existing rules.
+  if (tiles.some(tile => tile.kind === 'pair-double' || tile.kind === 'pair-single')) {
+    const result = settleRigidTiles(copy(tiles), direction, {
+      cols,
+      step: tile => {
+        const cells = tile.kind !== 'wall' && shift(tile.cells, direction, rows, cols);
+        return cells ? { cells } : null;
+      },
+      merge: (tile, target) => tile.kind === 'number' && target.kind === 'number' && tile.value === target.value
+        ? { tile: { id: `merge-${target.id}-${tile.id}`, kind: 'number', value: tile.value * 2, cells: target.cells.slice() }, score: tile.value * 2 } : null,
+    });
+    const clean = tile => { const value = clone(tile); delete value.merged; return value; };
+    return { ...result, tiles: result.tiles.map(clean), merges: result.merges.map(item => ({ ...item, tile: clean(item.tile) })) };
+  }
   const settled = new Map(), occupied = new Map(), movements = [], merges = [], removals = [];
   const add = tile => { settled.set(tile.id, tile); for (const cell of tile.cells) occupied.set(cell, tile); };
   const remove = tile => { settled.delete(tile.id); for (const cell of tile.cells) occupied.delete(cell); };

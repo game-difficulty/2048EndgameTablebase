@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CARGO_SHAPES, FIRST_CARGO_MOVE, CargoGame, hasCargoMove, moveCargoBoard } from '../src/projects/cargoEngine.js';
+import { CARGO_SHAPES, CARGO_SHAPE_GROUPS, FIRST_CARGO_MOVE, CargoGame, hasCargoMove, moveCargoBoard } from '../src/projects/cargoEngine.js';
 import { nextRandom } from '../src/projects/randomStreams.js';
 
 const empty = () => Array(16).fill(0);
@@ -20,8 +20,8 @@ test('cargo shapes have a separate stream from numeric spawns', () => {
   assert.equal(first.randomState, nextRandom(before));
 });
 
-test('all five cargo shapes fit the two-column entrance and exit', () => {
-  assert.equal(CARGO_SHAPES.length, 5);
+test('all six cargo variants fit the two-column entrance and exit', () => {
+  assert.equal(CARGO_SHAPES.length, 6);
   for (let shape = 0; shape < CARGO_SHAPES.length; shape += 1) {
     const start = cargo(shape, -2);
     const blocked = empty();
@@ -32,7 +32,7 @@ test('all five cargo shapes fit the two-column entrance and exit', () => {
     assert.equal(moveCargoBoard(empty(), cargo(shape, -1), 'up').cargoMoved, false);
     const exit = moveCargoBoard(empty(), start, 'down');
     assert.equal(exit.delivered, true);
-    assert.equal(exit.cargo.row, 4);
+    assert.equal(exit.cargo.row, shape === 1 ? 3 : 4);
   }
 });
 
@@ -52,14 +52,14 @@ test('numeric tiles remain on the board and block an occupied cargo destination'
   assert.equal(moveCargoBoard(empty(), cargo(0, 3, 1), 'up').cargoMoved, false);
 });
 
-test('a partly exited L can shift right to align with the outlet', () => {
+test('a partly exited vertical domino can shift sideways within the outlet', () => {
   const board = [
     2, 8, 2, 4,
     0, 4, 16, 2,
     2, 4, 16, 4,
     0, 0, 0, 128,
   ];
-  const piece = cargo(2, 3, 0); // (3,0), (3,1), (4,1), as pictured.
+  const piece = cargo(5, 3, 0); // (3,1), (4,1); can align with outlet column 2.
   const aligned = moveCargoBoard(board, piece, 'right');
   assert.equal(aligned.changed, true);
   assert.equal(aligned.cargoMoved, true);
@@ -77,6 +77,59 @@ test('a partly exited L can shift right to align with the outlet', () => {
   assert.equal(action.changed, true);
   assert.equal(action.snapshot.cargo.col, 1);
   assert.equal(action.snapshot.finished, false);
+});
+
+test('four equally weighted families contain only the requested variants', () => {
+  assert.deepEqual(CARGO_SHAPE_GROUPS, [[3, 4], [1], [2, 5], [0]]);
+  assert.deepEqual(CARGO_SHAPES[1].cells, [[1, 0], [1, 1]]);
+  assert.deepEqual(CARGO_SHAPES[2].cells, [[0, 0], [1, 0]]);
+  assert.deepEqual(CARGO_SHAPES[5].cells, [[0, 1], [1, 1]]);
+  for (const shape of CARGO_SHAPE_GROUPS[0]) {
+    assert.equal(CARGO_SHAPES[shape].cells.filter(([row]) => row === 0).length, 1);
+    assert.equal(CARGO_SHAPES[shape].cells.filter(([row]) => row === 1).length, 2);
+  }
+  const game = new CargoGame({ id: 'cargo' }, { seed: 'shape-families' });
+  const originalNumeric = game.randomState;
+  const counts = [0, 0, 0, 0], variants = Array(6).fill(0);
+  for (let i = 0; i < 16000; i++) {
+    const groupState = nextRandom(game.shapeState);
+    const variantState = nextRandom(groupState);
+    const groupIndex = Math.floor(groupState / 0x100000000 * 4);
+    const group = CARGO_SHAPE_GROUPS[groupIndex];
+    const next = game.nextCargo();
+    assert.equal(next.shape, group[Math.floor(variantState / 0x100000000 * group.length)]);
+    assert.equal(game.shapeState, variantState);
+    counts[groupIndex]++; variants[next.shape]++;
+  }
+  assert.equal(game.randomState, originalNumeric);
+  for (const count of counts) assert.ok(count > 3600 && count < 4400);
+  for (const index of [2, 3, 4, 5]) assert.ok(variants[index] > 1700 && variants[index] < 2300);
+});
+
+test('same seed keeps cargo sequence identical despite different numeric draws, and restores by shape cursor', () => {
+  const a = new CargoGame({}, { seed: 'two-players' });
+  const b = new CargoGame({}, { seed: 'two-players' });
+  for (let i = 0; i < 100; i++) {
+    for (let j = 0; j < i % 7; j++) a.nextSpawnTicket();
+    assert.equal(a.nextCargo().shape, b.nextCargo().shape);
+  }
+  const restored = new CargoGame({}, { seed: 'two-players' });
+  restored.shapeState = a.shapeState;
+  restored.nextCargoId = a.nextCargoId;
+  for (let i = 0; i < 20; i++) assert.deepEqual(restored.nextCargo(), a.nextCargo());
+});
+
+test('horizontal domino uses actual cells for entry, lateral movement and delivery', () => {
+  // Anchor remains at -1 but both actual cells have entered row 0.
+  const entered = cargo(1, -1, 1);
+  const left = moveCargoBoard(empty(), entered, 'left');
+  assert.equal(left.cargo.col, 0);
+  assert.equal(moveCargoBoard(empty(), entered, 'up').changed, false);
+  const exit = moveCargoBoard(empty(), entered, 'down');
+  assert.equal(exit.delivered, true);
+  assert.equal(exit.cargo.row, 3); // Both actual cells are already in outlet row 4.
+  assert.equal(moveCargoBoard(empty(), exit.cargo, 'down').changed, false);
+  assert.equal(moveCargoBoard(empty(), cargo(5, 0, 1), 'left').cargo.col, -1);
 });
 
 test('one delivery adds one point and immediately stages the next cargo', () => {

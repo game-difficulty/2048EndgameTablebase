@@ -76,10 +76,13 @@ function cargoLabelStyle(cargo) {
   const cells = shapeCells(cargo);
   const joint = cells.find(([row, col]) => cells.filter(([otherRow, otherCol]) =>
     Math.abs(row - otherRow) + Math.abs(col - otherCol) === 1).length === 2);
-  if (!joint) return null;
+  const center = joint || [
+    cells.reduce((sum, cell) => sum + cell[0], 0) / cells.length,
+    cells.reduce((sum, cell) => sum + cell[1], 0) / cells.length,
+  ];
   return {
-    left: `${(joint[1] * PITCH + CELL / 2) / BOX * 100}%`,
-    top: `${(joint[0] * PITCH + CELL / 2) / BOX * 100}%`,
+    left: `${(center[1] * PITCH + CELL / 2) / BOX * 100}%`,
+    top: `${(center[0] * PITCH + CELL / 2) / BOX * 100}%`,
   };
 }
 function partStyle(cargo, [row, col]) {

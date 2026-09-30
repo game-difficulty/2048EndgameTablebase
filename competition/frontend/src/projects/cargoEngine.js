@@ -1,14 +1,9 @@
-import { moveBoard, WALL } from './engine.js';
+import { settleRigidTiles, shiftCells } from './rigidMovement.js';
 import { nextRandom, seed32, ticketFloat } from './randomStreams.js';
+import { CARGO_SHAPES, CARGO_SHAPE_GROUPS } from '../../../shared/cargoShapes.mjs';
+export { CARGO_SHAPES, CARGO_SHAPE_GROUPS } from '../../../shared/cargoShapes.mjs';
 
 export const FIRST_CARGO_MOVE = 10;
-export const CARGO_SHAPES = Object.freeze([
-  Object.freeze({ key: 'square', name: '2×2', cells: [[0, 0], [0, 1], [1, 0], [1, 1]] }),
-  Object.freeze({ key: 'l0', name: 'L', cells: [[0, 0], [0, 1], [1, 0]] }),
-  Object.freeze({ key: 'l1', name: 'L', cells: [[0, 0], [0, 1], [1, 1]] }),
-  Object.freeze({ key: 'l2', name: 'L', cells: [[0, 1], [1, 0], [1, 1]] }),
-  Object.freeze({ key: 'l3', name: 'L', cells: [[0, 0], [1, 0], [1, 1]] }),
-]);
 
 const VECTORS = Object.freeze({ up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1] });
 const copyCargo = cargo => cargo && { ...cargo };
@@ -19,42 +14,57 @@ function cargoBoardCells(cargo) {
   return tileCells(cargo).filter(([row]) => row >= 0 && row < 4).map(([row, col]) => row * 4 + col);
 }
 
-function canShiftCargo(cargo, direction, board) {
+function canShiftCargo(cargo, direction) {
   if (!cargo || !VECTORS[direction]) return false;
-  if (cargo.row < 0 && direction !== 'down') return false;
+  const currentCells = tileCells(cargo);
+  if (currentCells.every(([row]) => row >= 4)) return false;
+  if (currentCells.some(([row]) => row < 0) && direction !== 'down') return false;
   // Once a piece crosses the outlet it cannot be pulled back, but it may
   // still slide sideways to align its protruding cells with the two-cell exit.
-  if (cargo.row >= 3 && direction === 'up') return false;
+  if (currentCells.some(([row]) => row >= 4) && direction === 'up') return false;
   const [dr, dc] = VECTORS[direction];
   const next = { ...cargo, row: cargo.row + dr, col: cargo.col + dc };
-  if (next.row < 0 && direction !== 'down') return false;
   const cells = tileCells(next);
+  if (cells.some(([row]) => row < 0) && direction !== 'down') return false;
   if (cells.some(([, col]) => col < 0 || col >= 4)) return false;
   if (cells.some(([row, col]) => row >= 4 && ![1, 2].includes(col))) return false;
-  return cells.every(([row, col]) => row < 0 || row >= 4 || board[row * 4 + col] === 0);
+  return true;
 }
 
 export function moveCargoBoard(board, cargo, direction) {
   if (!VECTORS[direction]) return { changed: false, board, cargo, movements: [], delivered: false };
-  const occupied = new Set(cargoBoardCells(cargo));
-  const masked = board.map((value, index) => occupied.has(index) ? WALL : value);
-  const moved = moveBoard(masked, { rows: 4, cols: 4 }, direction);
-  const nextBoard = moved.board.map(value => value === WALL ? 0 : value);
   const [dr, dc] = VECTORS[direction];
-  let nextCargo = cargo;
-  while (canShiftCargo(nextCargo, direction, nextBoard)) {
-    nextCargo = { ...nextCargo, row: nextCargo.row + dr, col: nextCargo.col + dc };
-    if (nextCargo.row >= 4) break; // Fully through the outlet; never slide beyond the delivery point.
-  }
-  const cargoMoved = nextCargo !== cargo;
+  const tiles = board.flatMap((value, index) => value > 0 ? [{ id: `number-${index}`, value, cells: [index] }] : []);
+  if (cargo) tiles.push({ ...cargo, isCargo: true, cells: tileCells(cargo).map(([r, c]) => r * 4 + c) });
+  const moved = settleRigidTiles(tiles, direction, {
+    cols: 4,
+    step: tile => {
+      if (!tile.isCargo) {
+        const cells = shiftCells(tile.cells, direction, 4, 4);
+        return cells && { cells };
+      }
+      if (!canShiftCargo(tile, direction)) return null;
+      return { row: tile.row + dr, col: tile.col + dc, cells: tile.cells.map(cell => cell + dr * 4 + dc) };
+    },
+    merge: (tile, target) => !tile.isCargo && !target.isCargo && tile.value === target.value
+      ? { tile: { id: `merge-${target.id}-${tile.id}`, value: tile.value * 2, cells: target.cells.slice() }, score: tile.value * 2 } : null,
+  });
+  const nextBoard = Array(16).fill(0);
+  for (const tile of moved.tiles) if (!tile.isCargo) nextBoard[tile.cells[0]] = tile.value;
+  const resolvedCargo = moved.tiles.find(tile => tile.isCargo);
+  const nextCargo = resolvedCargo ? { id: cargo.id, shape: cargo.shape, row: resolvedCargo.row, col: resolvedCargo.col } : null;
+  const cargoMoved = Boolean(cargo && (nextCargo.row !== cargo.row || nextCargo.col !== cargo.col));
+  const movements = moved.movements.filter(item => item.id !== cargo?.id).map(item => ({
+    from: item.from[0], to: item.to[0], value: board[item.from[0]], merged: Boolean(item.mergeInto),
+  }));
   return {
     changed: moved.changed || cargoMoved,
     board: nextBoard,
     cargo: nextCargo,
-    movements: moved.movements,
+    movements,
     gained: moved.score,
     cargoMoved,
-    delivered: cargoMoved && nextCargo.row >= 4,
+    delivered: cargoMoved && tileCells(nextCargo).every(([row]) => row >= 4),
   };
 }
 
@@ -91,7 +101,12 @@ export class CargoGame {
 
   nextCargo() {
     this.shapeState = nextRandom(this.shapeState);
-    return { id: `cargo-${this.nextCargoId++}`, shape: this.shapeState % CARGO_SHAPES.length, row: -2, col: 1 };
+    const group = CARGO_SHAPE_GROUPS[Math.floor(this.shapeState / 0x100000000 * CARGO_SHAPE_GROUPS.length)];
+    // Always take two draws from the shape stream, even for single-variant
+    // families. Neither numeric spawns nor player move counts affect it.
+    this.shapeState = nextRandom(this.shapeState);
+    const shape = group[Math.floor(this.shapeState / 0x100000000 * group.length)];
+    return { id: `cargo-${this.nextCargoId++}`, shape, row: -2, col: 1 };
   }
 
   reset(increment = true) {

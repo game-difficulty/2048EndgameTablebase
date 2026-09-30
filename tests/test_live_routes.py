@@ -67,7 +67,7 @@ class LiveRouteTests(unittest.TestCase):
     def test_chat_guest_limits_plain_text_and_origin(self):
         actor = ActorRef.from_guest({'guest_id':'test','display_name':'Guest-test'})
         with patch.object(routes, 'require_actor', return_value=actor):
-            self.assertEqual(self.client.post('/api/live/chat',json={'text':'x'*33}).status_code,400)
+            self.assertEqual(self.client.post('/api/live/chat',json={'text':'x'*81}).status_code,400)
             self.assertEqual(self.client.post('/api/live/chat',json={'text':'hi'},headers={'Origin':'https://evil.invalid'}).status_code,403)
             for _ in range(5):
                 self.assertEqual(self.client.post('/api/live/chat',json={'text':'<b>hello</b>'}).status_code,200)

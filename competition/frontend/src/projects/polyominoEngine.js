@@ -2,12 +2,12 @@
 // tile and never receives a spawn. The normal numeric board engine intentionally
 // stays separate from this shape-aware movement model.
 import { nextRandom, seed32, ticketFloat } from './randomStreams.js';
+import { settleRigidTiles } from './rigidMovement.js';
 const DIRECTIONS = Object.freeze({
   up: [-1, 0], right: [0, 1], down: [1, 0], left: [0, -1],
 });
 
 const copyTile = tile => ({ id: tile.id, value: tile.value, cells: tile.cells.slice() });
-const sameCells = (left, right) => left.length === right.length && left.every((cell, index) => cell === right[index]);
 const sortedCells = cells => [...new Set(cells)].sort((a, b) => a - b);
 
 function shifted(cells, direction, rows, cols) {
@@ -22,13 +22,6 @@ function shifted(cells, direction, rows, cols) {
   return sortedCells(next);
 }
 
-function leadingEdge(tile, direction, cols) {
-  const positions = tile.cells.map(cell =>
-    direction === 'left' || direction === 'right' ? cell % cols : Math.floor(cell / cols));
-  return direction === 'left' || direction === 'up'
-    ? Math.min(...positions) : -Math.max(...positions);
-}
-
 function mergeCells(value, movingCells, candidate, targetCells) {
   if (value === 128) return sortedCells([...candidate, ...targetCells]);
   if (value === 64) return sortedCells([...movingCells, ...targetCells]);
@@ -37,31 +30,15 @@ function mergeCells(value, movingCells, candidate, targetCells) {
 
 export function movePolyominoTiles(tiles, direction, rows = 4, cols = 4) {
   if (!DIRECTIONS[direction]) return { changed: false, tiles: tiles.map(copyTile), score: 0, movements: [], merges: [] };
-  const ordered = tiles.map(copyTile).sort((a, b) =>
-    leadingEdge(a, direction, cols) - leadingEdge(b, direction, cols) || String(a.id).localeCompare(String(b.id)));
-  const settled = new Map();
-  const occupied = new Map();
-  const movements = [];
-  const merges = [];
-  let score = 0;
-  let changed = false;
-
-  for (const tile of ordered) {
-    let cells = tile.cells.slice();
-    let merge = null;
-    while (true) {
-      const candidate = shifted(cells, direction, rows, cols);
-      if (!candidate) break;
-      const blockers = [...new Set(candidate.map(cell => occupied.get(cell)).filter(Boolean))];
-      if (!blockers.length) {
-        cells = candidate;
-        continue;
-      }
-      if (blockers.length !== 1) break;
-      const target = blockers[0];
-      if (target.merged || target.value !== tile.value || tile.value >= 256) break;
+  const result = settleRigidTiles(tiles.map(copyTile), direction, {
+    cols,
+    step: tile => {
+      const cells = shifted(tile.cells, direction, rows, cols);
+      return cells && { cells };
+    },
+    merge: (tile, target, candidate) => {
+      if (target.value !== tile.value || tile.value >= 256) return null;
       const intersection = candidate.filter(cell => target.cells.includes(cell));
-      if (!intersection.length) break;
       let mergePosition = candidate;
       if (tile.value === 128 && intersection.length === 1) {
         const aligned = shifted(candidate, direction, rows, cols);
@@ -69,47 +46,17 @@ export function movePolyominoTiles(tiles, direction, rows = 4, cols = 4) {
         // alignment. Prefer the two-cell overlap when that position exists.
         if (aligned?.every(cell => target.cells.includes(cell))) mergePosition = aligned;
       }
-      const resultCells = mergeCells(tile.value, cells, mergePosition, target.cells);
+      const resultCells = mergeCells(tile.value, tile.cells, mergePosition, target.cells);
       // An ordinary merge occupies one cell, 64+64 keeps both source cells,
       // and 128+128 takes the union at the first overlapping position.
-      const result = {
+      return { tile: {
         id: `merge-${target.id}-${tile.id}`,
         value: tile.value * 2,
         cells: resultCells,
-        merged: true,
-      };
-      for (const cell of target.cells) occupied.delete(cell);
-      settled.delete(target.id);
-      settled.set(result.id, result);
-      for (const cell of result.cells) occupied.set(cell, result);
-      merge = { result, target, candidate: mergePosition };
-      score += result.value;
-      changed = true;
-      break;
-    }
-
-    if (merge) {
-      movements.push({ id: tile.id, from: tile.cells.slice(), to: merge.candidate.slice(), mergeInto: merge.result.id });
-      const targetMovement = movements.find(item => item.id === merge.target.id);
-      if (targetMovement) targetMovement.mergeInto = merge.result.id;
-      merges.push({ tile: copyTile(merge.result), sources: [merge.target.id, tile.id] });
-      continue;
-    }
-
-    if (!sameCells(tile.cells, cells)) changed = true;
-    const result = { ...tile, cells };
-    settled.set(result.id, result);
-    for (const cell of cells) occupied.set(cell, result);
-    movements.push({ id: tile.id, from: tile.cells.slice(), to: cells.slice() });
-  }
-
-  return {
-    changed,
-    tiles: [...settled.values()].map(copyTile),
-    score,
-    movements,
-    merges,
-  };
+      }, to: mergePosition, score: tile.value * 2 };
+    },
+  });
+  return { ...result, tiles: result.tiles.map(copyTile), merges: result.merges.map(item => ({ ...item, tile: copyTile(item.tile) })) };
 }
 
 export function hasPolyominoMove(tiles, rows = 4, cols = 4) {
