@@ -55,7 +55,7 @@ export function commandId() {
 }
 
 export const api = {
-  session: () => request('/api/session'),
+  session: (options) => request('/api/session', options),
   practiceAppearance: () => request('/api/practice/appearance'),
   practiceLeaderboard: (projectId) => request(`/api/practice/${encodeURIComponent(projectId)}/leaderboard`),
   submitPracticeResult: (projectId, result) => request(`/api/practice/${encodeURIComponent(projectId)}/results`, {

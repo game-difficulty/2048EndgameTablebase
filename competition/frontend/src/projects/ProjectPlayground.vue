@@ -6,6 +6,7 @@
         <a :href="competitionHomePath" aria-label="赛事中心"><span class="full-label">赛事中心</span><span class="compact-label" aria-hidden="true">赛事</span></a>
         <span v-if="sessionReady && practiceUser" class="practice-account">{{ practiceUser.display_name }}</span>
         <a v-else-if="sessionReady" :href="mainSiteUrl">登录</a>
+        <button class="session-sync" type="button" :disabled="sessionSyncing" @click="syncPracticeSession(true)">{{ sessionSyncing ? '同步中…' : '同步登录' }}</button>
         <b>tournament.2048tables.online</b>
         <button class="theme-toggle" type="button" :aria-label="practiceTheme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" :aria-pressed="practiceTheme === 'dark'" @click="toggleTheme">
           <svg v-if="practiceTheme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
@@ -112,6 +113,7 @@ import CargoBoard from './CargoBoard.vue';
 import { resolvePracticeAppearance } from './practiceAppearance.js';
 import { projectIconUrl } from '../../../shared/projectIcons.js';
 import { api } from '../api.js';
+import { getPracticeSession } from './practiceSession.js';
 
 const props = defineProps({ projectId: { type: String, default: '' } });
 const practiceThemeKey = 'tournament-practice-theme';
@@ -129,6 +131,18 @@ function toggleTheme() {
 }
 const competitionHomePath = String(import.meta.env.VITE_COMPETITION_HOME_PATH || '/test');
 const mainSiteUrl = String(import.meta.env.VITE_MAIN_SITE_URL || 'https://2048tables.online/');
+let sessionViewStorage;
+try { sessionViewStorage = window.localStorage; } catch { /* In-memory reuse still works. */ }
+const practiceSession = getPracticeSession({
+  storage: sessionViewStorage,
+  readSession: () => api.session({ timeoutMs: 5000 }),
+  origins: window.location.hostname === 'tournament.2048tables.online'
+    ? [new URL(mainSiteUrl).origin, 'https://play.2048tables.online', 'https://live.2048tables.online'] : [],
+  bridge: origin => fetch(`${origin}/api/auth/me`, {
+    mode: 'no-cors', credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(2500),
+  }),
+});
+const cachedSession = practiceSession.peek();
 const projects = PRACTICE_PROJECTS;
 function practiceTitle(project) { return project.title.replace(/（\d+×\d+）$/, ''); }
 const project = computed(() => projects.find(item => item.id === props.projectId) || null);
@@ -143,9 +157,13 @@ const leaderboard = ref(null);
 const leaderboardLoading = ref(true);
 const leaderboardError = ref('');
 const recordMessage = ref('');
-const practiceUser = ref(null);
+const practiceUser = ref(cachedSession.fresh ? cachedSession.user : null);
 const accountAppearance = ref(null);
-const sessionReady = ref(false);
+const sessionReady = ref(cachedSession.fresh);
+const sessionSyncing = ref(false);
+let leaderboardRequest = 0;
+let disposed = false;
+let reconciledSession = false;
 let runId = 0;
 let submittedRunId = -1;
 let timer = null;
@@ -173,51 +191,60 @@ function formatRecord(entry) {
   if (leaderboard.value?.metric === 'time') return formatElapsed(entry.result_value);
   return `${Number(entry.result_value).toLocaleString()}${leaderboard.value?.metric === 'deliveries' ? ' 块' : leaderboard.value?.metric === 'board_sum' ? '' : ' 分'}`;
 }
-async function syncPracticeSession() {
-  async function readSession() {
-    try {
-      practiceUser.value = (await api.session()).user;
-      return true;
-    } catch (error) {
-      return error.status || 0;
-    }
-  }
-  const initial = await readSession();
-  if (initial === 401 && window.location.hostname === 'tournament.2048tables.online') {
-    // Older main/play/live logins may still have a host-only cookie. Visiting
-    // their existing /me endpoint upgrades it to the shared parent-domain cookie.
-    for (const origin of [new URL(mainSiteUrl).origin, 'https://play.2048tables.online', 'https://live.2048tables.online']) {
-      try {
-        await fetch(`${origin}/api/auth/me`, {
-          mode: 'no-cors', credentials: 'include', cache: 'no-store',
-          signal: AbortSignal.timeout?.(2500),
-        });
-      } catch { /* An unavailable sibling site must not block practice. */ }
-      if (await readSession() === true) break;
-    }
-  }
+function clearPracticeLogin() {
+  practiceSession.clear();
+  practiceUser.value = null;
+  accountAppearance.value = null;
   sessionReady.value = true;
-  if (practiceUser.value) {
-    void api.practiceAppearance().then(appearance => {
-      if (practiceUser.value) accountAppearance.value = appearance;
-    }).catch(() => { /* Keep the default board palette if preferences are unavailable. */ });
+  if (leaderboard.value) leaderboard.value = { ...leaderboard.value, signed_in: false, my_best: null };
+}
+async function syncPracticeSession(force = false) {
+  if (sessionSyncing.value) return;
+  sessionSyncing.value = true;
+  const previousId = practiceUser.value?.id;
+  try {
+    const user = await practiceSession.sync({ force });
+    if (disposed) return;
+    practiceUser.value = user;
+    if (previousId !== user?.id) accountAppearance.value = null;
+    if (user) {
+      void api.practiceAppearance().then(appearance => {
+        if (!disposed && practiceUser.value?.id === user.id) accountAppearance.value = appearance;
+      }).catch(error => { if (error.status === 401 && !disposed) clearPracticeLogin(); });
+    }
+    // Refresh after a sibling upgrades its cookie, without hiding the public list.
+    if (force || previousId !== user?.id || (user && leaderboard.value?.signed_in === false)) {
+      void loadLeaderboard();
+    }
+  } catch {
+    // Network failure does not prove logout and must not block the public list.
+  } finally {
+    if (!disposed) { sessionReady.value = true; sessionSyncing.value = false; }
   }
 }
 async function loadLeaderboard() {
   if (!project.value) return;
   const projectId = project.value.id;
-  leaderboardLoading.value = true;
+  const request = ++leaderboardRequest;
+  leaderboardLoading.value = !leaderboard.value;
   leaderboardError.value = '';
   try {
     const result = await api.practiceLeaderboard(projectId);
-    if (project.value?.id === projectId) {
+    if (!disposed && request === leaderboardRequest && project.value?.id === projectId) {
       leaderboard.value = result;
+      if (!sessionSyncing.value) {
+        if (!result.signed_in && practiceUser.value) clearPracticeLogin();
+        else if (result.signed_in && !practiceUser.value && !reconciledSession) {
+          reconciledSession = true;
+          void syncPracticeSession(true);
+        }
+      }
       if (snapshot.value.finished) submitFinishedRun();
     }
   } catch {
-    if (project.value?.id === projectId) leaderboardError.value = '榜单暂不可用，不影响试玩。';
+    if (!disposed && request === leaderboardRequest && project.value?.id === projectId && !leaderboard.value) leaderboardError.value = '榜单暂不可用，不影响试玩。';
   } finally {
-    if (project.value?.id === projectId) leaderboardLoading.value = false;
+    if (!disposed && request === leaderboardRequest && project.value?.id === projectId) leaderboardLoading.value = false;
   }
 }
 async function submitFinishedRun() {
@@ -238,6 +265,7 @@ async function submitFinishedRun() {
     if (project.value?.id === projectId) leaderboard.value = updated;
     if (runId === thisRun) recordMessage.value = updated.improved ? '个人最佳已更新。' : '本次未超过个人最佳。';
   } catch (error) {
+    if (error.status === 401 && !disposed) clearPracticeLogin();
     if (runId === thisRun) recordMessage.value = error.status === 401 ? '登录已过期，本次未记录。' : '成绩记录失败，不影响试玩。';
   }
 }
@@ -302,11 +330,12 @@ function keydown(event) {
   // Practice may always start a fresh run; match-only restart restrictions do not apply here.
   if (event.key.toLowerCase() === 'r' && !event.repeat) { event.preventDefault(); restart(); }
 }
-onMounted(() => { createGame(); syncPracticeSession().finally(loadLeaderboard); timer = window.setInterval(() => { now.value = performance.now(); }, 16); window.addEventListener('keydown', keydown); });
-onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTimer); window.clearTimeout(finishTimer); window.clearTimeout(thinkingTimer); window.removeEventListener('keydown', keydown); });
+onMounted(() => { createGame(); void loadLeaderboard(); void syncPracticeSession(); timer = window.setInterval(() => { now.value = performance.now(); }, 16); window.addEventListener('keydown', keydown); });
+onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.clearTimeout(diceTimer); window.clearTimeout(finishTimer); window.clearTimeout(thinkingTimer); window.removeEventListener('keydown', keydown); });
 </script>
 
 <style scoped>
+.session-sync{padding:0;border:0;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}.session-sync:disabled{opacity:.55;cursor:default}
 .project-lab .game-hud{position:static;z-index:auto;display:flex;grid-template-columns:none;align-items:stretch;min-height:0;padding:0;color:inherit;background:transparent;border:0;box-shadow:none}
 .project-lab .game-hud>div{color:inherit}
 .project-art { display: block; flex: none; border-radius: 8px; object-fit: cover; }
