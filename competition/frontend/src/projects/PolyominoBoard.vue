@@ -4,9 +4,11 @@
     class="poly-board"
     :style="{ '--rows': rows, '--cols': cols, '--board-slide-duration': `${BOARD_SLIDE_DURATION}ms`, '--board-pop-duration': `${BOARD_POP_DURATION}ms`, aspectRatio: `${cols} / ${rows}` }"
     tabindex="0"
-    @pointerdown="pointerDown"
-    @pointerup="pointerUp"
-    @pointercancel="pointer = null"
+    @pointerdown="swipe.down"
+    @pointermove="swipe.drag"
+    @pointerup="swipe.up"
+    @pointercancel="swipe.cancel"
+    @lostpointercapture="swipe.cancel"
   >
     <div v-for="index in rows * cols" :key="`cell-${index}`" class="poly-cell" :style="cellStyle(index - 1)" />
     <div
@@ -26,6 +28,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { createBoardSwipe } from './boardSwipe.js';
 import { defaultTileValueClass, tileLabelSize } from './practiceAppearance.js';
 import {
   BOARD_ANIMATION_DURATION,
@@ -47,7 +50,8 @@ const rows = computed(() => Number(props.snapshot?.rows || 4));
 const cols = computed(() => Number(props.snapshot?.cols || 4));
 const activeTiles = ref([]);
 const GAP = 2.25;
-let pointer = null;
+const swipe = createBoardSwipe(() => props.disabled, direction => emit('move', direction));
+onBeforeUnmount(() => swipe.cancel());
 let timers = [];
 let animationEpoch = 0;
 
@@ -227,18 +231,6 @@ watch(() => props.snapshot?.revision, async () => {
   }, BOARD_ANIMATION_DURATION));
 }, { immediate: true });
 
-function pointerDown(event) {
-  if (props.disabled || !event.isPrimary) return;
-  pointer = { x: event.clientX, y: event.clientY, id: event.pointerId };
-  event.currentTarget.setPointerCapture?.(event.pointerId);
-}
-function pointerUp(event) {
-  if (!pointer || pointer.id !== event.pointerId || props.disabled) return;
-  const dx = event.clientX - pointer.x, dy = event.clientY - pointer.y;
-  pointer = null;
-  if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
-  emit('move', Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
-}
 onBeforeUnmount(() => { ++animationEpoch; clearTimers(); });
 </script>
 

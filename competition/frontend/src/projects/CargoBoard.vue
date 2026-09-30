@@ -1,5 +1,5 @@
 <template>
-  <div ref="stage" class="cargo-stage" tabindex="0" @pointerdown="pointerDown" @pointerup="pointerUp" @pointercancel="pointer = null">
+  <div ref="stage" class="cargo-stage" tabindex="0" @pointerdown="swipe.down" @pointermove="swipe.drag" @pointerup="swipe.up" @pointercancel="swipe.cancel" @lostpointercapture="swipe.cancel">
     <div class="cargo-port cargo-entry" aria-label="入口">
       <span v-for="cell in 4" :key="`entry-${cell}`" :style="portCellStyle(cell - 1, true)" />
       <b>入口</b>
@@ -21,6 +21,7 @@
 
 <script setup>
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { createBoardSwipe } from './boardSwipe.js';
 import TournamentBoard from './TournamentBoard.vue';
 import { CARGO_SHAPES } from './cargoEngine.js';
 import { BOARD_SLIDE_DURATION } from './boardMotion.js';
@@ -35,7 +36,8 @@ const emit = defineEmits(['move']);
 const stage = ref(null);
 const displayCargo = ref(null);
 const cargoInstant = ref(true);
-let pointer = null;
+const swipe = createBoardSwipe(() => props.disabled, direction => emit('move', direction));
+onBeforeUnmount(() => swipe.cancel());
 let revealTimer = null;
 let animationEpoch = 0;
 
@@ -138,18 +140,6 @@ watch(() => props.snapshot?.revision, async () => {
   }
 }, { immediate: true });
 
-function pointerDown(event) {
-  if (props.disabled || !event.isPrimary || event.target.closest('.tournament-board')) return;
-  pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
-  event.currentTarget.setPointerCapture?.(event.pointerId);
-}
-function pointerUp(event) {
-  if (!pointer || pointer.id !== event.pointerId || props.disabled) return;
-  const dx = event.clientX - pointer.x, dy = event.clientY - pointer.y;
-  pointer = null;
-  if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
-  emit('move', Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
-}
 onBeforeUnmount(() => { ++animationEpoch; clearTimeout(revealTimer); });
 </script>
 

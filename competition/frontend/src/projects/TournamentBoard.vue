@@ -4,9 +4,11 @@
     :class="['tournament-board', { mirror: mirrorPortals, irregular: irregularShape, 'quake-shape': aftershock, 'quake-active': quakeVisible }]"
     :style="boardStyle"
     tabindex="0"
-    @pointerdown="pointerDown"
-    @pointerup="pointerUp"
-    @pointercancel="pointer = null"
+    @pointerdown="swipe.down"
+    @pointermove="swipe.drag"
+    @pointerup="swipe.up"
+    @pointercancel="swipe.cancel"
+    @lostpointercapture="swipe.cancel"
   >
     <div
       v-for="(value, index) in board"
@@ -50,6 +52,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { createBoardSwipe } from './boardSwipe.js';
 import { ISLAND, WALL } from './engine.js';
 import { defaultTileValueClass, tileLabelSize } from './practiceAppearance.js';
 import {
@@ -103,7 +106,8 @@ const quakeVisible = ref(false);
 const quakeCells = ref([]);
 const quakeMoveTiles = ref([]);
 const quakePhase = ref(0);
-let pointer = null;
+const swipe = createBoardSwipe(() => props.disabled, direction => emit('move', direction));
+onBeforeUnmount(() => swipe.cancel());
 let timers = [];
 let animationEpoch = 0;
 let tileIdCounter = 0;
@@ -431,19 +435,6 @@ function tileClass(value) {
 }
 function tileLabel(value) { return value === WALL || value === ISLAND ? '' : value; }
 
-function pointerDown(event) {
-  if (props.disabled || !event.isPrimary) return;
-  pointer = { x: event.clientX, y: event.clientY, id: event.pointerId };
-  event.currentTarget.setPointerCapture?.(event.pointerId);
-}
-function pointerUp(event) {
-  if (!pointer || pointer.id !== event.pointerId || props.disabled) return;
-  const dx = event.clientX - pointer.x;
-  const dy = event.clientY - pointer.y;
-  pointer = null;
-  if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
-  emit('move', Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
-}
 onBeforeUnmount(() => { animationEpoch += 1; clearTimers(); });
 </script>
 
