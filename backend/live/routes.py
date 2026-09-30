@@ -464,8 +464,8 @@ def resolve_hub(connection=None):
     return _dynamic_hub(room_id)
 
 
-async def _reconcile_dynamic_room(room_id, runtime, data, now):
-    if not data:
+async def _reconcile_dynamic_room(room_id, runtime, definition, now):
+    if not definition:
         if not runtime.room_ended_notified:
             runtime.room_ended_notified = True
             runtime.broadcast(dict(type='room_ended', room_id=room_id,
@@ -473,8 +473,17 @@ async def _reconcile_dynamic_room(room_id, runtime, data, now):
         if runtime.producer:
             with contextlib.suppress(Exception):
                 await runtime.producer.close(code=1008)
-        if not runtime.viewers:
+        if not runtime.viewers and dynamic_hubs.get(room_id) is runtime:
             dynamic_hubs.pop(room_id, None)
+        return
+    metadata = definition.metadata if isinstance(definition, RoomDefinition) else definition
+    if int(runtime.room.metadata.get('generation', 0)) != int(metadata.get('generation', 0)):
+        replacement = _dynamic_hub(room_id)
+        if replacement is not runtime:
+            # Existing websocket handlers retain the old hub: reconnect to the new one.
+            for viewer in tuple(runtime.viewers):
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(viewer.close(code=1012), 5)
         return
     if runtime.producer and now - runtime.last_seen >= 20:
         with contextlib.suppress(Exception):
@@ -498,6 +507,7 @@ async def dynamic_maintenance():
         active = {item['room_id']: item for item in await asyncio.to_thread(human_rooms.active_rooms)}
         for room_id, runtime in items:
             await _reconcile_dynamic_room(room_id, runtime, active.get(room_id), now)
+        items = list(dynamic_hubs.items())
         if items:
             # Recovery/activity work is deliberately staggered across dynamic rooms.
             _, runtime = items[cursor % len(items)]
