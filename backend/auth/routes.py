@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from email.utils import format_datetime
-import logging
-import sqlite3
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 
 from backend.quota.service import grant_weekly_tokens_if_due
-from backend.auth.daily_activity import record_daily_visit, site_from_host
+from backend.auth.daily_activity import bind_activity_account
 
 from .dependencies import (
     auth_tokens_from_request,
@@ -41,14 +39,6 @@ from .principal import ActorRef
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-logger = logging.getLogger(__name__)
-
-
-def _record_account_visit(request: Request, user_id: int) -> None:
-    try:
-        record_daily_visit(user_id, site_from_host(request.headers.get('host', '')))
-    except sqlite3.Error:
-        logger.exception('Could not record daily account visit')
 
 
 def _set_session_cookie(response: Response, token: str, expires_at: str, request: Request | None = None) -> None:
@@ -126,7 +116,6 @@ async def me(request: Request, response: Response):
     response.headers['Cache-Control'] = 'no-store'
     user = current_user_from_request(request)
     if user is not None:
-        _record_account_visit(request, int(user['id']))
         token = getattr(request.state, 'auth_session_token', None)
         session_sync = {}
         if (shared_cookie_domain(request) and token and user.get('session_expires_at')
@@ -187,7 +176,7 @@ async def register(request: Request, response: Response, payload: dict = Body(..
             ip_address=client_ip(request),
         )
         _set_session_cookie(response, result["token"], result["expires_at"], request)
-        _record_account_visit(request, int(result['user']['id']))
+        bind_activity_account(request, result['user']['id'])
         return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -203,7 +192,7 @@ async def login(request: Request, response: Response, payload: dict = Body(...))
             ip_address=client_ip(request),
         )
         _set_session_cookie(response, result["token"], result["expires_at"], request)
-        _record_account_visit(request, int(result['user']['id']))
+        bind_activity_account(request, result['user']['id'])
         return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -234,7 +223,7 @@ async def reset_password_route(request: Request, response: Response, payload: di
             ip_address=client_ip(request),
         )
         _set_session_cookie(response, result["token"], result["expires_at"], request)
-        _record_account_visit(request, int(result['user']['id']))
+        bind_activity_account(request, result['user']['id'])
         return _authenticated_response(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

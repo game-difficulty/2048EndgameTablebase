@@ -1,7 +1,7 @@
 """Idempotently backfill daily active accounts from existing action records.
 
-Run periodically; site visits are also recorded immediately in /api/auth/me
-and the Live watch socket. Historical anonymous browsing cannot be recovered.
+Run periodically; authenticated traffic is also recorded by shared middleware.
+Historical browsing without action records cannot be recovered.
 """
 
 from __future__ import annotations
@@ -35,12 +35,20 @@ AUTH_SOURCES = (
     ('live_red_claims', 'created_at', 'user_id', 'live', None),
 )
 
+COMPETITION_SOURCES = (
+    ('competition_commands', 'created_at', 'user_id'),
+    ('tournament_enrollment_audit', 'created_at', 'actor_user_id'),
+    ('tournament_roster_audit', 'created_at', 'actor_user_id'),
+    ('practice_bests', 'achieved_at', 'user_id'),
+)
+
 
 def _cutoff_utc(first_day: date) -> datetime:
     return datetime.combine(first_day, datetime.min.time(), BEIJING).astimezone(timezone.utc)
 
 
-def refresh(*, first_day: date, last_day: date, play_db: Path | None = None) -> dict:
+def refresh(*, first_day: date, last_day: date, play_db: Path | None = None,
+            competition_db: Path | None = None) -> dict:
     if first_day > last_day:
         raise ValueError('first_day must not exceed last_day')
     start = _cutoff_utc(first_day)
@@ -87,6 +95,25 @@ def refresh(*, first_day: date, last_day: date, play_db: Path | None = None) -> 
             activity.update((day, user_id, 'play') for day, user_id in entries
                             if day and user_id in valid_users)
 
+    competition_path = Path(competition_db) if competition_db is not None else (
+        Path(os.environ['COMPETITION_DB']) if os.getenv('COMPETITION_DB') else None)
+    if competition_db is not None and not competition_path.is_file():
+        raise FileNotFoundError(competition_path)
+    if competition_path is not None and competition_path.is_file():
+        with closing(sqlite3.connect(competition_path.resolve().as_uri() + '?mode=ro', uri=True)) as source:
+            tables = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            for table, timestamp, actor in COMPETITION_SOURCES:
+                if table not in tables:
+                    continue
+                entries = source.execute(
+                    f"SELECT DISTINCT date({timestamp}, '+8 hours'), {actor} FROM {table} "
+                    f"WHERE julianday({timestamp}) >= julianday(?) "
+                    f"AND julianday({timestamp}) < julianday(?) AND {actor} IS NOT NULL",
+                    (start.isoformat(), end.isoformat()),
+                )
+                activity.update((day, user_id, 'tournament') for day, user_id in entries
+                                if day and user_id in valid_users)
+
     with auth_db() as db:
         before = db.total_changes
         db.executemany(
@@ -109,11 +136,12 @@ def main() -> None:
     parser.add_argument('--since', type=date.fromisoformat)
     parser.add_argument('--through', type=date.fromisoformat)
     parser.add_argument('--play-db', type=Path)
+    parser.add_argument('--competition-db', type=Path)
     args = parser.parse_args()
     last_day = args.through or datetime.now(BEIJING).date()
     first_day = args.since or last_day - timedelta(days=max(1, args.days) - 1)
     print(json.dumps(refresh(first_day=first_day, last_day=last_day,
-                             play_db=args.play_db), ensure_ascii=False))
+                             play_db=args.play_db, competition_db=args.competition_db), ensure_ascii=False))
 
 
 if __name__ == '__main__':

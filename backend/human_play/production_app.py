@@ -14,6 +14,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 
 from backend.admin.routes import router as admin_router
 from backend.auth.db import init_auth_db
+from backend.auth.activity_middleware import DailyActivityMiddleware
 from backend.auth.dependencies import require_user
 from backend.auth.routes import router as auth_router
 from backend.cloud_analysis_jobs import (
@@ -104,6 +105,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="2048 Play API", lifespan=lifespan)
+app.add_middleware(DailyActivityMiddleware, site='play')
 app.add_middleware(DisplayCompression)
 app.include_router(auth_router)
 app.include_router(admin_router)

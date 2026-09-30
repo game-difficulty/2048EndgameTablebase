@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from backend.auth.activity_middleware import DailyActivityMiddleware
 
 from .auth import principal_from_socket_auth, principal_from_websocket
 from .config import load_settings
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.competition_settings = settings
+    app.add_middleware(DailyActivityMiddleware, site='tournament')
     app.state.competition_service = service
     app.state.practice_leaderboard = PracticeLeaderboard(database)
     app.state.competition_hub = hub
@@ -106,7 +108,7 @@ def create_app() -> FastAPI:
             if message.get("type") != "authenticate":
                 await websocket.close(code=4401)
                 return
-            principal = principal_from_socket_auth(message.get("data") or {}, settings)
+            principal = principal_from_socket_auth(message.get("data") or {}, settings, websocket)
         if principal is None:
             await websocket.close(code=4401)
             return

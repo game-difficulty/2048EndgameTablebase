@@ -11,6 +11,7 @@ from .guest_service import (
     authenticate_guest_token,
 )
 from .principal import ActorRef
+from .daily_activity import bind_activity_account
 from .service import SESSION_COOKIE_NAME, SHARED_SESSION_COOKIE_NAME, authenticate_session_token
 from .service import authenticate_session_identity
 
@@ -20,6 +21,7 @@ def current_identity_from_request(request: Request):
         user = authenticate_session_identity(token)
         if user is not None:
             request.state.auth_session_token = token
+            bind_activity_account(request, user['id'])
             return user
     return None
 
@@ -50,6 +52,7 @@ def current_user_from_request(request: Request) -> dict[str, Any] | None:
         user = authenticate_session_token(token)
         if user is not None:
             request.state.auth_session_token = token
+            bind_activity_account(request, user['id'])
             return user
     return None
 
@@ -121,8 +124,12 @@ def current_user_from_websocket(websocket: WebSocket) -> dict[str, Any] | None:
     if shared_cookie_domain(websocket):
         user = authenticate_session_token(websocket.cookies.get(SHARED_SESSION_COOKIE_NAME))
         if user is not None:
+            bind_activity_account(websocket, user['id'])
             return user
-    return authenticate_session_token(websocket.cookies.get(SESSION_COOKIE_NAME))
+    user = authenticate_session_token(websocket.cookies.get(SESSION_COOKIE_NAME))
+    if user is not None:
+        bind_activity_account(websocket, user['id'])
+    return user
 
 
 def current_guest_from_websocket(websocket: WebSocket) -> dict[str, Any] | None:

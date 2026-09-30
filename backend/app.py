@@ -31,6 +31,8 @@ from backend.actions import Action, Message
 from backend.admin.routes import router as admin_router
 from backend.auth.access_policy import AccessLevel, actor_satisfies, websocket_access_level
 from backend.auth.db import init_auth_db
+from backend.auth.activity_middleware import DailyActivityMiddleware
+from backend.auth.daily_activity import bind_activity_account
 from backend.auth.dependencies import (
     client_ip,
     current_guest_from_websocket,
@@ -306,6 +308,7 @@ async def app_lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=app_lifespan)
+app.add_middleware(DailyActivityMiddleware)
 app.add_middleware(DisplayCompression)
 app.include_router(auth_router)
 app.include_router(guest_router)
@@ -559,6 +562,7 @@ def _bind_or_restore_auth_user(
 ):
     restored_session = manager.restore_detached_session(websocket, auth_user) or session
     _bind_auth_user(restored_session, auth_user)
+    bind_activity_account(websocket, auth_user['id'])
     return restored_session
 
 

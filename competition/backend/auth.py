@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from fastapi import HTTPException, Request, WebSocket
+from backend.auth.daily_activity import bind_activity_account
 
 from .config import CompetitionSettings
 from .domain import Principal
@@ -60,6 +61,7 @@ def principal_from_request(request: Request, settings: CompetitionSettings) -> P
     for token in tokens:
         principal = _authenticate_token(token)
         if principal is not None:
+            bind_activity_account(request, principal.user_id)
             return principal
     if settings.allow_dev_auth:
         principal = _dev_principal(request.headers.get("x-competition-dev-user"))
@@ -76,15 +78,19 @@ def principal_from_websocket(websocket: WebSocket, settings: CompetitionSettings
     ):
         principal = _authenticate_token(token)
         if principal is not None:
+            bind_activity_account(websocket, principal.user_id)
             return principal
     if settings.allow_dev_auth:
         return _dev_principal(websocket.query_params.get("dev_user"))
     return None
 
 
-def principal_from_socket_auth(payload: dict[str, Any], settings: CompetitionSettings) -> Principal | None:
+def principal_from_socket_auth(payload: dict[str, Any], settings: CompetitionSettings,
+                               websocket: WebSocket | None = None) -> Principal | None:
     principal = _authenticate_token(str(payload.get("token") or ""))
     if principal is not None:
+        if websocket is not None:
+            bind_activity_account(websocket, principal.user_id)
         return principal
     if settings.allow_dev_auth:
         return _dev_principal(str(payload.get("dev_user") or ""))
