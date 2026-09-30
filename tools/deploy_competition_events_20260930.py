@@ -20,6 +20,8 @@ BACKUP = Path('/var/lib/2048tables/backups') / RELEASE
 DB = Path('/var/lib/2048tables/competition-test/competition.sqlite3')
 NGINX = Path('/etc/nginx/sites-enabled/tournament.2048tables.online').resolve()
 SERVICE = '2048tables-competition-test.service'
+ENV = Path('/etc/2048tables/competition-test.env')
+PLAY_DB = Path('/var/lib/2048tables/play/human.sqlite3')
 OLD = '20260929-competition-predictions-r1'
 
 def run(*args):
@@ -70,11 +72,13 @@ def main():
     assert oldback.name==OLD and oldfront.name==OLD
     assert not BACKUP.exists()
     rooms(args.allow_waiting)
+    assert PLAY_DB.is_file()
     assert NGINX.read_text().count('location = /test/ { return 308 /test; }')==1
     if args.check_only:
         print('Preflight OK');return
     BACKUP.mkdir(parents=True)
     shutil.copy2(NGINX,BACKUP/'nginx.conf')
+    shutil.copy2(ENV,BACKUP/'competition-test.env')
     newback,newfront=BACK/'releases'/RELEASE,FRONT/'releases'/RELEASE
     shutil.copytree(oldback,newback)
     shutil.copytree(oldfront,newfront)
@@ -91,6 +95,9 @@ def main():
             with sqlite3.connect(BACKUP/'competition.sqlite3') as target:
                 source.backup(target)
         switch(BACK,newback)
+        env = ENV.read_text()
+        lines = [line for line in env.splitlines() if not line.startswith('HUMAN_PLAY_DB=')]
+        ENV.write_text('\n'.join(lines) + '\nHUMAN_PLAY_DB=' + str(PLAY_DB) + '\n')
         run('systemctl','start',SERVICE)
         health()
         switch(FRONT,newfront)
@@ -103,6 +110,7 @@ def main():
     except BaseException:
         switch(BACK,oldback);switch(FRONT,oldfront)
         shutil.copy2(BACKUP/'nginx.conf',NGINX)
+        shutil.copy2(BACKUP/'competition-test.env',ENV)
         run('nginx','-t');run('systemctl','reload','nginx')
         run('systemctl','restart',SERVICE)
         # Additive schema changes are retained; never overwrite live data during rollback.

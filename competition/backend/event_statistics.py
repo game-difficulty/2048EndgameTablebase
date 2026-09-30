@@ -1,13 +1,23 @@
 """Read-only Play results integration. No replay blobs or game simulation."""
 import json
+import math
+import os
+from pathlib import Path
 import sqlite3
 import threading
 import time
 from contextlib import closing
 from datetime import datetime, timezone
 
-from backend.human_play.rating import top_rating
 from .errors import CompetitionError
+
+
+def top_rating(variant, board_sums):
+    """Pinned 3x3 formula; Play is deployed separately, not a runtime dependency."""
+    if variant != '3x3':
+        raise ValueError('Unsupported event rating variant')
+    values = list(board_sums)
+    return 800 * math.log2(sum(values) / len(values)) - 5468
 
 
 def readonly(path):
@@ -27,11 +37,12 @@ def accounts(user_ids):
 
 
 def play_results(user_ids, start, end):
-    from backend.human_play.store import db_path
+    from backend.auth.db import get_auth_db_path
     if not user_ids:
         return {}
     try:
-        with closing(readonly(db_path())) as db:
+        path = Path(os.environ.get('HUMAN_PLAY_DB') or get_auth_db_path().with_name('human-play.sqlite3'))
+        with closing(readonly(path)) as db:
             db.execute('BEGIN')
             # Same native eligibility as Play ranking; imported/manual/Verse runs are never eligible here.
             result = {}
