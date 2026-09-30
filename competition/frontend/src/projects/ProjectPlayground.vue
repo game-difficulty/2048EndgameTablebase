@@ -1,97 +1,98 @@
 <template>
   <div :class="['project-lab', { 'is-dark': practiceTheme === 'dark' }]">
     <header class="lab-header">
-      <a class="lab-brand" href="/practice"><span>20</span><strong>2048 赛事项目试玩</strong></a>
+      <a class="lab-brand" href="/practice"><span>20</span><strong>{{ $t("2048 赛事项目试玩") }}</strong></a>
       <nav>
-        <a :href="competitionHomePath" aria-label="赛事中心"><span class="full-label">赛事中心</span><span class="compact-label" aria-hidden="true">赛事</span></a>
+        <a :href="competitionHomePath" :aria-label='$t("赛事中心")'><span class="full-label">{{ $t("赛事中心") }}</span><span class="compact-label" aria-hidden="true">{{ $t("赛事") }}</span></a>
         <span v-if="sessionReady && practiceUser" class="practice-account">{{ practiceUser.display_name }}</span>
-        <a v-else-if="sessionReady" :href="mainSiteUrl">登录</a>
-        <button class="session-sync" type="button" :disabled="sessionSyncing" @click="syncPracticeSession(true)">{{ sessionSyncing ? '同步中…' : '同步登录' }}</button>
+        <a v-else-if="sessionReady" :href="mainSiteUrl">{{ $t("登录") }}</a>
+        <button class="session-sync" type="button" :disabled="sessionSyncing" @click="syncPracticeSession(true)">{{ $t(sessionSyncing ? '同步中…' : '同步登录') }}</button>
         <b>tournament.2048tables.online</b>
-        <button class="theme-toggle" type="button" :aria-label="practiceTheme === 'dark' ? '切换为浅色模式' : '切换为深色模式'" :aria-pressed="practiceTheme === 'dark'" @click="toggleTheme">
+        <LanguageSwitch />
+        <button class="theme-toggle" type="button" :aria-label="$t(practiceTheme === 'dark' ? '切换为浅色模式' : '切换为深色模式')" :aria-pressed="practiceTheme === 'dark'" @click="toggleTheme">
           <svg v-if="practiceTheme === 'dark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
           <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z"/></svg>
-          <span>{{ practiceTheme === 'dark' ? '浅色' : '深色' }}</span>
+          <span>{{ $t(practiceTheme === 'dark' ? '浅色' : '深色') }}</span>
         </button>
       </nav>
     </header>
 
     <main v-if="!project" class="project-index">
-      <section class="index-intro"><p>TOURNAMENT PROJECT LAB</p><h1>比赛项目试玩</h1><span>以下页面用于举办方验收规则、选手熟悉操作。试玩成绩不会进入正式比赛。</span></section>
+      <section class="index-intro"><p>TOURNAMENT PROJECT LAB</p><h1>{{ $t("比赛项目试玩") }}</h1><span>{{ $t("以下页面用于举办方验收规则、选手熟悉操作。试玩成绩不会进入正式比赛。") }}</span></section>
       <div class="project-list">
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" class="project-entry">
-          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ item.displayOrder }}</small><h2>{{ practiceTitle(item) }}</h2><p>{{ item.description }}</p><footer><span>{{ item.boardLabel || `${item.rows}×${item.cols}` }}</span><span class="metric-tag">{{ item.race ? 'Faster' : 'Higher' }}</span><b>开始试玩 →</b></footer>
+          <img class="project-art entry-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>PROJECT {{ $t(item.displayOrder) }}</small><h2>{{ $t(practiceTitle(item)) }}</h2><p>{{ $t(item.description) }}</p><footer><span>{{ $t(item.boardLabel || `${item.rows}×${item.cols}`) }}</span><span class="metric-tag">{{ $t(item.race ? 'Faster' : 'Higher') }}</span><b>{{ $t("开始试玩 →") }}</b></footer>
         </a>
       </div>
     </main>
 
     <main v-else class="play-page">
       <aside class="project-rail">
-        <a href="/practice" class="rail-back">← 全部项目</a>
+        <a href="/practice" class="rail-back">{{ $t("← 全部项目") }}</a>
         <a v-for="item in projects" :key="item.id" :href="item.practicePath" :class="{ active: item.id === project.id }">
-          <img class="project-art rail-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>{{ item.displayOrder }}</small><span>{{ item.shortTitle }}</span>
+          <img class="project-art rail-art" :src="projectIconUrl(item.id, practiceTheme)" alt="" /><small>{{ $t(item.displayOrder) }}</small><span>{{ $t(item.shortTitle) }}</span>
         </a>
       </aside>
 
       <header class="project-heading">
         <img class="project-art heading-art" :src="projectIconUrl(project.id, practiceTheme)" alt="" />
-        <div class="heading-copy"><p>PROJECT {{ project.displayOrder }} · PRACTICE</p><h1>{{ practiceTitle(project) }}</h1></div>
-        <div class="practice-tag">单人试玩<br><small>{{ !sessionReady ? '正在同步登录状态' : practiceUser ? '已登录' : '游客' }}</small></div>
-        <div class="project-summary">{{ project.description }}</div>
+        <div class="heading-copy"><p>PROJECT {{ $t(project.displayOrder) }} · PRACTICE</p><h1>{{ $t(practiceTitle(project)) }}</h1></div>
+        <div class="practice-tag">{{ $t("单人试玩") }}<br><small>{{ $t(!sessionReady ? '正在同步登录状态' : practiceUser ? '已登录' : '游客') }}</small></div>
+        <div class="project-summary">{{ $t(project.description) }}</div>
       </header>
 
       <section class="play-main">
         <div class="game-shell">
           <section class="game-hud">
-            <div><small>用时</small><strong class="timer">{{ elapsedText }}</strong></div>
-            <div><small>{{ project.cargoTransport ? '已送出' : '得分' }}</small><strong>{{ snapshot.score.toLocaleString() }}</strong></div>
-            <div><small>步数</small><strong>{{ snapshot.moves }}</strong></div>
-            <div v-if="project.tileLimit"><small>方块数量</small><strong>{{ tileCount }} / {{ project.tileLimit }}</strong></div>
-            <div v-if="project.sealEveryMoves"><small>距下次轮换</small><strong>{{ snapshot.nextSealIn }} 步</strong></div>
-            <div v-if="project.resultMetric === 'boardSum' || project.targetSum"><small>盘面和</small><strong>{{ snapshot.boardSum }}</strong></div>
-            <div v-if="project.targetTile"><small>{{ project.targetTile }} 数量</small><strong>{{ snapshot.targetCount }} / {{ project.targetCount }}</strong></div>
+            <div><small>{{ $t("用时") }}</small><strong class="timer">{{ $t(elapsedText) }}</strong></div>
+            <div><small>{{ $t(project.cargoTransport ? '已送出' : '得分') }}</small><strong>{{ $t(snapshot.score.toLocaleString()) }}</strong></div>
+            <div><small>{{ $t("步数") }}</small><strong>{{ $t(snapshot.moves) }}</strong></div>
+            <div v-if="project.tileLimit"><small>{{ $t("方块数量") }}</small><strong>{{ $t(tileCount) }} / {{ $t(project.tileLimit) }}</strong></div>
+            <div v-if="project.sealEveryMoves"><small>{{ $t("距下次轮换") }}</small><strong>{{ $t(snapshot.nextSealIn) }}{{ $t(" 步") }}</strong></div>
+            <div v-if="project.resultMetric === 'boardSum' || project.targetSum"><small>{{ $t("盘面和") }}</small><strong>{{ $t(snapshot.boardSum) }}</strong></div>
+            <div v-if="project.targetTile"><small>{{ $t(project.targetTile) }}{{ $t(" 数量") }}</small><strong>{{ $t(snapshot.targetCount) }} / {{ $t(project.targetCount) }}</strong></div>
           </section>
 
           <div class="board-column">
             <CargoBoard v-if="project.cargoTransport" :snapshot="snapshot" :disabled="snapshot.finished" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
             <PolyominoBoard v-else-if="project.polyomino || project.specialRule" :snapshot="snapshot" :disabled="snapshot.finished" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
             <TournamentBoard v-else :snapshot="snapshot" :mirror-portals="project.mirrorPortals" :irregular-shape="project.shapeShifter || project.geometryVariant === 'aftershock'" :aftershock="project.geometryVariant === 'aftershock'" :sealed-cells="snapshot.sealedCells" :disabled="snapshot.finished || locked" :tile-styles="resolvedAppearance.tileStyles" :font-scale="resolvedAppearance.fontScale" @move="move" />
-            <div v-if="diceVisible" class="dice-curtain"><div class="die" :class="`face-${snapshot.dice}`"><i v-for="dot in 9" :key="dot"></i></div><strong>掷出 {{ snapshot.dice }} 点</strong><span>{{ dicePlacement }}</span></div>
-            <div v-if="thinking" class="thinking" role="status"><span></span>AI 思考中</div>
-            <div v-if="finishVisible" class="finish-panel" role="dialog" aria-label="本次试玩结果">
-              <button class="finish-close" type="button" aria-label="关闭结果浮窗" @click="dismissFinish">×</button>
-              <small>{{ snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'tile_limit' ? '方块超限' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT' }}</small><h2>{{ snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'tile_limit' ? '超过12块，本次结束' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束' }}</h2><strong>{{ project.race ? elapsedText : project.resultMetric === 'boardSum' ? `盘面和 ${snapshot.boardSum.toLocaleString()}` : project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : `${snapshot.score.toLocaleString()} 分` }}</strong><span v-if="!project.race">用时 {{ elapsedText }}</span><button type="button" @click="restart">再试一次</button>
+            <div v-if="diceVisible" class="dice-curtain"><div class="die" :class="`face-${snapshot.dice}`"><i v-for="dot in 9" :key="dot"></i></div><strong>{{ $t("掷出 ") }}{{ $t(snapshot.dice) }}{{ $t(" 点") }}</strong><span>{{ $t(dicePlacement) }}</span></div>
+            <div v-if="thinking" class="thinking" role="status"><span></span>{{ $t("AI 思考中") }}</div>
+            <div v-if="finishVisible" class="finish-panel" role="dialog" :aria-label='$t("本次试玩结果")'>
+              <button class="finish-close" type="button" :aria-label='$t("关闭结果浮窗")' @click="dismissFinish">×</button>
+              <small>{{ $t(snapshot.outcome === 'target_reached' ? 'TARGET REACHED' : snapshot.outcome === 'tile_limit' ? '方块超限' : snapshot.outcome === 'no_moves' ? 'NO MORE MOVES' : 'TIME LIMIT') }}</small><h2>{{ $t(snapshot.outcome === 'target_reached' ? '完成目标' : snapshot.outcome === 'tile_limit' ? '超过12块，本次结束' : snapshot.outcome === 'no_moves' ? '本次试玩结束' : '运输结束') }}</h2><strong>{{ $t(project.race ? elapsedText : project.resultMetric === 'boardSum' ? `盘面和 ${snapshot.boardSum.toLocaleString()}` : project.cargoTransport ? `${snapshot.score.toLocaleString()} 块` : `${snapshot.score.toLocaleString()} 分`) }}</strong><span v-if="!project.race">{{ $t("用时 ") }}{{ $t(elapsedText) }}</span><button type="button" @click="restart">{{ $t("再试一次") }}</button>
             </div>
           </div>
 
           <section class="game-actions">
-            <button v-if="project.allowUndo" type="button" :disabled="!snapshot.canUndo || locked" @click="undo">撤销一步</button>
-            <button type="button" :disabled="locked" @click="restart">重新开始（R）</button>
-            <span>方向键 / WASD / 滑动操作</span>
+            <button v-if="project.allowUndo" type="button" :disabled="!snapshot.canUndo || locked" @click="undo">{{ $t("撤销一步") }}</button>
+            <button type="button" :disabled="locked" @click="restart">{{ $t("重新开始（R）") }}</button>
+            <span>{{ $t("方向键 / WASD / 滑动操作") }}</span>
           </section>
         </div>
       </section>
 
       <aside class="play-sidebar">
-        <section id="practice-leaderboard" class="practice-leaderboard" aria-label="试玩排行榜">
-          <div class="leaderboard-title"><h3>试玩榜</h3><small>仅供试玩</small></div>
-          <p v-if="leaderboardLoading" class="leaderboard-hint">正在加载…</p>
-          <p v-else-if="leaderboardError" class="leaderboard-hint">{{ leaderboardError }}</p>
+        <section id="practice-leaderboard" class="practice-leaderboard" :aria-label='$t("试玩排行榜")'>
+          <div class="leaderboard-title"><h3>{{ $t("试玩榜") }}</h3><small>{{ $t("仅供试玩") }}</small></div>
+          <p v-if="leaderboardLoading" class="leaderboard-hint">{{ $t("正在加载…") }}</p>
+          <p v-else-if="leaderboardError" class="leaderboard-hint">{{ $t(leaderboardError) }}</p>
           <template v-else-if="leaderboard">
-            <p v-if="!leaderboard.signed_in" class="leaderboard-hint">游客可查看；<a :href="mainSiteUrl">登录</a>后记录个人最佳。</p>
-            <p v-else-if="leaderboard.my_best" class="leaderboard-mine">我的最佳：{{ formatRecord(leaderboard.my_best) }}</p>
-            <p v-if="recordMessage" class="leaderboard-hint">{{ recordMessage }}</p>
+            <p v-if="!leaderboard.signed_in" class="leaderboard-hint">{{ $t("游客可查看；") }}<a :href="mainSiteUrl">{{ $t("登录") }}</a>{{ $t("后记录个人最佳。") }}</p>
+            <p v-else-if="leaderboard.my_best" class="leaderboard-mine">{{ $t("我的最佳：") }}{{ $t(formatRecord(leaderboard.my_best)) }}</p>
+            <p v-if="recordMessage" class="leaderboard-hint">{{ $t(recordMessage) }}</p>
             <ol v-if="leaderboard.top.length" class="leaderboard-list">
-              <li v-for="(entry, index) in leaderboard.top" :key="entry.user_id"><span class="leaderboard-rank">{{ index + 1 }}</span><span class="leaderboard-name" :title="entry.display_name">{{ entry.display_name }}</span><strong>{{ formatRecord(entry) }}</strong></li>
+              <li v-for="(entry, index) in leaderboard.top" :key="entry.user_id"><span class="leaderboard-rank">{{ $t(index + 1) }}</span><span class="leaderboard-name" :title="entry.display_name">{{ entry.display_name }}</span><strong>{{ $t(formatRecord(entry)) }}</strong></li>
             </ol>
-            <p v-else class="leaderboard-hint">暂无记录。</p>
+            <p v-else class="leaderboard-hint">{{ $t("暂无记录。") }}</p>
           </template>
         </section>
         <section class="rules-panel">
-          <p>玩法说明</p><h2>{{ project.shortTitle }}</h2>
-          <dl><dt>棋盘</dt><dd>{{ project.boardLabel || `${project.rows}×${project.cols}` }}</dd><dt>结算</dt><dd>{{ settlement }}</dd></dl>
-          <div v-if="project.mirrorPortals" class="mirror-note"><strong>镜面棋盘怎么走？</strong><span>把中央十字想成真正的墙。向左滑出最左边的砖会从最右边回来；上下同理。砖最终都停在中央墙的两侧。</span><div class="mirror-mini"><i></i><i></i><i></i><i></i><b></b><em></em></div></div>
-          <p v-if="snapshot.aiError" class="wasm-warning">WASM 暂不可用，本次已用确定性随机出数代替：{{ snapshot.aiError }}</p>
+          <p>{{ $t("玩法说明") }}</p><h2>{{ $t(project.shortTitle) }}</h2>
+          <dl><dt>{{ $t("棋盘") }}</dt><dd>{{ $t(project.boardLabel || `${project.rows}×${project.cols}`) }}</dd><dt>{{ $t("结算") }}</dt><dd>{{ $t(settlement) }}</dd></dl>
+          <div v-if="project.mirrorPortals" class="mirror-note"><strong>{{ $t("镜面棋盘怎么走？") }}</strong><span>{{ $t("把中央十字想成真正的墙。向左滑出最左边的砖会从最右边回来；上下同理。砖最终都停在中央墙的两侧。") }}</span><div class="mirror-mini"><i></i><i></i><i></i><i></i><b></b><em></em></div></div>
+          <p v-if="snapshot.aiError" class="wasm-warning">{{ $t("WASM 暂不可用，本次已用确定性随机出数代替：") }}{{ $t(snapshot.aiError) }}</p>
         </section>
       </aside>
     </main>
@@ -100,6 +101,8 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import LanguageSwitch from '../LanguageSwitch.vue';
+import { syncAccountLanguage } from '../i18n.js';
 import { PRACTICE_PROJECTS } from './catalog.js';
 import { formatElapsed, TournamentGame } from './engine.js';
 import { PolyominoGame } from './polyominoEngine.js';
@@ -206,6 +209,7 @@ async function syncPracticeSession(force = false) {
     const user = await practiceSession.sync({ force });
     if (disposed) return;
     practiceUser.value = user;
+    if(force || previousId!==user?.id)void syncAccountLanguage();
     if (previousId !== user?.id) accountAppearance.value = null;
     if (user) {
       void api.practiceAppearance().then(appearance => {

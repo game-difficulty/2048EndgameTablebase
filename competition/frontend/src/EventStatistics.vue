@@ -1,6 +1,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from './api.js';
+import { language } from './i18n.js';
 import { userFacingError } from './errorMessages.js';
 
 const props = defineProps({ slug: { type: String, required: true }, rosterRevision: Number });
@@ -11,7 +12,7 @@ let disposed = false;
 let timer;
 let refreshQueued = false;
 const number = value => value == null ? '—' : Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
-const date = value => new Date(typeof value === 'number' ? value * 1000 : value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+const date = value => new Date(typeof value === 'number' ? value * 1000 : value).toLocaleString(language.value==='en'?'en-GB':'zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
 const profile = player => `https://play.2048tables.online/user/${encodeURIComponent(player.display_name)}`;
 async function refresh() {
   if (loading.value) { refreshQueued = true; return; }
@@ -28,25 +29,25 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); document.removeEv
 
 <template>
   <section class="event-statistics">
-    <header class="statistics-heading"><h2>赛事进程与成绩</h2><button type="button" :disabled="loading" @click="refresh">{{ loading ? '更新中…' : '刷新成绩' }}</button></header>
-    <p v-if="error" class="alert" role="alert">{{ error }}<span v-if="data"> 以下为上次成功读取的数据。</span></p>
+    <header class="statistics-heading"><h2>{{ $t("赛事进程与成绩") }}</h2><button type="button" :disabled="loading" @click="refresh">{{ $t(loading ? '更新中…' : '刷新成绩') }}</button></header>
+    <p v-if="error" class="alert" role="alert">{{ $t(error) }}<span v-if="data">{{ $t(" 以下为上次成功读取的数据。") }}</span></p>
     <template v-if="data">
-      <p class="statistics-meta">{{ { upcoming: '尚未开赛', active: '比赛进行中', ended: '统计时间窗已结束' }[data.phase] }} · 更新于 {{ date(data.as_of) }}（北京时间） · 页面可见时每 30 秒刷新</p>
-      <p class="statistics-meta">{{ data.rating_note }}</p>
-      <p v-if="!data.players.length" class="statistics-empty">等待报名或举办方导入名单。目前尚未分组，不展示虚构队伍或成绩。</p>
-      <p v-if="data.unassigned_count" class="statistics-meta">{{ data.unassigned_count }} 位选手待分组，个人成绩照常统计；团队成绩在分组后汇总。</p>
+      <p class="statistics-meta">{{ $t({ upcoming: '尚未开赛', active: '比赛进行中', ended: '统计时间窗已结束' }[data.phase]) }}{{ $t(" · 更新于 ") }}{{ $t(date(data.as_of)) }}{{ $t("（北京时间） · 页面可见时每 30 秒刷新") }}</p>
+      <p class="statistics-meta">{{ $t(data.rating_note) }}</p>
+      <p v-if="!data.players.length" class="statistics-empty">{{ $t("等待报名或举办方导入名单。目前尚未分组，不展示虚构队伍或成绩。") }}</p>
+      <p v-if="data.unassigned_count" class="statistics-meta">{{ $t(data.unassigned_count) }}{{ $t(" 位选手待分组，个人成绩照常统计；团队成绩在分组后汇总。") }}</p>
       <div class="team-statistics">
         <article v-for="team in data.teams" :key="team.name" class="team-stat-card">
-          <header><h3>{{ team.name }}</h3><span>{{ team.complete ? '全员满五局' : '成绩未满' }}</span></header>
-          <div class="team-metrics"><div><small>盘面和合计</small><strong>{{ number(team.board_sum) }}</strong></div><div><small>Rating 合计</small><strong>{{ number(team.rating) }}</strong></div></div>
+          <header><h3>{{ team.name }}</h3><span>{{ $t(team.complete ? '全员满五局' : '成绩未满') }}</span></header>
+          <div class="team-metrics"><div><small>{{ $t("盘面和合计") }}</small><strong>{{ $t(number(team.board_sum)) }}</strong></div><div><small>{{ $t("Rating 合计") }}</small><strong>{{ $t(number(team.rating)) }}</strong></div></div>
           <progress :value="team.selected_games" max="25" :aria-label="`${team.name}已入选${team.selected_games}局，共需25局`" />
-          <p class="statistics-meta">已入选 {{ team.selected_games }}/25 局 · 有效完赛 {{ team.completed_games }} 局</p>
-          <div v-for="player in team.players" :key="player.user_id" class="team-member"><a :href="profile(player)" target="_blank" rel="noopener noreferrer">{{ player.display_name }}<small v-if="player.is_external"> · 外援</small></a><span>{{ player.selected_games }}/5 局</span></div>
+          <p class="statistics-meta">{{ $t("已入选 ") }}{{ $t(team.selected_games) }}{{ $t("/25 局 · 有效完赛 ") }}{{ $t(team.completed_games) }}{{ $t(" 局") }}</p>
+          <div v-for="player in team.players" :key="player.user_id" class="team-member"><a :href="profile(player)" target="_blank" rel="noopener noreferrer">{{ player.display_name }}<small v-if="player.is_external">{{ $t(" · 外援") }}</small></a><span>{{ $t(player.selected_games) }}{{ $t("/5 局") }}</span></div>
         </article>
       </div>
-      <section v-if="data.players.length" class="player-statistics"><h2>个人成绩与最佳五局</h2><p class="statistics-meta">按个人 rating 排列。分数决定入选局；不足五局按零补足后计算。* 表示尚未完成五局。</p>
-        <details v-for="player in data.players" :key="player.user_id" class="player-stat-row"><summary><strong>{{ player.display_name }}{{ player.is_external ? ' · 外援' : '' }}</strong><span>{{ player.team_name || '待分组' }}</span><span>{{ player.selected_games }}/5 局</span><span>盘面和 {{ number(player.board_sum) }}</span><span>Rating {{ number(player.rating) }}{{ player.complete ? '' : ' *' }}</span></summary>
-          <div class="games-scroll"><table><thead><tr><th>得分</th><th>盘面和</th><th>开始时间（北京时间）</th><th>完成时间</th></tr></thead><tbody><tr v-for="game in player.games" :key="game.id"><td>{{ number(game.score) }}</td><td>{{ number(game.board_sum) }}</td><td>{{ date(game.started_at) }}</td><td>{{ date(game.ended_at) }}</td></tr></tbody></table></div><p v-if="!player.games.length">暂无符合时间和有效性要求的已完成局。</p>
+      <section v-if="data.players.length" class="player-statistics"><h2>{{ $t("个人成绩与最佳五局") }}</h2><p class="statistics-meta">{{ $t("按个人 rating 排列。分数决定入选局；不足五局按零补足后计算。* 表示尚未完成五局。") }}</p>
+        <details v-for="player in data.players" :key="player.user_id" class="player-stat-row"><summary><strong>{{ player.display_name }}{{ $t(player.is_external ? ' · 外援' : '') }}</strong><span>{{ player.team_name || '待分组' }}</span><span>{{ $t(player.selected_games) }}{{ $t("/5 局") }}</span><span>{{ $t("盘面和 ") }}{{ $t(number(player.board_sum)) }}</span><span>Rating {{ $t(number(player.rating)) }}{{ $t(player.complete ? '' : ' *') }}</span></summary>
+          <div class="games-scroll"><table><thead><tr><th>{{ $t("得分") }}</th><th>{{ $t("盘面和") }}</th><th>{{ $t("开始时间（北京时间）") }}</th><th>{{ $t("完成时间") }}</th></tr></thead><tbody><tr v-for="game in player.games" :key="game.id"><td>{{ $t(number(game.score)) }}</td><td>{{ $t(number(game.board_sum)) }}</td><td>{{ $t(date(game.started_at)) }}</td><td>{{ $t(date(game.ended_at)) }}</td></tr></tbody></table></div><p v-if="!player.games.length">{{ $t("暂无符合时间和有效性要求的已完成局。") }}</p>
         </details>
       </section>
     </template>

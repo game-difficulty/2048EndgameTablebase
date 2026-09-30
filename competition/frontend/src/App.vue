@@ -1,5 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { language, t } from './i18n.js';
+import LanguageSwitch from './LanguageSwitch.vue';
 import { api, connectRoom } from './api';
 import { userFacingError } from './errorMessages.js';
 import ProjectPlayground from './projects/ProjectPlayground.vue';
@@ -12,7 +14,7 @@ import TournamentBoard from './projects/TournamentBoard.vue';
 import CargoBoard from './projects/CargoBoard.vue';
 import PolyominoBoard from './projects/PolyominoBoard.vue';
 import { projectIconUrl } from '../../shared/projectIcons.js';
-import { projectPerformanceMetric, projectResultValue } from '../../shared/projectMetrics.mjs';
+import { projectPerformanceMetric, projectResultValue as rawProjectResultValue } from '../../shared/projectMetrics.mjs';
 import { ownDeadline, phaseSeconds, stageChange } from './stageMotion.js';
 import { MatchRuntime, LatestStateSender } from './projects/matchRuntime.js';
 import { receivedProjectView } from '../../shared/projectStateOrder.mjs';
@@ -553,7 +555,7 @@ async function createRoom() {
 
 async function closeRoom(item) {
   if (busy.value || !(item?.can_close ?? item?.me?.can_close)) return;
-  if (!window.confirm(`确定关闭「${item.name}」？关闭后无法重新落座或开赛，房间记录仍会保留。`)) return;
+  if (!window.confirm(t(`确定关闭「${item.name}」？关闭后无法重新落座或开赛，房间记录仍会保留。`))) return;
   busy.value = true;
   error.value = '';
   try {
@@ -667,7 +669,7 @@ async function moveGame(direction) {
 }
 
 function projectAction(action) {
-  if (action === 'surrender' && (!canSurrender.value || !window.confirm('确认认输本局？将保留当前得分并判本方负，无法撤回。'))) return;
+  if (action === 'surrender' && (!canSurrender.value || !window.confirm(t('确认认输本局？将保留当前得分并判本方负，无法撤回。')))) return;
   if (localRuntime && canPlayLocal.value && !movePending.value) commitLocal(localRuntime.action(action));
 }
 
@@ -681,7 +683,7 @@ const stageWait = computed(() => {
   return Math.max(0, Math.ceil((Date.parse(deadline || '') - clockNow.value - serverOffsetMs.value) / 1000)) || 0;
 });
 function manageMember(userId, remove = true) {
-  if (!Number(userId) || !window.confirm(remove ? '移出此人并禁止其重新进入本房间？赛中会暂停并保留历史记录。' : '允许此人重新进入？比赛不会自动解除暂停。')) return;
+  if (!Number(userId) || !window.confirm(t(remove ? '移出此人并禁止其重新进入本房间？赛中会暂停并保留历史记录。' : '允许此人重新进入？比赛不会自动解除暂停。'))) return;
   perform(() => api.manageMember(room.value.room_code, Number(userId), remove));
 }
 function projectMark(key) {
@@ -778,7 +780,7 @@ function forceFinish() {
 }
 
 function projectName(key) {
-  return room.value?.projects?.find((project) => project.key === key)?.name || key || '—';
+  return t(room.value?.projects?.find((project) => project.key === key)?.name || key || '—');
 }
 
 function projectDescription(key) {
@@ -794,8 +796,9 @@ function sessionPayload(side) {
 }
 
 function projectMetric(side) {
-  return projectPerformanceMetric(match.value?.sessions?.[side]?.public_view);
+  return projectPerformanceMetric(match.value?.sessions?.[side]?.public_view, language.value);
 }
+function projectResultValue(result, side) { return rawProjectResultValue(result, side, language.value); }
 
 function projectBoardSnapshot(side) {
   const view = match.value?.sessions?.[side]?.public_view;
@@ -859,7 +862,7 @@ function canUseBoard(side) {
 }
 
 function sideName(side) {
-  return side === 'yellow' ? '黄方' : side === 'white' ? '白方' : '—';
+  return t(side === 'yellow' ? '黄方' : side === 'white' ? '白方' : '—');
 }
 
 function captainName(side) {
@@ -948,7 +951,7 @@ function seatLabel(side, position) {
 }
 
 async function rematchRoom() {
-  if(busy.value || !window.confirm('因落位错误重赛？原房间取消、下注退还，新建空席位房间。已过开战时间时，从现在重新计算15分钟就位期限。'))return;
+  if(busy.value || !window.confirm(t('因落位错误重赛？原房间取消、下注退还，新建空席位房间。已过开战时间时，从现在重新计算15分钟就位期限。')))return;
   busy.value=true;
   try{const result=await api.rematch(room.value.room_code);navigate(`/rooms/${result.competition.room_code}`);}catch(cause){setError(cause);}finally{busy.value=false;}
 }
@@ -995,90 +998,91 @@ onBeforeUnmount(() => {
     <header class="site-header">
       <button class="brand" type="button" @click="navigate(competitionHomePath)">
         <span class="brand-mark">20</span>
-        <span><strong>2048 赛事中心</strong><small>Competition</small></span>
+        <span><strong>{{ $t("2048 赛事中心") }}</strong><small>Competition</small></span>
       </button>
       <div v-if="session?.user" class="account-chip">
         <span class="account-dot"></span>
         {{ session.user.display_name }}
       </div>
+      <LanguageSwitch />
     </header>
 
     <main v-if="loading" class="center-state">
       <span class="spinner"></span>
-      <p>正在同步比赛状态…</p>
+      <p>{{ $t("正在同步比赛状态…") }}</p>
     </main>
 
     <main v-else-if="error && !session && currentCode" class="center-state error-state">
-      <h1>需要登录</h1>
-      <p>{{ error }}</p>
-      <a class="primary-button" :href="mainSiteUrl">前往主站登录</a>
+      <h1>{{ $t("需要登录") }}</h1>
+      <p>{{ $t(error) }}</p>
+      <a class="primary-button" :href="mainSiteUrl">{{ $t("前往主站登录") }}</a>
     </main>
 
     <main v-else-if="!room" class="dashboard page-width">
       <EventCenter :key="eventSlug" :slug="eventSlug" :events="events" :can-create="canCreateEvent" :status-text="statusText" @navigate="navigate" @refresh="loadDashboard(routeEpoch)" @create-room="slug => { newRoomEventSlug = slug; createRoomOpen = true; }" />
       <section v-if="eventHasRooms" class="hero-row">
         <div>
-          <h2>快捷进入房间</h2>
-          <p class="muted">已有房间码？登录后进入候场。观众请从直播大厅进入。</p>
+          <h2>{{ $t("快捷进入房间") }}</h2>
+          <p class="muted">{{ $t("已有房间码？登录后进入候场。观众请从") }}<a href="https://live.2048tables.online/" target="_blank" rel="noopener noreferrer">{{ $t("直播大厅") }}</a>{{ $t("进入。") }}</p>
         </div>
         <form class="join-box" @submit.prevent="enterRoom">
-          <label for="room-code">房间码</label>
+          <label for="room-code">{{ $t("房间码") }}</label>
           <div class="inline-form">
-            <input id="room-code" v-model="joinCode" maxlength="12" placeholder="例如 K8F3QX" />
-            <button class="primary-button" type="submit">进入房间</button>
+            <input id="room-code" v-model="joinCode" maxlength="12" :placeholder='$t("例如 K8F3QX")' />
+            <button class="primary-button" type="submit">{{ $t("进入房间") }}</button>
           </div>
         </form>
       </section>
 
-      <p v-if="error" class="alert">{{ error }}</p>
+      <p v-if="error" class="alert">{{ $t(error) }}</p>
 
       <details v-if="eventHasRooms && session && (session.can_create_competition || events.some(e => e.can_manage && e.capabilities.rooms))" :open="createRoomOpen" class="panel room-create-disclosure" @toggle="createRoomOpen = $event.target.open">
-        <summary>创建比赛房间</summary>
+        <summary>{{ $t("创建比赛房间") }}</summary>
         <div>
-          <p class="eyebrow">举办方</p>
-          <h2>创建新比赛</h2>
-          <p class="muted">从已注册玩法中选择至少 5 项；创建后规则与顺序固定。</p>
+          <p class="eyebrow">{{ $t("举办方") }}</p>
+          <h2>{{ $t("创建新比赛") }}</h2>
+          <p class="muted">{{ $t("从已注册玩法中选择至少 5 项；创建后规则与顺序固定。") }}</p>
         </div>
         <form class="create-form" @submit.prevent="createRoom">
-          <label class="create-name">所属赛事<select v-model="newRoomEventSlug"><option value="">独立 / 测试房间</option><option v-for="event in events.filter(item => item.can_manage && item.status !== 'finished' && item.capabilities.rooms)" :key="event.slug" :value="event.slug">{{ event.name }}</option></select></label>
-          <label class="create-name">比赛名称<input v-model="newRoomName" minlength="2" maxlength="100" required placeholder="比赛名称" /></label>
+          <label class="create-name">{{ $t("所属赛事") }}<select v-model="newRoomEventSlug"><option value="">{{ $t("独立 / 测试房间") }}</option><option v-for="event in events.filter(item => item.can_manage && item.status !== 'finished' && item.capabilities.rooms)" :key="event.slug" :value="event.slug">{{ event.name }}</option></select></label>
+          <label class="create-name">{{ $t("比赛名称") }}<input v-model="newRoomName" minlength="2" maxlength="100" required :placeholder='$t("比赛名称")' /></label>
           <RoomSchedulePicker :slug="newRoomEventSlug" @change="newRoomSchedule=$event" />
           <fieldset class="project-picker">
-            <legend>项目池 · 已选 {{ selectedProjects.length }} 项</legend>
-            <p class="muted">勾选项目后，可调整其在 BP 项目池中的顺序。</p>
+            <legend>{{ $t("项目池 · 已选 ") }}{{ $t(selectedProjects.length) }}{{ $t(" 项") }}</legend>
+            <p class="muted">{{ $t("勾选项目后，可调整其在 BP 项目池中的顺序。") }}</p>
             <div v-for="project in orderedProjectOptions" :key="project.id" class="project-picker-row">
-              <label><input v-model="selectedProjectIds" type="checkbox" :value="project.id" /><img class="project-icon picker-icon" :src="projectIconUrl(project.id)" alt="" /><span><strong>{{ project.title }}</strong><small>{{ project.description }}</small></span></label>
+              <label><input v-model="selectedProjectIds" type="checkbox" :value="project.id" /><img class="project-icon picker-icon" :src="projectIconUrl(project.id)" alt="" /><span><strong>{{ $t(project.title) }}</strong><small>{{ $t(project.description) }}</small></span></label>
               <div class="project-picker-actions">
-                <a :href="project.practicePath" target="_blank" rel="noopener noreferrer">试玩</a>
-                <button type="button" :disabled="!selectedProjectIds.includes(project.id) || selectedProjectIds.indexOf(project.id) === 0" :aria-label="`上移 ${project.title}`" @click="moveProjectOrder(project.id, -1)">↑</button>
-                <button type="button" :disabled="!selectedProjectIds.includes(project.id) || selectedProjectIds.indexOf(project.id) === selectedProjectIds.length - 1" :aria-label="`下移 ${project.title}`" @click="moveProjectOrder(project.id, 1)">↓</button>
-                <span v-if="selectedProjectIds.includes(project.id)" class="project-picker-order">{{ selectedProjectIds.indexOf(project.id) + 1 }}</span>
+                <a :href="project.practicePath" target="_blank" rel="noopener noreferrer">{{ $t("试玩") }}</a>
+                <button type="button" :disabled="!selectedProjectIds.includes(project.id) || selectedProjectIds.indexOf(project.id) === 0" :aria-label="$t(`上移 ${project.title}`)" @click="moveProjectOrder(project.id, -1)">↑</button>
+                <button type="button" :disabled="!selectedProjectIds.includes(project.id) || selectedProjectIds.indexOf(project.id) === selectedProjectIds.length - 1" :aria-label="$t(`下移 ${project.title}`)" @click="moveProjectOrder(project.id, 1)">↓</button>
+                <span v-if="selectedProjectIds.includes(project.id)" class="project-picker-order">{{ $t(selectedProjectIds.indexOf(project.id) + 1) }}</span>
               </div>
             </div>
           </fieldset>
-          <p v-if="selectedProjects.length < 5" class="alert">项目池至少需要 5 项。</p>
-          <button class="primary-button" type="submit" :disabled="busy || selectedProjects.length < 5">创建房间</button>
+          <p v-if="selectedProjects.length < 5" class="alert">{{ $t("项目池至少需要 5 项。") }}</p>
+          <button class="primary-button" type="submit" :disabled="busy || selectedProjects.length < 5">{{ $t("创建房间") }}</button>
         </form>
       </details>
 
       <section v-if="session && eventHasRooms" class="room-list-section">
-        <div class="section-heading"><h2>我的比赛房间</h2><span>{{ activeRooms.length }} 场</span></div>
+        <div class="section-heading"><h2>{{ $t("我的比赛房间") }}</h2><span>{{ $t(activeRooms.length) }}{{ $t(" 场") }}</span></div>
         <div v-if="activeRooms.length" class="room-list">
           <div v-for="item in activeRooms" :key="item.id" class="room-row">
             <button class="room-row-link" type="button" @click="navigate(`/rooms/${item.room_code}`)">
-              <span><strong>{{ roomMatchTitle(item) }} <b>{{ roomMatchScore(item) }}</b></strong><small>{{ item.event?.name || '独立房间' }} · {{ item.room_code }} · {{ scheduleTime(item.schedule?.starts_at) }}{{ item.schedule ? '（北京时间）' : '' }}</small></span>
-              <span class="room-meta">{{ item.schedule?.exception === 'both_late' ? '双方未就位 · 0:0' : statusText[item.status] || item.status }}</span>
+              <span><strong>{{ roomMatchTitle(item) }} <b>{{ $t(roomMatchScore(item)) }}</b></strong><small>{{ item.event?.name || $t('独立房间') }} · {{ $t(item.room_code) }} · {{ $t(scheduleTime(item.schedule?.starts_at)) }}{{ $t(item.schedule ? '（北京时间）' : '') }}</small></span>
+              <span class="room-meta">{{ $t(item.schedule?.exception === 'both_late' ? '双方未就位 · 0:0' : statusText[item.status] || item.status) }}</span>
             </button>
-            <button v-if="item.can_close" class="room-close-button" type="button" :disabled="busy" :aria-label="`关闭比赛房间 ${item.name}`" @click="closeRoom(item)">关闭房间</button>
+            <button v-if="item.can_close" class="room-close-button" type="button" :disabled="busy" :aria-label="`关闭比赛房间 ${item.name}`" @click="closeRoom(item)">{{ $t("关闭房间") }}</button>
           </div>
         </div>
-        <p v-else class="empty-state">暂无进行中的比赛房间。</p>
+        <p v-else class="empty-state">{{ $t("暂无进行中的比赛房间。") }}</p>
         <details v-if="closedRooms.length" class="closed-room-list">
-          <summary>已关闭的房间 · {{ closedRooms.length }} 场</summary>
+          <summary>{{ $t("已关闭的房间 · ") }}{{ $t(closedRooms.length) }}{{ $t(" 场") }}</summary>
           <div class="room-list">
             <button v-for="item in closedRooms" :key="item.id" class="room-row room-row-link" type="button" @click="navigate(`/rooms/${item.room_code}`)">
-              <span><strong>{{ roomMatchTitle(item) }} {{ roomMatchScore(item) }}</strong><small>{{ item.room_code }} · {{ scheduleTime(item.schedule?.starts_at) }}</small></span>
-              <span class="room-meta">房间已关闭 · 查看记录</span>
+              <span><strong>{{ roomMatchTitle(item) }} {{ $t(roomMatchScore(item)) }}</strong><small>{{ $t(item.room_code) }} · {{ $t(scheduleTime(item.schedule?.starts_at)) }}</small></span>
+              <span class="room-meta">{{ $t("房间已关闭 · 查看记录") }}</span>
             </button>
           </div>
         </details>
@@ -1089,133 +1093,133 @@ onBeforeUnmount(() => {
       <section class="match-header">
         <div class="page-width match-header-inner">
           <div class="match-header-actions">
-            <button class="back-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ room.event?.name || '赛事中心' }}</button>
-            <button v-if="room.me.can_close" class="close-room-link" type="button" :disabled="busy" @click="closeRoom(room)">关闭房间</button>
-            <button v-if="(room.me.can_manage || room.me.staff_roles?.includes('referee')) && ['SEATING','READY_CHECK','DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(room.status)" class="close-room-link" :disabled="busy" @click="rematchRoom">落位错误重赛</button>
+            <button class="back-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ room.event?.name || $t('赛事中心') }}</button>
+            <button v-if="room.me.can_close" class="close-room-link" type="button" :disabled="busy" @click="closeRoom(room)">{{ $t("关闭房间") }}</button>
+            <button v-if="(room.me.can_manage || room.me.staff_roles?.includes('referee')) && ['SEATING','READY_CHECK','DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(room.status)" class="close-room-link" :disabled="busy" @click="rematchRoom">{{ $t("落位错误重赛") }}</button>
           </div>
           <div class="match-identity">
-            <span class="room-code">{{ room.room_code }}</span>
+            <span class="room-code">{{ $t(room.room_code) }}</span>
             <h1>{{ room.name }}</h1>
           </div>
-          <div class="stage-chip"><span :class="['connection-dot', connection]"></span>{{ match?.suspension?.active ? '暂停中 · ' : '' }}{{ statusText[room.status] || room.status }}</div>
+          <div class="stage-chip"><span :class="['connection-dot', connection]"></span>{{ $t(match?.suspension?.active ? '暂停中 · ' : '') }}{{ $t(statusText[room.status] || room.status) }}</div>
         </div>
       </section>
 
       <section v-if="!['CANCELLED','FINISHED'].includes(room.status)" class="progress-strip">
-        <div :class="['progress-step', room.status === 'SEATING' ? 'active' : 'done']">选手落座</div>
-        <div :class="['progress-step', room.status === 'READY_CHECK' ? 'active' : !['SEATING', 'READY_CHECK'].includes(room.status) ? 'done' : '']">队长准备</div>
-        <div :class="['progress-step', room.status === 'DRAW' ? 'active' : !['SEATING', 'READY_CHECK', 'DRAW'].includes(room.status) ? 'done' : '']">先后手抽签</div>
-        <div :class="['progress-step', ['FIRST_PICK_BAN', 'SECOND_PICK_BAN', 'BLIND_PICK'].includes(room.status) ? 'active' : ['C_DRAW', 'LINEUP'].includes(room.status) || room.status.startsWith('GAME_') || room.status === 'FINISHED' ? 'done' : '']">项目 BP</div>
-        <div :class="['progress-step', room.status === 'LINEUP' ? 'active' : room.status.startsWith('GAME_') || room.status === 'FINISHED' ? 'done' : '']">秘密布阵</div>
-        <div :class="['progress-step', room.status.startsWith('GAME_') ? 'active' : room.status === 'FINISHED' ? 'done' : '']">项目对局</div>
+        <div :class="['progress-step', room.status === 'SEATING' ? 'active' : 'done']">{{ $t("选手落座") }}</div>
+        <div :class="['progress-step', room.status === 'READY_CHECK' ? 'active' : !['SEATING', 'READY_CHECK'].includes(room.status) ? 'done' : '']">{{ $t("队长准备") }}</div>
+        <div :class="['progress-step', room.status === 'DRAW' ? 'active' : !['SEATING', 'READY_CHECK', 'DRAW'].includes(room.status) ? 'done' : '']">{{ $t("先后手抽签") }}</div>
+        <div :class="['progress-step', ['FIRST_PICK_BAN', 'SECOND_PICK_BAN', 'BLIND_PICK'].includes(room.status) ? 'active' : ['C_DRAW', 'LINEUP'].includes(room.status) || room.status.startsWith('GAME_') || room.status === 'FINISHED' ? 'done' : '']">{{ $t("项目 BP") }}</div>
+        <div :class="['progress-step', room.status === 'LINEUP' ? 'active' : room.status.startsWith('GAME_') || room.status === 'FINISHED' ? 'done' : '']">{{ $t("秘密布阵") }}</div>
+        <div :class="['progress-step', room.status.startsWith('GAME_') ? 'active' : room.status === 'FINISHED' ? 'done' : '']">{{ $t("项目对局") }}</div>
       </section>
 
       <div class="page-width room-content">
         <section v-if="room.schedule && (isLobby || match?.finish_reason === 'late_forfeit')" class="panel schedule-room-notice">
-          <h2>{{ roomMatchTitle(room) }} · {{ scheduleTime(room.schedule.starts_at) }}（北京时间）</h2>
-          <p v-if="match?.finish_reason === 'late_forfeit' && match.winner_side === 'draw'">双方均未在宽限期内就位，本轮以 0:0 结束。</p>
-          <p v-else-if="match?.finish_reason === 'late_forfeit'">迟到判负：{{ match.winner_side === 'yellow' ? room.schedule.yellow_name : room.schedule.white_name }} 以 3:0 获胜。</p>
-          <template v-else><p>可提前签到与准备，到点后开始抽签。{{ scheduleTime(room.schedule.late_at) }} 后仍未全员落座并由队长准备的一方判 0:3 负；双方均未就位则 0:0。</p>
-          <template v-if="room.schedule.players.length"><p v-for="side in ['yellow','white']" :key="side">{{ room.schedule[`${side}_name`] }}：{{ room.schedule.players.filter(p => p.side === side).map(p => `${p.position} 号 · ${p.display_name}（${p.arrived_at ? '已签到' : '未到场'}）`).join('、') }}</p></template>
-          <p v-else>自由房间，已登录选手可自行落座。</p>
-          <p v-if="room.schedule.exception === 'both_late'" role="alert">双方均未在宽限期内就位，本轮以 0:0 结束。</p></template>
+          <h2>{{ roomMatchTitle(room) }} · {{ $t(scheduleTime(room.schedule.starts_at)) }}{{ $t("（北京时间）") }}</h2>
+          <p v-if="match?.finish_reason === 'late_forfeit' && match.winner_side === 'draw'">{{ $t("双方均未在宽限期内就位，本轮以 0:0 结束。") }}</p>
+          <p v-else-if="match?.finish_reason === 'late_forfeit'">{{ $t("迟到判负：") }}{{ match.winner_side === 'yellow' ? room.schedule.yellow_name : room.schedule.white_name }}{{ $t(" 以 3:0 获胜。") }}</p>
+          <template v-else><p>{{ $t("可提前签到与准备，到点后开始抽签。") }}{{ $t(scheduleTime(room.schedule.late_at)) }}{{ $t(" 后仍未全员落座并由队长准备的一方判 0:3 负；双方均未就位则 0:0。") }}</p>
+          <template v-if="room.schedule.players.length"><p v-for="side in ['yellow','white']" :key="side">{{ $t(room.schedule[`${side}_name`]) }}：{{ room.schedule.players.filter(p => p.side === side).map(p => `${p.position} 号 · ${p.display_name}（${p.arrived_at ? '已签到' : '未到场'}）`).join('、') }}</p></template>
+          <p v-else>{{ $t("自由房间，已登录选手可自行落座。") }}</p>
+          <p v-if="room.schedule.exception === 'both_late'" role="alert">{{ $t("双方均未在宽限期内就位，本轮以 0:0 结束。") }}</p></template>
         </section>
-        <p v-if="error" class="alert">{{ error }}</p>
-        <p v-if="room.replacement_room_code" class="alert">本房间已取消并安排重赛。<a :href="`/rooms/${room.replacement_room_code}`">进入新房间 {{ room.replacement_room_code }}</a>，请重新落座。</p>
-        <p v-if="room.member_hold && !match?.suspension?.active" class="alert" role="status">参赛人员已被移出，流程暂缓。请房主或赛事管理员处理后继续。</p>
+        <p v-if="error" class="alert">{{ $t(error) }}</p>
+        <p v-if="room.replacement_room_code" class="alert">{{ $t("本房间已取消并安排重赛。") }}<a :href="`/rooms/${room.replacement_room_code}`">{{ $t("进入新房间 ") }}{{ $t(room.replacement_room_code) }}</a>{{ $t("，请重新落座。") }}</p>
+        <p v-if="room.member_hold && !match?.suspension?.active" class="alert" role="status">{{ $t("参赛人员已被移出，流程暂缓。请房主或赛事管理员处理后继续。") }}</p>
 
         <Transition name="suspension-drop">
         <section v-if="match?.suspension?.active" class="suspension-banner" role="status">
           <div class="suspension-copy">
             <p class="eyebrow">MATCH SUSPENDED</p>
-            <h2>比赛已由赛事方暂停</h2>
-            <p>{{ match.suspension.reason_text }}</p>
-            <small>{{ match.suspension.started_by_display_name || `赛事方 #${match.suspension.started_by_user_id}` }} · 两队计时器已冻结</small>
+            <h2>{{ $t("比赛已由赛事方暂停") }}</h2>
+            <p>{{ $t(match.suspension.reason_text) }}</p>
+            <small>{{ match.suspension.started_by_display_name || `赛事方 #${match.suspension.started_by_user_id}` }}{{ $t(" · 两队计时器已冻结") }}</small>
           </div>
           <div class="resume-status">
-            <span :class="match.suspension.resume_readiness.yellow.ready && 'ready'">黄方队长 {{ match.suspension.resume_readiness.yellow.ready ? '已就绪' : '待就绪' }}</span>
-            <span :class="match.suspension.resume_readiness.white.ready && 'ready'">白方队长 {{ match.suspension.resume_readiness.white.ready ? '已就绪' : '待就绪' }}</span>
+            <span :class="match.suspension.resume_readiness.yellow.ready && 'ready'">{{ $t("黄方队长 ") }}{{ $t(match.suspension.resume_readiness.yellow.ready ? '已就绪' : '待就绪') }}</span>
+            <span :class="match.suspension.resume_readiness.white.ready && 'ready'">{{ $t("白方队长 ") }}{{ $t(match.suspension.resume_readiness.white.ready ? '已就绪' : '待就绪') }}</span>
           </div>
           <div class="suspension-actions">
             <button v-if="room.me.can_mark_resume_ready" class="secondary-button" type="button" :disabled="busy" @click="toggleResumeReadiness">
-              {{ match.suspension.resume_readiness[mySeat.side].ready ? '取消恢复就绪' : '队长确认可恢复' }}
+              {{ $t(match.suspension.resume_readiness[mySeat.side].ready ? '取消恢复就绪' : '队长确认可恢复') }}
             </button>
-            <button v-if="room.me.is_match_official" class="primary-button" type="button" :disabled="busy || !room.me.can_resume" @click="resumeMatch">恢复比赛与计时</button>
+            <button v-if="room.me.is_match_official" class="primary-button" type="button" :disabled="busy || !room.me.can_resume" @click="resumeMatch">{{ $t("恢复比赛与计时") }}</button>
           </div>
         </section>
         </Transition>
 
         <section v-if="room.me.can_manage_members || (match && room.status.startsWith('GAME_'))" class="match-operations">
-          <details v-if="room.me.can_manage_members" class="operation-card"><summary>人员管理</summary>
-            <p>管理员可管理任意房间，房主仅限自建房间。赛中移出选手将暂停比赛，历史成绩保留。</p>
-            <div v-for="seat in room.seats" :key="seat.user_id" class="operation-form"><PlayerAvatar :person="seat" /><span>{{ sideName(seat.side) }} · {{ seat.display_name }}（{{ seat.user_id }}）</span><button :disabled="busy || seat.user_id === session?.user?.user_id" @click="manageMember(seat.user_id)">移出</button></div>
-            <div class="operation-form"><input v-model="manageUserId" type="number" min="1" placeholder="其他人员的用户 ID" /><button :disabled="busy || !manageUserId" @click="manageMember(manageUserId)">移出此人</button></div>
-            <div v-for="member in room.me.removed_members" :key="member.user_id" class="operation-form"><span>已移出：{{ member.user_id }}</span><button :disabled="busy" @click="manageMember(member.user_id, false)">允许重新进入</button></div>
+          <details v-if="room.me.can_manage_members" class="operation-card"><summary>{{ $t("人员管理") }}</summary>
+            <p>{{ $t("管理员可管理任意房间，房主仅限自建房间。赛中移出选手将暂停比赛，历史成绩保留。") }}</p>
+            <div v-for="seat in room.seats" :key="seat.user_id" class="operation-form"><PlayerAvatar :person="seat" /><span>{{ $t(sideName(seat.side)) }} · {{ seat.display_name }}（{{ $t(seat.user_id) }}）</span><button :disabled="busy || seat.user_id === session?.user?.user_id" @click="manageMember(seat.user_id)">{{ $t("移出") }}</button></div>
+            <div class="operation-form"><input v-model="manageUserId" type="number" min="1" :placeholder='$t("其他人员的用户 ID")' /><button :disabled="busy || !manageUserId" @click="manageMember(manageUserId)">{{ $t("移出此人") }}</button></div>
+            <div v-for="member in room.me.removed_members" :key="member.user_id" class="operation-form"><span>{{ $t("已移出：") }}{{ $t(member.user_id) }}</span><button :disabled="busy" @click="manageMember(member.user_id, false)">{{ $t("允许重新进入") }}</button></div>
           </details>
           <details v-if="room.me.can_report_issue || room.issues.length" class="operation-card" :open="issueOpen" @toggle="issueOpen = $event.target.open">
-            <summary>问题上报 <span v-if="room.issues.length">{{ room.issues.length }} 项待处理</span></summary>
-            <button type="button" class="secondary-button" @click="issueOpen = false">关闭上报面板 ×</button>
-            <p>提交后通知房间主办方／裁判处理，不会自动暂停。无人值守时请另行联系赛事管理员；收到暂停通知前，比赛仍继续计时。</p>
+            <summary>{{ $t("问题上报 ") }}<span v-if="room.issues.length">{{ $t(room.issues.length) }}{{ $t(" 项待处理") }}</span></summary>
+            <button type="button" class="secondary-button" @click="issueOpen = false">{{ $t("关闭上报面板 ×") }}</button>
+            <p>{{ $t("提交后通知房间主办方／裁判处理，不会自动暂停。无人值守时请另行联系赛事管理员；收到暂停通知前，比赛仍继续计时。") }}</p>
             <div v-if="room.me.can_report_issue" class="operation-form issue-form">
-              <select v-model="issueCategory" aria-label="问题类别">
-                <option value="network_device">网络 / 设备</option>
-                <option value="project">项目运行</option>
-                <option value="rules">规则争议</option>
-                <option value="other">其他</option>
+              <select v-model="issueCategory" :aria-label='$t("问题类别")'>
+                <option value="network_device">{{ $t("网络 / 设备") }}</option>
+                <option value="project">{{ $t("项目运行") }}</option>
+                <option value="rules">{{ $t("规则争议") }}</option>
+                <option value="other">{{ $t("其他") }}</option>
               </select>
-              <input v-model="issueDetails" maxlength="500" placeholder="简要描述问题（至少 3 个字符）" />
-              <button class="secondary-button" type="button" :disabled="busy || issueDetails.trim().length < 3" @click="reportIssue">提交给裁判</button>
+              <input v-model="issueDetails" maxlength="500" :placeholder='$t("简要描述问题（至少 3 个字符）")' />
+              <button class="secondary-button" type="button" :disabled="busy || issueDetails.trim().length < 3" @click="reportIssue">{{ $t("提交给裁判") }}</button>
             </div>
             <div v-if="room.issues.length" class="issue-list">
               <article v-for="issue in room.issues" :key="issue.id">
-                <div><strong>{{ issue.reporter_display_name }}</strong><span>{{ issue.details }}</span><small>{{ issue.category }}</small></div>
+                <div><strong>{{ issue.reporter_display_name }}</strong><span>{{ $t(issue.details) }}</span><small>{{ $t(issue.category) }}</small></div>
                 <div v-if="room.me.is_match_official" class="issue-resolution">
-                  <input v-model="issueResolutionNote" maxlength="500" placeholder="处理说明" />
-                  <button type="button" :disabled="busy || issueResolutionNote.trim().length < 3" @click="resolveIssue(issue)">解决</button>
-                  <button type="button" :disabled="busy || issueResolutionNote.trim().length < 3" @click="resolveIssue(issue, 'dismissed')">驳回</button>
+                  <input v-model="issueResolutionNote" maxlength="500" :placeholder='$t("处理说明")' />
+                  <button type="button" :disabled="busy || issueResolutionNote.trim().length < 3" @click="resolveIssue(issue)">{{ $t("解决") }}</button>
+                  <button type="button" :disabled="busy || issueResolutionNote.trim().length < 3" @click="resolveIssue(issue, 'dismissed')">{{ $t("驳回") }}</button>
                 </div>
               </article>
             </div>
           </details>
 
           <details v-if="match && room.me.is_match_official" class="operation-card referee-card">
-            <summary>裁判控制台 <span>所有操作写入审计事件</span></summary>
+            <summary>{{ $t("裁判控制台 ") }}<span>{{ $t("所有操作写入审计事件") }}</span></summary>
             <div class="referee-grid">
               <form v-if="room.me.can_suspend" class="operation-form" @submit.prevent="suspendMatch">
-                <strong>暂停比赛</strong>
+                <strong>{{ $t("暂停比赛") }}</strong>
                 <select v-model="suspendReasonCode">
-                  <option value="network_device">网络 / 设备</option>
-                  <option value="project">项目故障</option>
-                  <option value="rules">规则争议</option>
-                  <option value="medical">医疗情况</option>
-                  <option value="other">其他</option>
+                  <option value="network_device">{{ $t("网络 / 设备") }}</option>
+                  <option value="project">{{ $t("项目故障") }}</option>
+                  <option value="rules">{{ $t("规则争议") }}</option>
+                  <option value="medical">{{ $t("医疗情况") }}</option>
+                  <option value="other">{{ $t("其他") }}</option>
                 </select>
-                <input v-model="suspendReasonText" maxlength="500" placeholder="公开暂停原因" />
-                <button class="danger-button" type="submit" :disabled="busy || suspendReasonText.trim().length < 3">暂停并冻结计时</button>
+                <input v-model="suspendReasonText" maxlength="500" :placeholder='$t("公开暂停原因")' />
+                <button class="danger-button" type="submit" :disabled="busy || suspendReasonText.trim().length < 3">{{ $t("暂停并冻结计时") }}</button>
               </form>
 
               <form v-if="room.me.can_override_result" class="operation-form result-correction" @submit.prevent="overrideResult">
-                <strong>纠正当前赛果</strong>
-                <label>黄方分数 <input v-model.number="overrideYellowScore" type="number" min="0" /></label>
-                <label>白方分数 <input v-model.number="overrideWhiteScore" type="number" min="0" /></label>
+                <strong>{{ $t("纠正当前赛果") }}</strong>
+                <label>{{ $t("黄方分数 ") }}<input v-model.number="overrideYellowScore" type="number" min="0" /></label>
+                <label>{{ $t("白方分数 ") }}<input v-model.number="overrideWhiteScore" type="number" min="0" /></label>
                 <select v-model="overrideWinner">
-                  <option value="yellow">黄方胜</option><option value="white">白方胜</option><option value="draw">平局</option>
+                  <option value="yellow">{{ $t("黄方胜") }}</option><option value="white">{{ $t("白方胜") }}</option><option value="draw">{{ $t("平局") }}</option>
                 </select>
-                <input v-model="overrideReason" maxlength="500" placeholder="纠正原因" />
-                <button class="secondary-button" type="submit" :disabled="busy || overrideReason.trim().length < 3">发布修订并清空确认</button>
+                <input v-model="overrideReason" maxlength="500" :placeholder='$t("纠正原因")' />
+                <button class="secondary-button" type="submit" :disabled="busy || overrideReason.trim().length < 3">{{ $t("发布修订并清空确认") }}</button>
               </form>
 
               <form v-if="room.me.can_force_advance" class="operation-form" @submit.prevent="forceAdvance">
-                <strong>强制推进</strong>
-                <input v-model="forceAdvanceReason" maxlength="500" placeholder="跳过队长确认的原因" />
-                <button class="secondary-button" type="submit" :disabled="busy || stageWait > 0 || forceAdvanceReason.trim().length < 3">{{ stageWait ? `休整 ${stageWait} 秒` : '进入下一项目' }}</button>
+                <strong>{{ $t("强制推进") }}</strong>
+                <input v-model="forceAdvanceReason" maxlength="500" :placeholder='$t("跳过队长确认的原因")' />
+                <button class="secondary-button" type="submit" :disabled="busy || stageWait > 0 || forceAdvanceReason.trim().length < 3">{{ $t(stageWait ? `休整 ${stageWait} 秒` : '进入下一项目') }}</button>
               </form>
 
               <form v-if="room.me.can_force_finish" class="operation-form" @submit.prevent="forceFinish">
-                <strong>强制结束全场</strong>
-                <select v-model="forceFinishWinner"><option value="yellow">黄方胜</option><option value="white">白方胜</option><option value="draw">平局</option></select>
-                <input v-model="forceFinishReason" maxlength="500" placeholder="裁决原因" />
-                <button class="danger-button" type="submit" :disabled="busy || forceFinishReason.trim().length < 3">结束并冻结结果</button>
+                <strong>{{ $t("强制结束全场") }}</strong>
+                <select v-model="forceFinishWinner"><option value="yellow">{{ $t("黄方胜") }}</option><option value="white">{{ $t("白方胜") }}</option><option value="draw">{{ $t("平局") }}</option></select>
+                <input v-model="forceFinishReason" maxlength="500" :placeholder='$t("裁决原因")' />
+                <button class="danger-button" type="submit" :disabled="busy || forceFinishReason.trim().length < 3">{{ $t("结束并冻结结果") }}</button>
               </form>
             </div>
           </details>
@@ -1223,46 +1227,46 @@ onBeforeUnmount(() => {
 
         <Transition name="stage-note">
           <div v-if="visibleStageMotion" :key="visibleStageMotion.to" :class="['stage-motion-note', visibleStageMotion.kind]" role="status" aria-live="polite">
-            <span class="stage-motion-mark">{{ visibleStageMotion.kind === 'game-start' ? '▶' : visibleStageMotion.kind === 'match-finished' ? '✓' : '◆' }}</span>
+            <span class="stage-motion-mark">{{ $t(visibleStageMotion.kind === 'game-start' ? '▶' : visibleStageMotion.kind === 'match-finished' ? '✓' : '◆') }}</span>
             <div>
-              <strong v-if="visibleStageMotion.kind === 'pick-lock'">项目与 BAN 已由服务器锁定</strong>
-              <strong v-else-if="visibleStageMotion.kind === 'lineup-reveal'">双方阵容已锁定 · 项目 A 开局检查</strong>
-              <strong v-else-if="visibleStageMotion.kind === 'game-start'">项目 {{ visibleStageMotion.game }} 已开局</strong>
-              <strong v-else-if="visibleStageMotion.kind === 'game-result'">项目 {{ visibleStageMotion.game }} 双方已完成 · 赛果公布</strong>
-              <strong v-else-if="visibleStageMotion.kind === 'match-finished'">三场赛果已冻结 · 全场结算</strong>
-              <strong v-else>{{ statusText[room.status] || room.status }}</strong>
-              <small v-if="visibleStageMotion.kind === 'game-start'">队伍包干时间已按服务器开局时刻计时</small>
-              <small v-else-if="visibleStageMotion.kind === 'lineup-reveal'">双方三场出战安排已公开</small>
-              <small v-else-if="visibleStageMotion.kind === 'pick-lock'">{{ draftSource(visibleStageMotion.to === 'SECOND_PICK_BAN' ? 'A' : 'B') || '服务器确认' }}</small>
-              <small v-else>以服务器确认的比赛状态为准</small>
+              <strong v-if="visibleStageMotion.kind === 'pick-lock'">{{ $t("项目与 BAN 已由服务器锁定") }}</strong>
+              <strong v-else-if="visibleStageMotion.kind === 'lineup-reveal'">{{ $t("双方阵容已锁定 · 项目 A 开局检查") }}</strong>
+              <strong v-else-if="visibleStageMotion.kind === 'game-start'">{{ $t("项目 ") }}{{ $t(visibleStageMotion.game) }}{{ $t(" 已开局") }}</strong>
+              <strong v-else-if="visibleStageMotion.kind === 'game-result'">{{ $t("项目 ") }}{{ $t(visibleStageMotion.game) }}{{ $t(" 双方已完成 · 赛果公布") }}</strong>
+              <strong v-else-if="visibleStageMotion.kind === 'match-finished'">{{ $t("三场赛果已冻结 · 全场结算") }}</strong>
+              <strong v-else>{{ $t(statusText[room.status] || room.status) }}</strong>
+              <small v-if="visibleStageMotion.kind === 'game-start'">{{ $t("队伍包干时间已按服务器开局时刻计时") }}</small>
+              <small v-else-if="visibleStageMotion.kind === 'lineup-reveal'">{{ $t("双方三场出战安排已公开") }}</small>
+              <small v-else-if="visibleStageMotion.kind === 'pick-lock'">{{ $t(draftSource(visibleStageMotion.to === 'SECOND_PICK_BAN' ? 'A' : 'B') || '服务器确认') }}</small>
+              <small v-else>{{ $t("以服务器确认的比赛状态为准") }}</small>
             </div>
           </div>
         </Transition>
 
-        <section v-if="isGameStage" class="game-hud" aria-label="当前比赛状态">
+        <section v-if="isGameStage" class="game-hud" :aria-label='$t("当前比赛状态")'>
           <div class="game-hud-side yellow">
-            <button class="game-hud-back" type="button" aria-label="返回比赛列表" @click="navigate(competitionHomePath)">←</button>
-            <strong class="game-hud-series" :aria-label="`黄方局分 ${match.series_score.yellow}`">{{ match.series_score.yellow }}</strong>
-            <span class="game-hud-team">黄方<small>包干时间</small></span>
-            <strong class="game-hud-clock">{{ formatTeamClock(teamClockMs('yellow')) }}</strong>
+            <button class="game-hud-back" type="button" :aria-label='$t("返回比赛列表")' @click="navigate(competitionHomePath)">←</button>
+            <strong class="game-hud-series" :aria-label="$t(`黄方局分 ${match.series_score.yellow}`)">{{ $t(match.series_score.yellow) }}</strong>
+            <span class="game-hud-team">{{ $t("黄方") }}<small>{{ $t("包干时间") }}</small></span>
+            <strong class="game-hud-clock">{{ $t(formatTeamClock(teamClockMs('yellow'))) }}</strong>
           </div>
           <div class="game-hud-center">
             <img v-if="roomProjectIcon(match.project_key)" class="game-hud-project-icon" :src="roomProjectIcon(match.project_key)" alt="" />
-            <div class="game-hud-project-copy"><small class="game-hud-room">{{ room.name }} · {{ room.room_code }}</small><strong>项目 {{ match.current_game_key }} · {{ projectName(match.project_key) }}</strong></div>
-            <div class="game-hud-progress" aria-label="三场项目进度"><span v-for="game in ['A', 'B', 'C']" :key="game" :class="[game === currentGameKey && 'current', resultForGame(game) && 'complete']">{{ game }}</span></div>
+            <div class="game-hud-project-copy"><small class="game-hud-room">{{ room.name }} · {{ $t(room.room_code) }}</small><strong>{{ $t("项目 ") }}{{ $t(match.current_game_key) }} · {{ $t(projectName(match.project_key)) }}</strong></div>
+            <div class="game-hud-progress" :aria-label='$t("三场项目进度")'><span v-for="game in ['A', 'B', 'C']" :key="game" :class="[game === currentGameKey && 'current', resultForGame(game) && 'complete']">{{ $t(game) }}</span></div>
           </div>
           <div class="game-hud-side white">
-            <strong class="game-hud-clock">{{ formatTeamClock(teamClockMs('white')) }}</strong>
-            <span class="game-hud-team">白方<small>包干时间</small></span>
-            <strong class="game-hud-series" :aria-label="`白方局分 ${match.series_score.white}`">{{ match.series_score.white }}</strong>
-            <span class="game-hud-stage"><i :class="['connection-dot', connection]"></i>{{ match.suspension.active ? '暂停' : statusText[room.status] }}</span>
+            <strong class="game-hud-clock">{{ $t(formatTeamClock(teamClockMs('white'))) }}</strong>
+            <span class="game-hud-team">{{ $t("白方") }}<small>{{ $t("包干时间") }}</small></span>
+            <strong class="game-hud-series" :aria-label="$t(`白方局分 ${match.series_score.white}`)">{{ $t(match.series_score.white) }}</strong>
+            <span class="game-hud-stage"><i :class="['connection-dot', connection]"></i>{{ $t(match.suspension.active ? '暂停' : statusText[room.status]) }}</span>
           </div>
         </section>
 
-        <div v-if="match && room.status.startsWith('GAME_') && !isGameStage" class="series-track" aria-label="三场赛程">
+        <div v-if="match && room.status.startsWith('GAME_') && !isGameStage" class="series-track" :aria-label='$t("三场赛程")'>
           <div v-for="game in ['A', 'B', 'C']" :key="game" :class="['series-game', game === currentGameKey && room.status !== 'FINISHED' && 'current', resultForGame(game) && 'complete']">
             <img v-if="roomProjectIcon(gameProject(game))" class="project-icon series-icon" :src="roomProjectIcon(gameProject(game))" alt="" />
-            <span>项目 {{ game }}<small>{{ resultForGame(game) ? `${projectResultValue(resultForGame(game), 'yellow')} / ${projectResultValue(resultForGame(game), 'white')} · ${winnerName(resultForGame(game).winner_side)}` : game === currentGameKey && room.status !== 'FINISHED' ? '当前项目' : '待进行' }}</small></span>
+            <span>{{ $t("项目 ") }}{{ $t(game) }}<small>{{ $t(resultForGame(game) ? `${projectResultValue(resultForGame(game), 'yellow')} / ${projectResultValue(resultForGame(game), 'white')} · ${winnerName(resultForGame(game).winner_side)}` : game === currentGameKey && room.status !== 'FINISHED' ? '当前项目' : '待进行') }}</small></span>
           </div>
         </div>
 
@@ -1270,16 +1274,16 @@ onBeforeUnmount(() => {
         <div :key="room.status" class="phase-body">
         <section v-if="room.status === 'CANCELLED'" class="closed-room-panel">
           <p class="eyebrow">ROOM CLOSED</p>
-          <h2>房间已关闭</h2>
-          <p>这场比赛未进入抽签，不能继续落座或开赛。房间记录已保留，可返回大厅查看。</p>
-          <button class="secondary-button" type="button" @click="navigate(competitionHomePath)">返回比赛大厅</button>
+          <h2>{{ $t("房间已关闭") }}</h2>
+          <p>{{ $t("这场比赛未进入抽签，不能继续落座或开赛。房间记录已保留，可返回大厅查看。") }}</p>
+          <button class="secondary-button" type="button" @click="navigate(competitionHomePath)">{{ $t("返回比赛大厅") }}</button>
         </section>
         <template v-else-if="isLobby">
           <section class="teams-grid">
             <div class="team-panel yellow-team">
               <div class="team-heading">
                 <div><p class="eyebrow">YELLOW SIDE</p><h2>{{ room.schedule?.yellow_name || '黄队' }}</h2></div>
-                <span :class="['ready-chip', room.teams.yellow.ready && 'is-ready']">{{ room.teams.yellow.ready ? '已准备' : '未准备' }}</span>
+                <span :class="['ready-chip', room.teams.yellow.ready && 'is-ready']">{{ $t(room.teams.yellow.ready ? '已准备' : '未准备') }}</span>
               </div>
               <button
                 v-for="item in teamSeats('yellow')"
@@ -1290,25 +1294,25 @@ onBeforeUnmount(() => {
                 @click="claim(item.side, item.position)"
               >
                 <PlayerAvatar v-if="item.seat" class="seat-avatar" :person="item.seat" />
-                <span v-else class="seat-number">{{ seatLabel(item.side, item.position) }}</span>
-                <span v-if="item.seat" class="seat-player"><strong>{{ item.seat.display_name }}</strong><small>{{ item.position === 1 ? '队长席位' : '队员席位' }}</small></span>
-                <span v-else class="seat-empty"><strong>空位</strong><small>{{ room.me.can_claim_seat ? '点击落座' : '等待选手' }}</small></span>
-                <span v-if="item.seat?.user_id === room.me.user_id" class="you-label">你</span>
+                <span v-else class="seat-number">{{ $t(seatLabel(item.side, item.position)) }}</span>
+                <span v-if="item.seat" class="seat-player"><strong>{{ item.seat.display_name }}</strong><small>{{ $t(item.position === 1 ? '队长席位' : '队员席位') }}</small></span>
+                <span v-else class="seat-empty"><strong>{{ $t("空位") }}</strong><small>{{ $t(room.me.can_claim_seat ? '点击落座' : '等待选手') }}</small></span>
+                <span v-if="item.seat?.user_id === room.me.user_id" class="you-label">{{ $t("你") }}</span>
               </button>
             </div>
 
             <div class="versus-column">
               <span class="versus">VS</span>
-              <span v-if="room.schedule?.players.length">{{ room.schedule.players.filter(p => p.arrived_at).length }} / 6 已签到</span>
-              <span v-else>{{ room.seats.length }} / 6 已落座</span>
-              <span v-if="room.status === 'SEATING'">等待全部选手</span>
-              <span v-else>等待双方队长</span>
+              <span v-if="room.schedule?.players.length">{{ $t(room.schedule.players.filter(p => p.arrived_at).length) }}{{ $t(" / 6 已签到") }}</span>
+              <span v-else>{{ $t(room.seats.length) }}{{ $t(" / 6 已落座") }}</span>
+              <span v-if="room.status === 'SEATING'">{{ $t("等待全部选手") }}</span>
+              <span v-else>{{ $t("等待双方队长") }}</span>
             </div>
 
             <div class="team-panel white-team">
               <div class="team-heading">
                 <div><p class="eyebrow">WHITE SIDE</p><h2>{{ room.schedule?.white_name || '白队' }}</h2></div>
-                <span :class="['ready-chip', room.teams.white.ready && 'is-ready']">{{ room.teams.white.ready ? '已准备' : '未准备' }}</span>
+                <span :class="['ready-chip', room.teams.white.ready && 'is-ready']">{{ $t(room.teams.white.ready ? '已准备' : '未准备') }}</span>
               </div>
               <button
                 v-for="item in teamSeats('white')"
@@ -1319,74 +1323,74 @@ onBeforeUnmount(() => {
                 @click="claim(item.side, item.position)"
               >
                 <PlayerAvatar v-if="item.seat" class="seat-avatar" :person="item.seat" />
-                <span v-else class="seat-number">{{ seatLabel(item.side, item.position) }}</span>
-                <span v-if="item.seat" class="seat-player"><strong>{{ item.seat.display_name }}</strong><small>{{ item.position === 1 ? '队长席位' : '队员席位' }}</small></span>
-                <span v-else class="seat-empty"><strong>空位</strong><small>{{ room.me.can_claim_seat ? '点击落座' : '等待选手' }}</small></span>
-                <span v-if="item.seat?.user_id === room.me.user_id" class="you-label">你</span>
+                <span v-else class="seat-number">{{ $t(seatLabel(item.side, item.position)) }}</span>
+                <span v-if="item.seat" class="seat-player"><strong>{{ item.seat.display_name }}</strong><small>{{ $t(item.position === 1 ? '队长席位' : '队员席位') }}</small></span>
+                <span v-else class="seat-empty"><strong>{{ $t("空位") }}</strong><small>{{ $t(room.me.can_claim_seat ? '点击落座' : '等待选手') }}</small></span>
+                <span v-if="item.seat?.user_id === room.me.user_id" class="you-label">{{ $t("你") }}</span>
               </button>
             </div>
           </section>
 
           <section class="action-bar">
             <div>
-              <strong v-if="mySeat">你位于 {{ seatLabel(mySeat.side, mySeat.position) }}{{ mySeat.position === 1 ? '，是本队队长' : '' }}</strong>
-              <strong v-else-if="room.schedule">按报名表对应席位落座</strong>
-              <strong v-else>请选择一个空位落座</strong>
-              <p v-if="room.schedule">请按报名序号落座。队长准备前请核对双方名单；双方就位后等待预定开战时间开始抽签。</p>
-              <p v-else-if="room.status === 'SEATING'">六个席位坐满后，双方队长可以准备。</p>
-              <p v-else>任一队准备后席位将锁定，双方准备后进入抽签。</p>
+              <strong v-if="mySeat">{{ $t("你位于 ") }}{{ $t(seatLabel(mySeat.side, mySeat.position)) }}{{ $t(mySeat.position === 1 ? '，是本队队长' : '') }}</strong>
+              <strong v-else-if="room.schedule">{{ $t("按报名表对应席位落座") }}</strong>
+              <strong v-else>{{ $t("请选择一个空位落座") }}</strong>
+              <p v-if="room.schedule">{{ $t("请按报名序号落座。队长准备前请核对双方名单；双方就位后等待预定开战时间开始抽签。") }}</p>
+              <p v-else-if="room.status === 'SEATING'">{{ $t("六个席位坐满后，双方队长可以准备。") }}</p>
+              <p v-else>{{ $t("任一队准备后席位将锁定，双方准备后进入抽签。") }}</p>
             </div>
             <div class="action-buttons">
-              <button v-if="room.me.can_leave_seat" class="secondary-button" type="button" :disabled="busy" @click="leave">离开席位</button>
-              <button v-if="room.me.can_ready" class="primary-button" type="button" :disabled="busy" @click="toggleReady">{{ busy ? '提交中…' : myTeamReady ? '取消准备' : '队长准备' }}</button>
+              <button v-if="room.me.can_leave_seat" class="secondary-button" type="button" :disabled="busy" @click="leave">{{ $t("离开席位") }}</button>
+              <button v-if="room.me.can_ready" class="primary-button" type="button" :disabled="busy" @click="toggleReady">{{ $t(busy ? '提交中…' : myTeamReady ? '取消准备' : '队长准备') }}</button>
             </div>
           </section>
         </template>
 
         <section v-else-if="room.status === 'DRAW'" :class="['draw-stage', visibleStageMotion?.kind === 'first-draw' && revealStep === 0 && 'drawing']">
           <p class="eyebrow">FIRST SIDE DRAW</p>
-          <div class="draw-orbit"><span v-if="visibleStageMotion?.kind === 'first-draw' && revealStep === 0" class="draw-alternating"><b>黄</b><b>白</b></span><span v-else>{{ sideName(draft.first_side).slice(0, 1) }}</span></div>
-          <h1>{{ visibleStageMotion?.kind === 'first-draw' && revealStep === 0 ? '抽签结果揭晓中' : `${sideName(draft.first_side)}获得先手` }}</h1>
-          <p>{{ visibleStageMotion?.kind === 'first-draw' && revealStep === 0 ? '服务器已确定先后手，即将揭晓。' : `${captainName(draft.first_side)} 将首先选择项目 A 并 BAN 一个项目` }}</p>
-          <strong class="draw-countdown">{{ formatCountdown(remainingSeconds) }}</strong>
-          <small>抽签承诺 {{ draft.commitment.slice(0, 12) }}… · {{ draft.algorithm_version }}</small>
+          <div class="draw-orbit"><span v-if="visibleStageMotion?.kind === 'first-draw' && revealStep === 0" class="draw-alternating"><b>{{ $t("黄") }}</b><b>{{ $t("白") }}</b></span><span v-else>{{ $t(sideName(draft.first_side).slice(0, 1)) }}</span></div>
+          <h1>{{ $t(visibleStageMotion?.kind === 'first-draw' && revealStep === 0 ? '抽签结果揭晓中' : `${sideName(draft.first_side)}获得先手`) }}</h1>
+          <p>{{ $t(visibleStageMotion?.kind === 'first-draw' && revealStep === 0 ? '服务器已确定先后手，即将揭晓。' : `${captainName(draft.first_side)} 将首先选择项目 A 并 BAN 一个项目`) }}</p>
+          <strong class="draw-countdown">{{ $t(formatCountdown(remainingSeconds)) }}</strong>
+          <small>{{ $t("抽签承诺 ") }}{{ $t(draft.commitment.slice(0, 12)) }}… · {{ $t(draft.algorithm_version) }}</small>
         </section>
 
         <template v-else-if="['FIRST_PICK_BAN', 'SECOND_PICK_BAN', 'BLIND_PICK'].includes(room.status)">
           <section class="bp-team-bar">
             <div :class="['bp-team-side', 'yellow', draft.active_side === 'yellow' && 'is-active']">
-              <span>黄方</span><strong>{{ captainName('yellow') }}</strong>
-              <small>{{ draft.first_side === 'yellow' ? '先手' : '后手' }}</small>
+              <span>{{ $t("黄方") }}</span><strong>{{ $t(captainName('yellow')) }}</strong>
+              <small>{{ $t(draft.first_side === 'yellow' ? '先手' : '后手') }}</small>
             </div>
             <div class="bp-phase-title">
-              <span>{{ statusText[room.status] }}</span>
-              <strong>{{ formatCountdown(remainingSeconds) }}</strong>
-              <small v-if="room.status !== 'BLIND_PICK'">{{ sideName(draft.active_side) }}队长操作</small>
-              <small v-else>双方独立提交，选择互不可见</small>
+              <span>{{ $t(statusText[room.status]) }}</span>
+              <strong>{{ $t(formatCountdown(remainingSeconds)) }}</strong>
+              <small v-if="room.status !== 'BLIND_PICK'">{{ $t(sideName(draft.active_side)) }} · {{ $t("队长操作") }}</small>
+              <small v-else>{{ $t("双方独立提交，选择互不可见") }}</small>
             </div>
             <div :class="['bp-team-side', 'white', draft.active_side === 'white' && 'is-active']">
-              <span>白方</span><strong>{{ captainName('white') }}</strong>
-              <small>{{ draft.first_side === 'white' ? '先手' : '后手' }}</small>
+              <span>{{ $t("白方") }}</span><strong>{{ $t(captainName('white')) }}</strong>
+              <small>{{ $t(draft.first_side === 'white' ? '先手' : '后手') }}</small>
             </div>
           </section>
 
           <section :class="['draft-history', visibleStageMotion?.kind === 'pick-lock' && 'locking']">
-            <div data-slot-key="A" :class="visibleStageMotion?.to === 'SECOND_PICK_BAN' && 'new-lock'"><img v-if="roomProjectIcon(draft.project_a)" class="project-icon history-icon" :src="roomProjectIcon(draft.project_a)" alt="" /><span>项目 A <em>{{ draftSource('A') }}</em></span><strong>{{ projectName(draft.project_a) }}</strong></div>
-            <div data-slot-key="M" :class="['ban', visibleStageMotion?.to === 'SECOND_PICK_BAN' && 'new-lock']"><img v-if="roomProjectIcon(draft.ban_m)" class="project-icon history-icon" :src="roomProjectIcon(draft.ban_m)" alt="" /><span>{{ sideName(draft.first_side) }} BAN <em>{{ draftSource('A') }}</em></span><strong>{{ projectName(draft.ban_m) }}</strong></div>
-            <div data-slot-key="B" :class="visibleStageMotion?.to === 'BLIND_PICK' && 'new-lock'"><img v-if="roomProjectIcon(draft.project_b)" class="project-icon history-icon" :src="roomProjectIcon(draft.project_b)" alt="" /><span>项目 B <em>{{ draftSource('B') }}</em></span><strong>{{ projectName(draft.project_b) }}</strong></div>
-            <div data-slot-key="N" :class="['ban', visibleStageMotion?.to === 'BLIND_PICK' && 'new-lock']"><img v-if="roomProjectIcon(draft.ban_n)" class="project-icon history-icon" :src="roomProjectIcon(draft.ban_n)" alt="" /><span>{{ sideName(draft.second_side) }} BAN <em>{{ draftSource('B') }}</em></span><strong>{{ projectName(draft.ban_n) }}</strong></div>
+            <div data-slot-key="A" :class="visibleStageMotion?.to === 'SECOND_PICK_BAN' && 'new-lock'"><img v-if="roomProjectIcon(draft.project_a)" class="project-icon history-icon" :src="roomProjectIcon(draft.project_a)" alt="" /><span>{{ $t("项目 A ") }}<em>{{ $t(draftSource('A')) }}</em></span><strong>{{ $t(projectName(draft.project_a)) }}</strong></div>
+            <div data-slot-key="M" :class="['ban', visibleStageMotion?.to === 'SECOND_PICK_BAN' && 'new-lock']"><img v-if="roomProjectIcon(draft.ban_m)" class="project-icon history-icon" :src="roomProjectIcon(draft.ban_m)" alt="" /><span>{{ $t(sideName(draft.first_side)) }} BAN <em>{{ $t(draftSource('A')) }}</em></span><strong>{{ $t(projectName(draft.ban_m)) }}</strong></div>
+            <div data-slot-key="B" :class="visibleStageMotion?.to === 'BLIND_PICK' && 'new-lock'"><img v-if="roomProjectIcon(draft.project_b)" class="project-icon history-icon" :src="roomProjectIcon(draft.project_b)" alt="" /><span>{{ $t("项目 B ") }}<em>{{ $t(draftSource('B')) }}</em></span><strong>{{ $t(projectName(draft.project_b)) }}</strong></div>
+            <div data-slot-key="N" :class="['ban', visibleStageMotion?.to === 'BLIND_PICK' && 'new-lock']"><img v-if="roomProjectIcon(draft.ban_n)" class="project-icon history-icon" :src="roomProjectIcon(draft.ban_n)" alt="" /><span>{{ $t(sideName(draft.second_side)) }} BAN <em>{{ $t(draftSource('B')) }}</em></span><strong>{{ $t(projectName(draft.ban_n)) }}</strong></div>
           </section>
 
           <section v-if="room.status !== 'BLIND_PICK'" class="bp-workspace">
             <div class="bp-instruction">
               <div>
                 <p class="eyebrow">PICK + BAN</p>
-                <h2 v-if="room.me.can_submit_pick_ban">选择一个比赛项目，并 BAN 一个不同项目</h2>
-                <h2 v-else>等待 {{ sideName(draft.active_side) }}队长完成选择</h2>
+                <h2 v-if="room.me.can_submit_pick_ban">{{ $t("选择一个比赛项目，并 BAN 一个不同项目") }}</h2>
+                <h2 v-else>{{ $t("等待 ") }}{{ $t(sideName(draft.active_side)) }}{{ $t("队长完成选择") }}</h2>
               </div>
               <div v-if="room.me.can_submit_pick_ban" class="current-choices">
-                <span>PICK <strong>{{ projectName(selectedPick) }}</strong></span>
-                <span>BAN <strong>{{ projectName(selectedBan) }}</strong></span>
+                <span>PICK <strong>{{ $t(projectName(selectedPick)) }}</strong></span>
+                <span>BAN <strong>{{ $t(projectName(selectedBan)) }}</strong></span>
               </div>
             </div>
             <div class="project-pool">
@@ -1396,39 +1400,39 @@ onBeforeUnmount(() => {
                 :data-pool-key="project.key"
                 :class="['project-card', !isProjectAvailable(project.key) && 'unavailable', selectedPick === project.key && 'selected-pick', selectedBan === project.key && 'selected-ban']"
               >
-                <span class="project-order">{{ String(project.sort_order).padStart(2, '0') }}</span>
+                <span class="project-order">{{ $t(String(project.sort_order).padStart(2, '0')) }}</span>
                 <img v-if="projectIconUrl(project.project_ref)" class="project-icon pool-icon" :src="projectIconUrl(project.project_ref)" alt="" />
-                <h3>{{ project.name }}</h3>
-                <p>{{ project.description || `规则版本 ${project.rules_version}` }}</p>
+                <h3>{{ $t(project.name) }}</h3>
+                <p>{{ $t(project.description || `规则版本 ${project.rules_version}`) }}</p>
                 <div v-if="room.me.can_submit_pick_ban && isProjectAvailable(project.key)" class="project-actions">
-                  <button type="button" :class="selectedPick === project.key && 'active'" @click="choosePick(project.key)">选择</button>
+                  <button type="button" :class="selectedPick === project.key && 'active'" @click="choosePick(project.key)">{{ $t("选择") }}</button>
                   <button type="button" :class="['ban-action', selectedBan === project.key && 'active']" @click="chooseBan(project.key)">BAN</button>
                 </div>
-                <span v-else-if="draft.project_a === project.key" class="project-result">项目 A</span>
-                <span v-else-if="draft.project_b === project.key" class="project-result">项目 B</span>
-                <span v-else-if="[draft.ban_m, draft.ban_n].includes(project.key)" class="project-result banned">{{ projectMark(project.key) }}</span>
+                <span v-else-if="draft.project_a === project.key" class="project-result">{{ $t("项目 A") }}</span>
+                <span v-else-if="draft.project_b === project.key" class="project-result">{{ $t("项目 B") }}</span>
+                <span v-else-if="[draft.ban_m, draft.ban_n].includes(project.key)" class="project-result banned">{{ $t(projectMark(project.key)) }}</span>
               </article>
             </div>
             <div v-if="room.me.can_submit_pick_ban" class="draft-submit-bar">
-              <span>超时后系统按项目池顺序选择首个合法组合。</span>
-              <button class="primary-button" type="button" :disabled="busy || !canSubmitPickBan" @click="submitPickBan">锁定并公开</button>
+              <span>{{ $t("超时后系统按项目池顺序选择首个合法组合。") }}</span>
+              <button class="primary-button" type="button" :disabled="busy || !canSubmitPickBan" @click="submitPickBan">{{ $t("锁定并公开") }}</button>
             </div>
           </section>
 
           <section v-else class="bp-workspace blind-workspace">
             <div class="bp-instruction">
-              <div><p class="eyebrow">SEALED PICK</p><h2>双方同时盲选项目 C 候选</h2></div>
+              <div><p class="eyebrow">SEALED PICK</p><h2>{{ $t("双方同时盲选项目 C 候选") }}</h2></div>
               <div class="blind-status">
-                <span :class="draft.blind_submissions.yellow && 'submitted'">黄方 {{ draft.blind_submissions.yellow ? '已提交' : '选择中' }}</span>
-                <span :class="draft.blind_submissions.white && 'submitted'">白方 {{ draft.blind_submissions.white ? '已提交' : '选择中' }}</span>
+                <span :class="draft.blind_submissions.yellow && 'submitted'">{{ $t("黄方 ") }}{{ $t(draft.blind_submissions.yellow ? '已提交' : '选择中') }}</span>
+                <span :class="draft.blind_submissions.white && 'submitted'">{{ $t("白方 ") }}{{ $t(draft.blind_submissions.white ? '已提交' : '选择中') }}</span>
               </div>
             </div>
-            <p v-if="ownRemainingSeconds !== null && room.me.is_captain" class="own-deadline">我的剩余时间：{{ formatCountdown(ownRemainingSeconds) }}</p>
-            <div class="blind-envelopes" aria-label="双方密封提交状态">
+            <p v-if="ownRemainingSeconds !== null && room.me.is_captain" class="own-deadline">{{ $t("我的剩余时间：") }}{{ $t(formatCountdown(ownRemainingSeconds)) }}</p>
+            <div class="blind-envelopes" :aria-label='$t("双方密封提交状态")'>
               <div v-for="side in ['yellow', 'white']" :key="side" :class="['blind-envelope', side, draft.blind_submissions[side] && 'sealed']">
-                <span>{{ sideName(side) }}候选</span>
-                <strong>{{ draft.blind_submissions[side] ? (mySeat?.side === side && draft.my_blind_choice ? projectName(draft.my_blind_choice) : '已密封') : '选择中' }}</strong>
-                <small>{{ draft.blind_submissions[side] ? '提交已锁定' : '尚未提交' }}</small>
+                <span>{{ $t(sideName(side)) }}{{ $t("候选") }}</span>
+                <strong>{{ $t(draft.blind_submissions[side] ? (mySeat?.side === side && draft.my_blind_choice ? projectName(draft.my_blind_choice) : '已密封') : '选择中') }}</strong>
+                <small>{{ $t(draft.blind_submissions[side] ? '提交已锁定' : '尚未提交') }}</small>
               </div>
             </div>
             <div class="project-pool blind-pool">
@@ -1440,165 +1444,165 @@ onBeforeUnmount(() => {
                 :disabled="!room.me.can_submit_blind || !isProjectAvailable(project.key)"
                 @click="selectedBlind = project.key"
               >
-                <span class="project-order">{{ String(project.sort_order).padStart(2, '0') }}</span>
+                <span class="project-order">{{ $t(String(project.sort_order).padStart(2, '0')) }}</span>
                 <img v-if="projectIconUrl(project.project_ref)" class="project-icon pool-icon" :src="projectIconUrl(project.project_ref)" alt="" />
-                <h3>{{ project.name }}</h3>
-                <p>{{ project.description || `规则版本 ${project.rules_version}` }}</p>
-                <span v-if="projectMark(project.key)" class="project-result">{{ projectMark(project.key) }}</span>
+                <h3>{{ $t(project.name) }}</h3>
+                <p>{{ $t(project.description || `规则版本 ${project.rules_version}`) }}</p>
+                <span v-if="projectMark(project.key)" class="project-result">{{ $t(projectMark(project.key)) }}</span>
               </button>
             </div>
             <div class="draft-submit-bar">
-              <span v-if="draft.my_blind_choice">本队已密封提交：{{ projectName(draft.my_blind_choice) }}</span>
-              <span v-else-if="!room.me.can_submit_blind">等待双方队长提交；候选项目不会提前公开。</span>
-              <span v-else>选定后不可修改；超时使用第一个合法项目。</span>
-              <button v-if="room.me.can_submit_blind" class="primary-button" type="button" :disabled="busy || !canSubmitBlind" @click="submitBlind">密封提交</button>
+              <span v-if="draft.my_blind_choice">{{ $t("本队已密封提交：") }}{{ $t(projectName(draft.my_blind_choice)) }}</span>
+              <span v-else-if="!room.me.can_submit_blind">{{ $t("等待双方队长提交；候选项目不会提前公开。") }}</span>
+              <span v-else>{{ $t("选定后不可修改；超时使用第一个合法项目。") }}</span>
+              <button v-if="room.me.can_submit_blind" class="primary-button" type="button" :disabled="busy || !canSubmitBlind" @click="submitBlind">{{ $t("密封提交") }}</button>
             </div>
           </section>
         </template>
 
         <section v-else-if="room.status === 'C_DRAW'" :class="['draft-complete', visibleStageMotion?.kind === 'c-draw' && revealStep < 2 && 'revealing', `reveal-step-${revealStep}`]">
           <p class="eyebrow">DRAFT COMPLETE</p>
-          <h1>{{ draft.c_reveal_at ? '双方盲选候选已公开' : '三个比赛项目已确定' }}</h1>
+          <h1>{{ $t(draft.c_reveal_at ? '双方盲选候选已公开' : '三个比赛项目已确定') }}</h1>
           <div v-if="draft.c_reveal_at" class="final-projects blind-candidate-cards">
-            <div v-for="side in ['yellow', 'white']" :key="side"><img v-if="roomProjectIcon(draft.blind_choices[side])" class="project-icon summary-icon" :src="roomProjectIcon(draft.blind_choices[side])" alt="" /><span>{{ sideName(side) }}候选</span><strong>{{ projectName(draft.blind_choices[side]) }}</strong><small>{{ projectDescription(draft.blind_choices[side]) }}</small></div>
+            <div v-for="side in ['yellow', 'white']" :key="side"><img v-if="roomProjectIcon(draft.blind_choices[side])" class="project-icon summary-icon" :src="roomProjectIcon(draft.blind_choices[side])" alt="" /><span>{{ $t(sideName(side)) }}{{ $t("候选") }}</span><strong>{{ $t(projectName(draft.blind_choices[side])) }}</strong><small>{{ $t(projectDescription(draft.blind_choices[side])) }}</small></div>
           </div>
           <div v-else class="final-projects">
-            <div><img v-if="roomProjectIcon(draft.project_a)" class="project-icon summary-icon" :src="roomProjectIcon(draft.project_a)" alt="" /><span>A · {{ sideName(draft.first_side) }}选择</span><strong>{{ projectName(draft.project_a) }}</strong><small>{{ projectDescription(draft.project_a) }}</small></div>
-            <div><img v-if="roomProjectIcon(draft.project_b)" class="project-icon summary-icon" :src="roomProjectIcon(draft.project_b)" alt="" /><span>B · {{ sideName(draft.second_side) }}选择</span><strong>{{ projectName(draft.project_b) }}</strong><small>{{ projectDescription(draft.project_b) }}</small></div>
-            <div class="project-c"><img v-if="roomProjectIcon(draft.project_c)" class="project-icon summary-icon" :src="roomProjectIcon(draft.project_c)" alt="" /><span>C · 盲选抽签</span><strong>{{ projectName(draft.project_c) }}</strong><small>{{ projectDescription(draft.project_c) }}</small></div>
+            <div><img v-if="roomProjectIcon(draft.project_a)" class="project-icon summary-icon" :src="roomProjectIcon(draft.project_a)" alt="" /><span>A · {{ $t(sideName(draft.first_side)) }}{{ $t("选择") }}</span><strong>{{ $t(projectName(draft.project_a)) }}</strong><small>{{ $t(projectDescription(draft.project_a)) }}</small></div>
+            <div><img v-if="roomProjectIcon(draft.project_b)" class="project-icon summary-icon" :src="roomProjectIcon(draft.project_b)" alt="" /><span>B · {{ $t(sideName(draft.second_side)) }}{{ $t("选择") }}</span><strong>{{ $t(projectName(draft.project_b)) }}</strong><small>{{ $t(projectDescription(draft.project_b)) }}</small></div>
+            <div class="project-c"><img v-if="roomProjectIcon(draft.project_c)" class="project-icon summary-icon" :src="roomProjectIcon(draft.project_c)" alt="" /><span>{{ $t("C · 盲选抽签") }}</span><strong>{{ $t(projectName(draft.project_c)) }}</strong><small>{{ $t(projectDescription(draft.project_c)) }}</small></div>
           </div>
           <div class="blind-reveal">
-            <span v-if="draft.blind_choices.yellow === draft.blind_choices.white" class="blind-candidate">双方相同候选：<strong>{{ projectName(draft.blind_choices.yellow) }}</strong> <em>黄 {{ draftSource('yellow') }} · 白 {{ draftSource('white') }}</em></span>
+            <span v-if="draft.blind_choices.yellow === draft.blind_choices.white" class="blind-candidate">{{ $t("双方相同候选：") }}<strong>{{ $t(projectName(draft.blind_choices.yellow)) }}</strong> <em>{{ $t("黄 ") }}{{ $t(draftSource('yellow')) }}{{ $t(" · 白 ") }}{{ $t(draftSource('white')) }}</em></span>
             <template v-else>
-              <span class="blind-candidate">黄方候选：<strong>{{ projectName(draft.blind_choices.yellow) }}</strong> <em>{{ draftSource('yellow') }}</em></span>
-              <span class="blind-candidate">白方候选：<strong>{{ projectName(draft.blind_choices.white) }}</strong> <em>{{ draftSource('white') }}</em></span>
+              <span class="blind-candidate">{{ $t("黄方候选：") }}<strong>{{ $t(projectName(draft.blind_choices.yellow)) }}</strong> <em>{{ $t(draftSource('yellow')) }}</em></span>
+              <span class="blind-candidate">{{ $t("白方候选：") }}<strong>{{ $t(projectName(draft.blind_choices.white)) }}</strong> <em>{{ $t(draftSource('white')) }}</em></span>
             </template>
-            <span>BAN：{{ projectName(draft.ban_m) }} / {{ projectName(draft.ban_n) }}</span>
+            <span>BAN：{{ $t(projectName(draft.ban_m)) }} / {{ $t(projectName(draft.ban_n)) }}</span>
           </div>
-          <p v-if="draft.c_reveal_at">先展示双方候选，随后揭晓项目 C 的抽签结果。</p>
-          <p v-else>抽签结果展示中，{{ formatCountdown(remainingSeconds) }} 后进入双方队长秘密布阵。</p>
+          <p v-if="draft.c_reveal_at">{{ $t("先展示双方候选，随后揭晓项目 C 的抽签结果。") }}</p>
+          <p v-else>{{ $t("抽签结果展示中，") }}{{ $t(formatCountdown(remainingSeconds)) }}{{ $t(" 后进入双方队长秘密布阵。") }}</p>
         </section>
 
         <template v-else-if="room.status === 'LINEUP'">
           <section class="bp-team-bar lineup-team-bar">
             <div class="bp-team-side yellow">
-              <span>黄方</span><strong>{{ captainName('yellow') }}</strong>
-              <small :class="['submission-state', lineup.submissions.yellow && 'submitted']">{{ lineup.submissions.yellow ? '阵容已密封' : '队长布阵中' }}</small>
+              <span>{{ $t("黄方") }}</span><strong>{{ $t(captainName('yellow')) }}</strong>
+              <small :class="['submission-state', lineup.submissions.yellow && 'submitted']">{{ $t(lineup.submissions.yellow ? '阵容已密封' : '队长布阵中') }}</small>
             </div>
             <div class="bp-phase-title">
               <span>SECRET LINEUP</span>
-              <strong>{{ formatCountdown(remainingSeconds) }}</strong>
-              <small>双方独立计时 · {{ ownRemainingSeconds === null ? '完整编排仅本队队员可见' : `我的剩余 ${formatCountdown(ownRemainingSeconds)}` }}</small>
+              <strong>{{ $t(formatCountdown(remainingSeconds)) }}</strong>
+              <small>{{ $t("双方独立计时 · ") }}{{ $t(ownRemainingSeconds === null ? '完整编排仅本队队员可见' : `我的剩余 ${formatCountdown(ownRemainingSeconds)}`) }}</small>
             </div>
             <div class="bp-team-side white">
-              <span>白方</span><strong>{{ captainName('white') }}</strong>
-              <small :class="['submission-state', lineup.submissions.white && 'submitted']">{{ lineup.submissions.white ? '阵容已密封' : '队长布阵中' }}</small>
+              <span>{{ $t("白方") }}</span><strong>{{ $t(captainName('white')) }}</strong>
+              <small :class="['submission-state', lineup.submissions.white && 'submitted']">{{ $t(lineup.submissions.white ? '阵容已密封' : '队长布阵中') }}</small>
             </div>
           </section>
 
           <section class="lineup-projects">
             <div v-for="game in ['A', 'B', 'C']" :key="game">
-              <img v-if="roomProjectIcon(gameProject(game))" class="project-icon lineup-icon" :src="roomProjectIcon(gameProject(game))" alt="" /><span>第 {{ game }} 场</span><strong>{{ projectName(gameProject(game)) }}</strong>
+              <img v-if="roomProjectIcon(gameProject(game))" class="project-icon lineup-icon" :src="roomProjectIcon(gameProject(game))" alt="" /><span>{{ $t("第 ") }}{{ $t(game) }}{{ $t(" 场") }}</span><strong>{{ $t(projectName(gameProject(game))) }}</strong>
             </div>
           </section>
 
           <section class="lineup-workspace">
             <div class="lineup-roster yellow-roster">
               <p class="eyebrow">YELLOW TEAM</p>
-              <h2>黄方名单</h2>
+              <h2>{{ $t("黄方名单") }}</h2>
               <div v-for="item in teamSeats('yellow')" :key="item.position" class="lineup-player">
-                <PlayerAvatar :person="item.seat" /><strong>{{ item.seat?.display_name }}</strong><small>{{ item.position === 1 ? '队长' : '队员' }}</small>
+                <PlayerAvatar :person="item.seat" /><strong>{{ item.seat?.display_name }}</strong><small>{{ $t(item.position === 1 ? '队长' : '队员') }}</small>
               </div>
             </div>
 
             <div class="lineup-console">
               <template v-if="room.me.can_submit_lineup">
-                <div class="lineup-title"><p class="eyebrow">CAPTAIN ONLY</p><h2>安排三场出战顺序</h2><p>每名队员必须且只能出战一场。提交后不可修改。</p></div>
+                <div class="lineup-title"><p class="eyebrow">CAPTAIN ONLY</p><h2>{{ $t("安排三场出战顺序") }}</h2><p>{{ $t("每名队员必须且只能出战一场。提交后不可修改。") }}</p></div>
                 <label v-for="game in ['A', 'B', 'C']" :key="game" class="lineup-assignment">
-                  <span><b>{{ game }}</b><img v-if="roomProjectIcon(gameProject(game))" class="project-icon assignment-icon" :src="roomProjectIcon(gameProject(game))" alt="" /><small>{{ projectName(gameProject(game)) }}</small></span>
+                  <span><b>{{ $t(game) }}</b><img v-if="roomProjectIcon(gameProject(game))" class="project-icon assignment-icon" :src="roomProjectIcon(gameProject(game))" alt="" /><small>{{ $t(projectName(gameProject(game))) }}</small></span>
                   <select v-model.number="lineupSelections[game]">
-                    <option v-for="position in [1, 2, 3]" :key="position" :value="position">{{ position }} 号位 · {{ playerAt(mySeat.side, position) }}</option>
+                    <option v-for="position in [1, 2, 3]" :key="position" :value="position">{{ $t(position) }}{{ $t(" 号位 · ") }}{{ $t(playerAt(mySeat.side, position)) }}</option>
                   </select>
                 </label>
-                <p v-if="!canSubmitLineup" class="lineup-warning">同一名队员不能重复出战，请为三场选择不同席位。</p>
-                <button class="primary-button lineup-submit" type="button" :disabled="busy || !canSubmitLineup" @click="submitLineup">密封提交阵容</button>
-                <small class="lineup-timeout">超时将自动采用 A=1、B=2、C=3。</small>
+                <p v-if="!canSubmitLineup" class="lineup-warning">{{ $t("同一名队员不能重复出战，请为三场选择不同席位。") }}</p>
+                <button class="primary-button lineup-submit" type="button" :disabled="busy || !canSubmitLineup" @click="submitLineup">{{ $t("密封提交阵容") }}</button>
+                <small class="lineup-timeout">{{ $t("超时将自动采用 A=1、B=2、C=3。") }}</small>
               </template>
               <template v-else-if="lineup.my_lineup">
                 <div class="sealed-mark">✓</div>
-                <h2>本队阵容已密封</h2>
-                <p>完整编排仅本队三名队员可见。你可以核对本队安排。</p>
+                <h2>{{ $t("本队阵容已密封") }}</h2>
+                <p>{{ $t("完整编排仅本队三名队员可见。你可以核对本队安排。") }}</p>
                 <div v-for="game in ['A', 'B', 'C']" :key="game" class="sealed-row">
-                  <b>{{ game }}</b><span>{{ projectName(gameProject(game)) }}</span><strong>{{ lineup.my_lineup[game].display_name }}</strong>
+                  <b>{{ $t(game) }}</b><span>{{ $t(projectName(gameProject(game))) }}</span><strong>{{ lineup.my_lineup[game].display_name }}</strong>
                 </div>
               </template>
               <template v-else>
                 <div class="sealed-mark waiting">•••</div>
-                <h2>{{ room.me.is_captain ? '等待对方队长提交' : '队长正在秘密布阵' }}</h2>
-                <p>提交前互相保密；双方都提交后，一并公开三场出战安排。</p>
+                <h2>{{ $t(room.me.is_captain ? '等待对方队长提交' : '队长正在秘密布阵') }}</h2>
+                <p>{{ $t("提交前互相保密；双方都提交后，一并公开三场出战安排。") }}</p>
               </template>
             </div>
 
             <div class="lineup-roster white-roster">
               <p class="eyebrow">WHITE TEAM</p>
-              <h2>白方名单</h2>
+              <h2>{{ $t("白方名单") }}</h2>
               <div v-for="item in teamSeats('white')" :key="item.position" class="lineup-player">
-                <PlayerAvatar :person="item.seat" /><strong>{{ item.seat?.display_name }}</strong><small>{{ item.position === 1 ? '队长' : '队员' }}</small>
+                <PlayerAvatar :person="item.seat" /><strong>{{ item.seat?.display_name }}</strong><small>{{ $t(item.position === 1 ? '队长' : '队员') }}</small>
               </div>
             </div>
           </section>
         </template>
 
         <template v-else-if="isGameReady">
-          <p v-if="stageWait > 0" class="muted">开局展示剩余 {{ stageWait }} 秒，可提前就绪；展示结束且双方就绪后开始，不扣比赛用时。</p>
-          <div v-if="lineup?.revealed_lineups" class="public-matchups"><p v-for="game in ['A','B','C']" :key="game">{{ lineup.revealed_lineups.yellow[game]?.display_name }} — 项目 {{ game }} · {{ projectName(gameProject(game)) }} — {{ lineup.revealed_lineups.white[game]?.display_name }}</p></div>
-          <p v-if="predictionWait > 0" class="muted" role="status">赛事下注最短窗口剩余 {{ predictionWait }} 秒；双方就绪后将自动开局，此处等待不扣队伍用时。</p>
+          <p v-if="stageWait > 0" class="muted">{{ $t("开局展示剩余 ") }}{{ $t(stageWait) }}{{ $t(" 秒，可提前就绪；展示结束且双方就绪后开始，不扣比赛用时。") }}</p>
+          <div v-if="lineup?.revealed_lineups" class="public-matchups"><p v-for="game in ['A','B','C']" :key="game">{{ lineup.revealed_lineups.yellow[game]?.display_name }}{{ $t(" — 项目 ") }}{{ $t(game) }} · {{ $t(projectName(gameProject(game))) }} — {{ lineup.revealed_lineups.white[game]?.display_name }}</p></div>
+          <p v-if="predictionWait > 0" class="muted" role="status">{{ $t("赛事下注最短窗口剩余 ") }}{{ $t(predictionWait) }}{{ $t(" 秒；双方就绪后将自动开局，此处等待不扣队伍用时。") }}</p>
           <section class="pregame-panel">
-            <p>双方独立确认，剩余 {{ Math.max(0,Math.ceil((Date.parse(match.ready_deadline_at)-clockNow-serverOffsetMs)/1000)) || 0 }} 秒后自动确认。期间不扣队伍包干时间。</p>
-            <div class="pregame-heading"><p class="eyebrow">PRE-GAME CHECK</p><h1>项目 {{ match.current_game_key }} 开局检查</h1><p>双方出战者和队长全部就绪后，项目与两队包干计时自动开始。</p></div>
-            <div class="pregame-project"><img v-if="roomProjectIcon(match.project_key)" class="project-icon pregame-project-icon" :src="roomProjectIcon(match.project_key)" alt="" /><div><span>本场项目</span><h2>{{ projectName(match.project_key) }}</h2><p>{{ projectDescription(match.project_key) }}</p></div></div>
+            <p>{{ $t("双方独立确认，剩余 ") }}{{ $t(Math.max(0,Math.ceil((Date.parse(match.ready_deadline_at)-clockNow-serverOffsetMs)/1000)) || 0) }}{{ $t(" 秒后自动确认。期间不扣队伍包干时间。") }}</p>
+            <div class="pregame-heading"><p class="eyebrow">PRE-GAME CHECK</p><h1>{{ $t("项目 ") }}{{ $t(match.current_game_key) }}{{ $t(" 开局检查") }}</h1><p>{{ $t("双方出战者和队长全部就绪后，项目与两队包干计时自动开始。") }}</p></div>
+            <div class="pregame-project"><img v-if="roomProjectIcon(match.project_key)" class="project-icon pregame-project-icon" :src="roomProjectIcon(match.project_key)" alt="" /><div><span>{{ $t("本场项目") }}</span><h2>{{ $t(projectName(match.project_key)) }}</h2><p>{{ $t(projectDescription(match.project_key)) }}</p></div></div>
             <div class="pregame-versus">
               <div v-for="side in ['yellow', 'white']" :key="side" :class="['pregame-team', side]">
-                <span class="side-kicker">{{ sideName(side) }}</span>
+                <span class="side-kicker">{{ $t(sideName(side)) }}</span>
                 <h2 class="pregame-player"><PlayerAvatar v-if="match.players[side]" :person="match.players[side]" />{{ match.players[side]?.display_name || '名单同步中' }}</h2>
-                <small v-if="match.players[side]">{{ match.players[side].position }} 号位 · 本场出战</small>
-                <small v-else>本队队员可查看本队安排</small>
-                <div class="check-row"><span>出战者连接与就绪</span><b :class="match.readiness[side].player_ready && 'ready'">{{ match.readiness[side].player_ready ? '已就绪' : '未就绪' }}</b></div>
-                <div class="check-row"><span>队长确认</span><b :class="match.readiness[side].captain_ready && 'ready'">{{ match.readiness[side].captain_ready ? '已确认' : '未确认' }}</b></div>
+                <small v-if="match.players[side]">{{ $t(match.players[side].position) }}{{ $t(" 号位 · 本场出战") }}</small>
+                <small v-else>{{ $t("本队队员可查看本队安排") }}</small>
+                <div class="check-row"><span>{{ $t("出战者连接与就绪") }}</span><b :class="match.readiness[side].player_ready && 'ready'">{{ $t(match.readiness[side].player_ready ? '已就绪' : '未就绪') }}</b></div>
+                <div class="check-row"><span>{{ $t("队长确认") }}</span><b :class="match.readiness[side].captain_ready && 'ready'">{{ $t(match.readiness[side].captain_ready ? '已确认' : '未确认') }}</b></div>
               </div>
             </div>
             <div class="pregame-actions">
-              <button v-if="room.me.can_mark_player_ready" class="secondary-button" type="button" :disabled="busy" @click="toggleGameReadiness('player')">{{ match.readiness[mySeat.side].player_ready ? '取消出战者就绪' : '我是出战者，已就绪' }}</button>
-              <button v-if="room.me.can_mark_captain_ready" class="secondary-button" type="button" :disabled="busy" @click="toggleGameReadiness('captain')">{{ match.readiness[mySeat.side].captain_ready ? '取消队长确认' : '队长确认开局' }}</button>
-              <span v-if="!room.me.can_mark_player_ready && !room.me.can_mark_captain_ready">等待双方出战者与队长完成开局检查。</span>
+              <button v-if="room.me.can_mark_player_ready" class="secondary-button" type="button" :disabled="busy" @click="toggleGameReadiness('player')">{{ $t(match.readiness[mySeat.side].player_ready ? '取消出战者就绪' : '我是出战者，已就绪') }}</button>
+              <button v-if="room.me.can_mark_captain_ready" class="secondary-button" type="button" :disabled="busy" @click="toggleGameReadiness('captain')">{{ $t(match.readiness[mySeat.side].captain_ready ? '取消队长确认' : '队长确认开局') }}</button>
+              <span v-if="!room.me.can_mark_player_ready && !room.me.can_mark_captain_ready">{{ $t("等待双方出战者与队长完成开局检查。") }}</span>
             </div>
           </section>
         </template>
 
         <template v-else-if="isGamePlaying">
           <section class="game-play-layout">
-            <div class="game-roster-edge yellow" aria-label="黄方队员状态">
-              <div class="roster-edge-title">黄方队员</div>
+            <div class="game-roster-edge yellow" :aria-label='$t("黄方队员状态")'>
+              <div class="roster-edge-title">{{ $t("黄方队员") }}</div>
               <div v-for="item in teamSeats('yellow')" :key="item.position" :class="['roster-edge-player', Number(match.players.yellow?.position) === item.position && 'active', match.sessions.yellow?.finished && Number(match.players.yellow?.position) === item.position && 'complete']">
                 <PlayerAvatar class="roster-edge-avatar" :person="item.seat" />
-                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `黄${item.position}` }}</strong><small>{{ item.position === 1 ? '队长 · ' : '' }}{{ rosterStatus('yellow', item.position) }}</small></span>
+                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `黄${item.position}` }}</strong><small>{{ $t(item.position === 1 ? '队长 · ' : '') }}{{ $t(rosterStatus('yellow', item.position)) }}</small></span>
               </div>
             </div>
             <div class="project-dual-view">
               <article v-for="side in ['yellow', 'white']" :key="side" :class="['project-side-view', side, match.sessions[side]?.finished && 'finished']">
-                <header class="project-metrics" :aria-label="`${sideName(side)}本场数据`">
-                  <div class="project-metric performance"><span>{{ projectMetric(side).label }}</span><strong>{{ projectMetric(side).value }}</strong></div>
-                  <div class="project-metric time"><span>{{ projectRemainingMs(side) == null ? '用时' : '倒计时' }}</span><strong>{{ formatProjectElapsed(projectRemainingMs(side) ?? projectElapsedMs(side)) }}</strong></div>
+                <header class="project-metrics" :aria-label="$t(`${sideName(side)}本场数据`)">
+                  <div class="project-metric performance"><span>{{ $t(projectMetric(side).label) }}</span><strong>{{ $t(projectMetric(side).value) }}</strong></div>
+                  <div class="project-metric time"><span>{{ $t(projectRemainingMs(side) == null ? '用时' : '倒计时') }}</span><strong>{{ $t(formatProjectElapsed(projectRemainingMs(side) ?? projectElapsedMs(side))) }}</strong></div>
                 </header>
                 <div class="project-board-stage" :class="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' && 'cargo-board-stage'">
-                <div v-if="match.sessions[side]?.finished" class="board-complete-tag" role="status">本侧已完成</div>
-                <div v-if="sessionPayload(side)?.awaiting_client" class="project-view-fallback" role="status">等待选手载入棋盘…</div>
+                <div v-if="match.sessions[side]?.finished" class="board-complete-tag" role="status">{{ $t("本侧已完成") }}</div>
+                <div v-if="sessionPayload(side)?.awaiting_client" class="project-view-fallback" role="status">{{ $t("等待选手载入棋盘…") }}</div>
                 <CargoBoard
                   v-else-if="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1'"
                   class="embedded-project-board"
                   :snapshot="projectBoardSnapshot(side)"
                   :disabled="!canUseBoard(side)"
-                  :aria-label="`${sideName(side)}真·华容道棋盘`"
+                  :aria-label="$t(`${sideName(side)}真·华容道棋盘`)"
                   @move="moveGame"
                 />
                 <TournamentBoard
@@ -1611,7 +1615,7 @@ onBeforeUnmount(() => {
                   :show-dice-effect="Boolean(sessionPayload(side)?.dice)"
                   :sealed-cells="sessionPayload(side)?.sealed_cells || []"
                   :disabled="!canUseBoard(side)"
-                  :aria-label="`${sideName(side)}项目棋盘`"
+                  :aria-label="$t(`${sideName(side)}项目棋盘`)"
                   @move="moveGame"
                 />
                 <PolyominoBoard
@@ -1619,67 +1623,68 @@ onBeforeUnmount(() => {
                   class="embedded-project-board"
                   :snapshot="projectBoardSnapshot(side)"
                   :disabled="!canUseBoard(side)"
-                  :aria-label="`${sideName(side)}越来越大棋盘`"
+                  :aria-label="$t(`${sideName(side)}越来越大棋盘`)"
                   @move="moveGame"
                 />
-                <div v-else class="project-view-fallback"><strong>项目公开画面暂不可用</strong><span>{{ match.sessions[side]?.public_view?.view_kind || '等待项目状态' }}</span></div>
-                <div v-if="isMyActiveSide(side) && projectThinking" class="project-thinking-pill" role="status"><span></span>AI 思考中</div>
+                <div v-else class="project-view-fallback"><strong>{{ $t("项目公开画面暂不可用") }}</strong><span>{{ $t(match.sessions[side]?.public_view?.view_kind || '等待项目状态') }}</span></div>
+                <div v-if="isMyActiveSide(side) && projectThinking" class="project-thinking-pill" role="status"><span></span>{{ $t("AI 思考中") }}</div>
                 </div>
-                <p v-if="isMyActiveSide(side) && sessionPayload(side)?.no_moves && (sessionPayload(side)?.allow_undo || sessionPayload(side)?.allow_restart)" class="project-recovery-note">当前盘面无可用移动，{{ sessionPayload(side)?.allow_undo ? '撤销' : '重开' }}后可继续。</p>
-                <button v-if="isMyActiveSide(side) && canSurrender" class="secondary-button" type="button" :disabled="movePending" @click="projectAction('surrender')">认输本局（保留当前得分）</button>
-                <p v-if="sessionPayload(side)?.target_sum" class="project-goal-note">目标盘面和 {{ sessionPayload(side).target_sum }} · 当前 {{ sessionPayload(side).board_sum }}</p>
-                <p v-if="sessionPayload(side)?.target_count" class="project-goal-note">{{ sessionPayload(side).target_tile }} 砖 {{ sessionPayload(side).current_target_count }}/{{ sessionPayload(side).target_count }}</p>
-                <p v-if="sessionPayload(side)?.next_seal_in != null" class="project-goal-note">距封锁轮换 {{ sessionPayload(side).next_seal_in }} 步</p>
+                <p v-if="isMyActiveSide(side) && sessionPayload(side)?.no_moves && (sessionPayload(side)?.allow_undo || sessionPayload(side)?.allow_restart)" class="project-recovery-note">{{ $t("当前盘面无可用移动，") }}{{ $t(sessionPayload(side)?.allow_undo ? '撤销' : '重开') }}{{ $t("后可继续。") }}</p>
+                <button v-if="isMyActiveSide(side) && canSurrender" class="secondary-button" type="button" :disabled="movePending" @click="projectAction('surrender')">{{ $t("认输本局（保留当前得分）") }}</button>
+                <p v-if="sessionPayload(side)?.target_sum" class="project-goal-note">{{ $t("目标盘面和 ") }}{{ $t(sessionPayload(side).target_sum) }}{{ $t(" · 当前 ") }}{{ $t(sessionPayload(side).board_sum) }}</p>
+                <p v-if="sessionPayload(side)?.target_count" class="project-goal-note">{{ $t(sessionPayload(side).target_tile) }}{{ $t(" 砖 ") }}{{ $t(sessionPayload(side).current_target_count) }}/{{ $t(sessionPayload(side).target_count) }}</p>
+                <p v-if="sessionPayload(side)?.next_seal_in != null" class="project-goal-note">{{ $t("距封锁轮换 ") }}{{ $t(sessionPayload(side).next_seal_in) }}{{ $t(" 步") }}</p>
                 <template v-if="isMyActiveSide(side)">
-                  <div v-if="room.me.can_move" class="move-pad side-move-pad" aria-label="棋盘方向操作">
-                    <button type="button" aria-label="向上" :disabled="!canUseBoard(side)" @click="moveGame('up')">↑</button>
-                    <button type="button" aria-label="向左" :disabled="!canUseBoard(side)" @click="moveGame('left')">←</button>
-                    <button type="button" aria-label="向下" :disabled="!canUseBoard(side)" @click="moveGame('down')">↓</button>
-                    <button type="button" aria-label="向右" :disabled="!canUseBoard(side)" @click="moveGame('right')">→</button>
+                  <div v-if="room.me.can_move" class="move-pad side-move-pad" :aria-label='$t("棋盘方向操作")'>
+                    <button type="button" :aria-label='$t("向上")' :disabled="!canUseBoard(side)" @click="moveGame('up')">↑</button>
+                    <button type="button" :aria-label='$t("向左")' :disabled="!canUseBoard(side)" @click="moveGame('left')">←</button>
+                    <button type="button" :aria-label='$t("向下")' :disabled="!canUseBoard(side)" @click="moveGame('down')">↓</button>
+                    <button type="button" :aria-label='$t("向右")' :disabled="!canUseBoard(side)" @click="moveGame('right')">→</button>
                   </div>
                   <div v-if="room.me.can_move && (sessionPayload(side)?.allow_undo || sessionPayload(side)?.allow_restart)" class="project-action-row">
-                    <button v-if="sessionPayload(side)?.allow_undo" type="button" :disabled="!canUseBoard(side) || !sessionPayload(side)?.can_undo" @click="projectAction('undo')">撤销一步（Z）</button>
-                    <button v-if="sessionPayload(side)?.allow_restart" type="button" :disabled="!canUseBoard(side)" @click="projectAction('restart')">重新开始（R）</button>
+                    <button v-if="sessionPayload(side)?.allow_undo" type="button" :disabled="!canUseBoard(side) || !sessionPayload(side)?.can_undo" @click="projectAction('undo')">{{ $t("撤销一步（Z）") }}</button>
+                    <button v-if="sessionPayload(side)?.allow_restart" type="button" :disabled="!canUseBoard(side)" @click="projectAction('restart')">{{ $t("重新开始（R）") }}</button>
                   </div>
-                  <p v-if="room.me.can_move" class="move-help">方向键 / WASD 操作 · 对手棋盘可实时查看</p>
-                  <p v-if="localPacket && projectSyncState === 'reconnecting'" class="project-recovery-note" role="status">网络重连中，当前进度已在本机保留，可继续操作。</p>
-                  <p v-else-if="localPacket?.finished && projectSyncState === 'syncing'" class="project-recovery-note" role="status">本局已完成，正在同步成绩…</p>
-                  <div v-else-if="match.suspension.active" class="project-finished-note suspended-note"><strong>比赛暂停</strong><span>操作已锁定，等待双方队长与裁判恢复比赛。</span></div>
+                  <p v-if="room.me.can_move" class="move-help">{{ $t("方向键 / WASD 操作 · 对手棋盘可实时查看") }}</p>
+                  <p v-if="localPacket && projectSyncState === 'reconnecting'" class="project-recovery-note" role="status">{{ $t("网络重连中，当前进度已在本机保留，可继续操作。") }}</p>
+                  <p v-else-if="localPacket?.finished && projectSyncState === 'syncing'" class="project-recovery-note" role="status">{{ $t("本局已完成，正在同步成绩…") }}</p>
+                  <div v-else-if="match.suspension.active" class="project-finished-note suspended-note"><strong>{{ $t("比赛暂停") }}</strong><span>{{ $t("操作已锁定，等待双方队长与裁判恢复比赛。") }}</span></div>
                 </template>
               </article>
             </div>
-            <div class="game-roster-edge white" aria-label="白方队员状态">
-              <div class="roster-edge-title">白方队员</div>
+            <div class="game-roster-edge white" :aria-label='$t("白方队员状态")'>
+              <div class="roster-edge-title">{{ $t("白方队员") }}</div>
               <div v-for="item in teamSeats('white')" :key="item.position" :class="['roster-edge-player', Number(match.players.white?.position) === item.position && 'active', match.sessions.white?.finished && Number(match.players.white?.position) === item.position && 'complete']">
-                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `白${item.position}` }}</strong><small>{{ item.position === 1 ? '队长 · ' : '' }}{{ rosterStatus('white', item.position) }}</small></span>
+                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `白${item.position}` }}</strong><small>{{ $t(item.position === 1 ? '队长 · ' : '') }}{{ $t(rosterStatus('white', item.position)) }}</small></span>
                 <PlayerAvatar class="roster-edge-avatar" :person="item.seat" />
               </div>
             </div>
-            <footer class="game-rules-footer"><span>当前玩法 · 项目 {{ match.current_game_key }}</span><strong>{{ projectName(match.project_key) }}</strong><p>{{ projectDescription(match.project_key) }}</p></footer>
+            <footer class="game-rules-footer"><span>{{ $t("当前玩法 · 项目 ") }}{{ $t(match.current_game_key) }}</span><strong>{{ $t(projectName(match.project_key)) }}</strong><p>{{ $t(projectDescription(match.project_key)) }}</p><LanguageSwitch /></footer>
           </section>
         </template>
 
         <section v-else-if="isGameResult" class="game-result-panel">
           <div class="result-versus">
-            <div class="result-side yellow"><div class="result-player"><PlayerAvatar :person="match.players.yellow" /><span>黄方 · {{ match.players.yellow.display_name }}</span></div><strong>{{ projectResultValue(match.current_result, 'yellow') }}</strong></div>
-            <div class="result-center"><img v-if="roomProjectIcon(match.project_key)" class="project-icon result-icon" :src="roomProjectIcon(match.project_key)" alt="" /><span>项目 {{ match.current_game_key }} · {{ projectName(match.project_key) }}</span><b>{{ match.current_result.winner_side === 'draw' ? '平局' : `${sideName(match.current_result.winner_side)}获胜` }}</b><p>{{ projectDescription(match.project_key) }}</p></div>
-            <div class="result-side white"><div class="result-player"><PlayerAvatar :person="match.players.white" /><span>白方 · {{ match.players.white.display_name }}</span></div><strong>{{ projectResultValue(match.current_result, 'white') }}</strong></div>
+            <div class="result-side yellow"><div class="result-player"><PlayerAvatar :person="match.players.yellow" /><span>{{ $t("黄方 · ") }}{{ match.players.yellow.display_name }}</span></div><strong>{{ $t(projectResultValue(match.current_result, 'yellow')) }}</strong></div>
+            <div class="result-center"><img v-if="roomProjectIcon(match.project_key)" class="project-icon result-icon" :src="roomProjectIcon(match.project_key)" alt="" /><span>{{ $t("项目 ") }}{{ $t(match.current_game_key) }} · {{ $t(projectName(match.project_key)) }}</span><b>{{ $t(match.current_result.winner_side === 'draw' ? '平局' : `${sideName(match.current_result.winner_side)}获胜`) }}</b><p>{{ $t(projectDescription(match.project_key)) }}</p></div>
+            <div class="result-side white"><div class="result-player"><PlayerAvatar :person="match.players.white" /><span>{{ $t("白方 · ") }}{{ match.players.white.display_name }}</span></div><strong>{{ $t(projectResultValue(match.current_result, 'white')) }}</strong></div>
           </div>
-          <p v-if="match.current_result.corrected" class="result-correction-note">裁判已修订 · {{ match.current_result.correction_reason }}</p>
-          <p v-if="match.current_result.reason?.endsWith('_surrendered')">{{ sideName(match.current_result.reason.split('_')[0]) }}认输本局，保留认输时成绩并判负。</p>
-          <div class="result-boards"><div v-for="side in ['yellow', 'white']" :key="side"><strong>{{ sideName(side) }}最终盘面</strong>
+          <p v-if="match.current_result.corrected" class="result-correction-note">{{ $t("裁判已修订 · ") }}{{ $t(match.current_result.correction_reason) }}</p>
+          <p v-if="match.current_result.reason?.endsWith('_surrendered')">{{ $t(sideName(match.current_result.reason.split('_')[0])) }}{{ $t("认输本局，保留认输时成绩并判负。") }}</p>
+          <div class="result-boards"><div v-for="side in ['yellow', 'white']" :key="side"><strong>{{ $t(sideName(side)) }}{{ $t("最终盘面") }}</strong>
             <component :is="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' ? CargoBoard : match.sessions[side]?.public_view?.view_protocol === 'polyomino-board-v1' ? PolyominoBoard : TournamentBoard" v-if="sessionPayload(side)?.board" :snapshot="projectBoardSnapshot(side)" :disabled="true" :mirror-portals="Boolean(sessionPayload(side)?.mirror_portals)" :irregular-shape="Boolean(sessionPayload(side)?.shape_shifter || sessionPayload(side)?.aftershock)" :aftershock="Boolean(sessionPayload(side)?.aftershock)" :sealed-cells="sessionPayload(side)?.sealed_cells || []" />
           </div></div>
-          <p v-for="side in ['yellow','white']" :key="`refund-${side}`" v-show="match.current_result[`${side}_refund_ms`]>0">{{ sideName(side) }}包干补时 +{{ (match.current_result[`${side}_refund_ms`]/1000).toFixed(2) }} 秒</p>
-          <p v-if="stageWait">休整剩余 {{ stageWait }} 秒，随后自动继续。</p>
+          <p v-for="side in ['yellow','white']" :key="`refund-${side}`" v-show="match.current_result[`${side}_refund_ms`]>0">{{ $t(sideName(side)) }}{{ $t("包干补时 +") }}{{ $t((match.current_result[`${side}_refund_ms`]/1000).toFixed(2)) }}{{ $t(" 秒") }}</p>
+          <p v-if="stageWait">{{ $t("休整剩余 ") }}{{ $t(stageWait) }}{{ $t(" 秒，随后自动继续。") }}</p>
           <div class="confirmation-strip">
-            <strong>休整结束后自动进入{{ match.current_game_key==='C' ? '全场结算' : '下一项目' }}</strong>
+            <strong>{{ $t("休整结束后自动进入") }}{{ $t(match.current_game_key==='C' ? '全场结算' : '下一项目') }}</strong>
           </div>
         </section>
 
-        <MatchSettlement v-else-if="room.status === 'FINISHED'" :games="settlementGames" :teams="{yellow:{name:room.schedule?.yellow_name || '黄方'},white:{name:room.schedule?.white_name || '白方'}}" :score="match.series_score" :points="match.series_points" :winner="match.winner_side" :reason="match.finish_reason">
-          <button class="secondary-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">返回比赛列表</button>
+        <MatchSettlement v-else-if="room.status === 'FINISHED'" :lang="language" :games="settlementGames" :teams="{yellow:{name:room.schedule?.yellow_name || t('黄方')},white:{name:room.schedule?.white_name || t('白方')}}" :score="match.series_score" :points="match.series_points" :winner="match.winner_side" :reason="match.finish_reason">
+          <button class="secondary-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">{{ $t("返回比赛列表") }}</button>
         </MatchSettlement>
+        <div v-if="isGameStage && !isGamePlaying" class="phase-language"><LanguageSwitch /></div>
         </div>
         </Transition>
       </div>

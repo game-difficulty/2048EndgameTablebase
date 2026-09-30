@@ -1,19 +1,19 @@
 <template>
   <div ref="stage" class="cargo-stage" tabindex="0" @pointerdown="swipe.down" @pointermove="swipe.drag" @pointerup="swipe.up" @pointercancel="swipe.cancel" @lostpointercapture="swipe.cancel">
-    <div class="cargo-port cargo-entry" aria-label="入口">
+    <div class="cargo-port cargo-entry" :aria-label='$t("入口")'>
       <span v-for="cell in 4" :key="`entry-${cell}`" :style="portCellStyle(cell - 1, true)" />
-      <b>入口</b>
+      <b>{{ $t("入口") }}</b>
     </div>
     <TournamentBoard class="cargo-number-board" :snapshot="snapshot" :disabled="disabled" :tile-styles="tileStyles" :font-scale="fontScale" @move="emit('move', $event)" />
-    <div class="cargo-port cargo-exit" aria-label="出口">
+    <div class="cargo-port cargo-exit" :aria-label='$t("出口")'>
       <span v-for="cell in 2" :key="`exit-${cell}`" :style="portCellStyle(cell - 1, false)" />
-      <b>出口 ↓</b>
+      <b>{{ $t("出口 ↓") }}</b>
     </div>
     <div v-if="displayCargo" :key="displayCargo.id" :class="['cargo-piece-box', { instant: cargoInstant }]" :style="cargoStyle(displayCargo)">
       <div class="cargo-art">
         <span v-for="(cell, index) in shapeCells(displayCargo)" :key="index" class="cargo-part" :style="partStyle(displayCargo, cell)" />
         <span v-for="(bridge, index) in shapeBridges(displayCargo)" :key="`bridge-${index}`" class="cargo-bridge" :style="bridge" />
-        <strong :style="cargoLabelStyle(displayCargo)">{{ displayCargo.shape === 0 ? '▣' : '◆' }}</strong>
+        <strong :style="cargoLabelStyle(displayCargo)">{{ $t(displayCargo.shape === 0 ? '▣' : '◆') }}</strong>
       </div>
     </div>
   </div>

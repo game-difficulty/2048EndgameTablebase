@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { api } from './api.js';
+import { t } from './i18n.js';
 import { userFacingError } from './errorMessages.js';
 
 const props = defineProps({ slug: { type: String, required: true } });
@@ -28,7 +29,7 @@ function update(value, preserveDraft = false) {
 async function load(preserveDraft = false) { try { update(await api.enrollment(props.slug), preserveDraft); } catch(cause) { error.value = userFacingError(cause); } }
 async function act(action, values = {}) {
   if (busy.value) return;
-  if (['withdraw','disband_team','lock_registration','lock_roster'].includes(action) && !window.confirm({withdraw:'确定退出报名？',disband_team:'解散后所有队员仍保留报名，但会变为未组队。确定继续？',lock_registration:'锁定参赛人员后不能自主报名或退出；举办方仍可调整分组。确定？',lock_roster:'锁定最终名单后，报名、组队和导入均停止。确定名单已经核对完毕？'}[action])) return;
+  if (['withdraw','disband_team','lock_registration','lock_roster'].includes(action) && !window.confirm(t({withdraw:'确定退出报名？',disband_team:'解散后所有队员仍保留报名，但会变为未组队。确定继续？',lock_registration:'锁定参赛人员后不能自主报名或退出；举办方仍可调整分组。确定？',lock_roster:'锁定最终名单后，报名、组队和导入均停止。确定名单已经核对完毕？'}[action]))) return;
   busy.value = true; error.value = ''; notice.value = '';
   try { update(await api.enrollmentAction(props.slug, { action, revision: state.value.revision, ...values })); preview.value = null; notice.value = '操作已保存。'; }
   catch(cause) { error.value = userFacingError(cause); if (cause.code === 'ROSTER_CHANGED') await load(); }
@@ -63,38 +64,38 @@ onBeforeUnmount(() => { disposed = true; clearInterval(pollTimer); });
 
 <template>
   <section class="enrollment-panel">
-    <header><h2>报名与参赛名单</h2><button type="button" :disabled="busy" @click="load()">刷新</button></header>
-    <p v-if="error" class="alert" role="alert">{{ error }}</p><p v-if="notice" role="status">{{ notice }}</p>
+    <header><h2>{{ $t("报名与参赛名单") }}</h2><button type="button" :disabled="busy" @click="load()">{{ $t("刷新") }}</button></header>
+    <p v-if="error" class="alert" role="alert">{{ $t(error) }}</p><p v-if="notice" role="status">{{ $t(notice) }}</p>
     <template v-if="state">
-      <p class="enrollment-meta">{{ labels[state.mode] }} · {{ state.entries.length }}{{ state.capacity ? `/${state.capacity}` : '' }} 人 · {{ state.roster_locked ? '最终名单已锁定' : state.registration_locked ? '参赛人员已锁定，分组可调整' : state.registration_open ? '报名开放' : '报名未开放' }}</p>
-      <p v-if="!state.me.user_id"><a href="https://2048tables.online/">登录 Table 账号后报名或处理邀请 →</a></p>
+      <p class="enrollment-meta">{{ $t(labels[state.mode]) }} · {{ $t(state.entries.length) }}{{ $t(state.capacity ? `/${state.capacity}` : '') }}{{ $t(" 人 · ") }}{{ $t(state.roster_locked ? '最终名单已锁定' : state.registration_locked ? '参赛人员已锁定，分组可调整' : state.registration_open ? '报名开放' : '报名未开放') }}</p>
+      <p v-if="!state.me.user_id"><a href="https://2048tables.online/">{{ $t("登录 Table 账号后报名或处理邀请 →") }}</a></p>
       <template v-else>
-        <p class="enrollment-meta">你的 Table 用户 ID：{{ state.me.user_id }}。可将此 ID 提供给队长用于邀请。</p>
-        <p v-if="mine">你已{{ mine.source === 'imported' ? '由举办方登记' : '报名' }}：{{ myTeam?.name || (state.mode === 'solo' ? '单人参赛' : '待分组 / 待组队') }}。</p>
-        <div class="enrollment-actions" v-if="editable"><button v-if="!mine" :disabled="busy" @click="act('signup')">报名参赛</button><button v-else-if="!myTeam || state.mode !== 'self_team'" :disabled="busy" @click="act('withdraw')">退出报名</button></div>
+        <p class="enrollment-meta">{{ $t("你的 Table 用户 ID：") }}{{ $t(state.me.user_id) }}。{{ $t("可将此 ID 提供给队长用于邀请。") }}</p>
+        <p v-if="mine">{{ $t("你已") }}{{ $t(mine.source === 'imported' ? '由举办方登记' : '报名') }}：{{ myTeam?.name || (state.mode === 'solo' ? '单人参赛' : '待分组 / 待组队') }}。</p>
+        <div class="enrollment-actions" v-if="editable"><button v-if="!mine" :disabled="busy" @click="act('signup')">{{ $t("报名参赛") }}</button><button v-else-if="!myTeam || state.mode !== 'self_team'" :disabled="busy" @click="act('withdraw')">{{ $t("退出报名") }}</button></div>
         <template v-if="state.mode === 'self_team'">
-          <form v-if="!myTeam && editable" @submit.prevent="act('create_team',{name:teamName})"><label>队伍名称<input v-model="teamName" required maxlength="40" /></label><button :disabled="busy">创建队伍并报名</button></form>
-          <div v-for="invite in state.invitations.filter(i=>i.user_id===state.me.user_id)" :key="invite.team_id" class="invite-row">「{{ invite.team_name }}」邀请你加入 <button :disabled="busy || !editable" @click="act('accept_invite',{team_id:invite.team_id})">接受</button><button :disabled="busy || !editable" @click="act('decline_invite',{team_id:invite.team_id})">拒绝</button></div>
-          <section v-if="myTeam" class="my-team"><h3>我的队伍 · {{ myTeam.name }} · {{ myTeam.submitted ? '已提交报名' : '待队长提交' }}</h3>
-            <p>{{ members(myTeam).map(e=>e.display_name).join('、') }}（{{ members(myTeam).length }}/{{ state.team_size }}）</p>
-            <template v-if="captain"><form v-if="!myTeam.submitted && editable" @submit.prevent="act('invite',{team_id:myTeam.id,user_id:Number(inviteUser)})"><label>队员 Table 用户 ID<input v-model="inviteUser" type="number" min="1" required /></label><button :disabled="busy">发出邀请</button></form>
-              <p v-for="invite in state.invitations.filter(i=>i.team_id===myTeam.id)" :key="invite.user_id">等待 {{ invite.display_name }} 接受 <button :disabled="busy || !editable" @click="act('cancel_invite',{team_id:myTeam.id,user_id:invite.user_id})">取消邀请</button></p>
-              <div class="enrollment-actions"><button :disabled="busy || state.roster_locked || (!myTeam.submitted && members(myTeam).length !== state.team_size)" @click="act(myTeam.submitted?'unsubmit_team':'submit_team',{team_id:myTeam.id})">{{ myTeam.submitted ? '撤回队伍报名' : '全员确认，提交队伍报名' }}</button><button :disabled="busy || !editable" @click="act('disband_team',{team_id:myTeam.id})">解散队伍</button></div>
-            </template><button v-else :disabled="busy || !editable" @click="act('leave_team',{team_id:myTeam.id})">离开队伍（保留个人报名）</button>
+          <form v-if="!myTeam && editable" @submit.prevent="act('create_team',{name:teamName})"><label>{{ $t("队伍名称") }}<input v-model="teamName" required maxlength="40" /></label><button :disabled="busy">{{ $t("创建队伍并报名") }}</button></form>
+          <div v-for="invite in state.invitations.filter(i=>i.user_id===state.me.user_id)" :key="invite.team_id" class="invite-row">「{{ invite.team_name }}{{ $t("」邀请你加入 ") }}<button :disabled="busy || !editable" @click="act('accept_invite',{team_id:invite.team_id})">{{ $t("接受") }}</button><button :disabled="busy || !editable" @click="act('decline_invite',{team_id:invite.team_id})">{{ $t("拒绝") }}</button></div>
+          <section v-if="myTeam" class="my-team"><h3>{{ $t("我的队伍 · ") }}{{ myTeam.name }} · {{ $t(myTeam.submitted ? '已提交报名' : '待队长提交') }}</h3>
+            <p>{{ members(myTeam).map(e=>e.display_name).join('、') }}（{{ $t(members(myTeam).length) }}/{{ $t(state.team_size) }}）</p>
+            <template v-if="captain"><form v-if="!myTeam.submitted && editable" @submit.prevent="act('invite',{team_id:myTeam.id,user_id:Number(inviteUser)})"><label>{{ $t("队员 Table 用户 ID") }}<input v-model="inviteUser" type="number" min="1" required /></label><button :disabled="busy">{{ $t("发出邀请") }}</button></form>
+              <p v-for="invite in state.invitations.filter(i=>i.team_id===myTeam.id)" :key="invite.user_id">{{ $t("等待 ") }}{{ invite.display_name }}{{ $t(" 接受 ") }}<button :disabled="busy || !editable" @click="act('cancel_invite',{team_id:myTeam.id,user_id:invite.user_id})">{{ $t("取消邀请") }}</button></p>
+              <div class="enrollment-actions"><button :disabled="busy || state.roster_locked || (!myTeam.submitted && members(myTeam).length !== state.team_size)" @click="act(myTeam.submitted?'unsubmit_team':'submit_team',{team_id:myTeam.id})">{{ $t(myTeam.submitted ? '撤回队伍报名' : '全员确认，提交队伍报名') }}</button><button :disabled="busy || !editable" @click="act('disband_team',{team_id:myTeam.id})">{{ $t("解散队伍") }}</button></div>
+            </template><button v-else :disabled="busy || !editable" @click="act('leave_team',{team_id:myTeam.id})">{{ $t("离开队伍（保留个人报名）") }}</button>
           </section>
         </template>
       </template>
-      <div class="enrolled-teams"><article v-for="team in state.teams" :key="team.id"><h3>{{ team.name }} <small>{{ state.roster_locked ? '已锁定' : state.mode === 'self_team' ? (team.submitted ? '已提交' : '待队长提交') : '分组草案' }}</small></h3><p v-for="member in members(team)" :key="member.user_id">{{ member.position ? `${member.position}号 · ` : '' }}{{ member.display_name }}{{ team.captain_user_id === member.user_id ? ' · 队长' : '' }}{{ member.is_external ? ' · 外援' : '' }}</p></article></div>
-      <p v-if="state.entries.some(e=>!e.team_id)">{{ state.mode==='solo'?'参赛选手':'待分组选手' }}：{{ state.entries.filter(e=>!e.team_id).map(e=>e.display_name+(e.is_external?'（外援）':'')).join('、') }}</p>
-      <p v-if="!state.entries.length" class="enrollment-meta">暂无报名或导入名单。</p>
-      <details v-if="state.me.can_manage" class="enrollment-admin"><summary>举办方 · 报名设置、导入与锁定</summary>
-        <form v-if="!state.roster_locked && !state.registration_locked" @submit.prevent="act('settings',{mode,capacity:Number(capacity),registration_open:open})"><label>报名方式<select v-model="mode" :disabled="state.fixed_policy || !!state.entries.length"><option v-for="(label,key) in labels" :key="key" :value="key">{{ label }}</option></select></label><label>人数上限（0 不限）<input v-model="capacity" type="number" min="0" max="10000" :disabled="state.fixed_policy" /></label><label class="checkbox-label"><input v-model="open" type="checkbox" />开放报名</label><button :disabled="busy">保存设置</button></form>
-        <div class="enrollment-actions" v-if="!state.roster_locked"><button v-if="!state.registration_locked" :disabled="busy" @click="act('lock_registration')">锁定参赛人员</button><button :disabled="busy" @click="act('lock_roster')">锁定最终名单</button></div>
-        <form v-if="state.registration_locked || state.roster_locked" @submit.prevent="act('unlock',{reason:unlockReason})"><label>解锁原因<input v-model="unlockReason" minlength="4" maxlength="500" required /></label><button :disabled="busy">解锁（不会自动开放报名）</button></form>
-        <template v-if="!state.roster_locked"><h3>导入 / 调整名单</h3><p>每行：用户ID,队名（未分组留空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。仅有用户 ID 也可导入。保存将整体替换当前名单，并取消旧邀请；锁定参赛人员后只能调整同一批人员的分组。自由组队的分组须各指定一名队长，导入后仍需队长提交。</p><button :disabled="busy" @click="exportToEditor">载入当前名单编辑</button><label>名单<textarea v-model="csv" rows="8" :disabled="busy" placeholder="123,,0,0&#10;456,,1,0" @input="preview=null" /></label><button :disabled="busy || !csv.trim()" @click="importList(false)">校验并预览</button>
-          <div v-if="preview"><h3>预览 · 尚未保存</h3><p v-for="entry in preview.entries" :key="entry.user_id">{{ entry.position ? `${entry.position}号 · ` : '' }}{{ entry.display_name }}（ID {{ entry.user_id }}） · {{ entry.team_name || '未分组' }}{{ entry.is_external ? ' · 外援' : '' }}{{ entry.captain ? ' · 队长' : '' }}</p><button :disabled="busy" @click="importList(true)">确认替换为这 {{ preview.entries.length }} 位选手</button></div>
+      <div class="enrolled-teams"><article v-for="team in state.teams" :key="team.id"><h3>{{ team.name }} <small>{{ $t(state.roster_locked ? '已锁定' : state.mode === 'self_team' ? (team.submitted ? '已提交' : '待队长提交') : '分组草案') }}</small></h3><p v-for="member in members(team)" :key="member.user_id">{{ $t(member.position ? `${member.position}号 · ` : '') }}{{ member.display_name }}{{ $t(team.captain_user_id === member.user_id ? ' · 队长' : '') }}{{ $t(member.is_external ? ' · 外援' : '') }}</p></article></div>
+      <p v-if="state.entries.some(e=>!e.team_id)">{{ $t(state.mode==='solo'?'参赛选手':'待分组选手') }}：{{ state.entries.filter(e=>!e.team_id).map(e=>e.display_name+(e.is_external?'（外援）':'')).join('、') }}</p>
+      <p v-if="!state.entries.length" class="enrollment-meta">{{ $t("暂无报名或导入名单。") }}</p>
+      <details v-if="state.me.can_manage" class="enrollment-admin"><summary>{{ $t("举办方 · 报名设置、导入与锁定") }}</summary>
+        <form v-if="!state.roster_locked && !state.registration_locked" @submit.prevent="act('settings',{mode,capacity:Number(capacity),registration_open:open})"><label>{{ $t("报名方式") }}<select v-model="mode" :disabled="state.fixed_policy || !!state.entries.length"><option v-for="(label,key) in labels" :key="key" :value="key">{{ $t(label) }}</option></select></label><label>{{ $t("人数上限（0 不限）") }}<input v-model="capacity" type="number" min="0" max="10000" :disabled="state.fixed_policy" /></label><label class="checkbox-label"><input v-model="open" type="checkbox" />{{ $t("开放报名") }}</label><button :disabled="busy">{{ $t("保存设置") }}</button></form>
+        <div class="enrollment-actions" v-if="!state.roster_locked"><button v-if="!state.registration_locked" :disabled="busy" @click="act('lock_registration')">{{ $t("锁定参赛人员") }}</button><button :disabled="busy" @click="act('lock_roster')">{{ $t("锁定最终名单") }}</button></div>
+        <form v-if="state.registration_locked || state.roster_locked" @submit.prevent="act('unlock',{reason:unlockReason})"><label>{{ $t("解锁原因") }}<input v-model="unlockReason" minlength="4" maxlength="500" required /></label><button :disabled="busy">{{ $t("解锁（不会自动开放报名）") }}</button></form>
+        <template v-if="!state.roster_locked"><h3>{{ $t("导入 / 调整名单") }}</h3><p>{{ $t("每行：用户ID,队名（未分组留空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。仅有用户 ID 也可导入。保存将整体替换当前名单，并取消旧邀请；锁定参赛人员后只能调整同一批人员的分组。自由组队的分组须各指定一名队长，导入后仍需队长提交。") }}</p><button :disabled="busy" @click="exportToEditor">{{ $t("载入当前名单编辑") }}</button><label>{{ $t("名单") }}<textarea v-model="csv" rows="8" :disabled="busy" placeholder="123,,0,0&#10;456,,1,0" @input="preview=null" /></label><button :disabled="busy || !csv.trim()" @click="importList(false)">{{ $t("校验并预览") }}</button>
+          <div v-if="preview"><h3>{{ $t("预览 · 尚未保存") }}</h3><p v-for="entry in preview.entries" :key="entry.user_id">{{ $t(entry.position ? `${entry.position}号 · ` : '') }}{{ entry.display_name }}（ID {{ $t(entry.user_id) }}） · {{ entry.team_name || '未分组' }}{{ $t(entry.is_external ? ' · 外援' : '') }}{{ $t(entry.captain ? ' · 队长' : '') }}</p><button :disabled="busy" @click="importList(true)">{{ $t("确认替换为这 ") }}{{ $t(preview.entries.length) }}{{ $t(" 位选手") }}</button></div>
         </template>
-        <details><summary>最近操作记录</summary><p v-for="item in state.audit" :key="item.revision">#{{ item.revision }} · 管理/操作账号 {{ item.actor_user_id }} · {{ item.action }} · {{ item.created_at }}<span v-if="item.action==='unlock'"> · {{ JSON.parse(item.payload_json).reason }}</span></p></details>
+        <details><summary>{{ $t("最近操作记录") }}</summary><p v-for="item in state.audit" :key="item.revision">#{{ $t(item.revision) }}{{ $t(" · 管理/操作账号 ") }}{{ $t(item.actor_user_id) }} · {{ $t(item.action) }} · {{ $t(item.created_at) }}<span v-if="item.action==='unlock'"> · {{ $t(JSON.parse(item.payload_json).reason) }}</span></p></details>
       </details>
     </template>
   </section>

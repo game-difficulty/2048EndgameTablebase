@@ -752,3 +752,22 @@ textarea { resize: vertical; }
   .game-room .match-operations { bottom: 5px; }
   .game-room .operation-card summary span { display: none; }
 }
+html[lang=en] .site-header{gap:14px}
+html[lang=en] .account-chip{margin-left:auto;min-width:0}
+html[lang=en] .game-hud-team{white-space:normal}
+html[lang=en] .project-entry h2{overflow-wrap:anywhere}
+html[lang=en] .project-card h3{overflow-wrap:anywhere}
+html[lang=en] .game-actions{flex-wrap:wrap}
+@media(max-width:820px){
+ html[lang=en] .lab-header{height:auto;min-height:66px;flex-wrap:wrap;gap:10px;padding:12px}
+ html[lang=en] .lab-header .lab-brand{width:100%;font-size:15px}
+ html[lang=en] .lab-header nav{width:100%;gap:10px;flex-wrap:wrap;justify-content:flex-start;font-size:12px}
+ html[lang=en] .lab-header nav button{white-space:nowrap}
+ html[lang=en] .lab-header nav .full-label{display:none}
+ html[lang=en] .lab-header nav .compact-label{display:inline}
+ html[lang=en] .site-header .brand strong{font-size:14px}
+ html[lang=en] .game-hud-team{font-size:10px}
+ html[lang=en] .game-hud-team small{font-size:9px}
+ html[lang=en] .progress-step{font-size:10px;white-space:normal;overflow-wrap:break-word}
+}
+.phase-language{display:flex;justify-content:center;margin:18px 0}

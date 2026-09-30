@@ -19,19 +19,19 @@ watch([enabled, yellow, white, start], () => {
 </script>
 <template>
   <fieldset class="schedule-picker">
-    <legend>赛程与锁定名单</legend>
-    <p v-if="error" role="alert">{{ error }}</p>
-    <p v-else-if="!roster?.roster_locked">自由房间：任意已登录选手可落座。正式赛程请先锁定报名名单及队内序号。</p>
-    <p v-else-if="roster.mode === 'solo' || roster.team_size !== 3">当前对战房间需要三人团队名单；单人赛和统计赛不使用此对战流程。</p>
+    <legend>{{ $t("赛程与锁定名单") }}</legend>
+    <p v-if="error" role="alert">{{ $t(error) }}</p>
+    <p v-else-if="!roster?.roster_locked">{{ $t("自由房间：任意已登录选手可落座。正式赛程请先锁定报名名单及队内序号。") }}</p>
+    <p v-else-if="roster.mode === 'solo' || roster.team_size !== 3">{{ $t("当前对战房间需要三人团队名单；单人赛和统计赛不使用此对战流程。") }}</p>
     <template v-else>
-      <label><input v-model="enabled" type="checkbox" />使用锁定队伍创建赛程房间</label>
+      <label><input v-model="enabled" type="checkbox" />{{ $t("使用锁定队伍创建赛程房间") }}</label>
       <div v-if="enabled" class="schedule-fields">
-        <label>黄方队伍<select v-model="yellow" required><option value="" disabled>请选择</option><option v-for="team in roster.teams" :key="team.id" :value="team.id" :disabled="team.id===white">{{ team.name }}</option></select></label>
-        <label>白方队伍<select v-model="white" required><option value="" disabled>请选择</option><option v-for="team in roster.teams" :key="team.id" :value="team.id" :disabled="team.id===yellow">{{ team.name }}</option></select></label>
+        <label>{{ $t("黄方队伍") }}<select v-model="yellow" required><option value="" disabled>{{ $t("请选择") }}</option><option v-for="team in roster.teams" :key="team.id" :value="team.id" :disabled="team.id===white">{{ team.name }}</option></select></label>
+        <label>{{ $t("白方队伍") }}<select v-model="white" required><option value="" disabled>{{ $t("请选择") }}</option><option v-for="team in roster.teams" :key="team.id" :value="team.id" :disabled="team.id===yellow">{{ team.name }}</option></select></label>
       </div>
     </template>
-    <label>预定开战时间（本设备时区）<input v-model="start" type="datetime-local" :required="enabled" /></label>
-    <p>未绑定队伍时为自由房间，不计入正式赛事纪录。设置开战时间后，到点方可开始抽签；超过15分钟，已全员落座且队长准备的一方3:0获胜，双方均未就位则0:0。</p>
+    <label>{{ $t("预定开战时间（本设备时区）") }}<input v-model="start" type="datetime-local" :required="enabled" /></label>
+    <p>{{ $t("未绑定队伍时为自由房间，不计入正式赛事纪录。设置开战时间后，到点方可开始抽签；超过15分钟，已全员落座且队长准备的一方3:0获胜，双方均未就位则0:0。") }}</p>
   </fieldset>
 </template>
 <style scoped>

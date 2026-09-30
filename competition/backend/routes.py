@@ -77,6 +77,19 @@ def optional_principal(request: Request) -> Principal | None:
         return None
 
 
+@router.get("/preferences/language")
+async def preferred_language(request: Request, response: Response) -> dict:
+    """Read the shared account preference; this site never writes it back."""
+    response.headers["Cache-Control"] = "private, no-store"
+    principal = optional_principal(request)
+    if principal is None:
+        return {"language": None}
+    from backend.profile.preferences import get_preferences
+    result = await asyncio.to_thread(get_preferences, principal.user_id)
+    language = result.get("preferences", {}).get("language")
+    return {"language": language if language in ("zh", "en") else None}
+
+
 @router.get("/practice/appearance")
 async def practice_appearance(principal: PrincipalDependency, response: Response) -> dict:
     """Read only this player's main-site tile appearance for practice boards."""

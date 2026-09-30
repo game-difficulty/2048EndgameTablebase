@@ -55,6 +55,7 @@ export function commandId() {
 }
 
 export const api = {
+  preferredLanguage: () => request('/api/preferences/language', { timeoutMs: 2500 }),
   session: (options) => request('/api/session', options),
   practiceAppearance: () => request('/api/practice/appearance'),
   practiceLeaderboard: (projectId) => request(`/api/practice/${encodeURIComponent(projectId)}/leaderboard`),

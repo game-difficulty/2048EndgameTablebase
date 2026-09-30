@@ -76,46 +76,46 @@ async function save() {
 
 <template>
   <section class="event-center">
-    <p v-if="error" class="alert" role="alert">{{ error }}</p>
-    <p v-if="notice" role="status">{{ notice }}</p>
+    <p v-if="error" class="alert" role="alert">{{ $t(error) }}</p>
+    <p v-if="notice" role="status">{{ $t(notice) }}</p>
     <template v-if="!slug">
-      <div class="event-intro"><div><p class="eyebrow">2048 · COMPETITION</p><h1>赛事中心</h1><p class="muted">选择赛事，查看规则与比赛安排。</p></div><a href="/practice">项目练习 →</a></div>
-      <nav class="event-filters" aria-label="赛事状态"><button v-for="(label, key) in { all: '全部赛事', ...labels }" :key="key" :aria-pressed="filter === key" @click="filter = key">{{ label }}</button></nav>
+      <div class="event-intro"><div><p class="eyebrow">2048 · COMPETITION</p><h1>{{ $t("赛事中心") }}</h1><p class="muted">{{ $t("选择赛事，查看规则与比赛安排。") }}</p></div><a href="/practice">{{ $t("项目练习 →") }}</a></div>
+      <nav class="event-filters" :aria-label='$t("赛事状态")'><button v-for="(label, key) in { all: '全部赛事', ...labels }" :key="key" :aria-pressed="filter === key" @click="filter = key">{{ $t(label) }}</button></nav>
       <div class="event-cards">
         <a v-for="event in shown" :key="event.slug" :href="`/events/${event.slug}`" class="event-card" @click.prevent="emit('navigate', `/events/${event.slug}`)">
-          <div class="event-cover"><span>2048</span><strong>{{ event.name }}</strong><small>{{ event.label }}</small></div>
-          <div class="event-card-body"><span class="event-status">{{ labels[event.status] }}</span><p>{{ event.description || '进入赛事查看详情。' }}</p><footer><span>{{ event.capabilities.statistics ? '名单导入 · 成绩统计' : `${event.room_count} 个比赛房间` }}</span><span>查看赛事 →</span></footer></div>
+          <div class="event-cover"><span>2048</span><strong>{{ event.name }}</strong><small>{{ $t(event.label) }}</small></div>
+          <div class="event-card-body"><span class="event-status">{{ $t(labels[event.status]) }}</span><p>{{ $t(event.description || '进入赛事查看详情。') }}</p><footer><span>{{ $t(event.capabilities.statistics ? '名单导入 · 成绩统计' : `${event.room_count} 个比赛房间`) }}</span><span>{{ $t("查看赛事 →") }}</span></footer></div>
         </a>
       </div>
-      <p v-if="!shown.length" class="empty-state">暂无此状态的赛事。</p>
-      <details v-if="canCreate" class="event-admin"><summary>创建赛事</summary><form @submit.prevent="create">
-        <label>赛事名称<input v-model="draft.name" required minlength="2" maxlength="100" /></label>
-        <label>赛事地址标识<input v-model="draft.slug" required minlength="2" maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="例如 summer-cup-1" /></label>
-        <label>简介<textarea v-model="draft.description" maxlength="1000" /></label>
-        <label>规则与公告<textarea v-model="draft.rules" maxlength="10000" rows="4" /></label>
-        <p class="muted">当前创建三人团队选 Ban 赛事。默认关闭报名，可在赛事管理中设置报名方式并开放。</p>
-        <button class="primary-button" :disabled="busy">创建赛事</button>
+      <p v-if="!shown.length" class="empty-state">{{ $t("暂无此状态的赛事。") }}</p>
+      <details v-if="canCreate" class="event-admin"><summary>{{ $t("创建赛事") }}</summary><form @submit.prevent="create">
+        <label>{{ $t("赛事名称") }}<input v-model="draft.name" required minlength="2" maxlength="100" /></label>
+        <label>{{ $t("赛事地址标识") }}<input v-model="draft.slug" required minlength="2" maxlength="64" pattern="[a-z0-9]+(-[a-z0-9]+)*" :placeholder='$t("例如 summer-cup-1")' /></label>
+        <label>{{ $t("简介") }}<textarea v-model="draft.description" maxlength="1000" /></label>
+        <label>{{ $t("规则与公告") }}<textarea v-model="draft.rules" maxlength="10000" rows="4" /></label>
+        <p class="muted">{{ $t("当前创建三人团队选 Ban 赛事。默认关闭报名，可在赛事管理中设置报名方式并开放。") }}</p>
+        <button class="primary-button" :disabled="busy">{{ $t("创建赛事") }}</button>
       </form></details>
     </template>
     <template v-else>
-      <a href="/events" @click.prevent="emit('navigate', '/events')">← 全部赛事</a>
-      <p v-if="loading" class="empty-state">正在加载赛事…</p>
+      <a href="/events" @click.prevent="emit('navigate', '/events')">{{ $t("← 全部赛事") }}</a>
+      <p v-if="loading" class="empty-state">{{ $t("正在加载赛事…") }}</p>
       <template v-else-if="detail">
-        <header class="event-detail-title"><span class="event-status">{{ labels[detail.status] }} · {{ detail.label }}</span><h1>{{ detail.name }}</h1><p class="muted">{{ detail.description }}</p></header>
+        <header class="event-detail-title"><span class="event-status">{{ $t(labels[detail.status]) }} · {{ $t(detail.label) }}</span><h1>{{ detail.name }}</h1><p class="muted">{{ detail.description }}</p></header>
         <div class="event-detail-grid">
-          <section class="panel"><h2>规则与公告</h2><p class="event-rules">{{ detail.rules || '举办方尚未发布规则。' }}</p></section>
-<section v-if="detail.capabilities.rooms" class="panel"><h2>参赛信息</h2><p>报名、邀请与队伍提交请在下方操作，以举办方公布的报名状态为准。</p><p class="muted">请按报名表队内序号落座。开战后超过 15 分钟，仅一方就位则该方 3:0 获胜；双方均未就位则 0:0。</p><a href="https://live.2048tables.online/" target="_blank" rel="noopener noreferrer">前往直播大厅 →</a></section>
-          <section v-else class="panel"><h2>参赛方式</h2><p>使用已登记的 Table 账号，在对局站进行 3×3 对局。无需进入比赛房间。</p><p class="muted">赛事状态按统计时间窗自动切换；只统计期间开始并完成、符合对局站有效性要求的原生局，外站导入局不计入。</p><a href="https://play.2048tables.online/" target="_blank" rel="noopener noreferrer">前往对局站 →</a></section>
+          <section class="panel"><h2>{{ $t("规则与公告") }}</h2><p class="event-rules">{{ detail.rules || '举办方尚未发布规则。' }}</p></section>
+<section v-if="detail.capabilities.rooms" class="panel"><h2>{{ $t("参赛信息") }}</h2><p>{{ $t("报名、邀请与队伍提交请在下方操作，以举办方公布的报名状态为准。") }}</p><p class="muted">{{ $t("请按报名表队内序号落座。开战后超过 15 分钟，仅一方就位则该方 3:0 获胜；双方均未就位则 0:0。") }}</p><a href="https://live.2048tables.online/" target="_blank" rel="noopener noreferrer">{{ $t("前往直播大厅 →") }}</a></section>
+          <section v-else class="panel"><h2>{{ $t("参赛方式") }}</h2><p>{{ $t("使用已登记的 Table 账号，在对局站进行 3×3 对局。无需进入比赛房间。") }}</p><p class="muted">{{ $t("赛事状态按统计时间窗自动切换；只统计期间开始并完成、符合对局站有效性要求的原生局，外站导入局不计入。") }}</p><a href="https://play.2048tables.online/" target="_blank" rel="noopener noreferrer">{{ $t("前往对局站 →") }}</a></section>
         </div>
         <EventEnrollment :slug="detail.slug" @changed="enrollmentRevision=$event" />
         <EventStatistics v-if="detail.capabilities.statistics" :slug="detail.slug" :roster-revision="enrollmentRevision" />
-        <details v-if="detail.record_candidates?.length" class="event-admin"><summary>赛事纪录候选成绩</summary><p>仅列入本轮获胜队伍的有效完赛成绩，按项目及规则版本分别评选。</p><p v-for="record in detail.record_candidates" :key="`${record.public_key}-${record.game_key}`">{{ record.name }} · 选手 ID {{ record.player_user_id }} · {{ record.project_ref.includes('-race-') ? `用时 ${(record.elapsed_ms/1000).toFixed(2)} 秒` : record.project_ref.includes('cargo') ? `送出 ${record.score} 块` : `成绩 ${record.score}` }}</p></details>
-        <section v-if="detail.capabilities.rooms" class="panel"><div class="section-heading"><h2>赛程与结果</h2><span>{{ detail.room_count }} 场 · 北京时间</span></div>
-          <div v-for="(item, index) in detail.rooms" :key="index" class="event-room"><time>{{ scheduleTime(item.schedule?.starts_at) || '时间待定' }}</time><strong>{{ roomMatchTitle(item) }}</strong><b v-if="roomMatchScore(item)">{{ roomMatchScore(item) }}</b><span>{{ item.schedule?.exception === 'both_late' && item.status !== 'CANCELLED' ? '双方未就位 · 0:0' : statusText?.[item.status] || item.status }}</span><a v-if="item.room_code" :href="`/rooms/${item.room_code}`" @click.prevent="emit('navigate', `/rooms/${item.room_code}`)">进入房间 →</a></div>
-          <p v-if="!detail.rooms.length" class="muted">举办方尚未关联比赛房间。</p>
+        <details v-if="detail.record_candidates?.length" class="event-admin"><summary>{{ $t("赛事纪录候选成绩") }}</summary><p>{{ $t("仅列入本轮获胜队伍的有效完赛成绩，按项目及规则版本分别评选。") }}</p><p v-for="record in detail.record_candidates" :key="`${record.public_key}-${record.game_key}`">{{ record.name }}{{ $t(" · 选手 ID ") }}{{ $t(record.player_user_id) }} · {{ $t(record.project_ref.includes('-race-') ? `用时 ${(record.elapsed_ms/1000).toFixed(2)} 秒` : record.project_ref.includes('cargo') ? `送出 ${record.score} 块` : `成绩 ${record.score}`) }}</p></details>
+        <section v-if="detail.capabilities.rooms" class="panel"><div class="section-heading"><h2>{{ $t("赛程与结果") }}</h2><span>{{ $t(detail.room_count) }}{{ $t(" 场 · 北京时间") }}</span></div>
+          <div v-for="(item, index) in detail.rooms" :key="index" class="event-room"><time>{{ $t(scheduleTime(item.schedule?.starts_at) || '时间待定') }}</time><strong>{{ roomMatchTitle(item) }}</strong><b v-if="roomMatchScore(item)">{{ $t(roomMatchScore(item)) }}</b><span>{{ $t(item.schedule?.exception === 'both_late' && item.status !== 'CANCELLED' ? '双方未就位 · 0:0' : statusText?.[item.status] || item.status) }}</span><a v-if="item.room_code" :href="`/rooms/${item.room_code}`" @click.prevent="emit('navigate', `/rooms/${item.room_code}`)">{{ $t("进入房间 →") }}</a></div>
+          <p v-if="!detail.rooms.length" class="muted">{{ $t("举办方尚未关联比赛房间。") }}</p>
         </section>
-        <details v-if="detail.can_manage && detail.capabilities.rooms" class="event-admin"><summary>赛事管理 · 房间关联</summary><p class="muted">已有房间不会自动归入赛事。关联不会改变原房间地址、项目规则或比赛进度。</p><form class="event-link-form" @submit.prevent="linkRoom"><label>已有房间码<input v-model="roomCode" required maxlength="12" /></label><button class="primary-button" :disabled="busy">关联房间</button><button type="button" @click="emit('create-room', detail.slug)">为本赛事创建房间</button></form></details>
-        <details v-if="detail.can_manage" class="event-admin"><summary>编辑赛事信息</summary><form @submit.prevent="save"><label>名称<input v-model="settings.name" required minlength="2" maxlength="100" /></label><label>简介<textarea v-model="settings.description" maxlength="1000" /></label><label>规则与公告<textarea v-model="settings.rules" maxlength="10000" rows="5" /></label><label>赛事状态<select v-model="settings.status" :disabled="detail.capabilities.statistics"><option v-for="(label,key) in labels" :key="key" :value="key">{{ label }}</option></select></label><p class="muted">{{ detail.capabilities.statistics ? '统计型赛事状态按时间窗自动切换；编辑公告不会改变统计时间或成绩算法。' : '赛事状态用于目录展示，不会启动、停止或修改已有对局。修改公告不会改变房间内已固定的项目规则。' }}</p><button class="primary-button" :disabled="busy">保存赛事信息</button></form></details>
+        <details v-if="detail.can_manage && detail.capabilities.rooms" class="event-admin"><summary>{{ $t("赛事管理 · 房间关联") }}</summary><p class="muted">{{ $t("已有房间不会自动归入赛事。关联不会改变原房间地址、项目规则或比赛进度。") }}</p><form class="event-link-form" @submit.prevent="linkRoom"><label>{{ $t("已有房间码") }}<input v-model="roomCode" required maxlength="12" /></label><button class="primary-button" :disabled="busy">{{ $t("关联房间") }}</button><button type="button" @click="emit('create-room', detail.slug)">{{ $t("为本赛事创建房间") }}</button></form></details>
+        <details v-if="detail.can_manage" class="event-admin"><summary>{{ $t("编辑赛事信息") }}</summary><form @submit.prevent="save"><label>{{ $t("名称") }}<input v-model="settings.name" required minlength="2" maxlength="100" /></label><label>{{ $t("简介") }}<textarea v-model="settings.description" maxlength="1000" /></label><label>{{ $t("规则与公告") }}<textarea v-model="settings.rules" maxlength="10000" rows="5" /></label><label>{{ $t("赛事状态") }}<select v-model="settings.status" :disabled="detail.capabilities.statistics"><option v-for="(label,key) in labels" :key="key" :value="key">{{ $t(label) }}</option></select></label><p class="muted">{{ $t(detail.capabilities.statistics ? '统计型赛事状态按时间窗自动切换；编辑公告不会改变统计时间或成绩算法。' : '赛事状态用于目录展示，不会启动、停止或修改已有对局。修改公告不会改变房间内已固定的项目规则。') }}</p><button class="primary-button" :disabled="busy">{{ $t("保存赛事信息") }}</button></form></details>
       </template>
     </template>
   </section>
