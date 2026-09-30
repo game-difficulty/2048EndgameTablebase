@@ -214,5 +214,6 @@ onUnmounted(()=>{
 </script>
 
 <style scoped>
-.archive-application-list{display:grid;gap:8px;margin-top:8px}.archive-application-list>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;border-top:1px solid var(--line);padding:10px 0}.archive-application-list small,.archive-application-list p{grid-column:1/-1;margin:0;color:var(--muted)}.archive-application-dialog select{display:block;width:100%;margin-top:6px}.archive-application-dialog .notice{margin:12px 0 0}
+.archive-application-list{display:grid;gap:8px;margin-top:8px}.archive-application-list>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;border-top:1px solid var(--line);padding:10px 0}.archive-application-list small,.archive-application-list p{grid-column:1/-1;margin:0;color:var(--muted)}.archive-application-dialog select{display:block;width:100%;margin-top:6px}.archive-application-dialog input[type="datetime-local"]{color-scheme:dark}.archive-application-dialog .notice{margin:12px 0 0}
+:global(:root:not([data-theme="dark"])) .archive-application-dialog input[type="datetime-local"]{color-scheme:light}
 </style>
