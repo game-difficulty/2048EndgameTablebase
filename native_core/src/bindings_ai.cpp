@@ -67,8 +67,11 @@ NB_MODULE(ai_core, m) {
         .def("dispatcher", &EvilGen::dispatcher, 
              "board"_a, 
              nb::call_guard<nb::gil_scoped_release>())
-        .def("gen_new_num", &EvilGen::gen_new_num, 
-             "depth"_a = 4, 
+        .def("gen_new_num", &EvilGen::gen_new_num,
+             "depth"_a = 4,
+              nb::call_guard<nb::gil_scoped_release>())
+        .def("gen_new_num_seeded", &EvilGen::gen_new_num_seeded,
+             "depth"_a, "seed"_a,
              nb::call_guard<nb::gil_scoped_release>())
         
         .def_rw("max_d", &EvilGen::max_d)

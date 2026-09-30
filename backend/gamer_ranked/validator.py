@@ -59,7 +59,7 @@ def classify_ranked_candidate(
         raise RankedValidationError("invalid_record") from exc
     if metadata != (rules_version, seed_hex.lower()):
         raise RankedValidationError("seed_mismatch")
-    if rules_version != RANKED_RULES_VERSION:
+    if rules_version not in (1, RANKED_RULES_VERSION):
         raise RankedValidationError("unsupported_rules")
 
     current_difficulty: int | None = None
@@ -134,7 +134,7 @@ def validate_ranked_game(
         raise RankedValidationError("invalid_record") from exc
     if metadata != (rules_version, seed_hex.lower()):
         raise RankedValidationError("seed_mismatch")
-    if rules_version != RANKED_RULES_VERSION:
+    if rules_version not in (1, RANKED_RULES_VERSION):
         raise RankedValidationError("unsupported_rules")
 
     rate4 = float(spawn_rate4)
@@ -204,11 +204,13 @@ def validate_ranked_game(
             current_difficulty > 0 and branch < current_difficulty / 100.0
         )
         try:
-            expected_index, expected_exponent = (
-                evil_spawn(moved_board, depth=5)
-                if use_evil
-                else random_spawn(moved_board, rng, rate4)
-            )
+            if use_evil:
+                expected_index, expected_exponent = (
+                    evil_spawn(moved_board, depth=5, seed=rng.state[0])
+                    if rules_version >= 2 else evil_spawn(moved_board, depth=5)
+                )
+            else:
+                expected_index, expected_exponent = random_spawn(moved_board, rng, rate4)
         except Exception as exc:
             raise RankedValidationError("spawn_validation_failed") from exc
         if (

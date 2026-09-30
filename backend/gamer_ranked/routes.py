@@ -23,6 +23,7 @@ class CreateRunRequest(BaseModel):
     lease_token: str = Field(min_length=16, max_length=256)
     # Keep old open browser tabs compatible; those clients always used 10%.
     spawn_rate4: float = 0.1
+    rules_version: int = 1
     replace_run_id: str | None = Field(default=None, max_length=64)
     replace_lease_token: str | None = Field(default=None, max_length=256)
 
@@ -47,6 +48,7 @@ def create_run(payload: CreateRunRequest, request: Request):
             request_id=payload.request_id,
             ip_address=client_ip(request),
             spawn_rate4=payload.spawn_rate4,
+            rules_version=payload.rules_version,
             lease_token=payload.lease_token,
             replace_run_id=payload.replace_run_id,
             replace_lease_token=payload.replace_lease_token,

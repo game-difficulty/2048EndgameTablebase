@@ -147,6 +147,7 @@ def create_ranked_run(
     request_id: str,
     ip_address: str,
     spawn_rate4: float = 0.1,
+    rules_version: int = 1,
     lease_token: str,
     replace_run_id: str | None = None,
     replace_lease_token: str | None = None,
@@ -155,6 +156,8 @@ def create_ranked_run(
     if not normalized_request or len(normalized_request) > 128:
         raise ValueError("invalid_request_id")
     spawn_rate4_millis = _spawn_rate4_millis(spawn_rate4)
+    if rules_version not in (1, RANKED_RULES_VERSION):
+        raise ValueError("unsupported_rules")
     now = _utc_now()
     expires = now + RUN_LIFETIME
     with auth_db() as db:
@@ -227,7 +230,7 @@ def create_ranked_run(
                 user_id,
                 normalized_request,
                 seed_hex,
-                RANKED_RULES_VERSION,
+                rules_version,
                 spawn_rate4_millis,
                 _iso(now),
                 _iso(expires),

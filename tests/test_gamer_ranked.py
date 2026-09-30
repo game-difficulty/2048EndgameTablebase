@@ -98,13 +98,13 @@ def _completed_random_game(
     return "REPLAY_v1RPL_B64_" + base64.b64encode(payload).decode("ascii"), score, board_codes(board)
 
 
-def _completed_adversarial_game(seed: str = SEED) -> tuple[str, int, list[int]]:
+def _completed_adversarial_game(seed: str = SEED, rules_version: int = 1) -> tuple[str, int, list[int]]:
     board, initial_tiles, rng = initial_board(seed)
     payload = bytearray(b"RPL1")
     payload.extend((0x44, 0, 2))
     for index, value_bit in initial_tiles:
         payload.append(index | (value_bit << 4))
-    payload.extend(_extension(EXT_RANKED_METADATA, bytes((1,)) + bytes.fromhex(seed)))
+    payload.extend(_extension(EXT_RANKED_METADATA, bytes((rules_version,)) + bytes.fromhex(seed)))
     payload.extend(_extension(EXT_RULESET, b"pow2"))
     payload.extend(_extension(EXT_DIFFICULTY_CHANGE, b"\x64"))
     payload.extend(_extension(EXT_AI_USED, b""))
@@ -220,6 +220,46 @@ class GamerRankedContractTests(unittest.TestCase):
         self.assertEqual(validated.board_key, GAMER_ADVERSARIAL_BOARD)
         self.assertTrue(validated.used_ai)
 
+    def test_seeded_adversarial_spawn_uses_ranked_rng_without_advancing_it(self):
+        record, score, final_board = _completed_adversarial_game(rules_version=2)
+        _, _, rng = initial_board(SEED)
+        expected_seeds = []
+        seen_seeds = []
+        for _ in range(sum(isinstance(item, MoveRecord) for item in decode_2048next_replay(record).records)):
+            rng.next_float()
+            expected_seeds.append(rng.state[0])
+
+        def first_empty_spawn(board, *, depth=5, seed=None):
+            self.assertEqual(depth, 5)
+            seen_seeds.append(seed)
+            return next(index for index, value in enumerate(board) if value == 0), 1
+
+        with patch("backend.gamer_ranked.validator.evil_spawn", side_effect=first_empty_spawn):
+            validated = validate_ranked_game(
+                seed_hex=SEED,
+                rules_version=2,
+                record_encoding=record,
+                claimed_score=score,
+                claimed_final_board=final_board,
+            )
+        self.assertEqual(validated.board_key, GAMER_ADVERSARIAL_BOARD)
+        self.assertEqual(seen_seeds, expected_seeds)
+
+    def test_native_seeded_ties_preserve_legacy_choice(self):
+        try:
+            from native_core.ai_core import EvilGen
+        except ImportError:
+            self.skipTest("native_core.ai_core is unavailable")
+        generator = EvilGen(0x123456789ABCDE0F)
+        legacy = generator.gen_new_num(5)[1:]
+        first = generator.gen_new_num_seeded(5, 1)[1:]
+        second = generator.gen_new_num_seeded(5, 2)[1:]
+        self.assertEqual(first, (14, 2))
+        self.assertEqual(second, (14, 1))
+        self.assertEqual(first, generator.gen_new_num_seeded(5, 1)[1:])
+        self.assertEqual(legacy, generator.gen_new_num(5)[1:])
+        self.assertNotEqual(first, second)
+
 
 class GamerRankedServiceTests(unittest.TestCase):
     def setUp(self):
@@ -247,6 +287,23 @@ class GamerRankedServiceTests(unittest.TestCase):
         else:
             os.environ["CLOUD_AUTH_DB"] = self.previous_db
         self.temporary.cleanup()
+
+    def test_run_creation_versions_new_rules_without_changing_legacy_clients(self):
+        legacy = create_ranked_run(
+            user_id=self.user_id, request_id="legacy-rules", ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN,
+        )
+        seeded = create_ranked_run(
+            user_id=self.user_id, request_id="seeded-rules", ip_address="127.0.0.1",
+            lease_token=LEASE_TOKEN, rules_version=2,
+        )
+        self.assertEqual(legacy["rules_version"], 1)
+        self.assertEqual(seeded["rules_version"], 2)
+        with self.assertRaisesRegex(ValueError, "unsupported_rules"):
+            create_ranked_run(
+                user_id=self.user_id, request_id="unknown-rules", ip_address="127.0.0.1",
+                lease_token=LEASE_TOKEN, rules_version=3,
+            )
 
     def _insert_recent_submissions(self, count: int = 5, ip_address: str = "127.0.0.1"):
         now = datetime.now(timezone.utc).isoformat()

@@ -116,12 +116,12 @@ def packed_native_board(board: list[int]) -> int:
     return encoded
 
 
-def evil_spawn(board: list[int], *, depth: int = 5) -> tuple[int, int]:
+def evil_spawn(board: list[int], *, depth: int = 5, seed: int | None = None) -> tuple[int, int]:
     from native_core.ai_core import EvilGen
 
     encoded = packed_native_board(board)
     generator = EvilGen(encoded)
-    result = generator.gen_new_num(depth)
+    result = generator.gen_new_num(depth) if seed is None else generator.gen_new_num_seeded(depth, seed)
     index = int(result[1])
     exponent = int(result[2])
     if index < 0 or index >= 16 or exponent not in (1, 2) or board[index] != 0:
