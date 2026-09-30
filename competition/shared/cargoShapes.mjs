@@ -8,7 +8,8 @@ export const CARGO_SHAPES = Object.freeze([
   Object.freeze({ key: 'vertical-right', name: '2×1', cells: [[0, 1], [1, 1]] }),
 ]);
 
-// Family first (25% each), then an equally weighted variant within the family.
+// Family first (L / horizontal / vertical / square: 30% / 30% / 30% / 10%),
+// then an equally weighted variant within the family.
 export const CARGO_SHAPE_GROUPS = Object.freeze([
   Object.freeze([3, 4]), Object.freeze([1]), Object.freeze([2, 5]), Object.freeze([0]),
 ]);

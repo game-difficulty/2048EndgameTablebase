@@ -101,7 +101,8 @@ export class CargoGame {
 
   nextCargo() {
     this.shapeState = nextRandom(this.shapeState);
-    const group = CARGO_SHAPE_GROUPS[Math.floor(this.shapeState / 0x100000000 * CARGO_SHAPE_GROUPS.length)];
+    const roll = this.shapeState / 0x100000000;
+    const group = CARGO_SHAPE_GROUPS[roll < .3 ? 0 : roll < .6 ? 1 : roll < .9 ? 2 : 3];
     // Always take two draws from the shape stream, even for single-variant
     // families. Neither numeric spawns nor player move counts affect it.
     this.shapeState = nextRandom(this.shapeState);

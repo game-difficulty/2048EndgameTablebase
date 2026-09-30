@@ -79,7 +79,7 @@ test('a partly exited vertical domino can shift sideways within the outlet', () 
   assert.equal(action.snapshot.finished, false);
 });
 
-test('four equally weighted families contain only the requested variants', () => {
+test('cargo families use 30/30/30/10 weights with equally weighted internal variants', () => {
   assert.deepEqual(CARGO_SHAPE_GROUPS, [[3, 4], [1], [2, 5], [0]]);
   assert.deepEqual(CARGO_SHAPES[1].cells, [[1, 0], [1, 1]]);
   assert.deepEqual(CARGO_SHAPES[2].cells, [[0, 0], [1, 0]]);
@@ -94,7 +94,8 @@ test('four equally weighted families contain only the requested variants', () =>
   for (let i = 0; i < 16000; i++) {
     const groupState = nextRandom(game.shapeState);
     const variantState = nextRandom(groupState);
-    const groupIndex = Math.floor(groupState / 0x100000000 * 4);
+    const roll = groupState / 0x100000000;
+    const groupIndex = roll < .3 ? 0 : roll < .6 ? 1 : roll < .9 ? 2 : 3;
     const group = CARGO_SHAPE_GROUPS[groupIndex];
     const next = game.nextCargo();
     assert.equal(next.shape, group[Math.floor(variantState / 0x100000000 * group.length)]);
@@ -102,8 +103,9 @@ test('four equally weighted families contain only the requested variants', () =>
     counts[groupIndex]++; variants[next.shape]++;
   }
   assert.equal(game.randomState, originalNumeric);
-  for (const count of counts) assert.ok(count > 3600 && count < 4400);
-  for (const index of [2, 3, 4, 5]) assert.ok(variants[index] > 1700 && variants[index] < 2300);
+  for (const count of counts.slice(0, 3)) assert.ok(count > 4400 && count < 5200);
+  assert.ok(counts[3] > 1300 && counts[3] < 1900);
+  for (const index of [2, 3, 4, 5]) assert.ok(variants[index] > 2100 && variants[index] < 2700);
 });
 
 test('same seed keeps cargo sequence identical despite different numeric draws, and restores by shape cursor', () => {
