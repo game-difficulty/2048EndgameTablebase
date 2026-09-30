@@ -1,7 +1,7 @@
 <template>
   <div ref="boardRef" class="human-board" :class="{ editable }" :style="{ '--cols': cols, '--rows': rows, '--human-slide-duration': animate ? '100ms' : '0ms' }"
        role="group" :aria-label="t(`${rows} 行 ${cols} 列棋盘`)" tabindex="0"
-       @pointerdown="down" @pointerup="up" @pointercancel="pointer = null" @contextmenu.prevent @auxclick.prevent>
+       @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @lostpointercapture="cancel" @contextmenu.prevent @auxclick.prevent>
     <button v-for="(value, index) in board" :key="index" type="button" class="tile"
       :class="{ empty: !value }"
       :style="resolvedTileStyle(0)" :tabindex="editable ? 0 : -1" :data-cell="index"
@@ -41,24 +41,41 @@ function position(tile) {
 }
 const emit = defineEmits(['move', 'cell']); let pointer = null;
 function down(e) {
+  // Overlay controls are not part of the board gesture surface.
+  if (e.target.closest('.board-overlay') || pointer) return;
   const cell = e.target.closest('[data-cell]');
-  if (!cell) return;
-  if (props.editable && e.pointerType === 'mouse') { e.preventDefault(); emit('cell', Number(cell.dataset.cell), e.button); return; }
+  if (props.editable && e.pointerType === 'mouse') {
+    if (cell) { e.preventDefault(); emit('cell', Number(cell.dataset.cell), e.button); }
+    return;
+  }
   if (e.isPrimary && e.button === 0) {
     if (e.pointerType === 'mouse') e.preventDefault();
-    pointer = { x: e.clientX, y: e.clientY, id: e.pointerId, index: Number(cell.dataset.cell), type: e.pointerType };
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    pointer = { x: e.clientX, y: e.clientY, id: e.pointerId,
+      index: cell ? Number(cell.dataset.cell) : null, type: e.pointerType, triggered: false };
+    try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* best effort */ }
+  }
+}
+function move(e) {
+  if (!pointer || pointer.id !== e.pointerId || pointer.triggered) return;
+  const bounds = e.currentTarget.getBoundingClientRect();
+  const factor = 100 / Math.max(50, Math.min(200, props.swipeSensitivity));
+  const direction = boardSwipeDirection(e.clientX - pointer.x, e.clientY - pointer.y, Math.min(bounds.width, bounds.height),
+    { ratio: 0.045 * factor, min: 10 * factor, max: 24 * factor });
+  if (direction) {
+    // Lock before emitting: a board update must not retrigger this touch.
+    pointer.triggered = true;
+    emit('move', { up: 0, right: 1, down: 2, left: 3 }[direction]);
   }
 }
 function up(e) {
   if (!pointer || pointer.id !== e.pointerId) return;
-  const start = pointer; pointer = null;
-  if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-  const bounds = e.currentTarget.getBoundingClientRect();
-  const factor = 100 / Math.max(50, Math.min(200, props.swipeSensitivity));
-  const direction = boardSwipeDirection(e.clientX - start.x, e.clientY - start.y, Math.min(bounds.width, bounds.height),
-    { ratio: 0.045 * factor, min: 10 * factor, max: 24 * factor });
-  if (direction) emit('move', { up: 0, right: 1, down: 2, left: 3 }[direction]);
-  else if (props.editable && start.type !== 'mouse') emit('cell', start.index, props.touchButton);
+  const start = pointer;
+  move(e); // Also support browsers that coalesce away the last pointermove.
+  pointer = null;
+  try { if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* best effort */ }
+  if (!start.triggered && props.editable && start.type !== 'mouse' && start.index !== null) emit('cell', start.index, props.touchButton);
+}
+function cancel(e) {
+  if (pointer?.id === e.pointerId) pointer = null;
 }
 </script>
