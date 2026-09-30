@@ -62,6 +62,23 @@ test('late ranked polling and heartbeat responses cannot restart timers after di
   }
 });
 
+test('ranked recording appends within the callback and preserves the array and size limit', () => {
+  const source = readFileSync(new URL('../src/features/gamer/composables/useGamerSession.js', import.meta.url), 'utf8');
+  const callback = source.slice(source.indexOf('  const appendRankedRecord ='), source.indexOf('  const appendRankedMove ='));
+  const records = [];
+  let rejected = false;
+  const context = vm.createContext({ ranked: { value: { runId: 'run', eligible: true, records, byteEstimate: 40 } },
+    disqualifyRanked: () => { rejected = true; } });
+  vm.runInContext(callback + '\nglobalThis.append = appendRankedRecord;', context);
+  assert.equal(records.length, 0);
+  context.append([1,2,3], 5);
+  assert.equal(context.ranked.value.records, records);
+  assert.deepEqual(records, [[1,2,3]]);
+  context.append([4], 500*1024);
+  assert.equal(rejected, true);
+  assert.equal(records.length, 1);
+});
+
 test('lobby deduplicates requests, aborts on hiding/unmount and ignores stale responses', async () => {
   const source = readFileSync(new URL('../src/live/HumanLiveLobby.vue', import.meta.url), 'utf8')
     .split('<script setup>')[1].split('</script>')[0].replace(/^import .*;\r?$/gm, '');
