@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CARGO_LIMIT_MS, CARGO_SHAPES, FIRST_CARGO_MOVE, CargoGame, hasCargoMove, moveCargoBoard } from '../src/projects/cargoEngine.js';
+import { CARGO_SHAPES, FIRST_CARGO_MOVE, CargoGame, hasCargoMove, moveCargoBoard } from '../src/projects/cargoEngine.js';
 import { nextRandom } from '../src/projects/randomStreams.js';
 
 const empty = () => Array(16).fill(0);
@@ -120,12 +120,14 @@ test('a dead opening board ends before its first cargo appears', () => {
   assert.equal(result.snapshot.outcome, 'no_moves');
 });
 
-test('the ten-minute countdown ends the run without requiring another move', () => {
+test('cargo remains playable beyond ten minutes', () => {
   const game = new CargoGame({ id: 'cargo' }, { seed: 'deadline' });
-  game.expire(game.startedAt + CARGO_LIMIT_MS);
-  assert.equal(game.finished, true);
-  assert.equal(game.outcome, 'time_limit');
-  assert.equal(game.snapshot().remainingMs, 0);
+  game.startedAt -= 1200000;
+  assert.ok(game.snapshot().elapsedMs >= 1200000);
+  assert.ok(['down', 'left', 'up', 'right'].some(direction => game.move(direction).changed));
+  assert.equal(game.finished, false);
+  assert.equal(game.elapsed(game.startedAt+1200000),1200000);
+  assert.equal(game.snapshot().remainingMs, null);
 });
 
 test('death requires both number tiles and cargo to have no effective move', () => {
@@ -135,7 +137,7 @@ test('death requires both number tiles and cargo to have no effective move', () 
   assert.equal(hasCargoMove(empty(), cargo(0, -2)), true);
 });
 
-test('death freezes the countdown and keeps the existing finish state', () => {
+test('death freezes elapsed time and keeps the existing finish state', () => {
   const game = new CargoGame({ id: 'cargo' }, { seed: 'death-search' });
   game.board = [8, 32, 32, 16, 4, 16, 0, 4, 16, 32, 4, 16, 32, 2, 32, 4];
   game.cargo = cargo(0, -2);
@@ -143,10 +145,9 @@ test('death freezes the countdown and keeps the existing finish state', () => {
   assert.equal(result.changed, true);
   assert.equal(result.snapshot.finished, true);
   assert.equal(result.snapshot.outcome, 'no_moves');
-  assert.ok(result.snapshot.remainingMs > 0);
-  const remaining = result.snapshot.remainingMs;
-  game.expire(game.startedAt + CARGO_LIMIT_MS + 1000);
-  assert.equal(game.snapshot().remainingMs, remaining);
+  assert.equal(result.snapshot.remainingMs, null);
+  const elapsed = result.snapshot.elapsedMs;
+  assert.equal(game.elapsed(game.startedAt + 1200000), elapsed);
   assert.equal(game.snapshot().outcome, 'no_moves');
   assert.equal(game.move('left').changed, false);
 });

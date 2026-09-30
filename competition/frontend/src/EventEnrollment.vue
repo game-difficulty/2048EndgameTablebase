@@ -40,9 +40,9 @@ async function importList(save = false) {
   try {
     let entries = preview.value?.entries;
     if (!save) entries = csv.value.trim().split(/\r?\n/).filter(line => line.trim()).map((line,index) => {
-      const [id, team = '', ext = '0', cap = '0', extra] = line.split(/[,，\t]/).map(part => part.trim());
-      if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)) || extra !== undefined || !['0','1'].includes(ext) || !['0','1'].includes(cap)) throw new Error(`第 ${index+1} 行有误：用户ID,队名（可空）,外援0或1,队长0或1。`);
-      return { user_id:Number(id), team_name:team, is_external:ext==='1', captain:cap==='1' };
+      const [id, team = '', ext = '0', cap = '0', pos = '', extra] = line.split(/[,，\t]/).map(part => part.trim());
+      if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)) || extra !== undefined || !['0','1'].includes(ext) || !['0','1'].includes(cap) || (pos && !['1','2','3'].includes(pos))) throw new Error(`第 ${index+1} 行有误：用户ID,队名（可空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。`);
+      return { user_id:Number(id), team_name:team, is_external:ext==='1', captain:cap==='1', position:pos ? Number(pos) : null };
     });
     if (!entries?.length || entries.length > 500) throw new Error('请提供 1–500 位选手。');
     const result = await api.importEnrollment(props.slug, { entries, revision: save ? preview.value.revision : state.value.revision, dry_run:!save });
@@ -54,7 +54,7 @@ async function importList(save = false) {
 function exportToEditor() {
   csv.value = state.value.entries.map(e => {
     const team = state.value.teams.find(t => t.id === e.team_id);
-    return [e.user_id,team?.name || '',e.is_external?1:0,team?.captain_user_id===e.user_id?1:0].join(',');
+    return [e.user_id,team?.name || '',e.is_external?1:0,team?.captain_user_id===e.user_id?1:0,e.position || ''].join(',');
   }).join('\n'); preview.value = null;
 }
 onMounted(() => { load(); pollTimer = setInterval(() => { if (!document.hidden && !busy.value) load(true); }, 15000); });
@@ -84,15 +84,15 @@ onBeforeUnmount(() => { disposed = true; clearInterval(pollTimer); });
           </section>
         </template>
       </template>
-      <div class="enrolled-teams"><article v-for="team in state.teams" :key="team.id"><h3>{{ team.name }} <small>{{ state.roster_locked ? '已锁定' : state.mode === 'self_team' ? (team.submitted ? '已提交' : '待队长提交') : '分组草案' }}</small></h3><p v-for="member in members(team)" :key="member.user_id">{{ member.display_name }}{{ team.captain_user_id === member.user_id ? ' · 队长' : '' }}{{ member.is_external ? ' · 外援' : '' }}</p></article></div>
+      <div class="enrolled-teams"><article v-for="team in state.teams" :key="team.id"><h3>{{ team.name }} <small>{{ state.roster_locked ? '已锁定' : state.mode === 'self_team' ? (team.submitted ? '已提交' : '待队长提交') : '分组草案' }}</small></h3><p v-for="member in members(team)" :key="member.user_id">{{ member.position ? `${member.position}号 · ` : '' }}{{ member.display_name }}{{ team.captain_user_id === member.user_id ? ' · 队长' : '' }}{{ member.is_external ? ' · 外援' : '' }}</p></article></div>
       <p v-if="state.entries.some(e=>!e.team_id)">{{ state.mode==='solo'?'参赛选手':'待分组选手' }}：{{ state.entries.filter(e=>!e.team_id).map(e=>e.display_name+(e.is_external?'（外援）':'')).join('、') }}</p>
       <p v-if="!state.entries.length" class="enrollment-meta">暂无报名或导入名单。</p>
       <details v-if="state.me.can_manage" class="enrollment-admin"><summary>举办方 · 报名设置、导入与锁定</summary>
         <form v-if="!state.roster_locked && !state.registration_locked" @submit.prevent="act('settings',{mode,capacity:Number(capacity),registration_open:open})"><label>报名方式<select v-model="mode" :disabled="state.fixed_policy || !!state.entries.length"><option v-for="(label,key) in labels" :key="key" :value="key">{{ label }}</option></select></label><label>人数上限（0 不限）<input v-model="capacity" type="number" min="0" max="10000" :disabled="state.fixed_policy" /></label><label class="checkbox-label"><input v-model="open" type="checkbox" />开放报名</label><button :disabled="busy">保存设置</button></form>
         <div class="enrollment-actions" v-if="!state.roster_locked"><button v-if="!state.registration_locked" :disabled="busy" @click="act('lock_registration')">锁定参赛人员</button><button :disabled="busy" @click="act('lock_roster')">锁定最终名单</button></div>
         <form v-if="state.registration_locked || state.roster_locked" @submit.prevent="act('unlock',{reason:unlockReason})"><label>解锁原因<input v-model="unlockReason" minlength="4" maxlength="500" required /></label><button :disabled="busy">解锁（不会自动开放报名）</button></form>
-        <template v-if="!state.roster_locked"><h3>导入 / 调整名单</h3><p>每行：用户ID,队名（未分组留空）,外援0或1,队长0或1。仅有用户 ID 也可导入。保存将整体替换当前名单，并取消旧邀请；锁定参赛人员后只能调整同一批人员的分组。自由组队的分组须各指定一名队长，导入后仍需队长提交。</p><button :disabled="busy" @click="exportToEditor">载入当前名单编辑</button><label>名单<textarea v-model="csv" rows="8" :disabled="busy" placeholder="123,,0,0&#10;456,,1,0" @input="preview=null" /></label><button :disabled="busy || !csv.trim()" @click="importList(false)">校验并预览</button>
-          <div v-if="preview"><h3>预览 · 尚未保存</h3><p v-for="entry in preview.entries" :key="entry.user_id">{{ entry.display_name }}（ID {{ entry.user_id }}） · {{ entry.team_name || '未分组' }}{{ entry.is_external ? ' · 外援' : '' }}{{ entry.captain ? ' · 队长' : '' }}</p><button :disabled="busy" @click="importList(true)">确认替换为这 {{ preview.entries.length }} 位选手</button></div>
+        <template v-if="!state.roster_locked"><h3>导入 / 调整名单</h3><p>每行：用户ID,队名（未分组留空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。仅有用户 ID 也可导入。保存将整体替换当前名单，并取消旧邀请；锁定参赛人员后只能调整同一批人员的分组。自由组队的分组须各指定一名队长，导入后仍需队长提交。</p><button :disabled="busy" @click="exportToEditor">载入当前名单编辑</button><label>名单<textarea v-model="csv" rows="8" :disabled="busy" placeholder="123,,0,0&#10;456,,1,0" @input="preview=null" /></label><button :disabled="busy || !csv.trim()" @click="importList(false)">校验并预览</button>
+          <div v-if="preview"><h3>预览 · 尚未保存</h3><p v-for="entry in preview.entries" :key="entry.user_id">{{ entry.position ? `${entry.position}号 · ` : '' }}{{ entry.display_name }}（ID {{ entry.user_id }}） · {{ entry.team_name || '未分组' }}{{ entry.is_external ? ' · 外援' : '' }}{{ entry.captain ? ' · 队长' : '' }}</p><button :disabled="busy" @click="importList(true)">确认替换为这 {{ preview.entries.length }} 位选手</button></div>
         </template>
         <details><summary>最近操作记录</summary><p v-for="item in state.audit" :key="item.revision">#{{ item.revision }} · 管理/操作账号 {{ item.actor_user_id }} · {{ item.action }} · {{ item.created_at }}<span v-if="item.action==='unlock'"> · {{ JSON.parse(item.payload_json).reason }}</span></p></details>
       </details>

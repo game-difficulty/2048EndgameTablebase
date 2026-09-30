@@ -53,6 +53,7 @@ class StatisticsRosterEntry(BaseModel):
     team_name: str = Field(default='', max_length=40)
     is_external: bool = False
     captain: bool = False
+    position: int | None = Field(default=None, ge=1, le=3)
 
 
 class EnrollmentRosterRequest(BaseModel):

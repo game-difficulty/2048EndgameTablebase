@@ -308,6 +308,13 @@ async def close_competition(
     return {"competition": room}
 
 
+@router.post('/competitions/{room_code}/rematch')
+async def rematch_room(request: Request, room_code: str, payload: CommandRequest, principal: PrincipalDependency):
+    room = await asyncio.to_thread(service_from_request(request).rematch_before_lineup,room_code,principal,command_id=payload.command_id)
+    await _broadcast(request, room_code)
+    return {'competition':room}
+
+
 @router.post("/competitions/{room_code}/staff")
 async def assign_staff(
     request: Request,

@@ -9,6 +9,24 @@ const bootstrap = project => ({ instance_id: 'game:yellow', project_ref: project
 const options = { now: () => 0, evilSpawn: async board => ({ index: board.indexOf(0), value: 2 }) };
 const project = order => TOURNAMENT_PROJECTS.find(item => item.order === order);
 
+test('Higher refund reserve rescues original zero without mutating queued timelines', () => {
+  let time=0;
+  const runtime=new MatchRuntime({...bootstrap(project(1)),original_team_budget_ms:60000},{now:()=>time});
+  const first=runtime.accept();
+  time=1500;runtime.game.score=3;runtime.accept();
+  runtime.opponentResult={finished:true,outcome:'no_moves',score:2,elapsed_ms:1000};
+  assert.equal(runtime.decisiveAt(),1500);
+  time=70000;
+  assert.equal(runtime.playable(),true);
+  assert.equal(runtime.elapsed(),70000);
+  assert.equal(runtime.budget(),360000);
+  assert.deepEqual(first.checkpoint.metric_history,[[0,0]]);
+  const resumed=new MatchRuntime({...bootstrap(project(1)),original_team_budget_ms:60000,checkpoint:runtime.checkpoint()}, {elapsedMs:70000,now:()=>time});
+  resumed.opponentResult=runtime.opponentResult;
+  assert.equal(resumed.decisiveAt(),1500);
+  assert.equal(resumed.elapsed(),70000);
+});
+
 test('surrender freezes time and preserves the current score and board', () => {
   let time = 0;
   const runtime = new MatchRuntime(bootstrap(project(2)), { now: () => time });
@@ -113,16 +131,15 @@ test('restartable race death is not a terminal match result', () => {
   assert.equal(runtime.stopRace().outcome, 'opponent_finished');
 });
 
-test('cargo countdown completes without a move and freezes at ten minutes', () => {
+test('cargo has no project deadline and continues beyond ten minutes', () => {
   let now = 0;
   const runtime = new MatchRuntime(bootstrap(project(1)), { now: () => now });
   now = 600010;
   const packet = runtime.tick();
-  assert.equal(packet.finished, true);
-  assert.equal(packet.elapsed_ms, 600000);
-  assert.equal(packet.outcome, 'time_limit');
+  assert.equal(packet, null);
+  assert.equal(runtime.completed(),false);
   now = 700000;
-  assert.equal(runtime.elapsed(), 600000);
+  assert.equal(runtime.elapsed(), 700000);
 });
 
 test('network transmission grace never grants extra local play time', () => {

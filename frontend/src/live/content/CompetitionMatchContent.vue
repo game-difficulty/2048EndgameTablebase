@@ -1,6 +1,6 @@
 <template>
-  <section class="competition-content">
-    <header class="scorebar">
+  <section :class="['competition-content', {'showing-settlement':stage==='result'}]">
+    <header v-if="stage!=='result'" class="scorebar">
       <div class="team yellow"><span>{{ team('yellow').name || t('黄方','Yellow') }}</span><b>{{ score.yellow || 0 }}</b><time>{{ clock('yellow') }}</time></div>
       <div class="match-title"><small>{{ t('团队赛','TEAM MATCH') }} · {{ gameLabel }}</small><strong>{{ match?.name || t('比赛直播','Competition') }}</strong><em>{{ phaseLabel }}</em></div>
       <div class="team white"><time>{{ clock('white') }}</time><b>{{ score.white || 0 }}</b><span>{{ team('white').name || t('白方','White') }}</span></div>
@@ -42,7 +42,7 @@
       <div class="ready-sides"><article v-for="side in sides" :key="side" class="ready-side" :class="side"><h3>{{ team(side).name || sideLabel(side) }}</h3><div><span>{{ t('出战者就绪','Player ready') }}</span><b :class="{confirmed:readiness(side).player_ready}">{{ readiness(side).player_ready ? t('已就绪','READY') : t('等待中','WAITING') }}</b></div><div><span>{{ t('队长确认','Captain confirms') }}</span><b :class="{confirmed:readiness(side).captain_ready}">{{ readiness(side).captain_ready ? t('已确认','CONFIRMED') : t('等待中','WAITING') }}</b></div></article></div>
       <p v-if="predictionWait > 0" class="ready-note">{{ t(`最短下注窗口剩余 ${predictionWait} 秒；此等待不扣比赛用时。`,`Minimum betting window: ${predictionWait}s remaining. Team clocks are stopped.`) }}</p>
       <div class="public-matchups"><p v-for="game in match.games" :key="game.game_key">{{ game.players?.yellow?.display_name }} — {{ game.game_key }} · {{ projectName(game.project_key) }} — {{ game.players?.white?.display_name }}</p></div>
-      <p class="ready-note">{{ t('双方阵容已公开。开局展示结束且双方出战者、队长均就绪后自动开局。','Lineups are public. The game starts after the preview when both players and captains are ready.') }} <span v-if="stageWait">{{ stageWait }}s</span></p>
+      <p class="ready-note">{{ t('双方阵容已公开。队长和出战者在60秒内确认，超时自动确认后开局。','Lineups are public. Both teams confirm within 60 seconds; missing confirmations are automatic.') }} <span>{{ t('自动确认倒计时','Auto-confirm in') }} {{ readyWait }}s</span></p>
     </div>
 
     <div v-else-if="stage==='game'" class="game-layout">
@@ -51,26 +51,27 @@
       <aside class="series-panel"><small>{{ t('当前项目','CURRENT PROJECT') }}</small><img v-if="gameIcon(current)" class="current-icon" :src="gameIcon(current)" alt="" /><h2>{{ projectName(current?.project_key) }}</h2><div class="series-track"><span v-for="game in match.games" :key="game.game_key" :class="{active:game.game_key===match.current_game,done:game.result}">{{ game.game_key }}</span></div><p>{{ gameState }}</p><dl><template v-for="game in match.games" :key="game.game_key"><dt>{{ game.game_key }}</dt><dd>{{ resultText(game.result) }}</dd></template></dl></aside>
       <ProjectPane side="white" :view="views.white" :status="session('white')" :player="currentPlayer('white')" :lang="lang" :suspended="match?.suspended" />
       <CompetitionRosterHud v-model:collapsed="hudCollapsed.white" side="white" :team="team('white')" :active-player="currentPlayer('white')" :finished="session('white').finished" :lang="lang" />
-      <p class="game-rule-strip"><b>{{ t('当前玩法','RULES') }}</b><span>{{ currentRule }}</span></p>
+      <p class="game-rule-strip"><b>{{ t('当前玩法','RULES') }}</b><span>{{ currentRule }} <em v-if="sides.some(side=>views[side]?.payload?.refund_reserve_ms)">{{ t('领先方可用时间含最多5分钟补时额度，完赛后按实际差额结算。','The leading side has up to 5 minutes of provisional refund time; the actual difference is settled on completion.') }}</em></span></p>
     </div>
 
     <div v-else-if="stage==='game-result'" class="game-result-layout">
-      <div class="section-title wide"><span>{{ t('单局结果','GAME RESULT') }}</span><b>{{ t('等待双方队长确认','Awaiting both captains') }}</b></div>
+      <div class="section-title wide"><span>{{ t('单局结果','GAME RESULT') }}</span><b>{{ t('休整后自动继续','Continuing after rest') }}</b></div>
       <div class="game-result-heading"><small>GAME {{ match.current_game }}</small><img v-if="gameIcon(current)" :src="gameIcon(current)" alt="" /><h2>{{ projectName(current?.project_key) }}</h2><strong>{{ resultText(current?.result) }}</strong><p>{{ resultReason(current?.result) }}</p></div>
-      <div class="game-result-scores"><article v-for="side in sides" :key="side" :class="side"><small>{{ team(side).name || sideLabel(side) }}</small><div><PlayerAvatar :player="currentPlayer(side)"/><span>{{ currentPlayer(side)?.display_name || '—' }}</span></div><strong>{{ resultScore(current?.result,side) }}</strong><b :class="{confirmed:confirmed(side)}">{{ confirmed(side) ? t('队长已确认','CAPTAIN CONFIRMED') : t('等待队长确认','AWAITING CAPTAIN') }}</b></article></div>
+      <div class="game-result-scores"><article v-for="side in sides" :key="side" :class="side"><small>{{ team(side).name || sideLabel(side) }}</small><div><PlayerAvatar :player="currentPlayer(side)"/><span>{{ currentPlayer(side)?.display_name || '—' }}</span></div><strong>{{ resultScore(current?.result,side) }}</strong><b :class="{confirmed:confirmed(side)}">{{ current?.result?.[`${side}_refund_ms`] ? `${t('补时','REFUND')} +${(current.result[`${side}_refund_ms`]/1000).toFixed(2)}s` : t('本局已结束','FINISHED') }}</b></article></div>
       <p class="next-game" v-if="nextGame"><img v-if="gameIcon(nextGame)" :src="gameIcon(nextGame)" alt="" /><span>{{ t('下一局','NEXT') }} · GAME {{ nextGame.game_key }} · {{ projectName(nextGame.project_key) }}</span></p>
-      <p class="next-game" v-else>{{ t('双方确认后进入全场结算','Final match result follows both confirmations') }}</p>
+      <p class="next-game" v-else>{{ t('休整后进入全场结算','Final result follows the rest') }}</p>
       <p v-if="stageWait">{{ t('休整剩余','Rest remaining') }} {{ stageWait }}s</p>
       <div class="result-final-boards"><ProjectPane v-for="side in sides" :key="side" :side="side" :view="views[side]" :status="session(side)" :player="currentPlayer(side)" :lang="lang" :suspended="true" /></div>
     </div>
 
-    <div v-else class="result-layout"><small>{{ t('比赛结束','MATCH COMPLETE') }}</small><h1>{{ winnerLabel }}</h1><strong>{{ score.yellow || 0 }} : {{ score.white || 0 }}</strong><div class="final-games"><article v-for="game in match.games" :key="game.game_key"><img v-if="gameIcon(game)" :src="gameIcon(game)" alt="" /><div class="final-game-title"><small>GAME {{ game.game_key }}</small><b>{{ projectName(game.project_key) }}</b><em>{{ resultText(game.result) }}</em></div><div class="final-game-scores"><span><PlayerAvatar :player="game.players?.yellow"/>{{ game.players?.yellow?.display_name || '—' }} <b>{{ resultScore(game.result,'yellow') }}</b></span><span><PlayerAvatar :player="game.players?.white"/>{{ game.players?.white?.display_name || '—' }} <b>{{ resultScore(game.result,'white') }}</b></span></div></article></div></div>
+    <MatchSettlement v-else class="live-settlement" dark :games="settlementGames" :teams="{yellow:team('yellow'),white:team('white')}" :score="score" :points="match.series_points" :winner="match.public_result?.winner_side" :reason="match.public_result?.finish_reason" :lang="lang" :cancelled="match.phase==='CANCELLED'" />
     <div v-if="match?.suspended || match?.member_hold" class="suspended">{{ match?.member_hold ? t('参赛人员变更，等待赛事方处理','Roster intervention — awaiting match staff') : t('比赛已由裁判暂停','MATCH SUSPENDED') }}</div>
     <div v-if="match && streamState !== 'live'" class="signal-notice">{{ t('直播信号重连中，当前保留最后公开画面','Reconnecting — showing the last verified public frame') }}</div>
   </section>
 </template>
 <script setup>
 import { shouldRefreshLiveClock } from '../displayClock.js';
+import MatchSettlement from '../../../../competition/shared/MatchSettlement.vue';
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue';
 import { projectViewRenderer } from './projectViewRegistry.js';
 import { projectIconUrl } from '../../../../competition/shared/projectIcons.js';
@@ -87,10 +88,11 @@ const current=computed(()=>match.value?.games?.find(item=>item.game_key===match.
 const nextGame=computed(()=>{const index=['A','B','C'].indexOf(match.value?.current_game);return index>=0?match.value?.games?.find(item=>item.game_key===['A','B','C'][index+1]):null});
 const sides=['yellow','white'];
 const stageWait=computed(()=>Math.max(0,Math.ceil((Date.parse((stage.value==='game-result'?match.value?.rest_until:match.value?.preview_until)||'')-currentServerNow())/1000))||0);
+const readyWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.ready_deadline_at||'')-currentServerNow())/1000))||0);
 const predictionWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.prediction_window?.minimum_until||'')-currentServerNow())/1000))||0);
 const stage=computed(()=>{const value=match.value?.phase||'';if(['DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(value))return'draft';if(value==='LINEUP')return'lineup';if(value.endsWith('_READY'))return'ready';if(value.endsWith('_RESULT'))return'game-result';if(value==='FINISHED'||value==='CANCELLED')return'result';return'game'});
 const phaseLabels={DRAW:['抽签','DRAW'],FIRST_PICK_BAN:['先手选禁','FIRST PICK / BAN'],SECOND_PICK_BAN:['后手选禁','SECOND PICK / BAN'],BLIND_PICK:['双方盲选','BLIND PICK'],C_DRAW:['项目 C 抽签','PROJECT C DRAW'],LINEUP:['秘密布阵','SECRET LINEUP'],FINISHED:['全场结束','FINAL']};
-const phaseLabel=computed(()=>{const value=match.value?.phase||'';const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`GAME ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('结果确认','RESULT')}[gamePhase[2]]}`;return value.replaceAll('_',' ')});
+const phaseLabel=computed(()=>{const value=match.value?.phase||'';const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`GAME ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('单局结果','RESULT')}[gamePhase[2]]}`;return value.replaceAll('_',' ')});
 const phaseActor=computed(()=>{const side=match.value?.phase_timing?.active_side;if(!side)return'';const name=team(side).name||(side==='yellow'?t('黄方','Yellow'):t('白方','White'));return`${name} · ${t('操作中','ON TURN')}`});
 const currentServerNow=()=>serverAnchor.value+(now.value-receivedAt.value);
 const phaseCountdown=computed(()=>{const deadline=Date.parse(match.value?.phase_timing?.deadline_at||'');if(!Number.isFinite(deadline))return'';const seconds=Math.max(0,Math.ceil((deadline-currentServerNow())/1000));return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`});
@@ -108,10 +110,11 @@ const session=side=>match.value?.session_status?.[side]||{};
 const readiness=side=>match.value?.game_readiness?.[side]||{};
 const confirmed=side=>Boolean(match.value?.captain_confirmation_status?.[side]);
 const currentPlayer=side=>current.value?.players?.[side];
-const clock=side=>{const value=match.value?.team_clocks?.[side];if(!value)return'60:00';const projectionTime=Date.parse(match.value?.server_time||'');const elapsed=value.state==='running'&&Number.isFinite(projectionTime)?Math.max(0,currentServerNow()-projectionTime):0;const ms=Math.max(0,Number(value.remaining_ms||0)-elapsed),seconds=Math.ceil(ms/1000);return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`};
-const gameState=computed(()=>match.value?.phase?.endsWith('_RESULT')?t('等待双方队长确认','Awaiting captain confirmation'):Object.values(match.value?.session_status||{}).some(item=>item.finished)?t('等待另一方完成','Waiting for the other side'):t('双方对局进行中','Both players in progress'));
+const clock=side=>{const value=match.value?.team_clocks?.[side];if(!value)return'30:00';const projectionTime=Date.parse(match.value?.server_time||'');const elapsed=value.state==='running'&&Number.isFinite(projectionTime)?Math.max(0,currentServerNow()-projectionTime):0;const ms=Math.max(0,Number(value.remaining_ms||0)-elapsed),seconds=Math.ceil(ms/1000);return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`};
+const gameState=computed(()=>match.value?.phase?.endsWith('_RESULT')?t('休整后自动继续','Continuing after rest'):Object.values(match.value?.session_status||{}).some(item=>item.finished)?t('等待另一方完成','Waiting for the other side'):t('双方对局进行中','Both players in progress'));
 const resultText=result=>!result?t('待进行','Pending'):result.winner_side==='draw'?t('平局','Draw'):result.winner_side==='yellow'?t('黄方胜','Yellow win'):t('白方胜','White win');
 const resultScore=(result,side)=>projectResultValue(result,side,props.lang);
+const settlementGames=computed(()=>(match.value?.games||[]).map(game=>({...game,name:projectName(game.project_key),icon:gameIcon(game),project:match.value?.projects?.find(p=>p.key===game.project_key)})));
 const resultReason=result=>{
   if(!result)return'';
   if(result.reason==='yellow_surrendered')return t('黄方认输，保留认输时成绩','Yellow conceded; score at concession retained');
@@ -149,6 +152,11 @@ const ProjectPane=defineComponent({props:['side','view','status','player','lang'
 }}});
 </script>
 <style scoped>
+.competition-content.showing-settlement{overflow:auto;display:block;padding:12px 18px}
+.competition-content.showing-settlement .live-settlement{height:auto;min-height:100%;padding:12px 8px}
+.live-settlement :deep(.settlement-row){padding:9px 0}
+.live-settlement :deep(.settlement-heading){padding-bottom:12px}
+.live-settlement :deep(.settlement-project img){width:64px;height:64px}
 .candidate-reveal{text-align:center;padding:20px}.candidate-reveal>div{display:grid;grid-template-columns:1fr 1fr;gap:24px}.candidate-reveal article{display:flex;flex-direction:column;align-items:center;gap:12px}.candidate-reveal img{width:150px;height:150px;object-fit:contain}.candidate-reveal b{color:#f4cd69}.competition-content .game-result-layout{overflow:auto;height:calc(100% - 90px)}.result-final-boards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:16px auto;max-width:840px}.result-final-boards :deep(.project-pane){min-width:0}.public-matchups{text-align:center;font-size:13px}
 .draft-icon,.lineup-icon,.current-icon{display:block;border-radius:6px;object-fit:cover}
 .project-grid article:has(.draft-icon){grid-template-columns:42px minmax(0,1fr);column-gap:8px;align-content:center}

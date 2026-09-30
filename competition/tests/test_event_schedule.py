@@ -19,7 +19,7 @@ def scheduled(tmp_path):
     enrollment.account_reader = lambda ids: {uid: f'Player {uid}' for uid in ids}
     state = enrollment.action(SLUG, ADMIN, action='settings', revision=0, mode='organizer_team', capacity=0, registration_open=False)
     enrollment.import_roster(SLUG, ADMIN, revision=state['revision'], dry_run=False, entries=[
-        {'user_id': i, 'team_name': 'AAA' if i <= 3 else 'BBB', 'captain': i in (1,4), 'is_external':False} for i in range(1,7)])
+        {'user_id': i, 'team_name': 'AAA' if i <= 3 else 'BBB', 'captain': i in (1,4), 'position':(i-1)%3+1, 'is_external':False} for i in range(1,7)])
     state = enrollment.snapshot(SLUG)
     state = enrollment.action(SLUG, ADMIN, action='lock_roster', revision=state['revision'])
     start = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -31,15 +31,16 @@ def scheduled(tmp_path):
 def arrive(service, ids):
     for uid in ids:
         service.schedule.check_in('SCHED2', Principal(uid, f'Player {uid}'))
+        service.claim_seat('SCHED2', Principal(uid,f'Player {uid}'),side='yellow' if uid<=3 else 'white',position=(uid-1)%3+1,command_id=f'arrive-seat-{uid}')
 
 
 def test_fixed_roster_directory_and_future_start(scheduled):
     service, room, start, _ = scheduled
-    assert room['status'] == 'READY_CHECK'
-    assert len(room['seats']) == 6
+    assert room['status'] == 'SEATING'
+    assert len(room['seats']) == 0
     assert service.events.detail(SLUG, Principal(1,'P'))['rooms'][0]['room_code'] == 'SCHED2'
     assert service.events.detail(SLUG)['rooms'][0]['room_code'] is None
-    for method, kwargs in [(service.claim_seat, dict(side='yellow',position=1)), (service.leave_seat,{})]:
+    for method, kwargs in [(service.claim_seat, dict(side='yellow',position=2)), (service.leave_seat,{})]:
         with pytest.raises(CompetitionError):
             method('SCHED2', Principal(1,'P'), command_id='test-fixed-roster', **kwargs)
     arrive(service, range(1,7))
@@ -54,9 +55,11 @@ def test_fixed_roster_directory_and_future_start(scheduled):
 def test_one_team_late_is_three_zero_and_idempotent(scheduled):
     service, room, start, _ = scheduled
     arrive(service, (1,2,3,4,5))
+    service.set_ready('SCHED2',Principal(1,'P'),ready=True,command_id='yellow-ready-late')
     assert not service.settle_deadline('SCHED2', now=start+timedelta(minutes=5))
     assert not service.settle_deadline('SCHED2', now=start+timedelta(minutes=10))
-    assert service.settle_deadline('SCHED2', now=start+timedelta(minutes=10,seconds=1))
+    assert not service.settle_deadline('SCHED2', now=start+timedelta(minutes=15))
+    assert service.settle_deadline('SCHED2', now=start+timedelta(minutes=15,seconds=1))
     result = service.snapshot('SCHED2', ADMIN)
     assert result['status'] == 'FINISHED'
     assert result['match']['series_score'] == {'yellow':3,'white':0,'draws':0}
@@ -71,18 +74,15 @@ def test_one_team_late_is_three_zero_and_idempotent(scheduled):
     assert service.events.detail(SLUG)['rooms'][0]['series_score'] == {'yellow':3,'white':0}
 
 
-def test_both_late_wait_for_manager(scheduled):
+def test_both_late_finishes_zero_zero(scheduled):
     service, room, start, _ = scheduled
     arrive(service, (1,4))
-    service.settle_deadline('SCHED2', now=start+timedelta(minutes=11))
+    service.settle_deadline('SCHED2', now=start+timedelta(minutes=16))
     result = service.snapshot('SCHED2', ADMIN)
     assert result['schedule']['exception'] == 'both_late'
-    assert result['status'] == 'READY_CHECK'
-    arrive(service, (2,3,5,6))
-    for uid in (1,4):
-        service.set_ready('SCHED2', Principal(uid,'P'), ready=True, command_id=f'ready-user-{uid}')
-    service.settle_deadline('SCHED2', now=start+timedelta(minutes=12))
-    assert service.snapshot('SCHED2', ADMIN)['status'] == 'READY_CHECK'
+    assert result['status'] == 'FINISHED'
+    assert result['match']['series_points']=={'yellow':0,'white':0}
+    assert result['match']['results']==[]
 
 
 def test_roster_unlock_does_not_change_scheduled_players(scheduled):
@@ -104,7 +104,8 @@ def test_same_team_rejected_and_checkin_not_ready(scheduled):
         service.create_competition(ADMIN, name='同队无效', **kwargs)
     arrive(service, (1,4))
     for uid in (1,4):
-        service.set_ready('SCHED2', Principal(uid,'P'), ready=True, command_id=f'ready-user-{uid}')
+        with pytest.raises(CompetitionError):
+            service.set_ready('SCHED2', Principal(uid,'P'), ready=True, command_id=f'ready-user-{uid}')
     assert not service.settle_deadline('SCHED2', now=start)
 
 
@@ -116,5 +117,7 @@ def test_expulsion_blocks_checkin_and_unban_restores_assigned_seat(scheduled):
         service.schedule.check_in('SCHED2', Principal(2,'P'))
     service.manage_member('SCHED2', ADMIN, user_id=2, remove=False, command_id='unban-user-2')
     result = service.schedule.check_in('SCHED2', Principal(2,'P'))
+    assert len(result['seats']) == 5
+    result=service.claim_seat('SCHED2',Principal(2,'P'),side='yellow',position=2,command_id='return-user-2')
     assert len(result['seats']) == 6
     assert result['status'] == 'READY_CHECK'

@@ -1,6 +1,8 @@
 // Competition API and room socket errors share stable codes. Keep user-facing
 // wording here instead of displaying the backend's English diagnostic text.
 export const ERROR_MESSAGES = Object.freeze({
+  REMATCH_WINDOW_CLOSED: '已进入布阵阶段，不再因落位错误重赛。',
+  SCHEDULE_SEATS_FIXED: '请按报名表上的队内序号落座。',
   AUTH_REQUIRED: '请先登录后再操作。',
   ACTIVE_PLAYER_REQUIRED: '只有本场项目的出战选手可以执行此操作。',
   BLIND_ALREADY_SUBMITTED: '本队已提交盲选结果。',

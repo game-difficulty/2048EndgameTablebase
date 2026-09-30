@@ -42,7 +42,7 @@
       <section class="play-main">
         <div class="game-shell">
           <section class="game-hud">
-            <div><small>{{ project.cargoTransport ? '剩余时间' : '用时' }}</small><strong class="timer">{{ project.cargoTransport ? remainingText : elapsedText }}</strong></div>
+            <div><small>用时</small><strong class="timer">{{ elapsedText }}</strong></div>
             <div><small>{{ project.cargoTransport ? '已送出' : '得分' }}</small><strong>{{ snapshot.score.toLocaleString() }}</strong></div>
             <div><small>步数</small><strong>{{ snapshot.moves }}</strong></div>
             <div v-if="project.tileLimit"><small>方块数量</small><strong>{{ tileCount }} / {{ project.tileLimit }}</strong></div>
@@ -105,7 +105,7 @@ import { PolyominoGame } from './polyominoEngine.js';
 import { PracticeSpecialGame } from './practiceSpecialEngine.js';
 import { PracticeScoreVariantGame } from './practiceScoreVariants.js';
 import { AftershockGame, LookBackGame } from './geometryVariants.js';
-import { CargoGame, CARGO_LIMIT_MS } from './cargoEngine.js';
+import { CargoGame } from './cargoEngine.js';
 import TournamentBoard from './TournamentBoard.vue';
 import PolyominoBoard from './PolyominoBoard.vue';
 import CargoBoard from './CargoBoard.vue';
@@ -155,9 +155,8 @@ let thinkingTimer = null;
 
 const elapsedText = computed(() => formatElapsed(game.value?.elapsed(now.value) || snapshot.value.elapsedMs));
 const tileCount = computed(() => snapshot.value.board.filter(value => value > 0).length);
-const remainingText = computed(() => formatElapsed(Math.max(0, CARGO_LIMIT_MS - (game.value?.elapsed(now.value) || snapshot.value.elapsedMs))));
 const dicePlacement = computed(() => snapshot.value.dice <= 3 ? '角位放置墙' : snapshot.value.dice <= 5 ? '边位放置墙' : '中心位放置墙');
-const settlement = computed(() => project.value?.cargoTransport ? '无路可走或10分钟结束，按送出数量比较' : project.value?.race ? '先达到目标者获胜' : project.value?.resultMetric === 'boardSum' ? '双方死亡后比较盘面和' : '双方死亡后比较得分');
+const settlement = computed(() => project.value?.cargoTransport ? '无路可走时结束，按送出数量比较' : project.value?.race ? '先达到目标者获胜' : project.value?.resultMetric === 'boardSum' ? '双方死亡后比较盘面和' : '双方死亡后比较得分');
 const resolvedAppearance = computed(() => resolvePracticeAppearance(accountAppearance.value, practiceTheme.value));
 
 watch(() => snapshot.value.finished, finished => {
@@ -302,7 +301,7 @@ function keydown(event) {
   if ((event.key === 'z' || event.key === 'Z') && project.value.allowUndo) { event.preventDefault(); undo(); }
   if (event.key.toLowerCase() === 'r' && project.value.allowRestart && !event.repeat) { event.preventDefault(); restart(); }
 }
-onMounted(() => { createGame(); syncPracticeSession().finally(loadLeaderboard); timer = window.setInterval(() => { now.value = performance.now(); if (project.value?.cargoTransport && game.value && !game.value.finished && game.value.elapsed(now.value) >= CARGO_LIMIT_MS) snapshot.value = game.value.expire(now.value); }, 16); window.addEventListener('keydown', keydown); });
+onMounted(() => { createGame(); syncPracticeSession().finally(loadLeaderboard); timer = window.setInterval(() => { now.value = performance.now(); }, 16); window.addEventListener('keydown', keydown); });
 onBeforeUnmount(() => { window.clearInterval(timer); window.clearTimeout(diceTimer); window.clearTimeout(finishTimer); window.clearTimeout(thinkingTimer); window.removeEventListener('keydown', keydown); });
 </script>
 

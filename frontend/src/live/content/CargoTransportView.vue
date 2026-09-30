@@ -1,6 +1,6 @@
 <template>
   <div class="cargo-live-shell">
-    <div class="cargo-live-header"><span><small>{{ metric.label }}</small><strong>{{ metric.value }}</strong></span><span><small>{{ t('倒计时', 'COUNTDOWN') }}</small><strong>{{ countdown }}</strong></span></div>
+    <div class="cargo-live-header"><span><small>{{ metric.label }}</small><strong>{{ metric.value }}</strong></span><span><small>{{ t('用时', 'TIME') }}</small><strong>{{ countdown }}</strong></span></div>
     <div class="cargo-live-stage">
       <i v-for="index in 16" :key="`cell-${index}`" class="grid-cell" :style="position(Math.floor((index - 1) / 4), (index - 1) % 4)" />
       <b v-for="(value, index) in cells" v-show="value > 0 && !hidden.has(index)" :key="`tile-${index}-${value}`"
@@ -81,7 +81,7 @@ function bridges(cargo) {
 }
 const countdown = computed(() => {
   const elapsed = elapsedAnchor.value + (payload.value.finished || props.suspended ? 0 : Math.max(0, now.value - receivedAt.value));
-  const ms = Math.max(0, Number(payload.value.time_limit_ms || 600000) - elapsed);
+  const ms = Math.max(0, elapsed);
   return `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(Math.floor(ms / 10) % 100).padStart(2, '0')}`;
 });
 const movingStyle = item => ({

@@ -215,22 +215,7 @@ def test_ready_gate_clocks_private_play_and_result_confirmation(
     assert completed["status"] == CompetitionStatus.GAME_A_RESULT.value
     assert completed["match"]["current_result"]["winner_side"] == "draw"
 
-    yellow_result = service.snapshot("MATCH5", players[0])
-    service.confirm_current_result(
-        "MATCH5",
-        players[0],
-        result_revision=yellow_result["match"]["current_result"]["result_revision"],
-        phase_token=yellow_result["match"]["phase_token"],
-        command_id="match-a-confirm-yellow",
-    )
-    white_result = service.snapshot("MATCH5", players[3])
-    next_game = service.confirm_current_result(
-        "MATCH5",
-        players[3],
-        result_revision=white_result["match"]["current_result"]["result_revision"],
-        phase_token=white_result["match"]["phase_token"],
-        command_id="match-a-confirm-white",
-    )
+    next_game = service.snapshot("MATCH5", players[0])
     assert next_game["status"] == CompetitionStatus.GAME_B_READY.value
     assert next_game["match"]["current_game_key"] == "B"
     assert next_game["match"]["series_score"] == {
@@ -254,21 +239,7 @@ def test_three_games_progress_to_finished(service: CompetitionService) -> None:
         result_view = force_one_move_completion(
             service, white_player, game_key, "white"
         )
-        revision = result_view["match"]["current_result"]["result_revision"]
-        service.confirm_current_result(
-            "MATCH5",
-            players[0],
-            result_revision=revision,
-            phase_token=service.snapshot("MATCH5", players[0])["match"]["phase_token"],
-            command_id=f"match-{game_key}-confirm-yellow",
-        )
-        final = service.confirm_current_result(
-            "MATCH5",
-            players[3],
-            result_revision=revision,
-            phase_token=service.snapshot("MATCH5", players[3])["match"]["phase_token"],
-            command_id=f"match-{game_key}-confirm-white",
-        )
+        final = service.snapshot("MATCH5", players[0])
     assert final["status"] == CompetitionStatus.FINISHED.value
     assert final["match"]["winner_side"] == "draw"
     assert len(final["match"]["results"]) == 3

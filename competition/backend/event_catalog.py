@@ -68,6 +68,7 @@ class EventCatalog:
             event = self._event(db, slug)
             result = self._view(db, event, principal)
             result['rooms'] = []
+            result['record_candidates'] = []
             for room in db.execute('''SELECT c.* FROM competitions c JOIN tournament_room_links l
                 ON l.competition_id=c.id LEFT JOIN competition_schedule s ON s.competition_id=c.id
                 WHERE l.event_slug=? ORDER BY COALESCE(s.starts_at,c.created_at),c.id''', (slug,)):
@@ -77,14 +78,24 @@ class EventCatalog:
                 may_enter = admitted and (self.rooms._is_platform_organizer(principal)
                     or room['created_by_user_id'] == principal.user_id or db.execute('''
                     SELECT 1 FROM competition_seats WHERE competition_id=? AND user_id=?
-                    UNION SELECT 1 FROM competition_staff WHERE competition_id=? AND user_id=?''',
-                    (room['id'], principal.user_id, room['id'], principal.user_id)).fetchone())
+                    UNION SELECT 1 FROM competition_staff WHERE competition_id=? AND user_id=?
+                    UNION SELECT 1 FROM competition_scheduled_players WHERE competition_id=? AND user_id=?''',
+                    (room['id'], principal.user_id, room['id'], principal.user_id,room['id'],principal.user_id)).fetchone())
                 # Directory is public; never expose join codes or private room snapshots to spectators.
                 result['rooms'].append({'name': room['name'], 'status': room['status'],
                     'schedule': self.rooms.schedule.view(db, room['id']),
                     'series_score': dict(db.execute('SELECT yellow_wins AS yellow,white_wins AS white FROM competition_match_control WHERE competition_id=?', (room['id'],)).fetchone() or {}),
                     'room_code': room['room_code'] if may_enter else None,
                     'public_key': room['public_key'] if room['live_started_at'] else None})
+                if room['status']=='FINISHED':
+                    games=[dict(r) for r in db.execute('SELECT * FROM competition_game_results WHERE competition_id=?',(room['id'],))]
+                    self.rooms._attach_result_timings(db,room['id'],games)
+                    for game in games:
+                        side=game.get('record_eligible_side')
+                        if not side: continue
+                        session=db.execute('SELECT s.project_ref,s.rules_version,s.player_user_id,p.name FROM competition_game_sessions s JOIN competition_projects p ON p.competition_id=s.competition_id AND p.project_key=s.project_key WHERE s.competition_id=? AND s.game_key=? AND s.side=?',(room['id'],game['game_key'],side)).fetchone()
+                        if session:
+                            result['record_candidates'].append({**dict(session),'game_key':game['game_key'],'score':game[f'{side}_score'],'elapsed_ms':game.get(f'{side}_elapsed_ms'),'public_key':room['public_key']})
             return result
 
     def create(self, principal, *, slug, name, description='', rules=''):

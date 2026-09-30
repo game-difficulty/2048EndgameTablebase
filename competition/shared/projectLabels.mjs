@@ -30,7 +30,7 @@ const phases = {
 };
 export function competitionPhaseLabel(phase, lang='zh') {
   const game = /^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(phase || '');
-  if(game){const state={READY:['开局检查','Ready check'],PLAYING:['对局中','In progress'],RESULT:['结果确认','Result confirmation']}[game[2]];return `${lang==='zh'?'项目':'Game'} ${game[1]} · ${state[lang==='zh'?0:1]}`;}
+  if(game){const state={READY:['开局检查','Ready check'],PLAYING:['对局中','In progress'],RESULT:['单局结果','Game result']}[game[2]];return `${lang==='zh'?'项目':'Game'} ${game[1]} · ${state[lang==='zh'?0:1]}`;}
   return phases[phase]?.[lang==='zh'?0:1] || (lang==='zh'?'比赛准备中':'Preparing match');
 }
 export function competitionProjectLabel(project, lang='zh') {

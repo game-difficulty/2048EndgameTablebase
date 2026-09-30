@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 SCHEMA = """
@@ -23,6 +23,20 @@ CREATE TABLE IF NOT EXISTS competition_scheduled_players (
   user_id INTEGER NOT NULL, side TEXT NOT NULL, position INTEGER NOT NULL,
   display_name TEXT NOT NULL, arrived_at TEXT,
   PRIMARY KEY(competition_id,user_id), UNIQUE(competition_id,side,position)
+);
+CREATE TABLE IF NOT EXISTS competition_flow_rules (
+  competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
+  version TEXT NOT NULL, team_clock_ms INTEGER NOT NULL,
+  late_minutes INTEGER NOT NULL DEFAULT 15, ready_seconds INTEGER NOT NULL DEFAULT 60
+);
+CREATE TABLE IF NOT EXISTS tournament_roster_positions (
+  event_slug TEXT NOT NULL, user_id INTEGER NOT NULL, position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 3),
+  PRIMARY KEY(event_slug,user_id)
+);
+CREATE TABLE IF NOT EXISTS competition_time_refunds (
+  competition_id TEXT NOT NULL, game_key TEXT NOT NULL, side TEXT NOT NULL,
+  decisive_ms INTEGER NOT NULL, amount_ms INTEGER NOT NULL,
+  PRIMARY KEY(competition_id,game_key,side)
 );
 CREATE TABLE IF NOT EXISTS tournament_events (
   slug TEXT PRIMARY KEY,

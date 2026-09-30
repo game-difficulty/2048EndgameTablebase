@@ -68,7 +68,7 @@ def load_settings() -> CompetitionSettings:
         draft_turn_seconds=_positive_int("COMPETITION_DRAFT_TURN_SECONDS", 60, 5),
         c_draw_reveal_seconds=10,
         lineup_seconds=_positive_int("COMPETITION_LINEUP_SECONDS", 180, 5),
-        team_clock_seconds=_positive_int("COMPETITION_TEAM_CLOCK_SECONDS", 3600, 30),
+        team_clock_seconds=_positive_int("COMPETITION_TEAM_CLOCK_SECONDS", 1800, 30),
         test_project_target_tile=_positive_int(
             "COMPETITION_TEST_PROJECT_TARGET_TILE", 2048, 4
         ),

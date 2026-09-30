@@ -122,12 +122,12 @@ def test_opening_can_end_before_first_cargo_when_board_is_dead() -> None:
     assert dead.finished and dead.outcome == "no_moves"
 
 
-def test_server_limit_ends_run_with_current_delivery_count() -> None:
+def test_no_project_time_limit() -> None:
     adapter = CargoTransportAdapter()
     state = adapter.initial_state(seed=SEED)
-    timed = adapter.apply_move(replace(state, elapsed_ms=LIMIT_MS), "down")
-    assert timed.finished and timed.outcome == "time_limit"
-    assert timed.score == state.score
+    timed = adapter.apply_move(replace(state, elapsed_ms=1_200_000), "down")
+    assert not timed.finished
+    assert adapter.public_payload(timed)['time_limit_ms'] is None
 
 
 def test_death_requires_no_numeric_or_cargo_move_and_ends_session() -> None:
@@ -145,23 +145,23 @@ def test_death_requires_no_numeric_or_cargo_move_and_ends_session() -> None:
     dead = adapter.apply_move(state, "down")
     assert dead.finished and dead.outcome == "no_moves"
     assert dead.move_count == state.move_count + 1
-    assert adapter.public_payload(dead)["remaining_ms"] == LIMIT_MS - 123_456
+    assert adapter.public_payload(dead)["remaining_ms"] is None
 
 
-def test_match_settles_cargo_only_after_client_reports_time_limit(tmp_path) -> None:
+def test_match_settles_cargo_only_after_client_reports_death(tmp_path) -> None:
     service, players = setup_game(tmp_path, CargoTransportAdapter.project_id)
     moment = datetime.now(timezone.utc)
     with service.database.transaction(immediate=True) as db:
         db.execute(
             "UPDATE competition_team_clocks SET running_since = ?",
-            ((moment - timedelta(milliseconds=LIMIT_MS + 10)).isoformat(),),
+            ((moment - timedelta(milliseconds=600_010)).isoformat(),),
         )
     # Project timeout is a local rule, not a server deadline.
     assert not service.settle_deadline("MATCH5", now=moment)
     assert service.snapshot("MATCH5", players[0])["status"] == CompetitionStatus.GAME_A_PLAYING.value
     for participant, delivered in ((players[0], 3), (players[3], 2)):
         final = packet(service, participant, finished=True, value=delivered,
-                       elapsed=LIMIT_MS, outcome="time_limit")
+                       elapsed=600_000, outcome="no_moves")
         final["payload"].update(board=[list(row) for row in EMPTY],
                                 delivered=delivered, remaining_ms=0)
         service.sync_client_game("MATCH5", participant, **final)
@@ -179,16 +179,16 @@ def test_match_death_stops_only_the_dead_side_clock(tmp_path) -> None:
     final = packet(service, players[0], finished=True, value=2,
                    elapsed=123_456, outcome="no_moves")
     final["payload"].update(board=[list(row) for row in EMPTY],
-                            delivered=2, remaining_ms=LIMIT_MS - 123_456)
+                            delivered=2, remaining_ms=None)
     result = service.sync_client_game("MATCH5", players[0], **final)["competition"]
     assert result["match"]["clocks"]["yellow"]["state"] == "stopped"
     assert result["match"]["clocks"]["white"]["state"] == "running"
     session = result["match"]["sessions"]["yellow"]
     assert session["finished"] is True
-    assert session["project_clock"]["mode"] == "countdown"
+    assert session["project_clock"]["mode"] == "elapsed"
     assert session["project_clock"]["limit_ms"] == LIMIT_MS
     assert session["project_clock"]["running"] is False
     assert session["public_view"]["payload"]["outcome"] == "no_moves"
-    assert session["public_view"]["payload"]["remaining_ms"] == LIMIT_MS - 123_456
+    assert session["public_view"]["payload"]["remaining_ms"] is None
     frozen = session["public_view"]["payload"]["remaining_ms"]
     assert service.snapshot("MATCH5", players[0])["match"]["sessions"]["yellow"]["public_view"]["payload"]["remaining_ms"] == frozen

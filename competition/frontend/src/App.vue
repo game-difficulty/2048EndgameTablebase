@@ -5,6 +5,7 @@ import { userFacingError } from './errorMessages.js';
 import ProjectPlayground from './projects/ProjectPlayground.vue';
 import PlayerAvatar from './PlayerAvatar.vue';
 import EventCenter from './EventCenter.vue';
+import MatchSettlement from '../../shared/MatchSettlement.vue';
 import RoomSchedulePicker from './RoomSchedulePicker.vue';
 import { scheduleTime, roomMatchTitle, roomMatchScore } from './scheduleDisplay.js';
 import TournamentBoard from './projects/TournamentBoard.vue';
@@ -139,6 +140,13 @@ const allSeated = computed(() => (room.value?.seats?.length || 0) === 6);
 const isLobby = computed(() => ['SEATING', 'READY_CHECK'].includes(room.value?.status));
 const draft = computed(() => room.value?.draft || null);
 const lineup = computed(() => room.value?.lineup || null);
+const settlementGames = computed(() => ['A','B','C'].map(game => {
+  const result = room.value?.match?.results?.find(item => item.game_key === game);
+  const key = result?.project_key || gameProject(game);
+  return { game_key:game, result, project:room.value?.projects?.find(p=>p.key===key),
+    name:key ? projectName(key) : '', icon:roomProjectIcon(key),
+    players:{ yellow:lineup.value?.revealed_lineups?.yellow?.[game], white:lineup.value?.revealed_lineups?.white?.[game] } };
+}));
 const match = computed(() => {
   const value = room.value?.match;
   const packet = localPacket.value;
@@ -388,6 +396,11 @@ function synchronizeRuntime(nextRoom) {
     localPacket.value = localRuntime.packet();
   }
   localRuntime?.setClock(clock.elapsed_ms, clock.running);
+  if(localRuntime) {
+    const other=nextRoom.match.sessions?.[bootstrap.side==='yellow'?'white':'yellow'];
+    localRuntime.opponentResult=other?.public_view?.payload;
+    localRuntime.originalBudget=bootstrap.original_team_budget_ms ?? bootstrap.team_remaining_at_start_ms;
+  }
   if (own.finished && !localPacket.value?.finished) {
     // Clock expiry / referee decisions remain authoritative match controls.
     localRuntime.game.finished = true;
@@ -890,7 +903,7 @@ function formatCountdown(value) {
 
 function teamClockMs(side) {
   if (localRuntime && isMyActiveSide(side) && localPacket.value?.finished) {
-    return Math.max(0, localRuntime.bootstrap.team_remaining_at_start_ms - localRuntime.elapsed());
+    return Math.max(0, localRuntime.budget() - localRuntime.elapsed());
   }
   const clock = match.value?.clocks?.[side];
   if (!clock) return 0;
@@ -939,8 +952,14 @@ function seatLabel(side, position) {
   return `${side === 'yellow' ? '黄' : '白'}${position}`;
 }
 
-function canClaim(seat) {
-  return !seat && room.value?.me?.can_claim_seat && !busy.value;
+async function rematchRoom() {
+  if(busy.value || !window.confirm('因落位错误重赛？原房间取消、下注退还，新建空席位房间。已过开战时间时，从现在重新计算15分钟就位期限。'))return;
+  busy.value=true;
+  try{const result=await api.rematch(room.value.room_code);navigate(`/rooms/${result.competition.room_code}`);}catch(cause){setError(cause);}finally{busy.value=false;}
+}
+function canClaim(seat,side,position) {
+  const players=room.value?.schedule?.players || [];
+  return !seat && room.value?.me?.can_claim_seat && !busy.value && (!players.length || players.some(p=>p.user_id===room.value.me.user_id && p.side===side && p.position===position));
 }
 
 function teamSeats(side) {
@@ -1053,7 +1072,7 @@ onBeforeUnmount(() => {
           <div v-for="item in activeRooms" :key="item.id" class="room-row">
             <button class="room-row-link" type="button" @click="navigate(`/rooms/${item.room_code}`)">
               <span><strong>{{ roomMatchTitle(item) }} <b>{{ roomMatchScore(item) }}</b></strong><small>{{ item.event?.name || '独立房间' }} · {{ item.room_code }} · {{ scheduleTime(item.schedule?.starts_at) }}{{ item.schedule ? '（北京时间）' : '' }}</small></span>
-              <span class="room-meta">{{ item.schedule?.exception === 'both_late' ? '双方迟到 · 待处理' : statusText[item.status] || item.status }}</span>
+              <span class="room-meta">{{ item.schedule?.exception === 'both_late' ? '双方未就位 · 0:0' : statusText[item.status] || item.status }}</span>
             </button>
             <button v-if="item.can_close" class="room-close-button" type="button" :disabled="busy" :aria-label="`关闭比赛房间 ${item.name}`" @click="closeRoom(item)">关闭房间</button>
           </div>
@@ -1077,6 +1096,7 @@ onBeforeUnmount(() => {
           <div class="match-header-actions">
             <button class="back-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ room.event?.name || '赛事中心' }}</button>
             <button v-if="room.me.can_close" class="close-room-link" type="button" :disabled="busy" @click="closeRoom(room)">关闭房间</button>
+            <button v-if="(room.me.can_manage || room.me.staff_roles?.includes('referee')) && ['SEATING','READY_CHECK','DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(room.status)" class="close-room-link" :disabled="busy" @click="rematchRoom">落位错误重赛</button>
           </div>
           <div class="match-identity">
             <span class="room-code">{{ room.room_code }}</span>
@@ -1086,7 +1106,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-if="room.status !== 'CANCELLED'" class="progress-strip">
+      <section v-if="!['CANCELLED','FINISHED'].includes(room.status)" class="progress-strip">
         <div :class="['progress-step', room.status === 'SEATING' ? 'active' : 'done']">选手落座</div>
         <div :class="['progress-step', room.status === 'READY_CHECK' ? 'active' : !['SEATING', 'READY_CHECK'].includes(room.status) ? 'done' : '']">队长准备</div>
         <div :class="['progress-step', room.status === 'DRAW' ? 'active' : !['SEATING', 'READY_CHECK', 'DRAW'].includes(room.status) ? 'done' : '']">先后手抽签</div>
@@ -1098,12 +1118,15 @@ onBeforeUnmount(() => {
       <div class="page-width room-content">
         <section v-if="room.schedule && (isLobby || match?.finish_reason === 'late_forfeit')" class="panel schedule-room-notice">
           <h2>{{ roomMatchTitle(room) }} · {{ scheduleTime(room.schedule.starts_at) }}（北京时间）</h2>
-          <p v-if="match?.finish_reason === 'late_forfeit'">迟到判负：{{ match.winner_side === 'yellow' ? room.schedule.yellow_name : room.schedule.white_name }} 以 3:0 获胜。</p>
-          <template v-else><p>可提前签到与准备，到点后开始抽签。{{ scheduleTime(room.schedule.late_at) }} 后未全员签到的一方判 0:3 负。</p>
-          <p v-for="side in ['yellow','white']" :key="side">{{ room.schedule[`${side}_name`] }}：{{ room.schedule.players.filter(p => p.side === side).map(p => `${p.display_name}（${p.arrived_at ? '已签到' : '未到场'}）`).join('、') }}</p>
-          <p v-if="room.schedule.exception === 'both_late'" role="alert">双方均未在宽限期内到齐，自动开赛已暂停。请管理员关闭本房间并重新安排赛程。</p></template>
+          <p v-if="match?.finish_reason === 'late_forfeit' && match.winner_side === 'draw'">双方均未在宽限期内就位，本轮以 0:0 结束。</p>
+          <p v-else-if="match?.finish_reason === 'late_forfeit'">迟到判负：{{ match.winner_side === 'yellow' ? room.schedule.yellow_name : room.schedule.white_name }} 以 3:0 获胜。</p>
+          <template v-else><p>可提前签到与准备，到点后开始抽签。{{ scheduleTime(room.schedule.late_at) }} 后仍未全员落座并由队长准备的一方判 0:3 负；双方均未就位则 0:0。</p>
+          <template v-if="room.schedule.players.length"><p v-for="side in ['yellow','white']" :key="side">{{ room.schedule[`${side}_name`] }}：{{ room.schedule.players.filter(p => p.side === side).map(p => `${p.position} 号 · ${p.display_name}（${p.arrived_at ? '已签到' : '未到场'}）`).join('、') }}</p></template>
+          <p v-else>自由房间，已登录选手可自行落座。</p>
+          <p v-if="room.schedule.exception === 'both_late'" role="alert">双方均未在宽限期内就位，本轮以 0:0 结束。</p></template>
         </section>
         <p v-if="error" class="alert">{{ error }}</p>
+        <p v-if="room.replacement_room_code" class="alert">本房间已取消并安排重赛。<a :href="`/rooms/${room.replacement_room_code}`">进入新房间 {{ room.replacement_room_code }}</a>，请重新落座。</p>
         <p v-if="room.member_hold && !match?.suspension?.active" class="alert" role="status">参赛人员已被移出，流程暂缓。请房主或赛事管理员处理后继续。</p>
 
         <Transition name="suspension-drop">
@@ -1225,7 +1248,7 @@ onBeforeUnmount(() => {
           <div class="game-hud-side yellow">
             <button class="game-hud-back" type="button" aria-label="返回比赛列表" @click="navigate(competitionHomePath)">←</button>
             <strong class="game-hud-series" :aria-label="`黄方局分 ${match.series_score.yellow}`">{{ match.series_score.yellow }}</strong>
-            <span class="game-hud-team">黄方<small>包干时间</small></span>
+            <span class="game-hud-team">黄方<small :title="sessionPayload('yellow')?.refund_reserve_ms ? '当前可用时间含最多 5 分钟补时额度，结束时按实际差额结算。' : ''">{{ sessionPayload('yellow')?.refund_reserve_ms ? '含补时额度' : '包干时间' }}</small></span>
             <strong class="game-hud-clock">{{ formatTeamClock(teamClockMs('yellow')) }}</strong>
           </div>
           <div class="game-hud-center">
@@ -1235,13 +1258,13 @@ onBeforeUnmount(() => {
           </div>
           <div class="game-hud-side white">
             <strong class="game-hud-clock">{{ formatTeamClock(teamClockMs('white')) }}</strong>
-            <span class="game-hud-team">白方<small>包干时间</small></span>
+            <span class="game-hud-team">白方<small :title="sessionPayload('white')?.refund_reserve_ms ? '当前可用时间含最多 5 分钟补时额度，结束时按实际差额结算。' : ''">{{ sessionPayload('white')?.refund_reserve_ms ? '含补时额度' : '包干时间' }}</small></span>
             <strong class="game-hud-series" :aria-label="`白方局分 ${match.series_score.white}`">{{ match.series_score.white }}</strong>
             <span class="game-hud-stage"><i :class="['connection-dot', connection]"></i>{{ match.suspension.active ? '暂停' : statusText[room.status] }}</span>
           </div>
         </section>
 
-        <div v-if="match && (room.status.startsWith('GAME_') || room.status === 'FINISHED') && !isGameStage" :class="['series-track', visibleStageMotion?.kind === 'match-finished' && 'settling']" aria-label="三场赛程">
+        <div v-if="match && room.status.startsWith('GAME_') && !isGameStage" class="series-track" aria-label="三场赛程">
           <div v-for="game in ['A', 'B', 'C']" :key="game" :class="['series-game', game === currentGameKey && room.status !== 'FINISHED' && 'current', resultForGame(game) && 'complete']">
             <img v-if="roomProjectIcon(gameProject(game))" class="project-icon series-icon" :src="roomProjectIcon(gameProject(game))" alt="" />
             <span>项目 {{ game }}<small>{{ resultForGame(game) ? `${projectResultValue(resultForGame(game), 'yellow')} / ${projectResultValue(resultForGame(game), 'white')} · ${winnerName(resultForGame(game).winner_side)}` : game === currentGameKey && room.status !== 'FINISHED' ? '当前项目' : '待进行' }}</small></span>
@@ -1268,7 +1291,7 @@ onBeforeUnmount(() => {
                 :key="item.position"
                 :class="['seat-card', item.seat && 'occupied', item.seat?.user_id === room.me.user_id && 'mine']"
                 type="button"
-                :disabled="!canClaim(item.seat)"
+                :disabled="!canClaim(item.seat,item.side,item.position)"
                 @click="claim(item.side, item.position)"
               >
                 <PlayerAvatar v-if="item.seat" class="seat-avatar" :person="item.seat" />
@@ -1281,7 +1304,7 @@ onBeforeUnmount(() => {
 
             <div class="versus-column">
               <span class="versus">VS</span>
-              <span v-if="room.schedule">{{ room.schedule.players.filter(p => p.arrived_at).length }} / 6 已签到</span>
+              <span v-if="room.schedule?.players.length">{{ room.schedule.players.filter(p => p.arrived_at).length }} / 6 已签到</span>
               <span v-else>{{ room.seats.length }} / 6 已落座</span>
               <span v-if="room.status === 'SEATING'">等待全部选手</span>
               <span v-else>等待双方队长</span>
@@ -1297,7 +1320,7 @@ onBeforeUnmount(() => {
                 :key="item.position"
                 :class="['seat-card', item.seat && 'occupied', item.seat?.user_id === room.me.user_id && 'mine']"
                 type="button"
-                :disabled="!canClaim(item.seat)"
+                :disabled="!canClaim(item.seat,item.side,item.position)"
                 @click="claim(item.side, item.position)"
               >
                 <PlayerAvatar v-if="item.seat" class="seat-avatar" :person="item.seat" />
@@ -1312,15 +1335,15 @@ onBeforeUnmount(() => {
           <section class="action-bar">
             <div>
               <strong v-if="mySeat">你位于 {{ seatLabel(mySeat.side, mySeat.position) }}{{ mySeat.position === 1 ? '，是本队队长' : '' }}</strong>
-              <strong v-else-if="room.schedule">本房间仅限已编排的选手参赛</strong>
+              <strong v-else-if="room.schedule">按报名表对应席位落座</strong>
               <strong v-else>请选择一个空位落座</strong>
-              <p v-if="room.schedule">席位已由赛事名单固定；全员签到且双方队长准备后，等待预定开战时间开始抽签。</p>
+              <p v-if="room.schedule">请按报名序号落座。队长准备前请核对双方名单；双方就位后等待预定开战时间开始抽签。</p>
               <p v-else-if="room.status === 'SEATING'">六个席位坐满后，双方队长可以准备。</p>
               <p v-else>任一队准备后席位将锁定，双方准备后进入抽签。</p>
             </div>
             <div class="action-buttons">
               <button v-if="room.me.can_leave_seat" class="secondary-button" type="button" :disabled="busy" @click="leave">离开席位</button>
-              <button v-if="room.me.can_ready" class="primary-button" type="button" :disabled="busy || !allSeated" @click="toggleReady">{{ busy ? '提交中…' : myTeamReady ? '取消准备' : '队长准备' }}</button>
+              <button v-if="room.me.can_ready" class="primary-button" type="button" :disabled="busy" @click="toggleReady">{{ busy ? '提交中…' : myTeamReady ? '取消准备' : '队长准备' }}</button>
             </div>
           </section>
         </template>
@@ -1536,6 +1559,7 @@ onBeforeUnmount(() => {
           <div v-if="lineup?.revealed_lineups" class="public-matchups"><p v-for="game in ['A','B','C']" :key="game">{{ lineup.revealed_lineups.yellow[game]?.display_name }} — 项目 {{ game }} · {{ projectName(gameProject(game)) }} — {{ lineup.revealed_lineups.white[game]?.display_name }}</p></div>
           <p v-if="predictionWait > 0" class="muted" role="status">赛事下注最短窗口剩余 {{ predictionWait }} 秒；双方就绪后将自动开局，此处等待不扣队伍用时。</p>
           <section class="pregame-panel">
+            <p>双方独立确认，剩余 {{ Math.max(0,Math.ceil((Date.parse(match.ready_deadline_at)-clockNow-serverOffsetMs)/1000)) || 0 }} 秒后自动确认。期间不扣队伍包干时间。</p>
             <div class="pregame-heading"><p class="eyebrow">PRE-GAME CHECK</p><h1>项目 {{ match.current_game_key }} 开局检查</h1><p>双方出战者和队长全部就绪后，项目与两队包干计时自动开始。</p></div>
             <div class="pregame-project"><img v-if="roomProjectIcon(match.project_key)" class="project-icon pregame-project-icon" :src="roomProjectIcon(match.project_key)" alt="" /><div><span>本场项目</span><h2>{{ projectName(match.project_key) }}</h2><p>{{ projectDescription(match.project_key) }}</p></div></div>
             <div class="pregame-versus">
@@ -1651,31 +1675,16 @@ onBeforeUnmount(() => {
           <div class="result-boards"><div v-for="side in ['yellow', 'white']" :key="side"><strong>{{ sideName(side) }}最终盘面</strong>
             <component :is="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' ? CargoBoard : match.sessions[side]?.public_view?.view_protocol === 'polyomino-board-v1' ? PolyominoBoard : TournamentBoard" v-if="sessionPayload(side)?.board" :snapshot="projectBoardSnapshot(side)" :disabled="true" :mirror-portals="Boolean(sessionPayload(side)?.mirror_portals)" :irregular-shape="Boolean(sessionPayload(side)?.shape_shifter || sessionPayload(side)?.aftershock)" :aftershock="Boolean(sessionPayload(side)?.aftershock)" :sealed-cells="sessionPayload(side)?.sealed_cells || []" />
           </div></div>
-          <p v-if="stageWait">休整剩余 {{ stageWait }} 秒。可提前确认；休整结束且双方确认后继续。</p>
+          <p v-for="side in ['yellow','white']" :key="`refund-${side}`" v-show="match.current_result[`${side}_refund_ms`]>0">{{ sideName(side) }}包干补时 +{{ (match.current_result[`${side}_refund_ms`]/1000).toFixed(2) }} 秒</p>
+          <p v-if="stageWait">休整剩余 {{ stageWait }} 秒，随后自动继续。</p>
           <div class="confirmation-strip">
-            <span :class="match.confirmations.yellow && 'confirmed'">黄方队长 {{ match.confirmations.yellow ? '已确认' : '待确认' }}</span>
-            <button v-if="room.me.can_confirm_result" class="primary-button" type="button" :disabled="busy" @click="confirmResult">确认本局结果</button>
-            <strong v-else>双方确认后自动进入下一项目</strong>
-            <span :class="match.confirmations.white && 'confirmed'">白方队长 {{ match.confirmations.white ? '已确认' : '待确认' }}</span>
+            <strong>休整结束后自动进入{{ match.current_game_key==='C' ? '全场结算' : '下一项目' }}</strong>
           </div>
         </section>
 
-        <section v-else-if="room.status === 'FINISHED'" :class="['match-finished-panel', visibleStageMotion?.kind === 'match-finished' && 'settling']">
-          <p class="eyebrow">MATCH FINISHED</p>
-          <h1>{{ match.winner_side === 'draw' ? '全场平局' : `${sideName(match.winner_side)}赢得比赛` }}</h1>
-          <div class="final-series-score"><strong>{{ match.series_score.yellow }}</strong><span>黄方&nbsp;&nbsp;—&nbsp;&nbsp;白方</span><strong>{{ match.series_score.white }}</strong></div>
-<p v-if="match.finish_reason === 'late_forfeit'">对方未在开战时间后十分钟内全员签到，本场按 3:0 判定。三个项目均未实际进行。</p>
-          <div v-else class="finished-results">
-            <div v-for="result in match.results" :key="result.game_key">
-              <img v-if="roomProjectIcon(result.project_key)" class="project-icon finished-icon" :src="roomProjectIcon(result.project_key)" alt="" />
-              <span>项目 {{ result.game_key }} · {{ projectName(result.project_key) }}</span>
-              <strong>{{ projectResultValue(result, 'yellow') }} / {{ projectResultValue(result, 'white') }}</strong>
-              <small>{{ winnerName(result.winner_side) }}{{ result.reason.includes('clock_expired') ? ' · 包干时间耗尽' : '' }}</small>
-            </div>
-          </div>
-          <p>{{ match.finish_reason === 'referee_force_advance' ? '裁判强制推进后赛果已由服务器冻结。' : match.finish_reason === 'referee_force_finish' ? '裁判裁决后赛果已由服务器冻结。' : '赛果已由服务器冻结。' }}可留在此页核对三场记录，或返回比赛列表。</p>
-          <button class="secondary-button" type="button" @click="navigate(competitionHomePath)">返回比赛列表</button>
-        </section>
+        <MatchSettlement v-else-if="room.status === 'FINISHED'" :games="settlementGames" :teams="{yellow:{name:room.schedule?.yellow_name || '黄方'},white:{name:room.schedule?.white_name || '白方'}}" :score="match.series_score" :points="match.series_points" :winner="match.winner_side" :reason="match.finish_reason">
+          <button class="secondary-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">返回比赛列表</button>
+        </MatchSettlement>
         </div>
         </Transition>
       </div>

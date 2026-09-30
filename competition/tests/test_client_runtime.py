@@ -102,6 +102,7 @@ def test_race_uses_completion_time_not_arrival_order_and_requests_peer_final_sta
     assert second['match']['current_result']['winner_side'] == 'white'
     assert second['match']['sessions']['white']['project_clock']['elapsed_ms'] == 7000
     assert second['match']['clocks']['white']['remaining_ms'] == 3600000 - 7000
+    assert second['match']['clocks']['yellow']['remaining_ms'] == 3600000 - 7000
 
 
 def test_disconnected_race_peer_cannot_block_result_forever(tmp_path):

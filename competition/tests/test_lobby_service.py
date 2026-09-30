@@ -146,7 +146,7 @@ def test_six_players_fill_room_and_captains_ready(service: CompetitionService) -
     )
     assert yellow_ready["teams"]["yellow"]["ready"] is True
     assert yellow_ready["status"] == CompetitionStatus.READY_CHECK.value
-    assert yellow_ready["me"]["can_claim_seat"] is False
+    assert yellow_ready["me"]["can_claim_seat"] is True
 
     finished = service.set_ready(
         "TEAM42",
@@ -189,17 +189,14 @@ def test_leaving_full_room_returns_to_seating(service: CompetitionService) -> No
     assert len(result["seats"]) == 5
 
 
-def test_ready_locks_all_seats(service: CompetitionService) -> None:
+def test_leaving_revokes_own_team_ready(service: CompetitionService) -> None:
     create_room(service)
     players = fill_room(service)
     service.set_ready(
         "TEAM42", players[0], ready=True, command_id="ready-yellow-lock"
     )
-    with pytest.raises(CompetitionError) as captured:
-        service.leave_seat(
-            "TEAM42", players[1], command_id="leave-after-ready"
-        )
-    assert captured.value.code == "SEATS_LOCKED"
+    result=service.leave_seat("TEAM42", players[1], command_id="leave-after-ready")
+    assert not result['teams']['yellow']['ready']
 
 
 def test_concurrent_claim_has_single_winner(service: CompetitionService) -> None:

@@ -9,7 +9,7 @@ from .contracts import ProjectDescriptor, ProjectState, PublicProjectView
 from .tournament_variants import WALL, _digest, _move
 
 
-LIMIT_MS = 600_000
+LIMIT_MS = None
 FIRST_CARGO_MOVE = 10
 SHAPES = (
     ((0, 0), (0, 1), (1, 0), (1, 1)),
@@ -149,13 +149,6 @@ class CargoTransportAdapter:
             raise ValueError("invalid direction")
         if state.finished:
             raise ValueError("project is already complete")
-        if state.elapsed_ms >= LIMIT_MS:
-            return replace(
-                state, finished=True, outcome="time_limit", elapsed_ms=LIMIT_MS,
-                extra={**state.extra,
-                       "revision": int(state.extra.get("revision", state.move_count)) + 1,
-                       "last_transition": {"kind": "time_limit"}},
-            )
         cargo_before = dict(state.extra["cargo"]) if state.extra.get("cargo") else None
         board, shifted, movements, cargo_moved = _move_cargo_board(state.board, cargo_before, direction)
         if board == state.board and not cargo_moved:
@@ -217,9 +210,9 @@ class CargoTransportAdapter:
             "score": state.score, "deliveries": state.score,
             "move_count": state.move_count,
             "cargo": state.extra.get("cargo"),
-            "elapsed_ms": min(LIMIT_MS, state.elapsed_ms),
+            "elapsed_ms": state.elapsed_ms,
             "time_limit_ms": LIMIT_MS,
-            "remaining_ms": max(0, LIMIT_MS - state.elapsed_ms),
+            "remaining_ms": None,
             "finished": state.finished,
             "outcome": state.outcome,
             "last_transition": state.extra.get("last_transition"),

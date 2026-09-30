@@ -79,6 +79,7 @@ export const api = {
     body: { name, projects, event_slug: eventSlug, ...schedule },
   }),
   room: (code) => request(`/api/competitions/${encodeURIComponent(code)}`),
+  rematch: (code) => request(`/api/competitions/${encodeURIComponent(code)}/rematch`, {method:'POST',body:{command_id:commandId()}}),
   checkIn: (code) => request(`/api/competitions/${encodeURIComponent(code)}/check-in`, { method: 'POST' }),
   closeRoom: (code) => request(`/api/competitions/${encodeURIComponent(code)}/close`, {
     method: 'POST', body: { command_id: commandId() },

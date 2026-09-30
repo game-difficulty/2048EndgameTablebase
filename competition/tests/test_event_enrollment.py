@@ -113,6 +113,8 @@ def test_captain_can_confirm_after_registration_closes(enrollment):
         act(enrollment, 'accept_invite', uid=uid, team_id=tid)
     act(enrollment, 'lock_registration')
     act(enrollment, 'submit_team', uid=1, team_id=tid)
+    with enrollment.database.transaction(immediate=True) as db:
+        db.executemany('INSERT INTO tournament_roster_positions VALUES(?,?,?)',[(TEAM,i,i) for i in (1,2,3)])
     act(enrollment, 'lock_roster')
     with pytest.raises(CompetitionError):
         act(enrollment, 'unsubmit_team', uid=1, team_id=tid)

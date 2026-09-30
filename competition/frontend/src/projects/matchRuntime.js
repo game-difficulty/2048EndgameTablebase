@@ -1,5 +1,5 @@
 import { TournamentGame, hasMove, hasMoveWithSeals } from './engine.js';
-import { CargoGame, CARGO_LIMIT_MS } from './cargoEngine.js';
+import { CargoGame } from './cargoEngine.js';
 import { PolyominoGame } from './polyominoEngine.js';
 import { PracticeSpecialGame } from './practiceSpecialEngine.js';
 import { PracticeScoreVariantGame } from './practiceScoreVariants.js';
@@ -48,7 +48,14 @@ export class MatchRuntime {
           : this.project.practiceVariant ? new PracticeScoreVariantGame(this.project, options)
             : new TournamentGame(this.project, options);
     this.sequence = Number(bootstrap.sequence || 0);
+    this.metricHistory = [];
+    this.originalBudget = bootstrap.original_team_budget_ms ?? bootstrap.team_remaining_at_start_ms;
+    this.opponentResult = null;
     if (bootstrap.checkpoint) this.restore(bootstrap.checkpoint);
+    if (!this.project.race && !this.metricHistory.length) {
+      const initial = this.game.snapshot();
+      this.metricHistory.push([0, this.project.resultMetric === 'boardSum' ? initial.boardSum : initial.score]);
+    }
     this.game.elapsed = () => this.elapsed();
     this.alignClock();
   }
@@ -56,7 +63,23 @@ export class MatchRuntime {
   elapsed() {
     return this.frozenElapsed ?? Math.min(this.budget(), Math.max(0, this.baseElapsed + (this.running ? this.now() - this.clockAt : 0)));
   }
-  budget() { return this.bootstrap.team_remaining_at_start_ms ?? Infinity; }
+  budget() {
+    return (this.originalBudget ?? Infinity) + (this.decisiveAt() != null ? 300000 : 0);
+  }
+  decisiveAt() {
+    const other=this.opponentResult;
+    if (this.project.race || !other?.finished || other.outcome==='surrendered') return null;
+    const threshold=other.result_value ?? (this.project.resultMetric==='boardSum' ? other.board_sum : other.score);
+    let value=0;
+    for(const [at,metric] of this.metricHistory){
+      if(at<=other.elapsed_ms)value=metric;
+      else if(metric>threshold){
+        const decisive = value>threshold ? other.elapsed_ms : at;
+        return decisive <= this.originalBudget ? decisive : null;
+      }
+    }
+    return value>threshold && other.elapsed_ms <= this.originalBudget ? other.elapsed_ms : null;
+  }
   playable() { return this.running && !this.completed() && this.elapsed() < this.budget(); }
   setClock(elapsed, running) {
     if (this.frozenElapsed != null) return;
@@ -76,10 +99,11 @@ export class MatchRuntime {
     // This project's undo only needs board/score/moves; compact tuples avoid
     // repeatedly transmitting object keys and inapplicable wall metadata.
     if (this.project.allowUndo) state.undo = this.game.history.map(item => [item.score, item.moves, ...item.board]);
-    return { version: 1, state, elapsed_ms: this.elapsed() };
+    return { version: 1, state, elapsed_ms: this.elapsed(), metric_history:clone(this.metricHistory) };
   }
   restore(checkpoint) {
     if (checkpoint?.version !== 1 || !checkpoint.state) throw new Error('对局恢复数据版本不兼容，请刷新客户端。');
+    this.metricHistory = clone(checkpoint.metric_history || []);
     for (const key of STATE_KEYS) if (checkpoint.state[key] !== undefined) this.game[key] = clone(checkpoint.state[key]);
     if (this.game.fissionTimers instanceof Map) this.game.fissionTimers = new Map(checkpoint.state.fissionTimers || []);
     if (this.project.geometryVariant === 'lookback') this.game.history = clone(checkpoint.state.lookBackHistory || []);
@@ -93,9 +117,11 @@ export class MatchRuntime {
 
   accept() {
     this.sequence += 1;
+    const snap=this.game.snapshot();
+    const metric=this.project.resultMetric==='boardSum' ? snap.boardSum : snap.score;
+    if(!this.project.race && this.metricHistory.at(-1)?.[1]!==metric)this.metricHistory.push([Math.floor(this.elapsed()),metric]);
     if (this.completed() && this.frozenElapsed == null) {
-      this.frozenElapsed = this.project.cargoTransport && this.game.outcome === 'time_limit'
-        ? CARGO_LIMIT_MS : this.elapsed();
+      this.frozenElapsed = this.elapsed();
     }
     return this.packet();
   }
@@ -125,10 +151,7 @@ export class MatchRuntime {
     return null;
   }
   tick() {
-    if (!this.project.cargoTransport || this.game.finished || !this.running || this.elapsed() < CARGO_LIMIT_MS) return null;
-    this.alignClock();
-    this.game.expire(this.game.startedAt + CARGO_LIMIT_MS);
-    return this.accept();
+    return null;
   }
   stopRace() {
     if (this.completed()) return null;
@@ -144,6 +167,7 @@ export class MatchRuntime {
     const payload = {
       ...snapshot, board, move_count: snapshot.moves, elapsed_ms: this.elapsed(),
       finished: this.completed(), outcome: this.completed() ? snapshot.outcome : null,
+      refund_reserve_ms: !this.completed() && this.decisiveAt() != null ? 300000 : 0,
       board_sum: snapshot.boardSum, last_transition: snapshot.transition,
       result_metric: project.resultMetric === 'boardSum' ? 'board_sum' : project.race ? 'race' : 'score',
       allow_restart: Boolean(project.allowRestart), allow_undo: Boolean(project.allowUndo),

@@ -1,7 +1,6 @@
 import { moveBoard, WALL } from './engine.js';
 import { nextRandom, seed32, ticketFloat } from './randomStreams.js';
 
-export const CARGO_LIMIT_MS = 10 * 60 * 1000;
 export const FIRST_CARGO_MOVE = 10;
 export const CARGO_SHAPES = Object.freeze([
   Object.freeze({ key: 'square', name: '2×2', cells: [[0, 0], [0, 1], [1, 0], [1, 1]] }),
@@ -112,22 +111,10 @@ export class CargoGame {
   }
 
   elapsed(now = performance.now()) {
-    return Math.min(CARGO_LIMIT_MS, Math.max(0, (this.finishedAt ?? now) - this.startedAt));
-  }
-
-  expire(now = performance.now()) {
-    if (!this.finished && now - this.startedAt >= CARGO_LIMIT_MS) {
-      this.finished = true;
-      this.outcome = 'time_limit';
-      this.finishedAt = this.startedAt + CARGO_LIMIT_MS;
-      this.revision += 1;
-      this.transition = { kind: 'time_limit' };
-    }
-    return this.snapshot();
+    return Math.max(0, (this.finishedAt ?? now) - this.startedAt);
   }
 
   move(direction) {
-    this.expire();
     if (this.finished) return { changed: false, snapshot: this.snapshot() };
     const before = this.board.slice();
     const cargoBefore = copyCargo(this.cargo);
@@ -158,8 +145,8 @@ export class CargoGame {
       projectId: this.project.id, rows: 4, cols: 4, board: this.board.slice(),
       score: this.score, deliveries: this.score, moves: this.moves,
       boardSum: this.board.reduce((sum, value) => sum + value, 0),
-      cargo: copyCargo(this.cargo), elapsedMs: this.elapsed(), limitMs: CARGO_LIMIT_MS,
-      remainingMs: Math.max(0, CARGO_LIMIT_MS - this.elapsed()),
+      cargo: copyCargo(this.cargo), elapsedMs: this.elapsed(), limitMs: null,
+      remainingMs: null,
       finished: this.finished, outcome: this.outcome,
       revision: this.revision, transition: this.transition,
     };

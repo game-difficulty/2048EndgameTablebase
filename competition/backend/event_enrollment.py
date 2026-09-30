@@ -63,6 +63,9 @@ class EventEnrollment:
     def _snapshot(self, db, slug, principal):
         config = self.config(db, slug)
         entries = [dict(row) for row in db.execute('SELECT * FROM tournament_entrants WHERE event_slug=? ORDER BY user_id', (slug,))]
+        positions = dict(db.execute('SELECT user_id,position FROM tournament_roster_positions WHERE event_slug=?', (slug,)))
+        for entry in entries:
+            entry['position'] = positions.get(entry['user_id'])
         teams = [dict(row) for row in db.execute('SELECT * FROM tournament_teams WHERE event_slug=? ORDER BY name', (slug,))]
         uid = principal.user_id if principal else None
         invitations = []
@@ -217,6 +220,8 @@ class EventEnrollment:
                     fail('所有队伍需由队长提交报名后才能锁定。')
                 if self.catalog._event(db, slug)['format_key'] == 'team-draft-v1' and not team['captain_user_id']:
                     fail('团队对战名单中的每队需指定一位队长。')
+                if self.catalog._event(db,slug)['format_key']=='team-draft-v1' and sorted(e.get('position') or 0 for e in members)!=[1,2,3]:
+                    fail('请由举办方导入或编辑各队明确的 1、2、3 号位后再锁定。')
         if self.catalog._event(db, slug)['format_key'] == 'team-top5-3x3-v1':
             if len(entries) != 20 or len(teams) != 4 or sum(e['is_external'] for e in entries) != 1:
                 fail('14360杯最终名单须为四队各五人，并标记一位外援。')
@@ -232,7 +237,7 @@ class EventEnrollment:
         if set(ids) - names.keys():
             fail(f'找不到有效的 Table 账号：{sorted(set(ids) - names.keys())}。')
         resolved = [{'user_id': e['user_id'], 'display_name': names[e['user_id']], 'team_name': ' '.join(str(e.get('team_name') or '').split()),
-                     'is_external': bool(e.get('is_external')), 'captain': bool(e.get('captain'))} for e in entries]
+                     'is_external': bool(e.get('is_external')), 'captain': bool(e.get('captain')), 'position': e.get('position')} for e in entries]
         with self.database.transaction(immediate=True) as db:
             self._manager(db, slug, principal)
             config = self.config(db, slug)
@@ -253,6 +258,10 @@ class EventEnrollment:
                 if e['team_name']:
                     groups.setdefault(e['team_name'], []).append(e)
             for group in groups.values():
+                positions = [e['position'] for e in group if e['position'] is not None]
+                if positions and (len(positions) != len(group) or len(set(positions)) != len(positions)
+                                  or any(e['captain'] != (e['position'] == 1) for e in group)):
+                    fail('队内序号须完整填写且不重复，1 号位必须为队长。')
                 if len(group) > config['team_size'] or sum(e['captain'] for e in group) > 1:
                     fail('队伍人数超限，或同队有多个队长。')
                 if config['mode'] == 'self_team' and sum(e['captain'] for e in group) != 1:
@@ -261,6 +270,7 @@ class EventEnrollment:
                 return {'entries': resolved, 'revision': revision, 'saved': False}
             db.execute('DELETE FROM tournament_team_invites WHERE team_id IN (SELECT id FROM tournament_teams WHERE event_slug=?)', (slug,))
             db.execute('DELETE FROM tournament_entrants WHERE event_slug=?', (slug,))
+            db.execute('DELETE FROM tournament_roster_positions WHERE event_slug=?', (slug,))
             db.execute('DELETE FROM tournament_teams WHERE event_slug=?', (slug,))
             team_ids = {}
             for name, group in groups.items():
@@ -271,4 +281,6 @@ class EventEnrollment:
             db.executemany('INSERT INTO tournament_entrants VALUES(?,?,?,?,?,\'imported\')',
                           [(slug, e['user_id'], e['display_name'], team_ids.get(e['team_name']), e['is_external']) for e in resolved])
             self._audit(db, slug, principal, 'import_roster', {'entries': resolved})
+            db.executemany('INSERT INTO tournament_roster_positions VALUES(?,?,?)',
+                           [(slug,e['user_id'],e['position']) for e in resolved if e['position'] is not None])
             return {'entries': resolved, 'revision': revision+1, 'saved': True}
