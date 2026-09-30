@@ -343,6 +343,7 @@ def _user_payload(row, *, pending_approval: bool = False) -> dict[str, Any]:
         "status": row["status"],
         "pending_approval": bool(pending_approval),
         "registered_with_invite": bool(row["registered_with_invite"]),
+        "managed_test_account": bool(row["managed_test_account"]),
         "created_at": row["created_at"],
         "last_login_at": row["last_login_at"],
         "entitlements": {
@@ -427,6 +428,7 @@ def _query_users(
           users.role,
           users.status,
           users.registered_with_invite,
+          users.managed_test_account,
           users.created_at,
           users.last_login_at,
           COALESCE(token_accounts.bonus_balance_units, 0) AS bonus_balance_units,
@@ -468,6 +470,7 @@ def _get_user_payload_by_id(db, user_id: int) -> dict[str, Any] | None:
           users.role,
           users.status,
           users.registered_with_invite,
+          users.managed_test_account,
           users.created_at,
           users.last_login_at,
           COALESCE(token_accounts.bonus_balance_units, 0) AS bonus_balance_units,
@@ -611,3 +614,25 @@ def admin_update_user_status(user_id: int, payload: UserStatusUpdate, request: R
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
     return {"user": user}
+
+
+class ManagedPasswordReset(BaseModel):
+    new_password: str = Field(min_length=8)
+
+
+@router.post("/users/{user_id}/managed-password")
+def admin_reset_managed_password(user_id: int, payload: ManagedPasswordReset, request: Request):
+    admin_user = _require_admin(request)
+    from backend.live.routes import same_origin
+    from backend.auth.managed_test_accounts import reset_managed_password
+    same_origin(request.headers)
+    try:
+        reset_managed_password(
+            user_id=int(user_id), operator_id=int(admin_user["id"]),
+            new_password=payload.new_password,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}

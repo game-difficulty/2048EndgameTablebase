@@ -98,6 +98,7 @@ def init_auth_db() -> None:
               display_name TEXT,
               display_name_key TEXT,
               registered_with_invite INTEGER NOT NULL DEFAULT 1,
+              managed_test_account INTEGER NOT NULL DEFAULT 0,
               invite_code_id INTEGER,
               role TEXT NOT NULL DEFAULT 'user',
               status TEXT NOT NULL DEFAULT 'active',
@@ -117,6 +118,14 @@ def init_auth_db() -> None:
               expires_at TEXT NOT NULL,
               revoked_at TEXT,
               FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS managed_test_account_audit (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES users(id),
+              operator_id INTEGER REFERENCES users(id),
+              action TEXT NOT NULL,
+              created_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS guest_sessions (
@@ -625,6 +634,8 @@ def init_auth_db() -> None:
             db.execute("ALTER TABLE users ADD COLUMN email_identity TEXT")
         if "registered_with_invite" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN registered_with_invite INTEGER NOT NULL DEFAULT 1")
+        if "managed_test_account" not in existing_user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN managed_test_account INTEGER NOT NULL DEFAULT 0")
         if "invite_code_id" not in existing_user_columns:
             db.execute("ALTER TABLE users ADD COLUMN invite_code_id INTEGER REFERENCES invite_codes(id)")
         if "display_name_key" not in existing_user_columns:

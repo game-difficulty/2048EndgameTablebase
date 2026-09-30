@@ -422,10 +422,10 @@ def request_password_reset_code(
     }
     with auth_db() as db:
         user = db.execute(
-            "SELECT id, status FROM users WHERE email = ?",
+            "SELECT id, status, managed_test_account FROM users WHERE email = ?",
             (normalized,),
         ).fetchone()
-        if user is None or user["status"] != "active":
+        if user is None or user["status"] != "active" or user["managed_test_account"]:
             return generic_payload
         code = _create_email_code(
             db,
@@ -445,9 +445,11 @@ def request_account_deactivation_code(
     browser_id: str = "",
 ) -> dict[str, Any]:
     with auth_db() as db:
-        user = db.execute("SELECT email, status FROM users WHERE id = ?", (user_id,)).fetchone()
+        user = db.execute("SELECT email, status, managed_test_account FROM users WHERE id = ?", (user_id,)).fetchone()
         if user is None or user["status"] != "active":
             raise ValueError("Account is not active.")
+        if user["managed_test_account"]:
+            raise ValueError("This account is managed by the site administrator.")
         email = normalize_email(user["email"])
         code = _create_email_code(
             db,
