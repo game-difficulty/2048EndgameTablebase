@@ -39,6 +39,10 @@ def public_view(adapter, state: ProjectState, generation: int) -> dict[str, Any]
 
 def resolve_result(yellow: ProjectState, white: ProjectState, *, race: bool) -> tuple[int, int, str, str]:
     y, w = int(yellow.extra.get("result_value", yellow.score)), int(white.extra.get("result_value", white.score))
+    if yellow.outcome == 'surrendered':
+        return y, w, 'white', 'yellow_surrendered'
+    if white.outcome == 'surrendered':
+        return y, w, 'yellow', 'white_surrendered'
     if race:
         yt, wt = yellow.outcome == "target_reached", white.outcome == "target_reached"
         if yt != wt:

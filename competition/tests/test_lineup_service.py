@@ -159,21 +159,20 @@ def test_lineups_stay_secret_until_both_captains_submit(
     )
     assert completed["status"] == CompetitionStatus.GAME_A_READY.value
     assert completed["lineup"]["my_lineup"]["A"]["display_name"] == "Player 15"
-    assert completed["lineup"]["revealed_lineups"] is None
-    assert set(completed["match"]["players"]) == {"white"}
+    assert set(completed["lineup"]["revealed_lineups"]) == {"yellow", "white"}
+    assert set(completed["match"]["players"]) == {"yellow", "white"}
     yellow = service.snapshot("LINE42", players[2])
     assert yellow["lineup"]["my_lineup"]["A"]["display_name"] == "Player 11"
-    assert set(yellow["match"]["players"]) == {"yellow"}
+    assert set(yellow["match"]["players"]) == {"yellow", "white"}
     for viewer in (player(1, role="admin"), player(99), player(100)):
         hidden = service.snapshot("LINE42", viewer)
         assert hidden["lineup"]["my_lineup"] is None
-        assert hidden["lineup"]["revealed_lineups"] is None
-        assert hidden["match"]["players"] == {}
-        assert "Player 11" not in json.dumps(hidden["lineup"])
+        assert hidden["lineup"]["revealed_lineups"] == completed["lineup"]["revealed_lineups"]
+        assert set(hidden["match"]["players"]) == {"yellow", "white"}
     public_key = service.list_live_rooms()[0]["public_key"]
     projection = service.live_projection(public_key)
-    assert projection["revealed_players"] == {"yellow": {}, "white": {}}
-    assert all(game["players"] == {"yellow": None, "white": None} for game in projection["games"])
+    assert all(set(projection["revealed_players"][side]) == {"A", "B", "C"} for side in ("yellow", "white"))
+    assert all(all(game["players"].values()) for game in projection["games"])
     with service.database.transaction() as db:
         event = db.execute(
             "SELECT payload_json FROM competition_events WHERE event_type = 'lineup.finalized'"

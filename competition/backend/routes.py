@@ -16,6 +16,7 @@ from .schemas import (
     ClaimSeatRequest,
     ClientGameStateRequest,
     CommandRequest,
+    ManageMemberRequest,
     CreateCompetitionRequest,
     GamePhaseRequest,
     GameReadinessRequest,
@@ -35,6 +36,15 @@ from .schemas import (
 
 
 router = APIRouter(prefix="/api")
+
+
+@router.post('/competitions/{room_code}/members/manage')
+async def manage_member(request: Request, room_code: str, payload: ManageMemberRequest):
+    principal = current_principal(request)
+    room = await asyncio.to_thread(service_from_request(request).manage_member, room_code, principal,
+        user_id=payload.user_id, remove=payload.remove, command_id=payload.command_id)
+    await _broadcast(request, room['room_code'])
+    return {'competition': room}
 
 
 def service_from_request(request: Request):
@@ -143,6 +153,13 @@ async def internal_live_projection(request: Request, public_key: str) -> dict:
         service_from_request(request).live_projection, public_key
     )
     return {"projection": projection}
+
+
+@router.get("/internal/live/settlement/{public_key}")
+async def internal_prediction_facts(request: Request, public_key: str) -> dict:
+    require_live_internal(request)
+    facts = await asyncio.to_thread(service_from_request(request).live_prediction_facts, public_key)
+    return {"projection": facts}
 
 
 @router.get("/session")

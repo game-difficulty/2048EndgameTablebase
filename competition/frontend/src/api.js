@@ -78,6 +78,9 @@ export const api = {
     `/api/competitions/${encodeURIComponent(code)}/seat/leave`,
     { method: 'POST', body: { command_id: commandId() } },
   ),
+  manageMember: (code, userId, remove = true) => request(`/api/competitions/${encodeURIComponent(code)}/members/manage`, {
+    method: 'POST', body: { user_id: userId, remove, command_id: commandId() },
+  }),
   ready: (code, ready) => request(
     `/api/competitions/${encodeURIComponent(code)}/ready`,
     { method: 'POST', body: { ready, command_id: commandId() } },

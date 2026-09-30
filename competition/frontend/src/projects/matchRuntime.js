@@ -91,6 +91,11 @@ export class MatchRuntime {
   }
   action(action) {
     if (!this.playable()) return null;
+    if (action === 'surrender') {
+      this.game.finished = true;
+      this.game.outcome = 'surrendered';
+      return this.accept();
+    }
     if (action === 'undo' && this.project.allowUndo && this.game.undo()) return this.accept();
     if (action === 'restart' && this.project.allowRestart) {
       this.game.reset(true);

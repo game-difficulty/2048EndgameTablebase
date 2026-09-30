@@ -26,6 +26,7 @@ def service(tmp_path) -> CompetitionService:
         lineup_seconds=5,
         team_clock_seconds=60,
         test_project_target_tile=4,
+        result_rest_seconds=0,
     )
     value.initialize()
     return value
@@ -59,7 +60,14 @@ def ready_and_start(
     players: list[Principal],
     game_key: str,
     code: str = "MATCH5",
+    expire_prediction_window: bool = True,
 ) -> dict:
+    if expire_prediction_window:
+        # Ordinary match tests begin after the independently tested betting gate.
+        with service.database.transaction(immediate=True) as db:
+            db.execute("UPDATE competition_stage_holds SET until_at=? WHERE competition_id=(SELECT id FROM competitions WHERE room_code=?) AND stage LIKE 'GAME_%_READY'", ((datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(), code))
+            db.execute("UPDATE competition_prediction_windows SET minimum_until=? WHERE competition_id=(SELECT id FROM competitions WHERE room_code=?)",
+                       ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), code))
     snapshot = service.snapshot(code, players[0])
     token = snapshot["match"]["phase_token"]
     active_ids = {
@@ -93,7 +101,8 @@ def ready_and_start(
         phase_token=token,
         command_id=f"match-{game_key}-white-captain-ready",
     )
-    assert started["status"] == f"GAME_{game_key}_PLAYING"
+    if expire_prediction_window:
+        assert started["status"] == f"GAME_{game_key}_PLAYING"
     return started
 
 

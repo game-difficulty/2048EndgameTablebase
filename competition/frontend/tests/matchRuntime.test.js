@@ -9,6 +9,23 @@ const bootstrap = project => ({ instance_id: 'game:yellow', project_ref: project
 const options = { now: () => 0, evilSpawn: async board => ({ index: board.indexOf(0), value: 2 }) };
 const project = order => TOURNAMENT_PROJECTS.find(item => item.order === order);
 
+test('surrender freezes time and preserves the current score and board', () => {
+  let time = 0;
+  const runtime = new MatchRuntime(bootstrap(project(2)), { now: () => time });
+  runtime.game.score = 4321;
+  const board = [...runtime.game.board];
+  time = 1234;
+  const packet = runtime.action('surrender');
+  time = 9876;
+  assert.equal(packet.outcome, 'surrendered');
+  assert.equal(packet.result_value, 4321);
+  assert.equal(packet.finished, true);
+  assert.deepEqual(packet.payload.board.flat(), board);
+  assert.equal(runtime.elapsed(), 1234);
+  assert.equal(runtime.move('left'), null);
+  assert.equal(runtime.action('restart'), null);
+});
+
 for (const item of TOURNAMENT_PROJECTS) test(`${item.order}: local deterministic execution and checkpoint continuation`, async () => {
   const a = new MatchRuntime(bootstrap(item), options);
   const b = new MatchRuntime(bootstrap(item), options);

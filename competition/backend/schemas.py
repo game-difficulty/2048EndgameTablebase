@@ -40,6 +40,11 @@ class CommandRequest(BaseModel):
     command_id: str
 
 
+class ManageMemberRequest(CommandRequest):
+    user_id: int = Field(gt=0)
+    remove: bool = True
+
+
 class ReadinessRequest(BaseModel):
     ready: bool
     command_id: str

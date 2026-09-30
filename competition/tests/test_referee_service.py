@@ -166,6 +166,8 @@ def test_result_override_invalidates_confirmations_and_force_advance(service) ->
         )
     assert captured.value.code == "STALE_RESULT"
 
+    with service.database.transaction(immediate=True) as db:
+        db.execute("UPDATE competition_game_results SET published_at='2020-01-01T00:00:00+00:00'")
     advanced = service.force_advance_current_result(
         "MATCH5",
         official,

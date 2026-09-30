@@ -6,10 +6,19 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS competition_expulsions (
+  competition_id TEXT NOT NULL, user_id INTEGER NOT NULL,
+  expelled_by INTEGER NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (competition_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS competition_stage_holds (
+  competition_id TEXT NOT NULL, stage TEXT NOT NULL, until_at TEXT NOT NULL,
+  PRIMARY KEY (competition_id, stage)
+);
 CREATE TABLE IF NOT EXISTS competition_schema_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -39,6 +48,13 @@ CREATE TABLE IF NOT EXISTS competition_staff (
   PRIMARY KEY (competition_id, user_id, role),
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
   CHECK (role IN ('organizer', 'referee'))
+);
+
+CREATE TABLE IF NOT EXISTS competition_prediction_windows (
+  competition_id TEXT PRIMARY KEY REFERENCES competitions(id),
+  opened_at TEXT NOT NULL,
+  minimum_until TEXT NOT NULL,
+  closed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS competition_seats (

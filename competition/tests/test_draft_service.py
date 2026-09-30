@@ -138,7 +138,9 @@ def test_complete_manual_draft_and_blind_secrecy(service: CompetitionService) ->
         "yellow": keys[4],
         "white": keys[5],
     }
-    assert completed["draft"]["project_c"] in {keys[4], keys[5]}
+    assert completed["draft"]["project_c"] is None
+    service.settle_deadline("DRAFT2", now=parse_time(completed["draft"]["c_reveal_at"]) + timedelta(milliseconds=1))
+    assert service.snapshot("DRAFT2", white_captain)["draft"]["project_c"] in {keys[4], keys[5]}
 
 
 def test_only_active_captain_can_submit(service: CompetitionService) -> None:
@@ -203,7 +205,9 @@ def test_all_draft_timeouts_choose_first_available(service: CompetitionService) 
         "yellow": keys[4],
         "white": keys[4],
     }
-    assert snapshot["draft"]["project_c"] == keys[4]
+    assert snapshot["draft"]["project_c"] is None
+    service.settle_deadline("DRAFT2", now=parse_time(snapshot["draft"]["c_reveal_at"]) + timedelta(milliseconds=1))
+    assert service.snapshot("DRAFT2", players[0])["draft"]["project_c"] == keys[4]
     assert snapshot["draft"]["sources"] == {
         "A": "timeout", "B": "timeout", "yellow": "timeout", "white": "timeout"
     }

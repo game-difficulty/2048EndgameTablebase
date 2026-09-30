@@ -219,9 +219,9 @@ def test_registered_adapter_exports_versioned_public_views(tmp_path) -> None:
     public_key = service.list_live_rooms()[0]["public_key"]
     projection = service.live_projection(public_key)
     assert projection["phase"] == "GAME_A_PLAYING"
-    assert set(projection["revealed_players"]["yellow"]) == {"A"}
-    assert set(projection["revealed_players"]["white"]) == {"A"}
-    assert all(game["players"] == {"yellow": None, "white": None}
+    assert set(projection["revealed_players"]["yellow"]) == {"A", "B", "C"}
+    assert set(projection["revealed_players"]["white"]) == {"A", "B", "C"}
+    assert all(all(game["players"].values())
                for game in projection["games"] if game["game_key"] in {"B", "C"})
     for side in ("yellow", "white"):
         view = projection["project_public_views"][side]
@@ -233,7 +233,7 @@ def test_registered_adapter_exports_versioned_public_views(tmp_path) -> None:
     assert "seed" not in json.dumps(projection)
 
 
-def test_live_ready_projection_shows_progress_without_revealing_lineup(tmp_path) -> None:
+def test_live_ready_projection_shows_progress_and_finalized_lineup(tmp_path) -> None:
     service = CompetitionService(
         CompetitionDatabase(tmp_path / "ready-public.sqlite3"),
         draw_reveal_seconds=1, draft_turn_seconds=5,
@@ -246,7 +246,7 @@ def test_live_ready_projection_shows_progress_without_revealing_lineup(tmp_path)
     projection = service.live_projection(public_key)
     assert projection["phase"] == "GAME_A_READY"
     assert all(not value for side in projection["game_readiness"].values() for value in side.values())
-    assert all(game["players"] == {"yellow": None, "white": None} for game in projection["games"])
+    assert all(all(game["players"].values()) for game in projection["games"])
 
     token = service.snapshot("PUBREADY", players[0])["match"]["phase_token"]
     service.set_game_readiness(
@@ -260,5 +260,5 @@ def test_live_ready_projection_shows_progress_without_revealing_lineup(tmp_path)
     assert projection["game_readiness"]["white"] == {
         "player_ready": False, "captain_ready": False,
     }
-    assert all(game["players"] == {"yellow": None, "white": None} for game in projection["games"])
+    assert all(all(game["players"].values()) for game in projection["games"])
     assert "player_user_id" not in json.dumps(projection)

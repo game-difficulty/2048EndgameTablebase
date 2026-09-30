@@ -87,9 +87,11 @@ class CompetitionService:
         *,
         bootstrap_organizer_ids: frozenset[int] = frozenset(),
         room_creator_ids: frozenset[int] = frozenset(),
-        draw_reveal_seconds: int = 4,
+        draw_reveal_seconds: int = 10,
         draft_turn_seconds: int = 60,
-        c_draw_reveal_seconds: int = 5,
+        c_draw_reveal_seconds: int = 10,
+        result_rest_seconds: int = 30,
+        ready_preview_seconds: int = 10,
         lineup_seconds: int = 180,
         team_clock_seconds: int = 3600,
         test_project_target_tile: int = 2048,
@@ -102,6 +104,8 @@ class CompetitionService:
         self.draw_reveal_seconds = max(1, int(draw_reveal_seconds))
         self.draft_turn_seconds = max(5, int(draft_turn_seconds))
         self.c_draw_reveal_seconds = max(1, int(c_draw_reveal_seconds))
+        self.result_rest_seconds = max(0, int(result_rest_seconds))
+        self.ready_preview_seconds = max(0, int(ready_preview_seconds))
         self.lineup_seconds = max(5, int(lineup_seconds))
         self.team_clock_ms = max(30, int(team_clock_seconds)) * 1000
         self.live_result_retention_seconds = max(
@@ -361,6 +365,10 @@ class CompetitionService:
         *,
         now: datetime,
     ) -> sqlite3.Row:
+        db.execute(
+            "INSERT OR IGNORE INTO competition_prediction_windows (competition_id, opened_at, minimum_until) VALUES (?, ?, ?)",
+            (str(room["id"]), now.isoformat(), (now + timedelta(seconds=60)).isoformat()),
+        )
         deadline = (now + timedelta(seconds=self.draft_turn_seconds)).isoformat()
         first_side = str(draft["first_side"])
         db.execute(
@@ -502,7 +510,8 @@ class CompetitionService:
             label = f"blind-project-c:{yellow}:{white}".encode("utf-8")
             digest = hmac.new(seed, label, hashlib.sha256).digest()
             project_c = (yellow, white)[digest[0] % 2]
-        reveal_ends_at = (now + timedelta(seconds=self.c_draw_reveal_seconds)).isoformat()
+        reveal_ends_at = (now + timedelta(seconds=2 * self.c_draw_reveal_seconds)).isoformat()
+        self._set_hold(db, str(room['id']), 'BLIND_CANDIDATES', now, self.c_draw_reveal_seconds)
         db.execute(
             """
             UPDATE competition_drafts
@@ -725,6 +734,7 @@ class CompetitionService:
             None,
             {"game_key": "A"},
         )
+        self._set_hold(db, competition_id, 'GAME_A_READY', now, self.ready_preview_seconds)
         return self._change_draft_status(
             db, room, CompetitionStatus.GAME_A_READY.value
         )
@@ -786,7 +796,7 @@ class CompetitionService:
     def _require_match_official(
         self, db: sqlite3.Connection, room: sqlite3.Row, principal: Principal
     ) -> None:
-        if self._is_platform_organizer(principal):
+        if self._is_platform_organizer(principal) or int(room['created_by_user_id']) == principal.user_id:
             return
         roles = self._staff_roles(db, str(room["id"]), principal.user_id)
         if not ({StaffRole.ORGANIZER.value, StaffRole.REFEREE.value} & set(roles)):
@@ -1218,6 +1228,35 @@ class CompetitionService:
         now: datetime,
     ) -> tuple[sqlite3.Row, bool]:
         status = str(room["status"])
+        cid = str(room['id'])
+        if db.execute('SELECT 1 FROM competition_expulsions e JOIN competition_seats s ON s.competition_id=e.competition_id AND s.user_id=e.user_id WHERE e.competition_id=?', (cid,)).fetchone():
+            return room, False
+        if status == 'C_DRAW' and self._hold_until(db, cid, 'BLIND_CANDIDATES'):
+            if now >= parse_time(self._hold_until(db, cid, 'BLIND_CANDIDATES')):
+                db.execute("DELETE FROM competition_stage_holds WHERE competition_id=? AND stage='BLIND_CANDIDATES'", (cid,))
+                self._touch(db, cid)
+                fresh = self._room_row(db, str(room['room_code']))
+                settled, _ = self._settle_due_in_transaction(db, fresh, now=now)
+                return settled, True
+        if status in GAME_RESULT_STATUS.values():
+            game = str(self._match_control_row(db, cid)['current_game_key'])
+            result = db.execute('SELECT * FROM competition_game_results WHERE competition_id=? AND game_key=?', (cid, game)).fetchone()
+            count = db.execute('SELECT COUNT(*) FROM competition_result_confirmations WHERE competition_id=? AND game_key=? AND result_revision=?', (cid, game, result['result_revision'])).fetchone()[0]
+            if count == 2 and not self._suspension_row(db, cid)['active'] and now >= parse_time(result['published_at']) + timedelta(seconds=self.result_rest_seconds):
+                return self._advance_after_result(db, room, game_key=game, now=now, actor_user_id=None), True
+            return room, False
+        if status in GAME_READY_STATUS.values():
+            game = str(self._match_control_row(db, cid)['current_game_key'])
+            window = self._prediction_window(db, room)
+            ready_count = db.execute(
+                "SELECT COUNT(*) FROM competition_game_readiness WHERE competition_id = ? AND game_key = ? AND player_ready_by_user_id IS NOT NULL AND captain_ready_by_user_id IS NOT NULL",
+                (cid, game),
+            ).fetchone()[0]
+            suspended = self._suspension_row(db, str(room["id"]))['active']
+            deadline = self._hold_until(db, cid, status)
+            if ready_count == 2 and not suspended and (not deadline or now >= parse_time(deadline)) and (game != 'A' or not window or now >= parse_time(window['minimum_until'])):
+                return self._start_game_in_transaction(db, room, game_key=game, now=now, actor_user_id=None), True
+            return room, False
         if status in set(GAME_PLAYING_STATUS.values()):
             room, project_changed = self._settle_race_ack_deadlines(db, room, now=now)
             if str(room["status"]) not in set(GAME_PLAYING_STATUS.values()):
@@ -1370,6 +1409,51 @@ class CompetitionService:
             raise CompetitionError("ROOM_NOT_FOUND", "Competition room not found.", 404)
         return value
 
+    def _set_hold(self, db, cid, stage, now, seconds):
+        db.execute('INSERT OR REPLACE INTO competition_stage_holds VALUES(?,?,?)', (cid, stage, (now + timedelta(seconds=seconds)).isoformat()))
+
+    def _hold_until(self, db, cid, stage):
+        row = db.execute('SELECT until_at FROM competition_stage_holds WHERE competition_id=? AND stage=?', (cid, stage)).fetchone()
+        return row['until_at'] if row else None
+
+    def _ensure_admitted(self, db, cid, principal):
+        if db.execute('SELECT 1 FROM competition_expulsions WHERE competition_id=? AND user_id=?', (cid, principal.user_id)).fetchone():
+            raise CompetitionError('REMOVED_FROM_ROOM', 'You have been removed from this room.', 403)
+
+    def manage_member(self, room_code, principal, *, user_id, remove, command_id):
+        action = 'member.remove' if remove else 'member.readmit'
+        command_id = self._normalize_command_id(command_id)
+        now = datetime.now(timezone.utc)
+        with self.database.transaction(immediate=True) as db:
+            room = self._room_row(db, room_code)
+            cid = str(room['id'])
+            if self._check_command(db, cid, principal, command_id, action):
+                return self._snapshot(db, room, principal)
+            if not (self._is_platform_organizer(principal) or int(room['created_by_user_id']) == principal.user_id):
+                raise CompetitionError('ROOM_MANAGER_REQUIRED', 'Only a tournament administrator or the room owner may manage members.', 403)
+            if user_id == principal.user_id:
+                raise CompetitionError('CANNOT_REMOVE_SELF', 'Cannot remove yourself.', 409)
+            seat = db.execute('SELECT * FROM competition_seats WHERE competition_id=? AND user_id=?', (cid, user_id)).fetchone()
+            if remove:
+                db.execute('INSERT OR REPLACE INTO competition_expulsions VALUES(?,?,?,?)', (cid, user_id, principal.user_id, now.isoformat()))
+                if seat and room['status'] in ('SEATING', 'READY_CHECK'):
+                    db.execute('DELETE FROM competition_seats WHERE competition_id=? AND user_id=?', (cid, user_id))
+                    db.execute('DELETE FROM competition_team_readiness WHERE competition_id=?', (cid,))
+                    self._touch(db, cid, status='SEATING')
+                elif seat and room['status'] in MATCH_ACTIVE_STATUSES:
+                    for clock in db.execute('SELECT * FROM competition_team_clocks WHERE competition_id=?', (cid,)).fetchall():
+                        if clock['state'] == 'running':
+                            self._stop_clock(db, cid, clock['side'], now=now)
+                            db.execute('UPDATE competition_team_clocks SET resume_after_suspension=1 WHERE competition_id=? AND side=?', (cid, clock['side']))
+                    db.execute('DELETE FROM competition_suspension_readiness WHERE competition_id=?', (cid,))
+                    db.execute("UPDATE competition_suspensions SET active=1,reason_code='other',reason_text='参赛人员被移出，等待管理员处理',started_by_user_id=?,started_by_display_name=?,started_at=?,updated_at=? WHERE competition_id=?", (principal.user_id, principal.display_name, now.isoformat(), now.isoformat(), cid))
+            else:
+                db.execute('DELETE FROM competition_expulsions WHERE competition_id=? AND user_id=?', (cid, user_id))
+            self._append_event(db, cid, action, principal.user_id, {'user_id': user_id})
+            self._record_command(db, cid, principal, command_id, action)
+            self._touch(db, cid)
+            return self._snapshot(db, self._room_row(db, room_code), principal)
+
     def _normalize_command_id(self, command_id: str) -> str:
         value = str(command_id or "").strip()
         if not COMMAND_ID_RE.fullmatch(value):
@@ -1514,6 +1598,11 @@ class CompetitionService:
         command_id: str,
         action: str,
     ) -> bool:
+        self._ensure_admitted(db, competition_id, principal)
+        if (action.startswith(('draft.', 'lineup.', 'game.readiness.', 'team.'))
+                or action in {'game.start', 'game.result.confirm', 'game.result.force_advance', 'match.resume'}):
+            if db.execute('SELECT 1 FROM competition_expulsions e JOIN competition_seats s ON s.competition_id=e.competition_id AND s.user_id=e.user_id WHERE e.competition_id=?', (competition_id,)).fetchone():
+                raise CompetitionError('MEMBER_REMOVAL_HOLD', '参赛人员已被移出，需房主或赛事管理员处理后继续。', 409)
         row = db.execute(
             """
             SELECT action FROM competition_commands
@@ -1714,11 +1803,34 @@ class CompetitionService:
                     raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
             return self._public_match_projection(db, room)
 
+    def _prediction_window(self, db, room):
+        row = db.execute("SELECT * FROM competition_prediction_windows WHERE competition_id = ?", (str(room['id']),)).fetchone()
+        if row is None:
+            return None
+        return {"opened_at": row['opened_at'], "minimum_until": row['minimum_until'],
+                "closed_at": row['closed_at'], "open": not row['closed_at'] and str(room['status']) in {
+                    'FIRST_PICK_BAN', 'SECOND_PICK_BAN', 'BLIND_PICK', 'C_DRAW', 'LINEUP', 'GAME_A_READY'}}
+
+    def live_prediction_facts(self, public_key):
+        """Authenticated settlement facts remain available after lobby retention."""
+        with self.database.transaction() as db:
+            room = db.execute("SELECT * FROM competitions WHERE public_key = ?", (public_key,)).fetchone()
+            if room is None or not room['live_started_at']:
+                raise CompetitionError('LIVE_ROOM_NOT_FOUND', 'Live match not found.', 404)
+            projection = self._public_match_projection(db, room)
+            return {key: projection[key] for key in (
+                'match_public_key', 'generation', 'content_sequence', 'phase', 'prediction_window',
+                'teams', 'public_result', 'suspended', 'server_time')}
+
     def _live_directory_entry(
         self, db: sqlite3.Connection, room: sqlite3.Row
     ) -> dict[str, Any]:
         projection = self._public_match_projection(db, room)
         score = projection["score"]
+        current = next((game for game in projection['games'] if game['game_key'] == projection['current_game']), None)
+        project = next((item for item in projection['projects'] if current and item['key'] == current['project_key']), None)
+        team_names = {side: ' / '.join(item['display_name'] for item in projection['teams'][side]['roster'])
+                      for side in ('yellow', 'white')}
         return {
             "room_id": f"competition-{room['public_key']}",
             "public_key": str(room["public_key"]),
@@ -1727,17 +1839,21 @@ class CompetitionService:
             "content_kind": "competition-match",
             "protocol": "competition-match-v1",
             "category_label": {"zh": "赛事直播", "en": "TOURNAMENT"},
-            "badge": {"zh": "直播中", "en": "LIVE"},
+            "badge": {"zh": "已结束" if room['live_ended_at'] else "赛事直播", "en": "ENDED" if room['live_ended_at'] else "TOURNAMENT"},
             "title": {"zh": str(room["name"]), "en": str(room["name"])},
             "subtitle": {
-                "zh": f"黄方 {score['yellow']} : {score['white']} 白方 · {projection['phase']}",
-                "en": f"Yellow {score['yellow']} : {score['white']} White · {projection['phase']}",
+                "zh": f"{team_names['yellow']} 对阵 {team_names['white']}",
+                "en": f"{team_names['yellow']} vs {team_names['white']}",
             },
             "preview": {
                 "kind": "competition-score",
                 "phase": projection["phase"],
                 "yellow_score": score["yellow"],
                 "white_score": score["white"],
+                "teams": projection['teams'],
+                "current_project": project,
+                "current_game": projection['current_game'],
+                "prediction_open": bool((projection['prediction_window'] or {}).get('open')),
             },
             "started_at": str(room["live_started_at"]),
             "ended": bool(room["live_ended_at"]),
@@ -1820,6 +1936,9 @@ class CompetitionService:
                     "yellow": str(draft["blind_yellow"]),
                     "white": str(draft["blind_white"]),
                 }
+            public_draft['c_reveal_at'] = self._hold_until(db, competition_id, 'BLIND_CANDIDATES') if status == 'C_DRAW' else None
+            if public_draft['c_reveal_at']:
+                public_draft['project_c'] = None
             draft_deadlines = {
                 "yellow": str(draft["yellow_deadline_at"])
                 if draft["yellow_deadline_at"]
@@ -1928,16 +2047,7 @@ class CompetitionService:
                     "player_ready": bool(row["player_ready_by_user_id"]),
                     "captain_ready": bool(row["captain_ready_by_user_id"]),
                 }
-        # Only a game that actually started may expose its two participants.
-        # In particular, completing the A/B/C plan or entering a ready check
-        # must not publish future assignments to the live feed.
-        public_game_keys = {
-            str(row["game_key"])
-            for row in db.execute(
-                "SELECT DISTINCT game_key FROM competition_game_sessions WHERE competition_id = ?",
-                (competition_id,),
-            ).fetchall()
-        }
+        public_game_keys = set(GAME_KEYS)
         for row in lineup_rows:
             if row["revealed_at"] and str(row["game_key"]) in public_game_keys:
                 side = str(row["side"])
@@ -1961,6 +2071,7 @@ class CompetitionService:
                 "reason": str(row["reason"]),
                 "result_revision": int(row["result_revision"]),
                 "corrected": bool(row["corrected_at"]),
+                "published_at": str(row['published_at']),
             }
             for row in results
         ]
@@ -2022,6 +2133,8 @@ class CompetitionService:
                 else None
             )
             result = next((item for item in public_results if item["game_key"] == game_key), None)
+            if game_key == 'C' and public_draft and public_draft.get('c_reveal_at'):
+                project_key = None
             games.append({
                 "game_key": game_key,
                 "project_key": project_key,
@@ -2038,6 +2151,7 @@ class CompetitionService:
             "content_sequence": int(sequence_row["value"]),
             "phase": status,
             "phase_timing": phase_timing,
+            "prediction_window": self._prediction_window(db, room),
             "name": str(room["name"]),
             "teams": {
                 "yellow": {"name": "黄方", "roster": roster["yellow"]},
@@ -2050,6 +2164,9 @@ class CompetitionService:
             "games": games,
             "current_game": current_game,
             "game_readiness": game_readiness,
+            "preview_until": self._hold_until(db, competition_id, status),
+            "member_hold": bool(db.execute('SELECT 1 FROM competition_expulsions e JOIN competition_seats s ON s.competition_id=e.competition_id AND s.user_id=e.user_id WHERE e.competition_id=?', (competition_id,)).fetchone()),
+            "rest_until": next(((parse_time(item['published_at']) + timedelta(seconds=self.result_rest_seconds)).isoformat() for item in public_results if item['game_key'] == current_game), None),
             "score": score,
             "team_clocks": clocks,
             "captain_confirmation_status": confirmations,
@@ -2092,7 +2209,7 @@ class CompetitionService:
                 for row in db.execute(
                     """
                     SELECT room_code FROM competitions
-                    WHERE status IN (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    WHERE status IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ORDER BY updated_at
                     """,
                     (
@@ -2102,9 +2219,11 @@ class CompetitionService:
                         CompetitionStatus.BLIND_PICK.value,
                         CompetitionStatus.C_DRAW.value,
                         CompetitionStatus.LINEUP.value,
+                        CompetitionStatus.GAME_A_READY.value,
                         CompetitionStatus.GAME_A_PLAYING.value,
                         CompetitionStatus.GAME_B_PLAYING.value,
                         CompetitionStatus.GAME_C_PLAYING.value,
+                        'GAME_B_READY', 'GAME_C_READY', 'GAME_A_RESULT', 'GAME_B_RESULT', 'GAME_C_RESULT',
                     ),
                 ).fetchall()
             ]
@@ -2832,6 +2951,17 @@ class CompetitionService:
         actor_user_id: int | None,
     ) -> sqlite3.Row:
         competition_id = str(room["id"])
+        preview_until = self._hold_until(db, competition_id, GAME_READY_STATUS[game_key])
+        if preview_until and now < parse_time(preview_until):
+            self._touch(db, competition_id)
+            return self._room_row(db, str(room['room_code']))
+        if game_key == 'A':
+            window = self._prediction_window(db, room)
+            if window and now < parse_time(window['minimum_until']):
+                self._touch(db, competition_id)
+                return self._room_row(db, str(room['room_code']))
+            db.execute("UPDATE competition_prediction_windows SET closed_at = COALESCE(closed_at, ?) WHERE competition_id = ?",
+                       (now.isoformat(), competition_id))
         draft = self._draft_row(db, competition_id)
         project_key = str(draft[f"project_{game_key.lower()}"])
         project = db.execute(
@@ -2954,7 +3084,7 @@ class CompetitionService:
                 or type(payload.get("move_count")) is not int or payload["move_count"] < 0
                 or checkpoint.get("version") != 1 or not isinstance(checkpoint.get("state"), dict)):
             raise CompetitionError("INVALID_CLIENT_STATE", "Malformed project state.")
-        if finished and outcome not in {"target_reached", "no_moves", "time_limit", "opponent_finished"}:
+        if finished and outcome not in {"target_reached", "no_moves", "time_limit", "opponent_finished", "surrendered"}:
             raise CompetitionError("INVALID_CLIENT_STATE", "Unknown completion reason.")
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)
@@ -2963,6 +3093,7 @@ class CompetitionService:
                 "SELECT * FROM competition_game_sessions WHERE competition_id = ? AND instance_id = ? AND player_user_id = ?",
                 (competition_id, instance_id, principal.user_id),
             ).fetchone()
+            self._ensure_admitted(db, competition_id, principal)
             if session is None:
                 raise CompetitionError("ACTIVE_PLAYER_REQUIRED", "Only this project's active player may upload.", 403)
             extra = json.loads(session["adapter_state_json"])
@@ -2987,6 +3118,10 @@ class CompetitionService:
                         "stopped": True, "competition": self._snapshot(db, room, principal)}
             if elapsed_ms > int(extra['project_clock_start_ms']):
                 raise CompetitionError('TEAM_CLOCK_EXPIRED', 'The team time budget has expired.', 409)
+            if outcome == 'surrendered':
+                opponent = db.execute("SELECT state,outcome_reason FROM competition_game_sessions WHERE competition_id=? AND game_key=? AND side!=?", (competition_id, game_key, session['side'])).fetchone()
+                if not finished or not opponent or opponent['state'] != 'completed' or opponent['outcome_reason'] == 'surrendered':
+                    raise CompetitionError('SURRENDER_NOT_ALLOWED', 'Only an unfinished player whose opponent has finished may surrender.', 409)
             extra.update(client_sequence=sequence, client_payload=payload, checkpoint=checkpoint,
                          result_value=result_value, client_elapsed_ms=elapsed_ms, client_completed=bool(finished))
             db.execute(
@@ -3058,6 +3193,9 @@ class CompetitionService:
         competition_id = str(room["id"])
         control = self._match_control_row(db, competition_id)
         if forced:
+            result = db.execute('SELECT published_at FROM competition_game_results WHERE competition_id=? AND game_key=?', (competition_id, game_key)).fetchone()
+            if result and now < parse_time(result['published_at']) + timedelta(seconds=self.result_rest_seconds):
+                raise CompetitionError('RESULT_REST_REQUIRED', '本局休整尚未结束，请等待 30 秒展示完毕。', 409)
             self._append_event(
                 db,
                 competition_id,
@@ -3067,6 +3205,7 @@ class CompetitionService:
             )
         if game_key != "C":
             next_game = GAME_KEYS[GAME_KEYS.index(game_key) + 1]
+            self._set_hold(db, competition_id, GAME_READY_STATUS[next_game], now, self.ready_preview_seconds)
             db.executemany(
                 """
                 INSERT INTO competition_game_readiness
@@ -3228,7 +3367,7 @@ class CompetitionService:
                     (competition_id, game_key, int(result_revision)),
                 ).fetchone()["count"]
             )
-            if confirmation_count < 2:
+            if confirmation_count < 2 or now < parse_time(result['published_at']) + timedelta(seconds=self.result_rest_seconds):
                 self._touch(db, competition_id)
                 room = self._room_row(db, room_code)
                 return self._snapshot(db, room, principal)
@@ -3913,6 +4052,7 @@ class CompetitionService:
         self, db: sqlite3.Connection, room: sqlite3.Row, principal: Principal
     ) -> dict[str, Any]:
         competition_id = str(room["id"])
+        self._ensure_admitted(db, competition_id, principal)
         seat_rows = db.execute(
             """
             SELECT side, position, user_id, display_name_snapshot, seated_at
@@ -4103,6 +4243,9 @@ class CompetitionService:
                     "yellow": str(draft_row["blind_yellow"]),
                     "white": str(draft_row["blind_white"]),
                 }
+            draft_payload['c_reveal_at'] = self._hold_until(db, competition_id, 'BLIND_CANDIDATES') if status == 'C_DRAW' else None
+            if draft_payload['c_reveal_at']:
+                draft_payload['project_c'] = None
             # Public provenance without exposing either blind choice before C_DRAW.
             draft_sources: dict[str, str] = {}
             for event in db.execute(
@@ -4205,9 +4348,8 @@ class CompetitionService:
                 "my_lineup": lineup_for(my_side)
                 if my_side and submissions[my_side]
                 else None,
-                # Keep the former field for older clients, but never return
-                # the opposing team's full A/B/C mapping to any viewer.
-                "revealed_lineups": None,
+                # Both sealed submissions are public once finalization is complete.
+                "revealed_lineups": {side: lineup_for(side) for side in ('yellow', 'white')} if revealed else None,
             }
 
         match_control = db.execute(
@@ -4430,6 +4572,7 @@ class CompetitionService:
             )
             is_official = bool(
                 self._is_platform_organizer(principal)
+                or int(room['created_by_user_id']) == principal.user_id
                 or {StaffRole.ORGANIZER.value, StaffRole.REFEREE.value}
                 & set(staff_roles)
             )
@@ -4502,6 +4645,7 @@ class CompetitionService:
                 "resume_readiness": suspension_readiness,
             }
             match_payload = {
+                "prediction_window": self._prediction_window(db, room),
                 "current_game_key": current_game,
                 "project_key": (
                     str(draft_row[f"project_{current_game.lower()}"])
@@ -4511,12 +4655,9 @@ class CompetitionService:
                 "phase_token": str(match_control["phase_token"])
                 if expose_phase_token
                 else None,
-                "players": (
-                    current_lineups
-                    if status in {GAME_PLAYING_STATUS[current_game], GAME_RESULT_STATUS[current_game]}
-                    else {side: assignment for side, assignment in current_lineups.items()
-                          if side == my_side}
-                ),
+                "players": current_lineups,
+                "preview_until": self._hold_until(db, competition_id, status),
+                "rest_until": (parse_time(current_result['published_at']) + timedelta(seconds=self.result_rest_seconds)).isoformat() if current_result else None,
                 "readiness": game_readiness,
                 "readiness_complete": readiness_complete,
                 "clocks": clocks,
@@ -4589,6 +4730,7 @@ class CompetitionService:
             "status": status,
             "version": int(room["version"]),
             "event_sequence": int(latest_sequence_row["sequence"]),
+            "member_hold": bool(db.execute('SELECT 1 FROM competition_expulsions e JOIN competition_seats s ON s.competition_id=e.competition_id AND s.user_id=e.user_id WHERE e.competition_id=?', (competition_id,)).fetchone()),
             "created_at": str(room["created_at"]),
             "updated_at": str(room["updated_at"]),
             "server_time": snapshot_now.isoformat(),
@@ -4608,6 +4750,8 @@ class CompetitionService:
                 "is_captain": is_captain,
                 "can_manage": can_manage,
                 "can_close": can_manage and status in CLOSABLE_ROOM_STATUSES,
+                "can_manage_members": self._is_platform_organizer(principal) or int(room['created_by_user_id']) == principal.user_id,
+                "removed_members": [dict(row) for row in db.execute('SELECT user_id FROM competition_expulsions WHERE competition_id=?', (competition_id,))] if self._is_platform_organizer(principal) or int(room['created_by_user_id']) == principal.user_id else [],
                 "can_claim_seat": status in {
                     CompetitionStatus.SEATING.value,
                     CompetitionStatus.READY_CHECK.value,

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from .domain import Principal
+from .errors import CompetitionError
 
 
 class RoomHub:
@@ -39,6 +40,15 @@ class RoomHub:
             try:
                 snapshot = await asyncio.to_thread(snapshot_factory, principal)
                 await asyncio.wait_for(websocket.send_json({"type": "room.snapshot", "data": snapshot}), timeout=2)
+            except CompetitionError as error:
+                try:
+                    if error.code == 'REMOVED_FROM_ROOM':
+                        await asyncio.wait_for(websocket.send_json({'type': 'room.error', 'error': {'code': error.code, 'message': '你已被管理员移出此房间。'}}), timeout=2)
+                        await asyncio.wait_for(websocket.close(code=4403), timeout=2)
+                except Exception:
+                    pass
+                finally:
+                    await self.disconnect(room_code, websocket)
             except Exception:
                 await self.disconnect(room_code, websocket)
 

@@ -64,11 +64,9 @@ def load_settings() -> CompetitionSettings:
         room_creator_ids=room_creator_ids,
         cors_origins=cors_origins,
         frontend_dist=COMPETITION_ROOT / "frontend" / "dist",
-        draw_reveal_seconds=_positive_int("COMPETITION_DRAW_REVEAL_SECONDS", 4, 1),
+        draw_reveal_seconds=10,
         draft_turn_seconds=_positive_int("COMPETITION_DRAFT_TURN_SECONDS", 60, 5),
-        c_draw_reveal_seconds=_positive_int(
-            "COMPETITION_C_DRAW_REVEAL_SECONDS", 5, 1
-        ),
+        c_draw_reveal_seconds=10,
         lineup_seconds=_positive_int("COMPETITION_LINEUP_SECONDS", 180, 5),
         team_clock_seconds=_positive_int("COMPETITION_TEAM_CLOCK_SECONDS", 3600, 30),
         test_project_target_tile=_positive_int(
