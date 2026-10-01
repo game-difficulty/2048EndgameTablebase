@@ -10,6 +10,7 @@ const state = ref(null), error = ref(''), notice = ref(''), busy = ref(false);
 const teamName = ref(''), inviteUser = ref(''), unlockReason = ref('');
 const mode = ref('solo'), capacity = ref(0), open = ref(false);
 const csv = ref(''), preview = ref(null);
+const identityMode = ref('username');
 let disposed = false;
 let pollTimer;
 let lastEmittedRevision;
@@ -41,10 +42,11 @@ async function importList(save = false) {
   busy.value = true; error.value = ''; notice.value = '';
   try {
     let entries = preview.value?.entries;
+    if (!save) preview.value = null;
     if (!save) entries = csv.value.trim().split(/\r?\n/).filter(line => line.trim()).map((line,index) => {
       const [id, team = '', ext = '0', cap = '0', pos = '', extra] = line.split(/[,，\t]/).map(part => part.trim());
-      if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)) || extra !== undefined || !['0','1'].includes(ext) || !['0','1'].includes(cap) || (pos && !['1','2','3'].includes(pos))) throw new Error(`第 ${index+1} 行有误：用户ID,队名（可空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。`);
-      return { user_id:Number(id), team_name:team, is_external:ext==='1', captain:cap==='1', position:pos ? Number(pos) : null };
+      if (!id || (identityMode.value === 'user_id' && (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) || extra !== undefined || !['0','1'].includes(ext) || !['0','1'].includes(cap) || (pos && !['1','2','3'].includes(pos))) throw new Error(`第 ${index+1} 行有误：${t(identityMode.value === 'username' ? '当前用户名' : '用户 ID')},${t('队名（可空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。')}`);
+      return { [identityMode.value]:identityMode.value === 'username' ? id : Number(id), team_name:team, is_external:ext==='1', captain:cap==='1', position:pos ? Number(pos) : null };
     });
     if (!entries?.length || entries.length > 500) throw new Error('请提供 1–500 位选手。');
     const result = await api.importEnrollment(props.slug, { entries, revision: save ? preview.value.revision : state.value.revision, dry_run:!save });
@@ -54,6 +56,7 @@ async function importList(save = false) {
   finally { busy.value = false; }
 }
 function exportToEditor() {
+  identityMode.value = 'user_id';
   csv.value = state.value.entries.map(e => {
     const team = state.value.teams.find(t => t.id === e.team_id);
     return [e.user_id,team?.name || '',e.is_external?1:0,team?.captain_user_id===e.user_id?1:0,e.position || ''].join(',');
@@ -93,7 +96,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(pollTimer); });
         <form v-if="!state.roster_locked && !state.registration_locked" @submit.prevent="act('settings',{mode,capacity:Number(capacity),registration_open:open})"><label>{{ $t("报名方式") }}<select v-model="mode" :disabled="state.fixed_policy || !!state.entries.length"><option v-for="(label,key) in labels" :key="key" :value="key">{{ $t(label) }}</option></select></label><label>{{ $t("人数上限（0 不限）") }}<input v-model="capacity" type="number" min="0" max="10000" :disabled="state.fixed_policy" /></label><label class="checkbox-label"><input v-model="open" type="checkbox" />{{ $t("开放报名") }}</label><button :disabled="busy">{{ $t("保存设置") }}</button></form>
         <div class="enrollment-actions" v-if="!state.roster_locked"><button v-if="!state.registration_locked" :disabled="busy" @click="act('lock_registration')">{{ $t("锁定参赛人员") }}</button><button :disabled="busy" @click="act('lock_roster')">{{ $t("锁定最终名单") }}</button></div>
         <form v-if="state.registration_locked || state.roster_locked" @submit.prevent="act('unlock',{reason:unlockReason})"><label>{{ $t("解锁原因") }}<input v-model="unlockReason" minlength="4" maxlength="500" required /></label><button :disabled="busy">{{ $t("解锁（不会自动开放报名）") }}</button></form>
-        <template v-if="!state.roster_locked"><h3>{{ $t("导入 / 调整名单") }}</h3><p>{{ $t("每行：用户ID,队名（未分组留空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。仅有用户 ID 也可导入。保存将整体替换当前名单，并取消旧邀请；锁定参赛人员后只能调整同一批人员的分组。自由组队的分组须各指定一名队长，导入后仍需队长提交。") }}</p><button :disabled="busy" @click="exportToEditor">{{ $t("载入当前名单编辑") }}</button><label>{{ $t("名单") }}<textarea v-model="csv" rows="8" :disabled="busy" placeholder="123,,0,0&#10;456,,1,0" @input="preview=null" /></label><button :disabled="busy || !csv.trim()" @click="importList(false)">{{ $t("校验并预览") }}</button>
+        <template v-if="!state.roster_locked"><h3>{{ $t("导入 / 调整名单") }}</h3><p>{{ $t("每行：当前用户名或用户ID（按导入方式选择）,队名（未分组留空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。仅填用户名或 ID 也可导入。用户名按主站规则匹配当前有效账号，不匹配历史用户名；任一行匹配失败则整批不导入。保存将整体替换当前名单，并取消旧邀请；锁定参赛人员后只能调整同一批人员的分组。自由组队的分组须各指定一名队长，导入后仍需队长提交。") }}</p><label>{{ $t("导入方式") }}<select v-model="identityMode" :disabled="busy" @change="preview=null"><option value="username">{{ $t("当前用户名") }}</option><option value="user_id">{{ $t("用户 ID") }}</option></select></label><button :disabled="busy" @click="exportToEditor">{{ $t("载入当前名单编辑") }}</button><label>{{ $t("名单") }}<textarea v-model="csv" rows="8" :disabled="busy" :placeholder="identityMode === 'username' ? 'Player One,,0,0\nPlayer Two,,1,0' : '123,,0,0\n456,,1,0'" @input="preview=null" /></label><button :disabled="busy || !csv.trim()" @click="importList(false)">{{ $t("校验并预览") }}</button>
           <div v-if="preview"><h3>{{ $t("预览 · 尚未保存") }}</h3><p v-for="entry in preview.entries" :key="entry.user_id">{{ $t(entry.position ? `${entry.position}号 · ` : '') }}{{ entry.display_name }}（ID {{ $t(entry.user_id) }}） · {{ entry.team_name || '未分组' }}{{ $t(entry.is_external ? ' · 外援' : '') }}{{ $t(entry.captain ? ' · 队长' : '') }}</p><button :disabled="busy" @click="importList(true)">{{ $t("确认替换为这 ") }}{{ $t(preview.entries.length) }}{{ $t(" 位选手") }}</button></div>
         </template>
         <details><summary>{{ $t("最近操作记录") }}</summary><p v-for="item in state.audit" :key="item.revision">#{{ $t(item.revision) }}{{ $t(" · 管理/操作账号 ") }}{{ $t(item.actor_user_id) }} · {{ $t(item.action) }} · {{ $t(item.created_at) }}<span v-if="item.action==='unlock'"> · {{ $t(JSON.parse(item.payload_json).reason) }}</span></p></details>

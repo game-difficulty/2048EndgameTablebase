@@ -1,4 +1,9 @@
 const entries=`
+导入方式|Import mode
+当前用户名|Current username
+用户 ID|User ID
+队名（可空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。|team name (optional), guest 0/1, captain 0/1, team position (1/2/3 for team matches).
+每行：当前用户名或用户ID（按导入方式选择）,队名（未分组留空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。仅填用户名或 ID 也可导入。用户名按主站规则匹配当前有效账号，不匹配历史用户名；任一行匹配失败则整批不导入。保存将整体替换当前名单，并取消旧邀请；锁定参赛人员后只能调整同一批人员的分组。自由组队的分组须各指定一名队长，导入后仍需队长提交。|Each row: current username or user ID (according to import mode), team name (blank if unassigned), guest 0/1, captain 0/1, team position (1/2/3 for team matches). Usernames or IDs alone are accepted. Usernames match current active accounts using the main site's rules, not historical names. Any unmatched row blocks the entire import. Saving replaces the entire roster and cancels old invitations. Once participants are locked, only team assignments may change. Self-organized teams need one captain each and still require captain submission after import.
 跟随主站语言，仅同步到本站|Follow the main-site language (one-way sync)
 同步中…|Syncing…
 同步登录|Sync sign-in

@@ -36,6 +36,26 @@ def accounts(user_ids):
         raise CompetitionError('EVENT_SOURCE_UNAVAILABLE', '账号数据源暂不可用，未导入任何名单。', 503) from exc
 
 
+def accounts_by_username(usernames):
+    """Resolve current usernames only, using the main site's normalization rules."""
+    from backend.auth.db import get_auth_db_path
+    from backend.profile.validation import canonical_display_name_key
+    keys = sorted({canonical_display_name_key(name) for name in usernames})
+    if not keys:
+        return {}
+    try:
+        with closing(readonly(get_auth_db_path())) as db:
+            rows = db.execute(f"SELECT id,display_name FROM users WHERE display_name_key IN ({','.join('?' for _ in keys)}) AND status='active'", keys)
+            matches = {}
+            for row in rows:
+                key = canonical_display_name_key(row['display_name'])
+                if key in keys:
+                    matches.setdefault(key, []).append(row['id'])
+            return matches
+    except sqlite3.Error as exc:
+        raise CompetitionError('EVENT_SOURCE_UNAVAILABLE', '账号数据源暂不可用，未导入任何名单。', 503) from exc
+
+
 def play_results(user_ids, start, end):
     from backend.auth.db import get_auth_db_path
     if not user_ids:
@@ -84,7 +104,8 @@ class EventStatistics:
 
     def import_roster(self, slug, principal, *, entries, revision, dry_run=True):
         from .event_enrollment import EventEnrollment
-        return EventEnrollment(self.catalog, account_reader=self.account_reader).import_roster(
+        return EventEnrollment(self.catalog, account_reader=self.account_reader,
+                               username_reader=self.catalog.enrollment.username_reader).import_roster(
             slug, principal, entries=entries, revision=revision, dry_run=dry_run)
 
     def standings(self, slug):

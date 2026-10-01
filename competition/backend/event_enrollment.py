@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from .errors import CompetitionError
-from .event_statistics import accounts
+from .event_statistics import accounts, accounts_by_username
 
 
 def fail(message, code='ENROLLMENT_INVALID', status=409):
@@ -12,8 +12,9 @@ def fail(message, code='ENROLLMENT_INVALID', status=409):
 
 
 class EventEnrollment:
-    def __init__(self, catalog, account_reader=accounts):
+    def __init__(self, catalog, account_reader=accounts, username_reader=accounts_by_username):
         self.catalog, self.database, self.account_reader = catalog, catalog.database, account_reader
+        self.username_reader = username_reader
 
     def config(self, db, slug):
         self.catalog._event(db, slug)
@@ -230,7 +231,24 @@ class EventEnrollment:
         with self.database.transaction() as db:
             self._manager(db, slug, principal)
             self._editable(self.config(db, slug), revision)
-        ids = [entry['user_id'] for entry in entries]
+        from backend.profile.validation import canonical_display_name_key
+        entries = [dict(entry) for entry in entries]
+        usernames = [entry['username'] for entry in entries if entry.get('username') is not None]
+        matches = self.username_reader(usernames) if usernames else {}
+        problems = []
+        for index, entry in enumerate(entries, 1):
+            username = entry.get('username')
+            if username is not None:
+                if entry.get('user_id') is not None or not isinstance(username, str) or not username.strip():
+                    fail(f'第 {index} 行必须只填写用户名或用户 ID。')
+                found = matches.get(canonical_display_name_key(username), [])
+                if len(found) != 1:
+                    problems.append(f'第 {index} 行「{username}」：' + ('找不到有效的当前用户名' if not found else '匹配到多个账号'))
+                else:
+                    entry['user_id'] = found[0]
+        if problems:
+            fail('；'.join(problems) + '。未导入任何名单。', 'ROSTER_USERNAME_INVALID', 400)
+        ids = [entry.get('user_id') for entry in entries]
         if not ids or len(ids) != len(set(ids)) or any(type(uid) is not int or uid <= 0 for uid in ids):
             fail('名单必须包含不重复的有效用户 ID。')
         names = self.account_reader(ids)

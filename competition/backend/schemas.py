@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 
 
@@ -54,11 +54,20 @@ class UpdateEventRequest(BaseModel):
 
 
 class StatisticsRosterEntry(BaseModel):
-    user_id: int = Field(gt=0)
+    user_id: int | None = Field(default=None, gt=0)
+    username: str | None = Field(default=None, min_length=1, max_length=100)
     team_name: str = Field(default='', max_length=40)
     is_external: bool = False
     captain: bool = False
     position: int | None = Field(default=None, ge=1, le=3)
+
+    @model_validator(mode='after')
+    def identity(self):
+        if (self.user_id is None) == (self.username is None):
+            raise ValueError('Provide exactly one of user_id or username')
+        if self.username is not None and not self.username.strip():
+            raise ValueError('Username cannot be blank')
+        return self
 
 
 class EnrollmentRosterRequest(BaseModel):
