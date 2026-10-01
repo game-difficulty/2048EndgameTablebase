@@ -114,6 +114,10 @@ def review(run_id, *, approved, operator, note, expected_seq=None, expected_hash
                     int(state['score'] >= run['display_threshold']),
                     rating.single_rating(run['variant'], state['board']), rating.RATING_VERSION, run_id))
                 db.execute("DELETE FROM human_chunks WHERE run_id=?", (run_id,))
+            # Explicit approval may promote a default-hidden restarted archive,
+            # while preserving the owner's deletion and captured display threshold.
+            db.execute("""UPDATE human_runs SET visible=CASE WHEN deleted_by_user=1 THEN 0 ELSE ? END
+                WHERE id=?""", (int(state['score'] >= run['display_threshold']), run_id))
             db.execute("""INSERT OR REPLACE INTO human_rank_approvals
                 (run_id,operator,note,created,seq,prefix_hash) VALUES(?,?,?,?,?,?)""",
                 (run_id, operator.strip(), note.strip(), time.time(), state["seq"], state["hash"]))

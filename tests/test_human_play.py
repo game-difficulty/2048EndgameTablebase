@@ -320,13 +320,24 @@ class HumanPlayTests(unittest.TestCase):
                 WHERE run_id=?""", (run['run_id'],)).fetchone()
             self.assertGreaterEqual(candidate['eligible_at'], candidate['achieved_at'])
 
-    def test_restarted_history_is_visible_and_retained_at_default_zero_threshold(self):
-        run = self.new(); raw,_,_ = self.records(run,count=3)
-        self.send(run,raw,reason='restarted')
-        self.assertEqual(len(service.history(1,1)['entries']),1)
-        self.assertEqual(len(service.history(1,2)['entries']),1)
-        self.assertTrue(service.replay(run['run_id'],2))
-        self.assertEqual(service.leaderboard('4x4')['entries'],[])
+    def test_restarted_history_is_hidden_but_replay_is_retained(self):
+        for variant in engine.VARIANTS:
+            with self.subTest(variant=variant):
+                run = self.new(variant); raw, _, _ = self.records(run, count=3)
+                result = self.send(run, raw, reason='restarted')
+                self.assertEqual(result['status'], 'sealed')
+                with database() as db:
+                    row = db.execute('SELECT visible,archive,has_replay FROM human_runs WHERE id=?',
+                                     (run['run_id'],)).fetchone()
+                    self.assertEqual((row['visible'], row['has_replay']), (0, 1))
+                    self.assertIsNotNone(row['archive'])
+                self.assertEqual(service.history(1, 1)['entries'], [])
+                self.assertEqual(service.history(1, 2)['entries'], [])
+                self.assertTrue(service.replay(run['run_id'], 1))
+                with self.assertRaisesRegex(service.RunError, 'replay_not_found'):
+                    service.replay(run['run_id'], 2)
+                self.assertEqual(service.best_ten(1, 1, variant)['entries'], [])
+                self.assertEqual(service.leaderboard(variant)['entries'], [])
 
     def test_display_threshold_is_fixed_when_run_starts(self):
         service.save_player_settings(1, {key: 100 for key in engine.VARIANTS})
@@ -350,6 +361,10 @@ class HumanPlayTests(unittest.TestCase):
         run2 = self.new('2x4')
         raw, state, _ = self.records(run2, count=3)
         self.send(run2, raw, reason='restarted')
+        # Legacy visible restart archives retain their existing history behavior.
+        with database() as db:
+            db.execute('UPDATE human_runs SET visible=1 WHERE id IN (?,?)',
+                       (run['run_id'], run2['run_id']))
         uid = service.player_id_for_name('Player 1')
         self.assertEqual(uid, 1)
         self.assertTrue(service.history(uid, 1)['is_owner'])

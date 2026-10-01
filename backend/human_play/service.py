@@ -157,7 +157,7 @@ def create(user_id, browser, variant, request_id, writer, replace_id=None):
                 if active["id"] != replace_id:
                     raise RunError("slot_exists", active_id=active["id"])
                 # Explicit abandonment frees only this browser/variant slot. Evidence remains.
-                db.execute("UPDATE human_runs SET status='pending_archive',reason='restarted',ended=? WHERE id=?",
+                db.execute("UPDATE human_runs SET status='pending_archive',reason='restarted',ended=?,visible=0 WHERE id=?",
                            (now, active["id"]))
             run_id = str(uuid.uuid4())
             seed = "".join(f"{secrets.randbelow(0xffffffff) + 1:08x}" for _ in range(4))
@@ -327,7 +327,7 @@ def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_has
         if archive is not None:
             from . import rating, statistics
             db.execute("UPDATE human_runs SET status='sealed',reason=?,ended=?,archive=?,permit_until=0,visible=?,has_replay=1,single_rating=?,single_rating_version=? WHERE id=?",
-                       (reason, now, archive, int(next_state['score'] >= run['display_threshold']),
+                       (reason, now, archive, int(reason != 'restarted' and next_state['score'] >= run['display_threshold']),
                         rating.single_rating(run['variant'], next_state['board']), rating.RATING_VERSION, run_id))
             db.execute("DELETE FROM human_chunks WHERE run_id=?", (run_id,))
             statistics.upsert_fact(db, {**run, "ended": now}, next_state["board"],
