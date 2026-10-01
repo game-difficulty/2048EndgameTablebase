@@ -412,7 +412,7 @@ function keydown(e) {
     e.preventDefault(); e.stopPropagation(); if (!e.repeat) practiceRedo(); return;
   }
   if (gate.value === 'ended' && ['Enter','NumpadEnter'].includes(e.code)) {
-    e.preventDefault(); e.stopPropagation(); if (!e.repeat) requestRestart(); return;
+    e.preventDefault(); e.stopPropagation(); if (!e.repeat) void session.restart(); return;
   }
   if (e.repeat) return;
   if (DIRECTIONS[e.code] !== undefined) { e.preventDefault(); onMove(DIRECTIONS[e.code]); }
