@@ -231,6 +231,11 @@ function closingCard(ctx, palette, copy) {
     palette.muted, { align: 'center', maxWidth: 445 });
 }
 
+export function bestTenPreviewSize(cssWidth, pixelRatio = 1) {
+  const width = Math.min(2400, Math.max(1, Math.ceil(cssWidth * Math.max(1, pixelRatio))));
+  return { width, height: Math.round(width * 2700 / 1600) };
+}
+
 export async function drawBestTenPoster({ canvas = document.createElement('canvas'), name, userId, variant,
   entries, pbScore, pbRank, rating, raRank, dark = false, language = 'zh', tilePalette = null,
   outputWidth = 1600, outputHeight = 2700, shouldRender = () => true }) {

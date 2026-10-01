@@ -96,7 +96,7 @@ import { t, language } from './i18n.js';
 import { tileStyle } from './appearance.js';
 import { getTileLabelStyle } from '../components/tileLabelStyle.js';
 import PlayerSettings from './PlayerSettings.vue';
-import { drawBestTenPoster, POSTER_HEIGHT, POSTER_WIDTH, posterCardBounds } from './bestTenPoster.js';
+import { drawBestTenPoster, bestTenPreviewSize, POSTER_HEIGHT, POSTER_WIDTH, posterCardBounds } from './bestTenPoster.js';
 import { isProfileOwner } from './profileOwnership.js';
 
 const props = defineProps({ username: String, viewer: Object, playSettings: Object });
@@ -115,7 +115,6 @@ const deleteError = ref('');
 let previewTrigger = null;
 let historySerial = 0, bestSerial = 0, posterFrame = 0;
 const historyCache = new Map(), bestCache = new Map();
-const POSTER_PREVIEW_WIDTH = 800, POSTER_PREVIEW_HEIGHT = 1350;
 function remember(cache, key, value, limit) {
   cache.delete(key); cache.set(key, value);
   while (cache.size > limit) cache.delete(cache.keys().next().value);
@@ -144,7 +143,24 @@ const paginationItems = computed(() => {
   return items;
 });
 const previewDims = computed(() => ({'4x4':[4,4],'3x4':[3,4],'2x4':[2,4],'3x3':[3,3]})[preview.value?.variant] || [4,4]);
-let themeObserver, resourcesActive = false, posterGeneration = 0;
+let themeObserver, posterResizeObserver, resourcesActive = false, posterGeneration = 0;
+function previewSize(canvas) {
+  return bestTenPreviewSize(canvas.parentElement.getBoundingClientRect().width, window.devicePixelRatio || 1);
+}
+function resizePosterIfNeeded() {
+  const canvas = posterCanvas.value;
+  if (!resourcesActive || tab.value !== 'profile' || !canvas) return;
+  const size = previewSize(canvas);
+  if (canvas.width !== size.width || canvas.height !== size.height) schedulePosterRender();
+}
+function observePosterSize() {
+  posterResizeObserver?.disconnect();
+  if (!resourcesActive || !posterCanvas.value) return;
+  posterResizeObserver = new ResizeObserver(resizePosterIfNeeded);
+  posterResizeObserver.observe(posterCanvas.value.parentElement);
+}
+function onProfileResize() { positionPreview(); resizePosterIfNeeded(); }
+watch(posterCanvas, observePosterSize, { flush: 'post' });
 function activateResources() {
   if (resourcesActive) return;
   resourcesActive = true;
@@ -158,7 +174,8 @@ function activateResources() {
   document.addEventListener('pointerdown', outsidePreview);
   document.addEventListener('keydown', previewKeydown);
   document.addEventListener('scroll', closePreview, true);
-  window.addEventListener('resize', positionPreview);
+  window.addEventListener('resize', onProfileResize);
+  observePosterSize();
 }
 function deactivateResources({ releasePoster = false } = {}) {
   posterGeneration += 1;
@@ -167,10 +184,11 @@ function deactivateResources({ releasePoster = false } = {}) {
   if (resourcesActive) {
     resourcesActive = false;
     themeObserver?.disconnect(); themeObserver = null;
+    posterResizeObserver?.disconnect(); posterResizeObserver = null;
     document.removeEventListener('pointerdown', outsidePreview);
     document.removeEventListener('keydown', previewKeydown);
     document.removeEventListener('scroll', closePreview, true);
-    window.removeEventListener('resize', positionPreview);
+    window.removeEventListener('resize', onProfileResize);
   }
   if (releasePoster && posterCanvas.value) {
     posterCanvas.value.width = 1; posterCanvas.value.height = 1;
@@ -273,7 +291,7 @@ async function loadBestTen(force = false) {
   } catch { if (serial === bestSerial) { bestMeta.value = null; bestTen.value = []; } }
   finally { if (serial === bestSerial) bestLoading.value = false; }
 }
-async function renderPoster(canvas = null, outputWidth = POSTER_PREVIEW_WIDTH, outputHeight = POSTER_PREVIEW_HEIGHT) {
+async function renderPoster(canvas = null, outputWidth, outputHeight) {
   const previewRender = !canvas;
   const generation = posterGeneration;
   await nextTick();
@@ -282,6 +300,10 @@ async function renderPoster(canvas = null, outputWidth = POSTER_PREVIEW_WIDTH, o
     && generation === posterGeneration && canvas === posterCanvas.value);
   if (!shouldRender()) return;
   if (!canvas || !bestTen.value.length) return;
+  if (previewRender) {
+    const size = previewSize(canvas);
+    outputWidth = size.width; outputHeight = size.height;
+  }
   await drawBestTenPoster({ canvas, name: profile.value?.player.display_name,
     userId: profile.value?.player.id, variant: bestVariant.value, entries: bestTen.value,
     pbScore: bestMeta.value?.pb_score, pbRank: bestMeta.value?.pb_rank,
