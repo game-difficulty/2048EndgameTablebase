@@ -411,6 +411,9 @@ function keydown(e) {
   if (practice.value && ['Enter','NumpadEnter'].includes(e.code)) {
     e.preventDefault(); e.stopPropagation(); if (!e.repeat) practiceRedo(); return;
   }
+  if (gate.value === 'ended' && ['Enter','NumpadEnter'].includes(e.code)) {
+    e.preventDefault(); e.stopPropagation(); if (!e.repeat) requestRestart(); return;
+  }
   if (e.repeat) return;
   if (DIRECTIONS[e.code] !== undefined) { e.preventDefault(); onMove(DIRECTIONS[e.code]); }
   else if (e.key.toLowerCase() === 'r') { e.preventDefault(); requestRestart(); }
