@@ -1,4 +1,8 @@
 const entries=`
+你自己|You
+暂无已落座选手|No seated players yet
+输入用户 ID|Enter user ID
+已移出人员|Removed participants
 导入方式|Import mode
 当前用户名|Current username
 用户 ID|User ID

@@ -32,10 +32,10 @@ const elapsed = computed(() => {
 </script>
 <style scoped>
 .stream-project{height:100%;display:grid;grid-template-rows:48px minmax(0,1fr) 22px;gap:8px;align-items:center}
-header{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:end;border-bottom:1px solid #334155;padding:0 2px 7px}
-header span{display:grid;gap:3px;min-width:0}header span:last-child{text-align:right}small{color:#94a3b8;font-size:11px}header strong{color:#f8fafc;font-size:24px;font-variant-numeric:tabular-nums;line-height:1}
-.stream-project>:deep(.tournament-board),.stream-project>:deep(.poly-board){width:min(100%,330px);margin:auto;background:#25334b}
+header{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:end;border-bottom:1px solid var(--match-line,#334155);padding:0 2px 7px}
+header span{display:grid;gap:3px;min-width:0}header span:last-child{text-align:right}small{color:var(--match-muted,#94a3b8);font-size:11px}header strong{color:var(--match-text,#f8fafc);font-size:24px;font-variant-numeric:tabular-nums;line-height:1}
+.stream-project>:deep(.tournament-board),.stream-project>:deep(.poly-board){width:min(100%,330px);margin:auto;background:var(--match-tint,#25334b)}
 .stream-project>:deep(.cargo-stage){width:min(100%,330px);max-height:100%}
-.stream-project :deep(.cargo-number-board){background:#25334b}.stream-project :deep(.board-cell),.stream-project :deep(.poly-cell){background:#3b4960}
+.stream-project :deep(.cargo-number-board){background:var(--match-tint,#25334b)}.stream-project :deep(.board-cell),.stream-project :deep(.poly-cell){background:var(--match-cell,#3b4960)}
 .stream-project>small{text-align:center}
 </style>

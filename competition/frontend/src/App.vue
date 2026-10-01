@@ -10,6 +10,7 @@ import PlayerAvatar from './PlayerAvatar.vue';
 import EventCenter from './EventCenter.vue';
 import MatchSettlement from '../../shared/MatchSettlement.vue';
 import RoomSchedulePicker from './RoomSchedulePicker.vue';
+import RoomMemberManagement from './RoomMemberManagement.vue';
 import { scheduleTime, roomMatchTitle, roomMatchScore } from './scheduleDisplay.js';
 import TournamentBoard from './projects/TournamentBoard.vue';
 import CargoBoard from './projects/CargoBoard.vue';
@@ -1169,10 +1170,7 @@ onBeforeUnmount(() => {
 
         <section v-if="room.me.can_manage_members || (match && room.status.startsWith('GAME_'))" class="match-operations">
           <details v-if="room.me.can_manage_members" class="operation-card"><summary>{{ $t("人员管理") }}</summary>
-            <p>{{ $t("管理员可管理任意房间，房主仅限自建房间。赛中移出选手将暂停比赛，历史成绩保留。") }}</p>
-            <div v-for="seat in room.seats" :key="seat.user_id" class="operation-form"><PlayerAvatar :person="seat" /><span>{{ $t(sideName(seat.side)) }} · {{ seat.display_name }}（{{ $t(seat.user_id) }}）</span><button :disabled="busy || seat.user_id === session?.user?.user_id" @click="manageMember(seat.user_id)">{{ $t("移出") }}</button></div>
-            <div class="operation-form"><input v-model="manageUserId" type="number" min="1" :placeholder='$t("其他人员的用户 ID")' /><button :disabled="busy || !manageUserId" @click="manageMember(manageUserId)">{{ $t("移出此人") }}</button></div>
-            <div v-for="member in room.me.removed_members" :key="member.user_id" class="operation-form"><span>{{ $t("已移出：") }}{{ $t(member.user_id) }}</span><button :disabled="busy" @click="manageMember(member.user_id, false)">{{ $t("允许重新进入") }}</button></div>
+            <RoomMemberManagement v-model:user-id="manageUserId" :seats="room.seats" :removed-members="room.me.removed_members" :current-user-id="session?.user?.user_id" :busy="busy" @remove="manageMember($event)" @restore="manageMember($event, false)" />
           </details>
           <details v-if="room.me.can_report_issue || room.issues.length" class="operation-card" :open="issueOpen" @toggle="issueOpen = $event.target.open">
             <summary>{{ $t("问题上报 ") }}<span v-if="room.issues.length">{{ $t(room.issues.length) }}{{ $t(" 项待处理") }}</span></summary>

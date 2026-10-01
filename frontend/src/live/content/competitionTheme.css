@@ -1,0 +1,17 @@
+/* Keep the broadcast's dark palette; switch all its surfaces as one unit. */
+.competition-content {
+  --match-bg:#111c30;--match-card:#17243a;--match-tint:#25334b;
+  --match-text:#f8fafc;--match-copy:#cbd5e1;--match-muted:#94a3b8;
+  --match-line:#334155;--match-border:#475569;--match-cell:#3b4960;
+  --match-accent:#d8bd69;--match-success:#78c59b;--match-dim:#64748b;
+  --match-active:#28334a;--match-white:#d8e0e9;
+  --match-hud-fade:rgba(15,23,42,.8);--match-hud-toggle:rgba(15,23,42,.82);
+}
+[data-theme="light"] .competition-content {
+  --match-bg:#fffbf4;--match-card:#fffdf8;--match-tint:#f0e8da;
+  --match-text:#433528;--match-copy:#574a3a;--match-muted:#756957;
+  --match-line:#ded3c3;--match-border:#b9aa93;--match-cell:#d8cbbb;
+  --match-accent:#896516;--match-success:#267449;--match-dim:#887965;
+  --match-active:#f4ebd8;--match-white:#776d60;
+  --match-hud-fade:rgba(255,253,248,.92);--match-hud-toggle:rgba(255,253,248,.96);
+}
