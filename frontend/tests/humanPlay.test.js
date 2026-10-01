@@ -151,3 +151,24 @@ test('seeked replay matches sequential states for every variant', async () => {
     assert.equal(eventBytes(events).length,events.length*5); assert.equal(hash.length,64);
   }
 });
+
+
+test('archive receipt updates do not postpone or hide the terminal overlay', () => {
+  let callback, timers=0, clears=0, visible=false;
+  const overlay=createTerminalOverlay({setTimer(fn){callback=fn;return ++timers;},clearTimer(){clears++;},onVisible(value){visible=value;}});
+  overlay.update('dead',true);const first=callback;
+  overlay.update('dead',true);assert.equal(timers,1);assert.equal(clears,0);
+  first();assert.equal(visible,true);overlay.update('dead',true);assert.equal(visible,true);
+  overlay.dismiss('dead');overlay.update('dead',true);assert.equal(visible,false);
+  overlay.update('new',false);overlay.update('new',true);assert.equal(timers,2);
+});
+
+test('terminal restart bypasses confirmation while active games retain it', async () => {
+  const body=humanAppSource.slice(humanAppSource.indexOf('async function requestRestart()'),humanAppSource.indexOf('async function confirmRestart()'));
+  const gate={value:'ended'},modal={value:''};let restarts=0;
+  const session={waitForMove:async()=>{},restart:async()=>{restarts++;}};
+  const restart=new Function('practice','session','busy','gate','modal','alwaysConfirmRestart','run','activePolicy','high','resetPractice',body+';return requestRestart;')(
+    {value:null},session,{value:false},gate,modal,{value:true},{value:{score:900000}},{value:{restart_threshold:360000}},{value:true},()=>{});
+  await restart();assert.equal(restarts,1);assert.equal(modal.value,'');
+  gate.value='ready';await restart();assert.equal(restarts,1);assert.equal(modal.value,'restart');
+});

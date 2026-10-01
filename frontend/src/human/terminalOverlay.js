@@ -8,6 +8,7 @@ export function createTerminalOverlay({
 } = {}) {
   let timer = null;
   let currentRunId = '';
+  let currentEnded = false;
   let dismissedRunId = '';
 
   function cancel() {
@@ -16,8 +17,11 @@ export function createTerminalOverlay({
   }
 
   function update(runId, ended) {
+    const nextRunId = String(runId || '');
+    if (nextRunId === currentRunId && !!ended === currentEnded) return;
     cancel();
-    currentRunId = String(runId || '');
+    currentRunId = nextRunId;
+    currentEnded = !!ended;
     onVisible(false);
     if (!ended || !currentRunId || dismissedRunId === currentRunId) return;
     const expectedRunId = currentRunId;

@@ -44,7 +44,7 @@
                   <h2>{{ t(gateTitle) }}</h2><p>{{ t(gateDescription) }}</p>
                   <div class="gate-actions"><button v-if="['network', 'checking', 'other-tab', 'missing'].includes(gate)" class="primary" :disabled="busy" @click="['other-tab', 'missing'].includes(gate) || !run ? session.activate() : session.retry()">{{ t(busy ? '检查中…' : '重新检查') }}</button>
                     <button v-if="gate === 'paused'" class="primary" @click="session.resume()">{{ t("继续本局") }}</button>
-                    <button v-if="gate === 'ended'" class="primary" @click="requestRestart">{{ t("开始新局") }}</button>
+                    <button v-if="gate === 'ended'" ref="terminalRestartButton" class="primary" @click="requestRestart">{{ t("开始新局") }}</button>
                     <button v-if="gate === 'ended'" @click="openLocalReplay">{{ t("回看本局") }}</button>
                     <button v-if="['rejected','missing','storage'].includes(gate)" :disabled="busy" @click="requestRestart">{{ t("明确重开") }}</button>
                     <button v-if="run && ['network','rejected','paused','ended','checking'].includes(gate)" @click="openPractice">{{ t("去练习") }}</button>
@@ -173,6 +173,7 @@ function initialView() {
 }
 const clock = ref(Date.now()), modal = ref(''), safeButton = ref(null), view = ref(initialView());
 const terminalOverlayVisible = ref(false);
+const terminalRestartButton = ref(null);
 const terminalOverlay = createTerminalOverlay({ onVisible: value => { terminalOverlayVisible.value = value; } });
 function dismissTerminalOverlay() { terminalOverlay.dismiss(run.value?.id); }
 const displayRequests = new Map();
@@ -347,6 +348,7 @@ async function requestRestart() {
   if (practice.value) { resetPractice(); return; }
   await session.waitForMove();
   if (busy.value) return;
+  if (gate.value === 'ended') { await session.restart(); return; }
   if (alwaysConfirmRestart.value || (run.value?.score || 0) >= (activePolicy.value?.restart_threshold || 0) || high.value || ['missing','rejected','storage'].includes(gate.value)) modal.value = 'restart';
   else session.restart();
 }
@@ -412,7 +414,7 @@ function keydown(e) {
     e.preventDefault(); e.stopPropagation(); if (!e.repeat) practiceRedo(); return;
   }
   if (gate.value === 'ended' && ['Enter','NumpadEnter'].includes(e.code)) {
-    e.preventDefault(); e.stopPropagation(); if (!e.repeat) void session.restart(); return;
+    e.preventDefault(); e.stopPropagation(); if (!e.repeat) void requestRestart(); return;
   }
   if (e.repeat) return;
   if (DIRECTIONS[e.code] !== undefined) { e.preventDefault(); onMove(DIRECTIONS[e.code]); }
@@ -515,7 +517,11 @@ watch(currentBest, value => live.updateBest(value));
 watch(() => run.value?.id, (id, oldId) => { if (oldId && id && id !== oldId) void live.runChanged(); });
 watch(() => run.value?.reason, (reason, oldReason) => { if (reason && !oldReason) live.finish(); });
 watch(() => [run.value?.id, gate.value], ([id, currentGate]) => terminalOverlay.update(id, currentGate === 'ended'), { immediate: true });
-watch(() => [run.value?.id, run.value?.archived], ([id, archived], [oldId, oldArchived]) => { if (archived && id === oldId && !oldArchived) { loadBoard(true); loadBests(true); } });
+watch(terminalOverlayVisible, async visible => {
+  if (!visible) return;
+  await nextTick();
+  if (terminalOverlayVisible.value && gate.value === 'ended' && view.value === 'game' && !practice.value && !modal.value) terminalRestartButton.value?.focus();
+});
 watch(currentFailure, async failure => {
   if (!failure) {
     if (modal.value === 'archive-failure') { modal.value = ''; currentExport.value = null; }
