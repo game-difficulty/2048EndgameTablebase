@@ -9,7 +9,7 @@
       </div>
 
       <p v-if="preferenceSyncStatus === 'error'" class="w-full mb-4 rounded-xl border border-amber-500/40 p-3 text-text-main" role="alert">
-        {{ config.language === 'zh' ? '账号设置尚未同步，请检查网络。' : 'Account settings have not synced. Check your connection.' }}
+        {{ preferenceSyncMessage(config.language) }}
         <button class="ml-2 underline" type="button" @click="retryAccountPreferences">{{ config.language === 'zh' ? '重试' : 'Retry' }}</button>
       </p>
 
@@ -153,7 +153,7 @@
 
 <script setup>
 import { toRef } from 'vue';
-import { preferenceSyncStatus, retryAccountPreferences } from '../../../services/preferences/accountPreferences';
+import { preferenceSyncStatus, preferenceSyncMessage, retryAccountPreferences } from '../../../services/preferences/accountPreferences';
 
 import { useSettingsSession } from '../composables/useSettingsSession';
 

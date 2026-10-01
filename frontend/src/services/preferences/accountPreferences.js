@@ -23,6 +23,13 @@ const guestStore = createLocalStorageStore({ key: 'guest-presentation-preference
 const pendingStore = createLocalStorageStore({ key: 'account-preferences-pending', version: 1, defaultValue: {} });
 
 export const preferenceSyncStatus = ref('idle');
+export const preferenceSyncError = ref('');
+const RETRY_DELAYS = [1000, 3000, 10000];
+let retryTimer = null;
+let retryCount = 0;
+let lastRecoveryAt = 0;
+let retryable = false;
+let reading = false;
 let accountId = null;
 let generation = 0;
 let loaded = false;
@@ -30,6 +37,43 @@ let pending = {};
 let timer = null;
 let writing = null;
 let applying = false;
+
+export function preferenceSyncMessage(language) {
+  const zh = String(language).startsWith('zh');
+  if (preferenceSyncError.value === 'auth') return zh ? '登录状态已失效，请重新登录后同步账号设置。' : 'Your session has expired. Sign in again to sync account settings.';
+  if (preferenceSyncError.value === 'validation') return zh ? '部分账号设置未被服务器接受，请调整设置后重试。' : 'Some account settings were rejected. Adjust them and try again.';
+  if (preferenceSyncError.value === 'server') return zh ? '账号设置暂时无法同步，请稍后重试。' : 'Account settings cannot sync right now. Try again later.';
+  return zh ? '账号设置尚未同步，连接恢复后将重试。' : 'Account settings have not synced. We will retry when the connection recovers.';
+}
+
+function clearRetry() { clearTimeout(retryTimer); retryTimer = null; }
+function synced() {
+  clearRetry();
+  retryCount = 0;
+  retryable = false;
+  preferenceSyncError.value = '';
+}
+function scheduleRecovery() {
+  if (!accountId || !retryable || retryTimer || retryCount >= RETRY_DELAYS.length) return;
+  const serial = generation;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    lastRecoveryAt = Date.now();
+    if (serial === generation) void recover();
+  }, RETRY_DELAYS[retryCount++]);
+}
+function failed(error) {
+  const status = Number(error.status) || 0;
+  retryable = !status || status === 429 || status >= 500;
+  preferenceSyncError.value = status === 401 || status === 403 ? 'auth' : status >= 400 && status < 500 && status !== 429 ? 'validation' : status ? 'server' : 'network';
+  preferenceSyncStatus.value = 'error';
+  scheduleRecovery();
+}
+function recover() {
+  if (!accountId || reading || writing) return;
+  if (!loaded) return activateAccountPreferences(accountId, { force: true });
+  return flush();
+}
 
 function pick(source, keys) {
   return Object.fromEntries(keys.filter(key => Object.hasOwn(source || {}, key)).map(key => [key, source[key]]));
@@ -92,6 +136,7 @@ function apply(values) {
 }
 
 async function request(method, body) {
+  const serial = generation;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
@@ -103,7 +148,17 @@ async function request(method, body) {
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`Preference sync failed: ${response.status}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      // Only discard a theme reference that the server explicitly identified as invalid.
+      if (response.status === 422 && payload.detail === 'invalid_saved_theme' && body?.preferences?.saved_theme_id && serial === generation) {
+        body.preferences.saved_theme_id = 0;
+        return request(method, body);
+      }
+      const error = new Error(`Preference sync failed: ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
     return response.json();
   } finally {
     clearTimeout(timeout);
@@ -130,13 +185,14 @@ async function flush() {
     if (serial === generation && id === accountId) {
       writePending(id, pending);
       apply({ ...result.preferences, ...pending });
-      preferenceSyncStatus.value = 'saved';
+      synced();
+      preferenceSyncStatus.value = Object.keys(pending).length ? 'saving' : 'saved';
     }
-  } catch {
+  } catch (error) {
     if (serial === generation && id === accountId) {
       pending = { ...changes, ...pending };
       writePending(id, pending);
-      preferenceSyncStatus.value = 'error';
+      failed(error);
     }
   } finally {
     writing = null;
@@ -156,7 +212,7 @@ export function saveAccountPreferences(changes) {
   pending = { ...pending, ...accepted };
   writePending(accountId, { ...(pendingStore.read()[accountId] || {}), ...pending });
   if (!loaded) {
-    preferenceSyncStatus.value = 'error';
+    if (!reading) scheduleRecovery();
     return;
   }
   preferenceSyncStatus.value = 'saving';
@@ -165,7 +221,10 @@ export function saveAccountPreferences(changes) {
 
 export async function activateAccountPreferences(userId, { force = false } = {}) {
   const nextId = userId == null ? null : String(userId);
-  if (nextId === accountId && loaded && !force) return;
+  if (nextId === accountId && !force && (loaded || reading)) {
+    if (preferenceSyncStatus.value === 'error') scheduleRecovery();
+    return;
+  }
   const retainedPending = nextId ? {
     ...(pendingStore.read()[nextId] || {}),
     ...(nextId === accountId ? pending : {}),
@@ -173,6 +232,9 @@ export async function activateAccountPreferences(userId, { force = false } = {})
   generation += 1;
   const serial = generation;
   clearTimeout(timer);
+  clearRetry();
+  if (nextId !== accountId) synced();
+  reading = false;
   pending = retainedPending;
   loaded = false;
   const oldOwner = ownerStore.read();
@@ -193,6 +255,7 @@ export async function activateAccountPreferences(userId, { force = false } = {})
   if (oldOwner != null && String(oldOwner) !== nextId) apply({});
   ownerStore.write(nextId);
   preferenceSyncStatus.value = 'loading';
+  reading = true;
   try {
     let result = await request('GET');
     if (serial !== generation) return;
@@ -203,24 +266,35 @@ export async function activateAccountPreferences(userId, { force = false } = {})
     }
     loaded = true;
     apply({ ...result.preferences, ...pending });
+    synced();
     preferenceSyncStatus.value = Object.keys(pending).length ? 'saving' : 'saved';
     scheduleFlush();
-  } catch {
+  } catch (error) {
     if (serial !== generation) return;
     loaded = false;
-    preferenceSyncStatus.value = 'error';
+    failed(error);
+  } finally {
+    if (serial === generation) reading = false;
   }
 }
 
 export function retryAccountPreferences() {
-  if (accountId && !loaded) return activateAccountPreferences(accountId, { force: true });
-  if (accountId) {
-    preferenceSyncStatus.value = 'saving';
-    void flush();
-  }
+  clearRetry();
+  retryCount = 0;
+  return recover();
 }
 
 export function refreshAccountPreferences() {
+  if (reading || writing) return Promise.resolve();
   if (accountId) return activateAccountPreferences(accountId, { force: true });
   return Promise.resolve();
 }
+
+function resumeSync() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+  if (retryCount >= RETRY_DELAYS.length && Date.now() - lastRecoveryAt >= 30000) retryCount = 0;
+  if (preferenceSyncStatus.value === 'error') scheduleRecovery();
+}
+window.addEventListener?.('online', resumeSync);
+window.addEventListener?.('focus', resumeSync);
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', resumeSync);

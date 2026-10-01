@@ -1,7 +1,7 @@
 <template>
   <div class="player-settings panel">
     <h2>{{ t('系统设置') }}</h2>
-    <p v-if="preferenceSyncStatus === 'error'" role="alert">{{ language === 'zh' ? '账号设置尚未同步，请检查网络。' : 'Account settings have not synced. Check your connection.' }} <button @click="retryAccountPreferences">{{ language === 'zh' ? '重试' : 'Retry' }}</button></p>
+    <p v-if="preferenceSyncStatus === 'error'" role="alert">{{ preferenceSyncMessage(language) }} <button @click="retryAccountPreferences">{{ language === 'zh' ? '重试' : 'Retry' }}</button></p>
     <div class="settings-subtabs"><button :class="{active:section==='game'}" @click="section='game'">{{ t('游戏与记录') }}</button><button :class="{active:section==='theme'}" @click="section='theme'">{{ t('界面与主题') }}</button></div>
     <div v-if="section==='game'" class="settings-rows">
       <div class="setting-line"><strong>{{ t('界面语言') }}</strong><div class="settings-options"><button :class="{active:language==='en'}" @click="setLanguage('en')">English</button><button :class="{active:language==='zh'}" @click="setLanguage('zh')">简体中文</button></div></div>
@@ -82,7 +82,7 @@ import { writeSharedTilePalette } from '../utils/sharedTilePalette.js';
 import { resolveTileColors } from '../utils/tileColors.js';
 import { json, request } from './client.js';
 import { t, language, setLanguage } from './i18n.js';
-import { preferenceSyncStatus, refreshAccountPreferences, retryAccountPreferences, saveAccountPreferences } from '../services/preferences/accountPreferences.js';
+import { preferenceSyncStatus, preferenceSyncMessage, refreshAccountPreferences, retryAccountPreferences, saveAccountPreferences } from '../services/preferences/accountPreferences.js';
 import SavedThemeLibrary from './SavedThemeLibrary.vue';
 import { DEFAULT_TIMER_SPLITS, normalizeTimerSplits, saveTimerSplits } from './timerSplits.js';
 const props=defineProps({playSettings:{type:Object,required:true}});

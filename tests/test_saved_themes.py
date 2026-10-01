@@ -59,6 +59,17 @@ class SavedThemeTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/profile/themes/{theme_id}", headers=self.headers()).status_code, 204)
         self.assertEqual(self.client.get("/api/profile/preferences", headers=self.headers()).json()["preferences"]["saved_theme_id"], 0)
 
+    def test_invalid_theme_reference_has_specific_error_without_accepting_other_invalid_settings(self):
+        response = self.client.patch("/api/profile/preferences", headers=self.headers(),
+                                     json={"preferences": {"saved_theme_id": 999, "dark_mode": True}})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "invalid_saved_theme")
+        response = self.client.patch("/api/profile/preferences", headers=self.headers(),
+                                     json={"preferences": {"saved_theme_id": 999, "dark_mode": "invalid"}})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "invalid_preferences")
+        self.assertEqual(self.client.get("/api/profile/preferences", headers=self.headers()).json()["preferences"], {})
+
     def test_rejects_131k_and_duplicate_names(self):
         payload = theme_payload()
         payload["light"]["131072"] = dict(payload["light"]["65536"])

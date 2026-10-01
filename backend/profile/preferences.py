@@ -77,7 +77,7 @@ def patch_preferences(user_id: int, changes: object, *, only_if_missing: bool = 
         if saved_theme_id and db.execute(
             "SELECT 1 FROM user_saved_themes WHERE id=? AND user_id=?", (saved_theme_id, int(user_id))
         ).fetchone() is None:
-            raise ValueError("invalid_preferences")
+            raise ValueError("invalid_saved_theme")
         row = db.execute(
             "SELECT preferences_json,revision FROM user_preferences WHERE user_id=?",
             (int(user_id),),

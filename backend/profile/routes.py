@@ -61,7 +61,8 @@ async def save_preferences(request: Request, response: Response, payload: dict =
             only_if_missing=payload.get("only_if_missing", False),
         )
     except ValueError as exc:
-        raise HTTPException(422, detail="invalid_preferences") from exc
+        detail = "invalid_saved_theme" if str(exc) == "invalid_saved_theme" else "invalid_preferences"
+        raise HTTPException(422, detail=detail) from exc
 
 
 @router.get("/api/profile/themes")
