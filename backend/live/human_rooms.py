@@ -103,8 +103,8 @@ def start(*, owner_user_id: int, run_id: str, variant: str,
         if existing:
             if existing["run_id"] != run_id or existing["variant"] != variant:
                 db.execute("""UPDATE live_human_rooms SET run_id=?,variant=?,generation=generation+1,
-                    display_name=?,avatar_url=?,last_publisher_at=NULL WHERE room_id=?""",
-                    (run_id, variant, display_name, avatar_url, existing["room_id"]))
+                    display_name=?,avatar_url=?,last_publisher_at=? WHERE room_id=?""",
+                    (run_id, variant, display_name, avatar_url, now, existing["room_id"]))
             elif existing["display_name"] != display_name or existing["avatar_url"] != avatar_url:
                 db.execute("UPDATE live_human_rooms SET display_name=?,avatar_url=? WHERE room_id=?",
                            (display_name, avatar_url, existing["room_id"]))

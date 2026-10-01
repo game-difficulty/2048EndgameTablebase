@@ -64,6 +64,24 @@ class HumanLiveTests(unittest.TestCase):
         self.assertIsNone(human_rooms.room(stale['room_id']))
         self.assertEqual(human_rooms.room(recent['room_id'])['run_id'], 'run-new')
 
+    def test_switch_in_long_running_room_gets_a_new_recovery_window(self):
+        first = human_rooms.start(owner_user_id=2, run_id='old', variant='4x4', display_name='Streamer', now=100)
+        second = human_rooms.start(owner_user_id=2, run_id='new', variant='2x4', display_name='Streamer', now=1000)
+        self.assertEqual(second['started_at'], first['started_at'])
+        self.assertEqual(human_rooms.expire_stale(stale_after=90, now=1001), [])
+        self.assertEqual(human_rooms.expire_stale(stale_after=90, now=1091), [first['room_id']])
+
+    def test_human_generation_change_preserves_hub_and_viewers(self):
+        first = human_rooms.start(owner_user_id=2, run_id='old', variant='4x4', display_name='Streamer')
+        runtime = live_routes._dynamic_hub(first['room_id'])
+        viewer = object()
+        runtime.viewers[viewer] = live_routes.ViewerQueue()
+        human_rooms.start(owner_user_id=2, run_id='new', variant='2x4', display_name='Streamer')
+        self.assertIs(live_routes._dynamic_hub(first['room_id']), runtime)
+        self.assertIn(viewer, runtime.viewers)
+        self.assertEqual(runtime.room.metadata['variant'], '2x4')
+        live_routes.dynamic_hubs.pop(first['room_id'], None)
+
     def test_ended_room_notifies_existing_viewers_once(self):
         room = human_rooms.start(owner_user_id=2, run_id='run-ended', variant='4x4',
                                  display_name='Streamer')
@@ -166,6 +184,46 @@ class HumanPublishProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(content.run.seq,1)
         self.assertEqual((content.run.snapshot()['rows'],content.run.snapshot()['cols']),(3,3))
         self.assertTrue(any(isinstance(value,bytes) and len(value)==9 for value in hub.events))
+
+    async def test_signed_switch_reuses_socket_and_resets_milestones(self):
+        import json
+        seed = '00000001000000020000000300000004'
+        first = human_rooms.start(owner_user_id=1, run_id='old', variant='4x4', display_name='Player')
+        old_lease, _ = human_rooms.issue_lease(first, seed=seed, writer='writer-0000000001', epoch=1, browser='browser')
+        room = RoomDefinition(id=first['room_id'], title={'en':'x'}, content_kind='human-play',
+            protocol='human-play-v1', dynamic=True, metadata={})
+        content = HumanPlayContent(room)
+        hub = _PublishHub(); hub.content = content
+        class SwitchSocket(_PublishSocket):
+            async def receive(self):
+                if len(self.sent) == 1:
+                    content.verified_milestones.add(32768)
+                    second = human_rooms.start(owner_user_id=1, run_id='new', variant='2x4', display_name='Player')
+                    lease, _ = human_rooms.issue_lease(second, seed=seed, writer='writer-0000000001', epoch=1, browser='browser')
+                    return {'type':'websocket.receive', 'text':json.dumps({'type':'switch','lease':lease,'seq':0})}
+                self_same.assertIs(hub.producer, self)
+                self_same.assertFalse(content.verified_milestones)
+                return {'type':'websocket.disconnect'}
+        self_same = self
+        socket = SwitchSocket(json.dumps({'type':'hello','lease':old_lease,'seq':0}), b'HLP1\0', b'')
+        await content.publish(socket, hub, {'id':1})
+        self.assertIsNone(socket.closed)
+        self.assertEqual([ack['run_id'] for ack in socket.sent], ['old', 'new'])
+        self.assertEqual(content.run.variant, '2x4')
+
+    async def test_switch_rejects_another_owner_and_preserves_previous_run(self):
+        import json
+        data = human_rooms.start(owner_user_id=1, run_id='old', variant='4x4', display_name='Player')
+        lease, _ = human_rooms.issue_lease(data, seed='00000001000000020000000300000004',
+            writer='writer-0000000001', epoch=1, browser='browser')
+        room = RoomDefinition(id=data['room_id'], title={'en':'x'}, content_kind='human-play', metadata={})
+        content = HumanPlayContent(room); hub = _PublishHub(); hub.content = content
+        socket = _PublishSocket('{}', b'HLP1\0', b'')
+        await content._install_run(socket, hub, {'lease':lease,'seq':0}, {'id':1})
+        previous = content.run
+        with self.assertRaises(HTTPException):
+            await content._install_run(socket, hub, {'lease':lease,'seq':0}, {'id':2})
+        self.assertIs(content.run, previous)
 
     def test_streamer_tile_appearance_is_sanitized_and_persisted_in_snapshot(self):
         appearance = {'version': 1, 'empty': {'background': '#716E69', 'color': '#B5B1AC'},

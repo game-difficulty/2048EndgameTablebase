@@ -179,14 +179,55 @@ class HumanPlayContent:
         if not self.run:
             return
         self.pending_milestones |= self._locally_reached() - self.verified_milestones
+        run = self.run
         for milestone in tuple(sorted(self.pending_milestones)):
             try:
-                verified = await asyncio.to_thread(self._verify, self.run.id, milestone)
+                verified = await asyncio.to_thread(self._verify, run.id, milestone)
             except (OSError, TimeoutError, urllib.error.URLError, ValueError):
                 continue
+            if self.run is not run:
+                return
             if verified:
                 self.pending_milestones.discard(milestone)
                 self.verified_milestones.add(milestone)
+
+    async def _install_run(self, ws, hub, hello, user):
+        lease = human_rooms.verify_lease(str(hello.get("lease") or ""),
+            room_id=self.room.id, owner_user_id=user["id"])
+        prefix_packet = await asyncio.wait_for(ws.receive_bytes(), 20)
+        if len(prefix_packet) < 5 or prefix_packet[:4] != b"HLP1":
+            raise ValueError("invalid_live_prefix")
+        flags = prefix_packet[4]
+        if flags & ~3:
+            raise ValueError("invalid_live_prefix")
+        encoded = prefix_packet[5:]
+        encoding = "gzip" if flags & 1 else "identity"
+        layout = "planes5" if flags & 2 else "interleaved"
+        raw = await asyncio.to_thread(codec.decode_upload, encoded, encoding, layout)
+        proposed_seq = hello.get("seq")
+        if type(proposed_seq) is not int or proposed_seq != len(raw) // engine.EVENT.size:
+            raise ValueError("invalid_live_prefix")
+        run = await asyncio.to_thread(HumanStreamRun,
+            run_id=lease["run"], variant=lease["variant"], seed=lease["seed"],
+            started_at=float(hello.get("started_at") or time.time()),
+            source=self.room.metadata.get("streamer", {}).get("display_name", "Player"),
+            raw=raw, appearance=sanitize_appearance(hello.get('appearance')),
+            best_score=hello.get('best_score', 0),
+        )
+        human_rooms.verify_lease(str(hello.get("lease") or ""),
+            room_id=self.room.id, owner_user_id=user["id"])
+        if not await asyncio.to_thread(human_rooms.publisher_seen, self.room.id, lease["generation"]):
+            raise ValueError("live_room_ended")
+        self.run = run
+        self.verified_milestones.clear()
+        self.pending_milestones.clear()
+        hub.producer_ready = True
+        hub.last_seen = time.monotonic()
+        await ws.send_json({"type": "ready", "room_id": self.room.id,
+                            "run_id": self.run.id, "seq": self.run.seq,
+                            "generation": lease["generation"], "switch_supported": True})
+        hub.broadcast(hub.snapshot())
+        return lease
 
     async def publish(self, ws, hub, user=None):
         if hub.producer:
@@ -204,35 +245,10 @@ class HumanPlayContent:
             if len(hello_packet) > 16_384:
                 raise ValueError("invalid_live_hello")
             hello = json.loads(hello_packet)
-            if hello.get("type") != "hello" or not user:
+            if not isinstance(hello, dict) or hello.get("type") != "hello" or not user:
                 raise ValueError("invalid_live_hello")
-            lease = human_rooms.verify_lease(str(hello.get("lease") or ""),
-                room_id=self.room.id, owner_user_id=user["id"])
-            prefix_packet = await asyncio.wait_for(ws.receive_bytes(), 20)
-            if len(prefix_packet) < 5 or prefix_packet[:4] != b"HLP1":
-                raise ValueError("invalid_live_prefix")
-            flags = prefix_packet[4]
-            encoded = prefix_packet[5:]
-            encoding = "gzip" if flags & 1 else "identity"
-            layout = "planes5" if flags & 2 else "interleaved"
-            raw = codec.decode_upload(encoded, encoding, layout)
-            proposed_seq = hello.get("seq")
-            if type(proposed_seq) is not int or proposed_seq != len(raw) // engine.EVENT.size:
-                raise ValueError("invalid_live_prefix")
-            self.run = HumanStreamRun(
-                run_id=lease["run"], variant=lease["variant"], seed=lease["seed"],
-                started_at=float(hello.get("started_at") or time.time()),
-                source=self.room.metadata.get("streamer", {}).get("display_name", "Player"),
-                raw=raw, appearance=sanitize_appearance(hello.get('appearance')),
-                best_score=hello.get('best_score', 0),
-            )
-            hub.producer_ready = True
-            hub.last_seen = time.monotonic()
-            await asyncio.to_thread(human_rooms.publisher_seen, self.room.id, lease["generation"])
+            lease = await self._install_run(ws, hub, hello, user)
             await hub.publisher_joined()
-            await ws.send_json({"type": "ready", "room_id": self.room.id,
-                                "run_id": self.run.id, "seq": self.run.seq})
-            hub.broadcast(hub.snapshot())
             last_seen_write = time.monotonic()
             rate_window_started = time.monotonic()
             rate_window_steps = 0
@@ -243,10 +259,24 @@ class HumanPlayContent:
                 if packet["type"] == "websocket.disconnect":
                     break
                 hub.last_seen = time.monotonic()
+                # Consume the signed switch before touching the previous generation's lease.
+                if packet.get("text"):
+                    if len(packet["text"]) > 16_384:
+                        raise ValueError("invalid_live_message")
+                    control = json.loads(packet["text"])
+                    if not isinstance(control, dict):
+                        raise ValueError("invalid_live_message")
+                    if control.get("type") == "switch":
+                        lease = await self._install_run(ws, hub, control, user)
+                        last_seen_write = rate_window_started = time.monotonic()
+                        rate_window_steps = 0
+                        continue
                 if time.monotonic() - last_seen_write >= 20:
                     if not await asyncio.to_thread(human_rooms.publisher_seen,
                             self.room.id, lease["generation"]):
-                        raise ValueError("live_room_ended")
+                        current = await asyncio.to_thread(human_rooms.room, self.room.id)
+                        if not current or current["owner_user_id"] != user["id"] or current["generation"] <= lease["generation"]:
+                            raise ValueError("live_room_ended")
                     last_seen_write = time.monotonic()
                 raw_step = packet.get("bytes")
                 if raw_step is not None:
@@ -262,8 +292,11 @@ class HumanPlayContent:
                     continue
                 data = json.loads(packet.get("text") or "{}")
                 if data.get("type") == "renew":
-                    lease = human_rooms.verify_lease(str(data.get("lease") or ""),
+                    renewed = human_rooms.verify_lease(str(data.get("lease") or ""),
                         room_id=self.room.id, owner_user_id=user["id"])
+                    if renewed["run"] != self.run.id or renewed["generation"] != lease["generation"]:
+                        raise ValueError("live_switch_required")
+                    lease = renewed
                 elif data.get("type") == "end":
                     self.run.ended = time.time()
                     hub.broadcast(hub.snapshot())

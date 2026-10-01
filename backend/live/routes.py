@@ -423,8 +423,9 @@ def _dynamic_hub_from_definition(definition):
     runtime = dynamic_hubs.get(room_id)
     if (runtime and runtime.room.content_kind == definition.content_kind
             and runtime.room.protocol == definition.protocol
-            and int(runtime.room.metadata.get('generation', 0))
-            == int(definition.metadata.get('generation', 0))):
+            and (definition.content_kind == 'human-play'
+                 or int(runtime.room.metadata.get('generation', 0))
+                 == int(definition.metadata.get('generation', 0)))):
         runtime.room.title.clear(); runtime.room.title.update(definition.title)
         runtime.room.description.clear(); runtime.room.description.update(definition.description)
         runtime.room.metadata.clear(); runtime.room.metadata.update(definition.metadata)
