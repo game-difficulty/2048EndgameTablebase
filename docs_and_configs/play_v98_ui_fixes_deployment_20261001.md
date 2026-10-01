@@ -37,3 +37,20 @@ were preserved: none under `/var/lib/2048tables/backups` were older than seven
 days, while 11 older files under `/opt/2048tables/backups` were retained because
 their mixed backup provenance needs further review. Final filesystem usage:
 51%, approximately 24 GiB available.
+
+## v99: Enter confirms restart
+
+Published `3ca467c` as `20261001-play-v99-restart-enter`. Cloned the then-current
+`20261001-replay-analysis-db6bba9` release, preserving its backend changes. Its
+frontend was still the byte-verified v98 bundle. Reused the isolated v98 source
+baseline and applied only the restart-button focus/primary-style change.
+Uploaded a 54,908-byte static patch with fresh HTML and JS gzip copies.
+Origin and public CDN entry/script bytes match the build; both services are
+active. No backend restart or database changes. Rollback target is the previous
+replay-analysis release.
+
+Retention used documented deployment chronology and checked current links,
+service configuration and live process references. Removed the unreferenced
+v97 release; retained v99, replay-analysis-db6bba9 and v98. Reclaimed 138,742,127
+bytes (about 132.3 MiB), including upload staging. Database backups preserved.
+Final filesystem use is 53%, with approximately 23 GiB available.
