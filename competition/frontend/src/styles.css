@@ -694,12 +694,16 @@ textarea { resize: vertical; }
 .game-room .project-dual-view { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: clamp(10px, 1.3vw, 24px); width: 100%; max-width: none; margin: 0; }
 .game-room .project-side-view { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; padding: 0 2px 10px; background: none; border: 0; border-radius: 0; }
 .game-room .project-side-view.finished { opacity: .82; }
-.game-room .project-side-view > header.project-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; width: 100%; max-width: 620px; min-height: 118px; gap: 20px; padding: 18px 5px 14px; border-bottom: 2px solid #dfb128; }
+.game-room .project-side-view > header.project-metrics { display: grid; grid-template-columns: repeat(var(--metric-count, 2), minmax(0, 1fr)); align-items: end; width: 100%; max-width: 620px; min-height: 118px; gap: 10px; padding: 18px 5px 14px; border-bottom: 2px solid #dfb128; }
 .game-room .project-side-view.white > header { border-color: #aeb8c5; }
 .project-metric { display: grid; align-content: end; gap: 5px; min-width: 0; }
 .project-metric span { color: var(--competition-muted); font-size: 13px; line-height: 1.1; }
 .project-metric strong { overflow: hidden; color: var(--competition-text); font-size: clamp(27px, 2.7vw, 40px); font-variant-numeric: tabular-nums; line-height: 1.05; text-overflow: ellipsis; white-space: nowrap; }
 .project-metric.time { text-align: right; }
+.project-metric.rule-metric strong { font-size: clamp(25px, 2.5vw, 36px); }
+.project-metric.rule-metric { text-align: center; }
+.project-metrics:has(.rule-metric) .project-metric.time strong { font-size: clamp(18px, 2vw, 30px); }
+.project-metric.rule-metric.warning strong { color: var(--competition-accent); }
 .project-board-stage { position: relative; display: grid; place-items: center; width: 100%; min-width: 0; }
 .game-room .project-board-stage > .embedded-project-board { width: min(100%, calc(100dvh - 220px), 620px); margin: 0; }
 .game-room .project-board-stage.cargo-board-stage > .embedded-project-board { width: min(100%, calc((100dvh - 220px) * 4 / 7), 500px); }

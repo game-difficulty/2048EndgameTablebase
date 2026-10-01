@@ -1,4 +1,5 @@
 const entries=`
+首个特殊块还剩|Until first cargo
 你自己|You
 暂无已落座选手|No seated players yet
 输入用户 ID|Enter user ID

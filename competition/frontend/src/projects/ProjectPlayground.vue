@@ -49,6 +49,8 @@
             <div><small>{{ $t("步数") }}</small><strong>{{ $t(snapshot.moves) }}</strong></div>
             <div v-if="project.tileLimit"><small>{{ $t("方块数量") }}</small><strong>{{ $t(tileCount) }} / {{ $t(project.tileLimit) }}</strong></div>
             <div v-if="project.sealEveryMoves"><small>{{ $t("距下次轮换") }}</small><strong>{{ $t(snapshot.nextSealIn) }}{{ $t(" 步") }}</strong></div>
+            <div v-if="project.cargoTransport && snapshot.moves < 10"><small>{{ $t("首个特殊块还剩") }}</small><strong>{{ $t(10 - snapshot.moves) }}{{ $t(" 步") }}</strong></div>
+            <div v-if="project.targetSum"><small>{{ $t("目标盘面和") }}</small><strong>{{ $t(project.targetSum) }}</strong></div>
             <div v-if="project.resultMetric === 'boardSum' || project.targetSum"><small>{{ $t("盘面和") }}</small><strong>{{ $t(snapshot.boardSum) }}</strong></div>
             <div v-if="project.targetTile"><small>{{ $t(project.targetTile) }}{{ $t(" 数量") }}</small><strong>{{ $t(snapshot.targetCount) }} / {{ $t(project.targetCount) }}</strong></div>
           </section>

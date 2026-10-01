@@ -17,7 +17,7 @@ import CargoBoard from './projects/CargoBoard.vue';
 import ObservedProjectBoard from '../../shared/ObservedProjectBoard.vue';
 import PolyominoBoard from './projects/PolyominoBoard.vue';
 import { projectIconUrl } from '../../shared/projectIcons.js';
-import { projectPerformanceMetric, projectResultValue as rawProjectResultValue } from '../../shared/projectMetrics.mjs';
+import { projectPerformanceMetric, projectRuleMetrics, projectResultValue as rawProjectResultValue } from '../../shared/projectMetrics.mjs';
 import { ownDeadline, phaseSeconds, stageChange } from './stageMotion.js';
 import { MatchRuntime } from './projects/matchRuntime.js';
 import { receivedProjectView } from '../../shared/projectStateOrder.mjs';
@@ -818,6 +818,11 @@ function projectMetric(side) {
   return projectPerformanceMetric(match.value?.sessions?.[side]?.public_view, language.value);
 }
 function projectResultValue(result, side) { return rawProjectResultValue(result, side, language.value); }
+function ruleMetrics(side) {
+  const game = match.value?.games?.find(item => item.game_key === match.value.current_game);
+  const project = room.value?.projects?.find(item => item.key === game?.project_key) || {};
+  return projectRuleMetrics(match.value?.sessions?.[side]?.public_view, language.value, project);
+}
 
 function projectBoardSnapshot(side) {
   const view = match.value?.sessions?.[side]?.public_view;
@@ -1606,9 +1611,10 @@ onBeforeUnmount(() => {
             </div>
             <div class="project-dual-view">
               <article v-for="side in ['yellow', 'white']" :key="side" :class="['project-side-view', side, match.sessions[side]?.finished && 'finished']">
-                <header class="project-metrics" :aria-label="$t(`${sideName(side)}本场数据`)">
+                <header class="project-metrics" :style="{'--metric-count':ruleMetrics(side).length+2}" :aria-label="$t(`${sideName(side)}本场数据`)">
                   <div class="project-metric performance"><span>{{ $t(projectMetric(side).label) }}</span><strong>{{ $t(projectMetric(side).value) }}</strong></div>
                   <div class="project-metric time"><span>{{ $t(projectRemainingMs(side) == null ? '用时' : '倒计时') }}</span><strong>{{ $t(formatProjectElapsed(projectRemainingMs(side) ?? projectElapsedMs(side))) }}</strong></div>
+                  <div v-for="item in ruleMetrics(side)" :key="item.key" :class="['project-metric', 'rule-metric', {warning:item.warning}]"><span>{{ item.label }}</span><strong>{{ item.value }}</strong></div>
                 </header>
                 <div class="project-board-stage" :class="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' && 'cargo-board-stage'">
                 <div v-if="match.sessions[side]?.finished" class="board-complete-tag" role="status">{{ $t("本侧已完成") }}</div>
@@ -1651,9 +1657,6 @@ onBeforeUnmount(() => {
                 </div>
                 <p v-if="isMyActiveSide(side) && sessionPayload(side)?.no_moves && (sessionPayload(side)?.allow_undo || sessionPayload(side)?.allow_restart)" class="project-recovery-note">{{ $t("当前盘面无可用移动，") }}{{ $t(sessionPayload(side)?.allow_undo ? '撤销' : '重开') }}{{ $t("后可继续。") }}</p>
                 <button v-if="isMyActiveSide(side) && canSurrender" class="secondary-button" type="button" :disabled="movePending" @click="projectAction('surrender')">{{ $t("认输本局（保留当前得分）") }}</button>
-                <p v-if="sessionPayload(side)?.target_sum" class="project-goal-note">{{ $t("目标盘面和 ") }}{{ $t(sessionPayload(side).target_sum) }}{{ $t(" · 当前 ") }}{{ $t(sessionPayload(side).board_sum) }}</p>
-                <p v-if="sessionPayload(side)?.target_count" class="project-goal-note">{{ $t(sessionPayload(side).target_tile) }}{{ $t(" 砖 ") }}{{ $t(sessionPayload(side).current_target_count) }}/{{ $t(sessionPayload(side).target_count) }}</p>
-                <p v-if="sessionPayload(side)?.next_seal_in != null" class="project-goal-note">{{ $t("距封锁轮换 ") }}{{ $t(sessionPayload(side).next_seal_in) }}{{ $t(" 步") }}</p>
                 <template v-if="isMyActiveSide(side)">
                   <div v-if="room.me.can_move" class="move-pad side-move-pad" :aria-label='$t("棋盘方向操作")'>
                     <button type="button" :aria-label='$t("向上")' :disabled="!canUseBoard(side)" @click="moveGame('up')">↑</button>
