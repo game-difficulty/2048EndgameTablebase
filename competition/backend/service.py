@@ -1872,7 +1872,7 @@ class CompetitionService:
             ).fetchall()
             return [self._live_directory_entry(db, row) for row in rows]
 
-    def live_projection(self, public_key: str) -> dict[str, Any]:
+    def live_projection(self, public_key: str, *, after_yellow: int = 0, after_white: int = 0) -> dict[str, Any]:
         with self.database.transaction() as db:
             room = db.execute(
                 "SELECT * FROM competitions WHERE public_key = ?",
@@ -1888,7 +1888,12 @@ class CompetitionService:
                     seconds=self.live_result_retention_seconds
                 ):
                     raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
-            return self._public_match_projection(db, room)
+            projection = self._public_match_projection(db, room)
+            for side, after in [('yellow', after_yellow), ('white', after_white)]:
+                view = projection.get('project_public_views', {}).get(side)
+                if view:
+                    view['frames'] = [frame for frame in view.get('frames', []) if frame['sequence'] > after]
+            return projection
 
     def _prediction_window(self, db, room):
         row = db.execute("SELECT * FROM competition_prediction_windows WHERE competition_id = ?", (str(room['id']),)).fetchone()
@@ -3153,10 +3158,10 @@ class CompetitionService:
         return room
 
     def sync_client_game(self, room_code, principal, *, instance_id, sequence, phase_token,
-                         payload, checkpoint, result_value, elapsed_ms, finished, outcome):
+                         payload, checkpoint, result_value, elapsed_ms, finished, outcome, frames=None):
         """Accept a player's latest complete state; no move, RNG or WASM calls."""
         now = datetime.now(timezone.utc)
-        if len(json.dumps({"payload": payload, "checkpoint": checkpoint})) > 1024 * 1024:
+        if len(json.dumps({"payload": payload, "checkpoint": checkpoint, "frames": frames})) > 1024 * 1024:
             raise CompetitionError("STATE_TOO_LARGE", "Project state is too large.", 413)
         board = payload.get("board")
         history = checkpoint.get('metric_history', [])
@@ -3214,7 +3219,25 @@ class CompetitionService:
                 opponent = db.execute("SELECT state,outcome_reason FROM competition_game_sessions WHERE competition_id=? AND game_key=? AND side!=?", (competition_id, game_key, session['side'])).fetchone()
                 if not finished or not opponent or opponent['state'] != 'completed' or opponent['outcome_reason'] == 'surrendered':
                     raise CompetitionError('SURRENDER_NOT_ALLOWED', 'Only an unfinished player whose opponent has finished may surrender.', 409)
-            extra.update(client_sequence=sequence, client_payload=payload, checkpoint=checkpoint,
+            incoming = frames or [{'sequence': sequence, 'payload': payload}]
+            if (len(incoming) > 128 or any(
+                not isinstance(frame, dict) or type(frame.get('sequence')) is not int or frame['sequence'] < 1
+                or frame['sequence'] > sequence or not isinstance(frame.get('payload'), dict)
+                for frame in incoming
+            ) or any(a['sequence'] >= b['sequence'] for a, b in zip(incoming, incoming[1:]))
+                or incoming[-1]['sequence'] != sequence or incoming[-1]['payload'] != payload):
+                raise CompetitionError('INVALID_CLIENT_STATE', 'Invalid playback frame batch.')
+            recent = extra.get('frames', []) + [frame for frame in incoming if frame['sequence'] > accepted]
+            # Legacy clients / long outages may resume with only a checkpoint.
+            # Advertise the contiguous suffix so receivers know when to rebase.
+            for index in range(len(recent) - 1, 0, -1):
+                if recent[index]['sequence'] != recent[index - 1]['sequence'] + 1:
+                    recent = recent[index:]
+                    break
+            recent = recent[-128:]
+            while len(recent) > 1 and len(json.dumps(recent)) > 512 * 1024:
+                recent.pop(0)
+            extra.update(client_sequence=sequence, client_payload=payload, checkpoint=checkpoint, frames=recent,
                          result_value=result_value, client_elapsed_ms=elapsed_ms, client_completed=bool(finished))
             db.execute(
                 """UPDATE competition_game_sessions SET board_json = ?, score = ?, move_count = ?,
@@ -3270,7 +3293,7 @@ class CompetitionService:
                     "room_code": str(room["room_code"]), "game_key": game_key,
                     "instance_id": instance_id, "side": str(session["side"]),
                     "version": int(room["version"]), "server_time": now.isoformat(),
-                    "public_view": client_runtime.public_view(adapter, state, int(session["public_generation"])),
+                    "public_view": client_runtime.public_view(adapter, state, int(session["public_generation"]), after_sequence=accepted),
                 }
             return result
 

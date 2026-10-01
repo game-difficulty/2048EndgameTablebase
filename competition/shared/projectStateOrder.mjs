@@ -3,6 +3,12 @@
 export function receivedProjectView(previous, next) {
   if (!next) return previous;
   const generation = Number(next.generation || 0), oldGeneration = Number(previous?.generation || 0);
+  if (previous && generation === oldGeneration && next.frames?.length) {
+    const frames = new Map((previous.frames || []).map(frame => [frame.sequence, frame]));
+    for (const frame of next.frames) frames.set(frame.sequence, frame);
+    const latest = Number(next.sequence) >= Number(previous.sequence) ? next : previous;
+    return { ...latest, frames: [...frames.values()].sort((a, b) => a.sequence - b.sequence).slice(-128) };
+  }
   if (previous && (generation < oldGeneration
     || (generation === oldGeneration && Number(next.sequence) < Number(previous.sequence)))) return previous;
   if (!previous || generation !== oldGeneration || Number(next.sequence) > Number(previous.sequence) + 1) {

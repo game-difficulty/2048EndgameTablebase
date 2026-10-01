@@ -30,9 +30,10 @@ router = APIRouter(prefix='/api/live', tags=['live'])
 
 class ViewerQueue(asyncio.Queue):
     """Bound both message count and pending payload bytes per spectator."""
-    def __init__(self):
+    def __init__(self, byte_limit=256 * 1024):
         super().__init__(maxsize=32)
         self.bytes = 0
+        self.byte_limit = byte_limit
         self.closing = False
 
     @staticmethod
@@ -41,7 +42,7 @@ class ViewerQueue(asyncio.Queue):
 
     def put_nowait(self, item):
         size = self.size(item)
-        if self.bytes + size > 256 * 1024:
+        if self.bytes + size > self.byte_limit:
             raise asyncio.QueueFull
         super().put_nowait((item, size))
         self.bytes += size
@@ -492,10 +493,14 @@ async def _reconcile_dynamic_room(room_id, runtime, definition, now):
     if hasattr(runtime.content, 'refresh'):
         try:
             if await runtime.content.refresh():
-                runtime.broadcast(runtime.snapshot())
+                snapshot = runtime.snapshot()
+                if runtime.room.content_kind == 'competition-match':
+                    snapshot['match'] = runtime.content.incremental_projection
+                runtime.broadcast(snapshot)
         except Exception:
             logging.getLogger(__name__).exception('Dynamic content refresh delayed')
-    if int(now) % 5 == 0:
+    if now - getattr(runtime, 'last_dynamic_presence', -5) >= 5:
+        runtime.last_dynamic_presence = now
         if runtime.room.content_kind == 'competition-match':
             try:
                 await runtime.activities.refresh()
@@ -509,8 +514,10 @@ async def dynamic_maintenance():
     cursor = 0
     last_expiry = 0.0
     last_competition_settlement = 0.0
+    last_directory = 0.0
+    active = {}
     while True:
-        await asyncio.sleep(1)
+        await asyncio.sleep(.25)
         items = list(dynamic_hubs.items())
         now = time.monotonic()
         if now - last_competition_settlement >= 5:
@@ -527,12 +534,18 @@ async def dynamic_maintenance():
             await asyncio.to_thread(human_rooms.expire_stale,
                 stale_after=float(os.environ.get('HUMAN_LIVE_RECOVERY_SECONDS', '90')))
             last_expiry = now
-        definitions = await asyncio.to_thread(dynamic_room_registry.list_active_rooms)
-        active = {item.id: item for item in definitions}
+        directory_tick = now - last_directory >= 1
+        if directory_tick:
+            definitions = await asyncio.to_thread(dynamic_room_registry.list_active_rooms)
+            active = {item.id: item for item in definitions}
+            last_directory = now
         for room_id, runtime in items:
-            await _reconcile_dynamic_room(room_id, runtime, active.get(room_id), now)
+            if not directory_tick and room_id not in active:
+                continue
+            if directory_tick or runtime.room.content_kind == 'competition-match':
+                await _reconcile_dynamic_room(room_id, runtime, active.get(room_id), now)
         items = list(dynamic_hubs.items())
-        if items:
+        if items and directory_tick:
             # Recovery/activity work is deliberately staggered across dynamic rooms.
             _, runtime = items[cursor % len(items)]
             cursor += 1
@@ -967,7 +980,7 @@ async def watch(ws: WebSocket):
         await ws.close(code=1013)
         return
     await ws.accept()
-    queue = ViewerQueue()
+    queue = ViewerQueue(byte_limit=2 * 1024 * 1024 if hub.room.content_kind == 'competition-match' else 256 * 1024)
     hub.viewers[ws] = queue
     queue.put_nowait(hub.snapshot())
     user = None

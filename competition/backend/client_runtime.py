@@ -30,11 +30,15 @@ def public_payload(state: ProjectState) -> dict[str, Any]:
             "awaiting_client": state.extra.get("checkpoint") is None}
 
 
-def public_view(adapter, state: ProjectState, generation: int) -> dict[str, Any]:
-    return PublicProjectView(
+def public_view(adapter, state: ProjectState, generation: int, after_sequence: int = 0) -> dict[str, Any]:
+    view = PublicProjectView(
         adapter.descriptor.view_kind, adapter.descriptor.view_protocol,
         generation, int(state.extra.get("client_sequence", 0)), public_payload(state),
     ).as_dict()
+    frames = state.extra.get('frames', [])
+    view['frame_start'] = frames[0]['sequence'] if frames else view['sequence']
+    view['frames'] = [frame for frame in frames if frame['sequence'] > after_sequence]
+    return view
 
 
 def resolve_result(yellow: ProjectState, white: ProjectState, *, race: bool) -> tuple[int, int, str, str]:

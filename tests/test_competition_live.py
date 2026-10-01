@@ -90,6 +90,20 @@ def test_lobby_does_not_advertise_expired_runtime_with_connected_viewers():
             assert captured.value.status_code == 404
 
 
+def test_transit_keeps_recovery_history_but_broadcasts_only_new_frames():
+    room = CompetitionMatchRoomProvider()._definition(directory_item())
+    def state(sequence, frames):
+        return {**projection(sequence), 'current_game': 'A', 'project_public_views': {
+            'yellow': {'sequence': sequence, 'frames': [{'sequence': i, 'payload': {}} for i in frames]}}}
+    with patch('backend.live.competition_content.competition_provider.projection', return_value=state(7, [6, 7])):
+        content = CompetitionMatchContent(room)
+    with patch('backend.live.competition_content.competition_provider.projection', return_value=state(10, [8, 9, 10])) as request:
+        assert asyncio.run(content.refresh())
+        assert request.call_args.args[1] == {'yellow': 7}
+    assert [f['sequence'] for f in content.snapshot()['match']['project_public_views']['yellow']['frames']] == [6, 7, 8, 9, 10]
+    assert [f['sequence'] for f in content.incremental_projection['project_public_views']['yellow']['frames']] == [8, 9, 10]
+
+
 def test_competition_content_rejects_wrong_generation() -> None:
     provider = CompetitionMatchRoomProvider()
     room = provider._definition(directory_item())

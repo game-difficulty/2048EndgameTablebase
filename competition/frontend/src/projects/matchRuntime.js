@@ -173,16 +173,21 @@ export class MatchRuntime {
   }
 }
 
-// One request in flight, one replaceable pending snapshot. Local moves never
-// await this queue. Retries reuse the sequence and body of the latest state.
+// One request in flight; checkpoints coalesce, but every public frame survives
+// until acknowledged. A long outage beyond the bounded window uses a snapshot.
 export class LatestStateSender {
   constructor({ send, onAck = () => {}, onError = () => {}, interval = 100 }) {
     Object.assign(this, { send, onAck, onError, interval });
     this.pending = null; this.inflight = false; this.timer = null; this.closed = false;
+    this.frames = [];
   }
   push(packet) {
     if (this.closed) return;
     if (!this.pending || packet.sequence >= this.pending.sequence) this.pending = packet;
+    if (!this.frames.length || packet.sequence > this.frames.at(-1).sequence) {
+      this.frames.push({ sequence: packet.sequence, payload: packet.payload });
+      if (this.frames.length > 128) this.frames.shift();
+    }
     if (!this.inflight && !this.timer) this.timer = setTimeout(() => this.flush(), packet.finished ? 0 : this.interval);
   }
   async flush() {
@@ -191,7 +196,11 @@ export class LatestStateSender {
     const packet = this.pending; this.pending = null; this.inflight = true;
     let delay = this.interval;
     try {
-      const ack = await this.send(packet);
+      const frames = this.frames.filter(frame => frame.sequence <= packet.sequence);
+      // Leave room for the current checkpoint within the server's 1 MiB limit.
+      while (frames.length > 1 && JSON.stringify({ ...packet, frames }).length > 750000) frames.shift();
+      const ack = await this.send({ ...packet, frames });
+      this.frames = this.frames.filter(frame => frame.sequence > (ack?.accepted_sequence ?? packet.sequence));
       if (!this.closed) this.onAck(ack, packet);
     } catch (error) {
       if (!this.closed) {
@@ -205,5 +214,5 @@ export class LatestStateSender {
       if (!this.closed && this.pending) this.timer = setTimeout(() => this.flush(), this.pending.finished && delay < 1000 ? 0 : delay);
     }
   }
-  close() { this.closed = true; clearTimeout(this.timer); this.pending = null; }
+  close() { this.closed = true; clearTimeout(this.timer); this.pending = null; this.frames = []; }
 }

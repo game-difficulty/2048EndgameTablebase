@@ -167,10 +167,11 @@ async def internal_live_rooms(request: Request) -> dict:
 
 
 @router.get("/internal/live/rooms/{public_key}")
-async def internal_live_projection(request: Request, public_key: str) -> dict:
+async def internal_live_projection(request: Request, public_key: str, after_yellow: int = 0, after_white: int = 0) -> dict:
     require_live_internal(request)
     projection = await asyncio.to_thread(
-        service_from_request(request).live_projection, public_key
+        service_from_request(request).live_projection, public_key,
+        after_yellow=max(0, after_yellow), after_white=max(0, after_white),
     )
     return {"projection": projection}
 

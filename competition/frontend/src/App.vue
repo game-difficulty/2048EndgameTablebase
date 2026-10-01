@@ -12,6 +12,7 @@ import RoomSchedulePicker from './RoomSchedulePicker.vue';
 import { scheduleTime, roomMatchTitle, roomMatchScore } from './scheduleDisplay.js';
 import TournamentBoard from './projects/TournamentBoard.vue';
 import CargoBoard from './projects/CargoBoard.vue';
+import ObservedProjectBoard from '../../shared/ObservedProjectBoard.vue';
 import PolyominoBoard from './projects/PolyominoBoard.vue';
 import { projectIconUrl } from '../../shared/projectIcons.js';
 import { projectPerformanceMetric, projectResultValue as rawProjectResultValue } from '../../shared/projectMetrics.mjs';
@@ -73,6 +74,8 @@ const serverOffsetMs = ref(0);
 const predictionWait = computed(() => Math.max(0, Math.ceil((Date.parse(match.value?.prediction_window?.minimum_until || '') - clockNow.value - serverOffsetMs.value) / 1000)) || 0);
 const movePending = ref(false);
 const projectThinking = ref(false);
+const observerPending = ref({ yellow: false, white: false });
+const finishPlaybackUntil = ref(0);
 const localPacket = ref(null);
 const projectSyncState = ref('synced');
 let localRuntime = null;
@@ -166,6 +169,8 @@ const canPlayLocal = computed(() => Boolean(room.value?.me?.can_move && localRun
 const isGameReady = computed(() => /^GAME_[ABC]_READY$/.test(room.value?.status || ''));
 const isGamePlaying = computed(() => /^GAME_[ABC]_PLAYING$/.test(room.value?.status || ''));
 const isGameResult = computed(() => /^GAME_[ABC]_RESULT$/.test(room.value?.status || ''));
+const showPlayingBoards = computed(() => isGamePlaying.value || (isGameResult.value
+  && (clockNow.value < finishPlaybackUntil.value || Object.values(observerPending.value).some(Boolean))));
 const isGameStage = computed(() => /^GAME_[ABC]_(READY|PLAYING|RESULT)$/.test(room.value?.status || ''));
 const remainingSeconds = computed(() => {
   const deadline = Date.parse(
@@ -274,6 +279,7 @@ function applyRoom(nextRoom, { live = false } = {}) {
         || (nextSequence === currentSequence && nextVersion < currentVersion))) return false;
   }
   const phaseChange = stageChange(room.value, nextRoom, live);
+  if (isGamePlaying.value && /^GAME_[ABC]_RESULT$/.test(nextRoom.status)) finishPlaybackUntil.value = Date.now() + 500;
   if (room.value?.status !== nextRoom.status) beginStageMotion(phaseChange, nextRoom);
   const nextToken = String(nextRoom?.draft?.phase_token || '');
   if (nextToken !== previousPhaseToken) {
@@ -412,13 +418,14 @@ function applyProjectUpdate(update) {
   const current = room.value;
   const state = current?.match?.sessions?.[update.side];
   if (!state || current.room_code !== update.room_code || current.match.current_game_key !== update.game_key
-    || state.instance_id !== update.instance_id || !/^GAME_[ABC]_PLAYING$/.test(current.status)
-    || Number(update.public_view.sequence) <= Number(state.public_view.sequence)) return;
+    || state.instance_id !== update.instance_id || !/^GAME_[ABC]_PLAYING$/.test(current.status)) return;
   // A full checkpoint may skip intermediate frames. Never animate a move from
   // a board that the receiver did not actually display.
   const view = receivedProjectView(state.public_view, update.public_view);
   state.public_view = view;
-  state.project_clock = { ...state.project_clock, elapsed_ms: view.payload.elapsed_ms, sampled_at: update.server_time };
+  if (Number(update.public_view.sequence) === Number(view.sequence)) {
+    state.project_clock = { ...state.project_clock, elapsed_ms: view.payload.elapsed_ms, sampled_at: update.server_time };
+  }
   current.version = Math.max(current.version, update.version);
 }
 
@@ -793,6 +800,12 @@ function roomProjectIcon(key) {
 
 function sessionPayload(side) {
   return match.value?.sessions?.[side]?.public_view?.payload || null;
+}
+
+function setObserverPending(side, pending) {
+  const wasPending = observerPending.value[side];
+  observerPending.value[side] = pending;
+  if (wasPending && !pending && isGameResult.value) finishPlaybackUntil.value = Math.max(finishPlaybackUntil.value, Date.now() + 300);
 }
 
 function projectMetric(side) {
@@ -1579,7 +1592,7 @@ onBeforeUnmount(() => {
           </section>
         </template>
 
-        <template v-else-if="isGamePlaying">
+        <template v-else-if="showPlayingBoards">
           <section class="game-play-layout">
             <div class="game-roster-edge yellow" :aria-label='$t("黄方队员状态")'>
               <div class="roster-edge-title">{{ $t("黄方队员") }}</div>
@@ -1597,6 +1610,9 @@ onBeforeUnmount(() => {
                 <div class="project-board-stage" :class="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' && 'cargo-board-stage'">
                 <div v-if="match.sessions[side]?.finished" class="board-complete-tag" role="status">{{ $t("本侧已完成") }}</div>
                 <div v-if="sessionPayload(side)?.awaiting_client" class="project-view-fallback" role="status">{{ $t("等待选手载入棋盘…") }}</div>
+                <ObservedProjectBoard v-else-if="!isMyActiveSide(side)" class="embedded-project-board"
+                  :view="match.sessions[side]?.public_view" :stream-key="match.sessions[side]?.instance_id"
+                  @pending="setObserverPending(side, $event)" />
                 <CargoBoard
                   v-else-if="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1'"
                   class="embedded-project-board"

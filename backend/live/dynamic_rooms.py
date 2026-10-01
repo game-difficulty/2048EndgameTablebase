@@ -130,8 +130,10 @@ class CompetitionMatchRoomProvider:
         # a room merely because a projection endpoint still responds.
         return None
 
-    def projection(self, public_key):
-        payload = self._request(f'/api/internal/live/rooms/{public_key}') or {}
+    def projection(self, public_key, after=None):
+        cursors = after or {}
+        query = '&'.join(f'after_{side}={int(cursors.get(side, 0))}' for side in ('yellow', 'white'))
+        payload = self._request(f'/api/internal/live/rooms/{public_key}?{query}') or {}
         return payload.get('projection')
 
     def settlement(self, public_key):

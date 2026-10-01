@@ -1,12 +1,10 @@
-import Project2048View from './Project2048View.vue';
-import CargoTransportView from './CargoTransportView.vue';
-import ProjectPolyominoView from './ProjectPolyominoView.vue';
+import StreamProjectView from './StreamProjectView.vue';
 
 const renderers = Object.freeze({
-  '2048-board|2048-board-v1': Project2048View,
-  '2048-board|2048-board-v2': Project2048View,
-  'cargo-transport|cargo-transport-v1': CargoTransportView,
-  'polyomino-board|polyomino-board-v1': ProjectPolyominoView,
+  '2048-board|2048-board-v1': StreamProjectView,
+  '2048-board|2048-board-v2': StreamProjectView,
+  'cargo-transport|cargo-transport-v1': StreamProjectView,
+  'polyomino-board|polyomino-board-v1': StreamProjectView,
 });
 
 export function projectViewRenderer(view) {

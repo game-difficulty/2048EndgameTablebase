@@ -148,6 +148,7 @@ class ClientGameStateRequest(BaseModel):
     phase_token: str = Field(max_length=100)
     payload: dict
     checkpoint: dict
+    frames: list[dict] = Field(default_factory=list, max_length=128)
     result_value: int = Field(ge=0, le=10**15)
     elapsed_ms: int = Field(ge=0, le=10**9)
     finished: bool

@@ -36,6 +36,24 @@ def upload(service, player, **options):
     return service.sync_client_game('MATCH5', player, **packet(service, player, **options))
 
 
+def test_frame_batches_are_retained_and_recoverable_through_live_cursor(tmp_path):
+    service, players = setup_game(tmp_path)
+    data = packet(service, players[0], sequence=6)
+    frames = [{'sequence': i, 'payload': {**data['payload'], 'move_count': i}} for i in range(1, 7)]
+    ack = service.sync_client_game('MATCH5', players[0], **data, frames=frames)
+    assert [f['sequence'] for f in ack['update']['public_view']['frames']] == list(range(1, 7))
+    key = service.list_live_rooms()[0]['public_key']
+    view = service.live_projection(key, after_yellow=3)['project_public_views']['yellow']
+    assert [f['sequence'] for f in view['frames']] == [4, 5, 6]
+    assert view['frame_start'] == 1
+    assert service.sync_client_game('MATCH5', players[0], **data, frames=frames)['duplicate']
+    # A legacy checkpoint with a genuine gap advertises a new history floor.
+    upload(service, players[0], sequence=10)
+    view = service.live_projection(key)['project_public_views']['yellow']
+    assert view['frame_start'] == 10
+    assert [f['sequence'] for f in view['frames']] == [10]
+
+
 def test_only_state_upload_gameplay_endpoint_is_registered():
     from competition.backend.routes import router
 

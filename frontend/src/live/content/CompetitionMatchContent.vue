@@ -81,6 +81,8 @@ import { projectResultValue } from '../../../../competition/shared/projectMetric
 import CompetitionRosterHud from './CompetitionRosterHud.vue';
 const props=defineProps({lang:String,streamState:String});
 const hudCollapsed=ref({yellow:false,white:false});
+const playbackPending=ref({yellow:false,white:false}),finishPlaybackUntil=ref(0);
+function setPlaybackPending(side,pending){const wasPending=playbackPending.value[side];playbackPending.value[side]=pending;if(wasPending&&!pending&&match.value?.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=Math.max(finishPlaybackUntil.value,Date.now()+300)}
 const match=ref(null),now=ref(Date.now()),receivedAt=ref(Date.now()),serverAnchor=ref(Date.now());let timer;
 const t=(zh,en)=>props.lang==='zh'?zh:en;
 const score=computed(()=>match.value?.score||{}),draft=computed(()=>match.value?.public_draft||{}),views=computed(()=>match.value?.project_public_views||{});
@@ -90,7 +92,7 @@ const sides=['yellow','white'];
 const stageWait=computed(()=>Math.max(0,Math.ceil((Date.parse((stage.value==='game-result'?match.value?.rest_until:match.value?.preview_until)||'')-currentServerNow())/1000))||0);
 const readyWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.ready_deadline_at||'')-currentServerNow())/1000))||0);
 const predictionWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.prediction_window?.minimum_until||'')-currentServerNow())/1000))||0);
-const stage=computed(()=>{const value=match.value?.phase||'';if(['DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(value))return'draft';if(value==='LINEUP')return'lineup';if(value.endsWith('_READY'))return'ready';if(value.endsWith('_RESULT'))return'game-result';if(value==='FINISHED'||value==='CANCELLED')return'result';return'game'});
+const stage=computed(()=>{const value=match.value?.phase||'';if(['DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(value))return'draft';if(value==='LINEUP')return'lineup';if(value.endsWith('_READY'))return'ready';if(value.endsWith('_RESULT'))return now.value<finishPlaybackUntil.value||Object.values(playbackPending.value).some(Boolean)?'game':'game-result';if(value==='FINISHED'||value==='CANCELLED')return'result';return'game'});
 const phaseLabels={DRAW:['抽签','DRAW'],FIRST_PICK_BAN:['先手选禁','FIRST PICK / BAN'],SECOND_PICK_BAN:['后手选禁','SECOND PICK / BAN'],BLIND_PICK:['双方盲选','BLIND PICK'],C_DRAW:['项目 C 抽签','PROJECT C DRAW'],LINEUP:['秘密布阵','SECRET LINEUP'],FINISHED:['全场结束','FINAL']};
 const phaseLabel=computed(()=>{const value=match.value?.phase||'';const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`${t('项目','GAME')} ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('单局结果','RESULT')}[gamePhase[2]]}`;return competitionPhaseLabel(value,props.lang)});
 const phaseActor=computed(()=>{const side=match.value?.phase_timing?.active_side;if(!side)return'';const name=team(side).name||(side==='yellow'?t('黄方','Yellow'):t('白方','White'));return`${name} · ${t('操作中','ON TURN')}`});
@@ -126,6 +128,7 @@ const winnerLabel=computed(()=>match.value?.public_result?.winner_side==='yellow
 function receive(data){
   if(data.type!=='snapshot'||!data.match||projectionIsOlder(match.value,data.match))return;
   const incoming={...data.match,project_public_views:{...data.match.project_public_views}};
+  if(match.value?.phase?.endsWith('_PLAYING')&&incoming.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=Date.now()+500;
   const sameGame=match.value?.match_public_key===incoming.match_public_key&&match.value?.generation===incoming.generation&&match.value?.current_game===incoming.current_game;
   for(const side of sides){const next=incoming.project_public_views[side];if(next)incoming.project_public_views[side]=receivedProjectView(sameGame?match.value?.project_public_views?.[side]:null,next)}
   match.value=incoming;receivedAt.value=Date.now();now.value=receivedAt.value;
@@ -142,7 +145,7 @@ const ProjectPane=defineComponent({props:['side','view','status','player','lang'
   const Renderer=projectViewRenderer(p.view);
   const waiting=p.view?.payload?.awaiting_client;
   const body=waiting?h('div',{class:'view-fallback'},p.lang==='zh'?'等待选手载入棋盘…':'Waiting for the player to load…')
-    :Renderer?h(Renderer,{view:p.view,lang:p.lang,suspended:p.suspended})
+    :Renderer?h(Renderer,{key:`${match.value?.match_public_key}:${match.value?.generation}:${match.value?.current_game}:${p.side}`,view:p.view,lang:p.lang,suspended:p.suspended,onPending:value=>setPlaybackPending(p.side,value)})
       :h('div',{class:'view-fallback'},[h('b',p.lang==='zh'?'项目画面暂不可用':'Project view unavailable'),h('small',p.view?`${p.view.view_kind} · ${p.view.view_protocol}`:'')]);
   return h('article',{class:['project-pane',p.side,p.status?.finished?'finished':'']},[
     h('header',[h('div',{class:'project-player'},[h(PlayerAvatar,{player:p.player}),h('span',[
