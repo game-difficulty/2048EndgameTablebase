@@ -152,5 +152,6 @@ onBeforeUnmount(() => { ++epoch; clearTimers(); clearInterval(timer); });
 @keyframes pop{50%{transform:scale(1.2)}}@keyframes appear{from{transform:scale(0);opacity:0}}
 .special-cargo.cao-cargo{background:#d8ab5d;border-radius:5px}
 .cao-cargo .cargo-cell,.cao-cargo .cargo-bridge{visibility:hidden}
-.special-cargo.cao-cargo strong{color:#50371b;font-weight:800;line-height:1;text-shadow:none}
+.special-cargo.cao-cargo{container-type:inline-size}
+.special-cargo.cao-cargo strong{color:#50371b;font-size:60cqw;font-weight:800;line-height:1;text-shadow:none}
 </style>

@@ -157,7 +157,7 @@ onBeforeUnmount(() => { ++animationEpoch; clearTimeout(revealTimer); });
 .cargo-art{position:absolute;inset:0;filter:drop-shadow(0 3px 4px rgba(29,48,58,.28));color:#f8fbfa}
 .cargo-part,.cargo-bridge{position:absolute;display:block;background:#448d8a}.cargo-part{border-radius:9px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)}
 .cargo-art strong{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:clamp(24px,4vw,42px);line-height:1;text-shadow:0 1px 2px rgba(0,0,0,.3)}
-.cargo-art.cao-cargo{background:#d8ab5d;border-radius:9px;color:#50371b}
+.cargo-art.cao-cargo{background:#d8ab5d;border-radius:9px;color:#50371b;container-type:inline-size}
 .cao-cargo .cargo-part,.cao-cargo .cargo-bridge{visibility:hidden}
-.cao-cargo strong{font-weight:800;text-shadow:none}
+.cao-cargo strong{font-size:60cqw;font-weight:800;text-shadow:none}
 </style>
