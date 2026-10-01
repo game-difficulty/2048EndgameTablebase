@@ -1,5 +1,6 @@
 <template>
   <section class="analysis-history-panel" tabindex="0" :aria-label="text('分析历史', 'Analysis history')">
+    <div ref="list" class="analysis-history-list" :aria-busy="loading">
     <p v-if="error" class="analysis-history-message analysis-history-error" role="alert">{{ error }}</p>
     <p v-else-if="loading && !jobs.length" class="analysis-history-message">{{ text('正在加载…', 'Loading…') }}</p>
     <p v-else-if="!jobs.length" class="analysis-history-message">{{ text('暂无分析记录', 'No analysis history yet') }}</p>
@@ -30,14 +31,17 @@
       </div>
     </article>
 
-    <button v-if="nextCursor" type="button" class="analysis-history-more" :disabled="loading" @click="load(false)">
-      {{ text('加载更多', 'Load more') }}
-    </button>
+    </div>
+    <nav v-if="pageIndex > 0 || nextCursor" class="analysis-history-pagination" :aria-label="text('分析历史分页', 'History pagination')">
+      <button type="button" :disabled="loading || pageIndex === 0" @click="loadPage(pageIndex - 1)">{{ text('上一页', 'Previous') }}</button>
+      <span aria-live="polite">{{ text(`第 ${pageIndex + 1} 页`, `Page ${pageIndex + 1}`) }}</span>
+      <button type="button" :disabled="loading || !nextCursor" @click="loadPage(pageIndex + 1)">{{ text('下一页', 'Next') }}</button>
+    </nav>
   </section>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { ChevronDown } from '@lucide/vue';
 import AnalysisStageList from '../features/replay/components/AnalysisStageList.vue';
 import { analysisScoreLabel } from '../features/replay/analysisPresentation.js';
@@ -46,8 +50,11 @@ import { authHeaders } from '../services/auth/sessionTokenStore.js';
 import { getBackendUrl } from '../services/runtime/backendUrl.js';
 
 const props = defineProps({ language: { type: String, default: 'zh' } });
-const jobs = ref([]);
-const nextCursor = ref('');
+const pages = ref([]);
+const pageIndex = ref(0);
+const jobs = computed(() => pages.value[pageIndex.value]?.items || []);
+const nextCursor = computed(() => pages.value[pageIndex.value]?.next_cursor || '');
+const list = ref(null);
 const loading = ref(false);
 const error = ref('');
 const opening = ref('');
@@ -64,15 +71,21 @@ async function api(path, init = {}) {
   return response.json();
 }
 
-async function load(reset) {
+async function loadPage(index = 0, reset = false) {
   if (loading.value) return;
+  if (index < 0 || (!reset && index > 0 && !pages.value[index - 1]?.next_cursor)) return;
   loading.value = true;
   error.value = '';
   try {
-    const cursor = reset ? '' : nextCursor.value;
-    const data = await api(`/api/analysis/history?limit=10${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-    jobs.value = reset ? data.items : [...jobs.value, ...data.items];
-    nextCursor.value = data.next_cursor || '';
+    if (reset || !pages.value[index]) {
+      const cursor = index === 0 ? '' : pages.value[index - 1].next_cursor;
+      const data = await api(`/api/analysis/history?limit=10${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      if (reset) pages.value = [];
+      pages.value[index] = data;
+    }
+    pageIndex.value = index;
+    await nextTick();
+    if (list.value) list.value.scrollTop = 0;
   } catch {
     error.value = text('分析历史读取失败，请稍后重试。', 'Could not load analysis history.');
   } finally {
@@ -104,8 +117,8 @@ async function openReplay(artifact) {
   }
 }
 
-defineExpose({ refresh: () => load(true), loading });
-onMounted(() => load(true));
+defineExpose({ refresh: () => loadPage(0, true), loading });
+onMounted(() => loadPage());
 </script>
 
 <style scoped>
@@ -116,6 +129,15 @@ onMounted(() => load(true));
   height: 100%;
   flex-direction: column;
   gap: 10px;
+  overflow: hidden;
+  color: var(--text-main);
+}
+.analysis-history-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 2px 8px 2px 2px;
@@ -123,8 +145,8 @@ onMounted(() => load(true));
   scrollbar-color: var(--border-main) transparent;
   scrollbar-width: thin;
 }
-.analysis-history-panel::-webkit-scrollbar { width: 8px; }
-.analysis-history-panel::-webkit-scrollbar-thumb { border: 2px solid var(--bg-card); border-radius: 8px; background: var(--border-main); }
+.analysis-history-list::-webkit-scrollbar { width: 8px; }
+.analysis-history-list::-webkit-scrollbar-thumb { border: 2px solid var(--bg-card); border-radius: 8px; background: var(--border-main); }
 .analysis-history-job { flex: 0 0 auto; overflow: hidden; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-main); }
 .analysis-history-job-head { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; border: 0; background: transparent; padding: 12px 14px; color: inherit; text-align: left; cursor: pointer; }
 .analysis-history-job-head:hover { background: var(--bg-card); }
@@ -142,8 +164,10 @@ onMounted(() => load(true));
 .analysis-history-message { margin: 6px 0; color: var(--text-secondary); }
 .analysis-history-error { color: #d14c45; }
 .analysis-history-empty { color: var(--text-secondary); }
-.analysis-history-more { align-self: center; margin: 4px 0 10px; border: 1px solid var(--border-main); border-radius: 6px; background: var(--bg-main); padding: 8px 16px; color: inherit; cursor: pointer; }
-.analysis-history-more:disabled { opacity: 0.5; cursor: default; }
+.analysis-history-pagination { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 14px; border-top: 1px solid var(--border-main); padding: 10px 0 2px; font-size: 0.85rem; }
+.analysis-history-pagination button { border: 1px solid var(--border-main); border-radius: 6px; background: var(--bg-main); padding: 8px 16px; color: inherit; cursor: pointer; }
+.analysis-history-pagination button:hover:not(:disabled) { background: var(--bg-card); }
+.analysis-history-pagination button:disabled { opacity: 0.5; cursor: default; }
 @media (max-width: 560px) {
   .analysis-history-job-head { padding: 10px; }
   .analysis-history-items { padding: 10px; }
