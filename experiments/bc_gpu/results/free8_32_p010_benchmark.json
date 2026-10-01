@@ -1,0 +1,253 @@
+{
+  "dataset": "C:\\Apps\\2048endgameTablebase\\src\\experiments\\bc_gpu\\data\\free8_32_p010",
+  "gpu": "NVIDIA GeForce RTX 4080 SUPER",
+  "repeats": 9,
+  "rounding": "cpu80",
+  "timing_scope": "CPU production resident raw solve; GPU decode+resident solve; cold GPU uses prebuilt exported indexes and warm OS file cache",
+  "layers": [
+    {
+      "small_sum": 38,
+      "rows": 1820480,
+      "cpu": {
+        "1": {
+          "rows": 1820480,
+          "threads": 1,
+          "repeats": 9,
+          "median_seconds": 0.250861899927,
+          "load_index_seconds": 0.0180290001445
+        },
+        "16": {
+          "rows": 1820480,
+          "threads": 16,
+          "repeats": 9,
+          "median_seconds": 0.0216626003385,
+          "load_index_seconds": 0.00992510002106
+        },
+        "32": {
+          "rows": 1820480,
+          "threads": 32,
+          "repeats": 9,
+          "median_seconds": 0.0212932997383,
+          "load_index_seconds": 0.00971759995446
+        }
+      },
+      "gpu": {
+        "64": {
+          "decode_seconds": 6.726399809122086e-05,
+          "solve_seconds": 0.0004472959935665131,
+          "launch_sync_wall_seconds": 0.0005405996926128864,
+          "exact": true
+        },
+        "128": {
+          "decode_seconds": 6.835199892520904e-05,
+          "solve_seconds": 0.000449535995721817,
+          "launch_sync_wall_seconds": 0.000542100053280592,
+          "exact": true
+        },
+        "256": {
+          "decode_seconds": 6.963200122117996e-05,
+          "solve_seconds": 0.0004535680115222931,
+          "launch_sync_wall_seconds": 0.0005473000928759575,
+          "exact": true
+        }
+      },
+      "gpu_prepared_cold_repeats": [
+        {
+          "prepared_disk_upload_seconds": 0.012727099936455488,
+          "total_seconds": 0.014224899932742119
+        },
+        {
+          "prepared_disk_upload_seconds": 0.012121600098907948,
+          "total_seconds": 0.013512100093066692
+        },
+        {
+          "prepared_disk_upload_seconds": 0.012285999953746796,
+          "total_seconds": 0.0136481998488307
+        }
+      ]
+    },
+    {
+      "small_sum": 48,
+      "rows": 4479360,
+      "cpu": {
+        "1": {
+          "rows": 4479360,
+          "threads": 1,
+          "repeats": 9,
+          "median_seconds": 0.49378020037,
+          "load_index_seconds": 0.0278687002137
+        },
+        "16": {
+          "rows": 4479360,
+          "threads": 16,
+          "repeats": 9,
+          "median_seconds": 0.0487522999756,
+          "load_index_seconds": 0.0161645999178
+        },
+        "32": {
+          "rows": 4479360,
+          "threads": 32,
+          "repeats": 9,
+          "median_seconds": 0.0419157999568,
+          "load_index_seconds": 0.0158138000406
+        }
+      },
+      "gpu": {
+        "64": {
+          "decode_seconds": 0.0001515520066022873,
+          "solve_seconds": 0.0009062399864196777,
+          "launch_sync_wall_seconds": 0.0010852999985218048,
+          "exact": true
+        },
+        "128": {
+          "decode_seconds": 0.0001505279988050461,
+          "solve_seconds": 0.0009082880020141601,
+          "launch_sync_wall_seconds": 0.0010836999863386154,
+          "exact": true
+        },
+        "256": {
+          "decode_seconds": 0.0001515199989080429,
+          "solve_seconds": 0.0009142400026321411,
+          "launch_sync_wall_seconds": 0.0010908995755016804,
+          "exact": true
+        }
+      },
+      "gpu_prepared_cold_repeats": [
+        {
+          "prepared_disk_upload_seconds": 0.02124739997088909,
+          "total_seconds": 0.024170500226318836
+        },
+        {
+          "prepared_disk_upload_seconds": 0.02042019972577691,
+          "total_seconds": 0.023372899740934372
+        },
+        {
+          "prepared_disk_upload_seconds": 0.020846799947321415,
+          "total_seconds": 0.024008700158447027
+        }
+      ]
+    },
+    {
+      "small_sum": 52,
+      "rows": 5225513,
+      "cpu": {
+        "1": {
+          "rows": 5225513,
+          "threads": 1,
+          "repeats": 9,
+          "median_seconds": 0.443800200243,
+          "load_index_seconds": 0.0288251996972
+        },
+        "16": {
+          "rows": 5225513,
+          "threads": 16,
+          "repeats": 9,
+          "median_seconds": 0.0388555997051,
+          "load_index_seconds": 0.0152202998288
+        },
+        "32": {
+          "rows": 5225513,
+          "threads": 32,
+          "repeats": 9,
+          "median_seconds": 0.0348975001834,
+          "load_index_seconds": 0.0149721000344
+        }
+      },
+      "gpu": {
+        "64": {
+          "decode_seconds": 0.0001720000058412552,
+          "solve_seconds": 0.000881663978099823,
+          "launch_sync_wall_seconds": 0.0010792999528348446,
+          "exact": true
+        },
+        "128": {
+          "decode_seconds": 0.00017283199727535247,
+          "solve_seconds": 0.0008823999762535095,
+          "launch_sync_wall_seconds": 0.0010769995860755444,
+          "exact": true
+        },
+        "256": {
+          "decode_seconds": 0.00017299200594425202,
+          "solve_seconds": 0.000886784017086029,
+          "launch_sync_wall_seconds": 0.001087600365281105,
+          "exact": true
+        }
+      },
+      "gpu_prepared_cold_repeats": [
+        {
+          "prepared_disk_upload_seconds": 0.02029299968853593,
+          "total_seconds": 0.02347219968214631
+        },
+        {
+          "prepared_disk_upload_seconds": 0.021110900212079287,
+          "total_seconds": 0.02461000019684434
+        },
+        {
+          "prepared_disk_upload_seconds": 0.02057769987732172,
+          "total_seconds": 0.023764499928802252
+        }
+      ]
+    },
+    {
+      "small_sum": 62,
+      "rows": 4344163,
+      "cpu": {
+        "1": {
+          "rows": 4344163,
+          "threads": 1,
+          "repeats": 9,
+          "median_seconds": 0.27991290018,
+          "load_index_seconds": 0.0240199998952
+        },
+        "16": {
+          "rows": 4344163,
+          "threads": 16,
+          "repeats": 9,
+          "median_seconds": 0.0263751000166,
+          "load_index_seconds": 0.0133210001513
+        },
+        "32": {
+          "rows": 4344163,
+          "threads": 32,
+          "repeats": 9,
+          "median_seconds": 0.0241982997395,
+          "load_index_seconds": 0.0129990996793
+        }
+      },
+      "gpu": {
+        "64": {
+          "decode_seconds": 0.0001454080045223236,
+          "solve_seconds": 0.0005926079750061035,
+          "launch_sync_wall_seconds": 0.0007636998780071735,
+          "exact": true
+        },
+        "128": {
+          "decode_seconds": 0.00014435200393199922,
+          "solve_seconds": 0.0005904960036277771,
+          "launch_sync_wall_seconds": 0.0007611000910401344,
+          "exact": true
+        },
+        "256": {
+          "decode_seconds": 0.0001454080045223236,
+          "solve_seconds": 0.0005949440002441407,
+          "launch_sync_wall_seconds": 0.0007668002508580685,
+          "exact": true
+        }
+      },
+      "gpu_prepared_cold_repeats": [
+        {
+          "prepared_disk_upload_seconds": 0.01790590025484562,
+          "total_seconds": 0.020466300193220377
+        },
+        {
+          "prepared_disk_upload_seconds": 0.018370000179857016,
+          "total_seconds": 0.021017900202423334
+        },
+        {
+          "prepared_disk_upload_seconds": 0.018084599636495113,
+          "total_seconds": 0.020637799985706806
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "created_utc": "2026-09-22T19:04:57.183960+00:00",
+  "gpu": "NVIDIA GeForce RTX 4080 SUPER",
+  "driver_version": 13010,
+  "runtime_version": 12090,
+  "cupy": "14.2.0",
+  "git_head": "f092f9e655ef82ee65d6b5a161b1d405b52b6afe",
+  "source_sha256": {
+    "experiments\\bc_gpu\\benchmark.py": "b5502123979ea557011baeeda95c2d204df8d6cbade354bb02476f188bc4224d",
+    "experiments\\bc_gpu\\capacity.py": "03c6425982455cd957a3ace65f99d1298ff9391f2582eb9eaa7f11b362397e51",
+    "experiments\\bc_gpu\\collect_results.py": "8eae6af722fa174b65f802c67bb6156fff3ba780bb0737dd764c010c57a76cf4",
+    "experiments\\bc_gpu\\compact.py": "93e58dd6abc23cf210feed8e3698d768d65eae014803f099f11573a57bcd883d",
+    "experiments\\bc_gpu\\recalculate.py": "9936b14df2307239a4ace3e9141e75c7a57674c8357222b5ff49bc06453885ea",
+    "experiments\\bc_gpu\\run.py": "237c5825f4f9a8e2e5aafba3fcef6a7effe34755e06d89a0aad94f464def32a0",
+    "experiments\\bc_gpu\\validate_primitives.py": "c061c6b49c003e0d049eececb0425eb81a781bffaa4e0c22eec19449ad4f8944",
+    "experiments\\bc_gpu\\native_fixture.cpp": "e0932a29958ce82fa7bf8c9ad41e0a80b3743f49901d30fe922f698f31b8f89a",
+    "experiments\\bc_gpu\\kernels.cu": "a48e7b51407b1c224871b3fd679c13f65fdae0b6903d99646c1a7ec260e7ad3c",
+    "native_core\\include\\BCResidentSolve.h": "52e4b17ff892a5765b3a5471c6851b2af1fc3346299d68b74b8b9dd1ea5af713",
+    "native_core\\include\\BCFutureSuccessLookup.h": "a777a3db0a3392ae30d5648a0580402ead352a546e810cc2c1a37725d4eb33be",
+    "native_core\\include\\BCSolveEdgeKernel.h": "0e3d62603aa085da8c8a7a3655908f95182db06a40fe0608066ca59806df77d7",
+    "native_core\\include\\BCKeyRank.h": "7222220e34d6c2fa720e3c5a53bb6f7fbc69f84ead0c0333b4d2392b4083ab30",
+    "native_core\\include\\BCCellBuilder.h": "2dc3a51536d8f1239b494cd9729060bab2f6912c833312da7251cdc03973f4ca",
+    "native_core\\include\\BCBoardCodec.h": "7687b138fa096b9b9e453dead733803b1c87e6e18a85dc017dbb5d02144154e1",
+    "native_core\\include\\BCLut.h": "42f03b5fd344545e39361a7530bc5ef5b0304993a91c65a725493c45c9e0c286",
+    "native_core\\include\\BoardMover.h": "7816d7c41396a60d6d3816a70e03353724f2296a0cb5b9dbc1789b20d404588f",
+    "native_core\\include\\Calculator.h": "909b3c447fa8fd686604339fed1a3113a05763d5004f70538fae6b36dd76f75b",
+    "native_core\\include\\BCPositionFile.h": "7742d1f7f64512f7879544bbd5f43f54d8c30541742f7644f98fe49e24ea3427",
+    "native_core\\src\\CanonicalBatch.cpp": "2f0440f52cab30bca57bb916637c53d4e94610f8984536f3ed40e7987a0b245a"
+  },
+  "checks": [
+    {
+      "case": "free6_8_p025",
+      "report": "gpu_cpu80_block128.json",
+      "rows": 250,
+      "all_cpu_value_hashes_match": true
+    },
+    {
+      "case": "free8_32_p025",
+      "report": "gpu_cpu80_block128.json",
+      "rows": 79230434,
+      "all_cpu_value_hashes_match": true
+    },
+    {
+      "case": "free8_32_p010",
+      "report": "gpu_cpu80_block128.json",
+      "rows": 79230434,
+      "all_cpu_value_hashes_match": true
+    },
+    {
+      "case": "free8_32_p010",
+      "report": "gpu_cpu80_block128_sparse.json",
+      "rows": 79230434,
+      "all_cpu_value_hashes_match": true
+    },
+    {
+      "case": "free9_16_p010",
+      "report": "gpu_cpu80_block128.json",
+      "rows": 14360934,
+      "all_cpu_value_hashes_match": true
+    }
+  ],
+  "primitive_and_rounding_pass": true,
+  "cpu": "AMD Ryzen 9 9950X, 16 cores / 32 logical processors",
+  "caveats": [
+    "resident scalar UInt32 only",
+    "no GPU generation or family streaming",
+    "prepared-index cold path uses OS file cache; not an SSD throughput test",
+    "CPU80 arithmetic assumes 64-bit long-double significand and p4 denominator exponent <=59",
+    "memory estimate is core live buffers, not whole CUDA context or allocator reserve"
+  ]
+}

@@ -51,6 +51,7 @@ This is a comprehensive 2048 training software suite offering table calculation,
     - CPUs supporting the AVX-512 instruction set offer superior performance.
     - Full support for multi-core parallel processing.
 - **GPU**: No GPU required; the engine is pure CPU-based.
+- **Linux compression dependency**: BC/EX/EXAD temporary-file compression requires `7zz`, `7z`, or `7za` to be installed and available on `PATH`.
 
 ## 2.2 Installation Steps
 

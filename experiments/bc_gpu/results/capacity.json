@@ -1,0 +1,74 @@
+{
+  "scope": "synthetic independently replicated future tables, not new states or a free12 measurement",
+  "dataset": "C:\\Apps\\2048endgameTablebase\\src\\experiments\\bc_gpu\\data\\free8_32_p010",
+  "small_sum": 52,
+  "rows": 5225513,
+  "repeats": 9,
+  "l2_bytes": 67108864,
+  "results": [
+    {
+      "replicas": 1,
+      "future_bytes": 49835356,
+      "solve_seconds": 0.0010250240564346313,
+      "launch_sync_wall_seconds": 0.001108888898872667,
+      "mrows_s": 5097.941816288724,
+      "exact": true
+    },
+    {
+      "replicas": 2,
+      "future_bytes": 99670712,
+      "solve_seconds": 0.0011263999938964844,
+      "launch_sync_wall_seconds": 0.0011992000250352754,
+      "mrows_s": 4639.12733337623,
+      "exact": true
+    },
+    {
+      "replicas": 4,
+      "future_bytes": 199341424,
+      "solve_seconds": 0.0017111040353775025,
+      "launch_sync_wall_seconds": 0.0018059888647662269,
+      "mrows_s": 3053.8838620920856,
+      "exact": true
+    },
+    {
+      "replicas": 8,
+      "future_bytes": 398682848,
+      "solve_seconds": 0.003130239963531494,
+      "launch_sync_wall_seconds": 0.003308655538906654,
+      "mrows_s": 1669.3649882690297,
+      "exact": true
+    },
+    {
+      "replicas": 16,
+      "future_bytes": 797365696,
+      "solve_seconds": 0.005186560153961181,
+      "launch_sync_wall_seconds": 0.005459533331708776,
+      "mrows_s": 1007.5103430563837,
+      "exact": true
+    },
+    {
+      "replicas": 32,
+      "future_bytes": 1594731392,
+      "solve_seconds": 0.007489247798919678,
+      "launch_sync_wall_seconds": 0.007801700021243758,
+      "mrows_s": 697.7353587837991,
+      "exact": true
+    },
+    {
+      "replicas": 64,
+      "future_bytes": 3189462784,
+      "solve_seconds": 0.010275775909423829,
+      "launch_sync_wall_seconds": 0.010242422214812703,
+      "mrows_s": 508.52734100669954,
+      "exact": true
+    },
+    {
+      "replicas": 128,
+      "future_bytes": 6378925568,
+      "solve_seconds": 0.01225113582611084,
+      "launch_sync_wall_seconds": 0.012099311117910676,
+      "mrows_s": 426.5329414488138,
+      "exact": true
+    }
+  ]
+}

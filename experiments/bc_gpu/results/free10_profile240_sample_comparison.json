@@ -1,0 +1,163 @@
+{
+  "sample_count": 4096,
+  "old_found": 103,
+  "bad_samples": 0,
+  "tolerance_raw": 4000,
+  "tolerance_probability": 1e-06,
+  "max_abs_raw": 3,
+  "max_abs_probability": 7.5e-10,
+  "layers": [
+    {
+      "step": 241,
+      "samples": 4096,
+      "old_found": 103,
+      "old_threshold_absent": 3993,
+      "max_abs_raw": 3,
+      "mean_abs_raw": 1.0194174757281553,
+      "p99_abs_raw": 2.980000000000004
+    }
+  ],
+  "worst": [
+    {
+      "step": 241,
+      "board": "1126f287f3f5f0ff",
+      "gpu": 1814135920,
+      "old": 1814135923,
+      "delta": 3
+    },
+    {
+      "step": 241,
+      "board": "0432f42f682ff7ff",
+      "gpu": 2542445351,
+      "old": 2542445354,
+      "delta": 3
+    },
+    {
+      "step": 241,
+      "board": "01fff1434367f8ff",
+      "gpu": 1041230279,
+      "old": 1041230281,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "0131f2572f68ffff",
+      "gpu": 1650002446,
+      "old": 1650002448,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "1023f258ff6f1f7f",
+      "gpu": 3576733676,
+      "old": 3576733678,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "0031f357ff61ff8f",
+      "gpu": 1832761798,
+      "old": 1832761800,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "06ff743332f83fff",
+      "gpu": 1784935091,
+      "old": 1784935093,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "2004f34f83ff76ff",
+      "gpu": 3891024704,
+      "old": 3891024706,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "2022f0ff56f837ff",
+      "gpu": 1733262883,
+      "old": 1733262885,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "0471747ff4ff16ff",
+      "gpu": 2863844818,
+      "old": 2863844820,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "01ff3f68251f27ff",
+      "gpu": 1647376528,
+      "old": 1647376530,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "00252f267f3f8fff",
+      "gpu": 1592111502,
+      "old": 1592111504,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "00781135f3ff6fff",
+      "gpu": 2621017308,
+      "old": 2621017310,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "03fff246247f28ff",
+      "gpu": 1829327156,
+      "old": 1829327158,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "03423554ff8f7fff",
+      "gpu": 1089311109,
+      "old": 1089311111,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "002ff736285f2fff",
+      "gpu": 1137700520,
+      "old": 1137700522,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "10ff213f6582f7ff",
+      "gpu": 2071273273,
+      "old": 2071273275,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "008f24ff337ff4f6",
+      "gpu": 2190379026,
+      "old": 2190379028,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "0035ff257f3ff58f",
+      "gpu": 685056759,
+      "old": 685056761,
+      "delta": 2
+    },
+    {
+      "step": 241,
+      "board": "0123f1fff5276ff8",
+      "gpu": 600473697,
+      "old": 600473699,
+      "delta": 2
+    }
+  ],
+  "note": "Old absence is checked against its archival 0.1 threshold; exact GPU futures only prune zero values."
+}

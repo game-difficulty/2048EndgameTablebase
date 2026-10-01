@@ -258,39 +258,84 @@ std::vector<uint8_t> xz_decompress_bytes(const uint8_t *data, size_t size) {
 }
 
 std::optional<std::string> resolve_7z_executable() {
-    std::vector<fs::path> candidates = {
-        fs::path("7z.exe"),
-        fs::path("7za.exe"),
-        fs::path("7zz.exe"),
-        fs::path("_internal") / "7z.exe",
-        fs::path("_internal") / "7za.exe",
-        fs::path("_internal") / "7zz.exe",
-        fs::path("7zip") / "7z.exe",
-        fs::path("7zip") / "7za.exe",
-        fs::path("7zip") / "7zz.exe",
-        fs::path("7z"),
-        fs::path("7za"),
-        fs::path("7zz"),
+    auto is_executable = [](const fs::path &path) {
+        std::error_code ec;
+        if (!fs::is_regular_file(path, ec)) {
+            return false;
+        }
+#ifdef _WIN32
+        return true;
+#else
+        return ::access(path.c_str(), X_OK) == 0;
+#endif
+    };
+
+#ifdef _WIN32
+    const std::array<const char *, 3> names = {"7z.exe", "7za.exe", "7zz.exe"};
+#else
+    const std::array<const char *, 3> names = {"7zz", "7z", "7za"};
+#endif
+    std::vector<fs::path> roots = {
+        fs::current_path(),
+        fs::current_path() / "_internal",
+        fs::current_path() / "7zip",
     };
 
 #ifdef _WIN32
     wchar_t exe_path[MAX_PATH] = {};
     if (GetModuleFileNameW(nullptr, exe_path, MAX_PATH) > 0) {
         fs::path root = fs::path(exe_path).parent_path();
-        candidates.push_back(root / "7z.exe");
-        candidates.push_back(root / "_internal" / "7z.exe");
-        candidates.push_back(root / "7zip" / "7z.exe");
+        roots.push_back(root);
+        roots.push_back(root / "_internal");
+        roots.push_back(root / "7zip");
+    }
+#else
+    std::array<char, 4096> exe_path{};
+    const ssize_t length = ::readlink("/proc/self/exe", exe_path.data(), exe_path.size() - 1U);
+    if (length > 0) {
+        exe_path[static_cast<size_t>(length)] = '\0';
+        const fs::path root = fs::path(exe_path.data()).parent_path();
+        roots.push_back(root);
+        roots.push_back(root / "_internal");
+        roots.push_back(root / "7zip");
     }
 #endif
 
-    for (const auto &candidate : candidates) {
-        if (fs::exists(candidate)) {
-            return NativePath::to_utf8_string(candidate);
+    for (const auto &root : roots) {
+        for (const char *name : names) {
+            const fs::path candidate = root / name;
+            if (is_executable(candidate)) {
+                return NativePath::to_utf8_string(fs::absolute(candidate));
+            }
         }
     }
+
     const char *path = std::getenv("PATH");
-    if (path && std::strlen(path) > 0) {
-        return std::string("7z");
+    if (path == nullptr || *path == '\0') {
+        return std::nullopt;
+    }
+#ifdef _WIN32
+    constexpr char separator = ';';
+#else
+    constexpr char separator = ':';
+#endif
+    const std::string path_value(path);
+    size_t begin = 0U;
+    while (begin <= path_value.size()) {
+        const size_t end = path_value.find(separator, begin);
+        const std::string component = path_value.substr(begin, end - begin);
+        const fs::path directory =
+            component.empty() ? fs::current_path() : NativePath::from_utf8(component);
+        for (const char *name : names) {
+            const fs::path candidate = directory / name;
+            if (is_executable(candidate)) {
+                return NativePath::to_utf8_string(fs::absolute(candidate));
+            }
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        begin = end + 1U;
     }
     return std::nullopt;
 }
@@ -794,7 +839,8 @@ struct SevenZipArchiveWriter::Impl {
         }
         auto exe = resolve_7z_executable();
         if (!exe) {
-            throw std::runtime_error("7z executable not found");
+            throw std::runtime_error(
+                "7-Zip executable not found; install 7zz, 7z, or 7za and ensure it is available on PATH");
         }
         archive_path = path;
         temp_archive_path = temporary_archive_path(path);
@@ -968,7 +1014,11 @@ struct SevenZipSequentialReader::Impl {
             throw std::runtime_error("7z archive reader is already open");
         }
         auto exe = resolve_7z_executable();
-        if (!exe || !NativePath::exists(path)) {
+        if (!exe) {
+            throw std::runtime_error(
+                "7-Zip executable not found; install 7zz, 7z, or 7za and ensure it is available on PATH");
+        }
+        if (!NativePath::exists(path)) {
             throw std::runtime_error("7z archive not available: " + path);
         }
         archive_path = path;

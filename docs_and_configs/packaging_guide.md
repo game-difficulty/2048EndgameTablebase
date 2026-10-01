@@ -289,6 +289,9 @@ Get-FileHash $WinArchive, $LinuxArchive -Algorithm SHA256 |
 - 检查包内没有 libreadline、libtinfo、libgnutls、libpcre2、libstdc++ 等系统库。
   目标机需安装 GTK3/WebKit2GTK、GObject introspection，以及 libgomp、liblzma 等原生
   依赖；对实际包内 ELF 执行依赖检查，确认没有 `not found` 或版本/符号错误。
+- Linux 的 BC/EX/EXAD 临时文件压缩依赖系统 `7zz`、`7z` 或 `7za`。发布验证必须分别在
+  `PATH` 中仅提供 `7zz`、仅提供 `7z`、完全不提供 7-Zip 的隔离环境中运行：前两种环境的
+  压缩生成和压缩层回算应成功，缺失环境应立即返回明确的依赖错误，不能误报文件损坏。
   在较新 Linux 上设置 `LD_LIBRARY_PATH` 指向包内 `_internal` 后执行 `/bin/sh -c
   'exit 0'` 也必须成功，以检查启动外部程序时的库冲突。
 

@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "output": "D:\\free12-4k",
+  "prefix": "D:\\free12-4k\\free12_4096_",
+  "source1": "D:\\free11-1k\\free11_1024_",
+  "source2": "G:\\free11-2k\\free11_2048_",
+  "source_stsl": [
+    108,
+    96
+  ],
+  "stsl": 96,
+  "signature": 3107817247746329041,
+  "seed_threshold": 0.4,
+  "deletion_threshold": 0.05,
+  "relative_deletion_threshold": 0.0,
+  "compress": false,
+  "dtype": "uint32",
+  "spawn4": 0.1,
+  "new_layers": 64,
+  "seeds": [
+    {
+      "source_step": 469,
+      "target_step": 980,
+      "target_sum": 133054,
+      "path": "D:\\free11-1k\\free11_1024_469.exadbook",
+      "rows": 1808187,
+      "bytes": 1037342438,
+      "mtime_ns": 1786988015613615600
+    },
+    {
+      "source_step": 470,
+      "target_step": 981,
+      "target_sum": 133056,
+      "path": "D:\\free11-1k\\free11_1024_470.exadbook",
+      "rows": 1642495,
+      "bytes": 968686909,
+      "mtime_ns": 1786987994672063800
+    }
+  ],
+  "boundaries": [
+    {
+      "target_step": 1044,
+      "target_sum": 133182,
+      "source_step": 21,
+      "source_sum": 163902,
+      "path": "G:\\free11-2k\\free11_2048_21.exadbook",
+      "rows": 165403151,
+      "bytes": 846883649,
+      "mtime_ns": 1789106786418534800
+    },
+    {
+      "target_step": 1045,
+      "target_sum": 133184,
+      "source_step": 22,
+      "source_sum": 163904,
+      "path": "G:\\free11-2k\\free11_2048_22.exadbook",
+      "rows": 185089639,
+      "bytes": 943306136,
+      "mtime_ns": 1789106774701386100
+    }
+  ],
+  "solver_steps": 1048
+}
