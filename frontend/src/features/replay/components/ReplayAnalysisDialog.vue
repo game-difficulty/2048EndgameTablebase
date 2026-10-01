@@ -263,7 +263,7 @@ const historyPanelRef = ref(null);
 
 let client = null;
 let pollTimer = null;
-let subscribedJobId = '';
+let statusRequest = null;
 const ACTIVE_ANALYSIS_JOB_KEY = '2048tables:analysis-active-job:v1';
 const ANALYSIS_POLL_INTERVAL_MS = 2500;
 
@@ -574,16 +574,21 @@ const applyAnalysisJobPayload = (payload = {}) => {
 
 const fetchAnalysisJobStatus = async (jobId) => {
   let response;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
   try {
     response = await fetch(getBackendUrl(`/api/analysis/jobs/${encodeURIComponent(jobId)}`), {
       credentials: 'include',
       headers: authHeaders(),
+      signal: controller.signal,
     });
   } catch (cause) {
     const error = new Error('Analysis job status failed: network error');
     error.code = 'NETWORK_ERROR';
     error.cause = cause;
     throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
   if (!response.ok) {
     let payload = null;
@@ -605,11 +610,15 @@ const fetchAnalysisJobStatus = async (jobId) => {
 
 const refreshAnalysisJobStatus = async ({ keepPollingOnNetworkError = true } = {}) => {
   const jobId = activeJobId.value || readStoredAnalysisJob()?.job_id || '';
-  if (!jobId) return;
+  if (!jobId || statusRequest?.jobId === jobId) return;
+  const request = { jobId };
+  statusRequest = request;
   try {
     const payload = await fetchAnalysisJobStatus(jobId);
+    if (statusRequest !== request || activeJobId.value !== jobId) return;
     applyAnalysisJobPayload(payload);
   } catch (error) {
+    if (statusRequest !== request || activeJobId.value !== jobId) return;
     if (error?.status === 404) {
       isRunning.value = false;
       analysisError.value = formatAnalysisError(error, 'status');
@@ -633,10 +642,13 @@ const refreshAnalysisJobStatus = async ({ keepPollingOnNetworkError = true } = {
     if (!keepPollingOnNetworkError) {
       stopAnalysisPolling();
     }
+  } finally {
+    if (statusRequest === request) statusRequest = null;
   }
 };
 
 function stopAnalysisPolling() {
+  statusRequest = null;
   if (pollTimer !== null) {
     window.clearInterval(pollTimer);
     pollTimer = null;
@@ -650,13 +662,11 @@ const startAnalysisPolling = () => {
   }, ANALYSIS_POLL_INTERVAL_MS);
 };
 
-const subscribeActiveAnalysisJob = () => {
+const resumeAnalysisPolling = () => {
   const jobId = activeJobId.value || readStoredAnalysisJob()?.job_id || '';
-  if (!jobId || !client) return;
+  if (!jobId) return;
   activeJobId.value = jobId;
-  if (subscribedJobId === jobId) return;
-  client.send('ANALYSIS_SUBSCRIBE', { job_id: jobId });
-  subscribedJobId = jobId;
+  // HTTP jobs may run in a different backend from the main-site WebSocket.
   startAnalysisPolling();
 };
 
@@ -675,7 +685,7 @@ const restoreStoredAnalysisJob = () => {
   refreshAnalysisJobStatus({ keepPollingOnNetworkError: true });
   if (isRunning.value) {
     startAnalysisPolling();
-    subscribeActiveAnalysisJob();
+    resumeAnalysisPolling();
   }
 };
 
@@ -693,7 +703,6 @@ const startAnalysis = async () => {
   currentFile.value = '';
   entries.value = [];
   activeJobId.value = '';
-  subscribedJobId = '';
   stopAnalysisPolling();
   clearStoredAnalysisJob();
   try {
@@ -708,7 +717,7 @@ const startAnalysis = async () => {
     totalCount.value = Number(payload.total || 0);
     completedCount.value = 0;
     storeAnalysisJob({ ...payload, pattern: selectedPattern.value, target: selectedTarget.value, status: 'queued' });
-    subscribeActiveAnalysisJob();
+    resumeAnalysisPolling();
     refreshAnalysisJobStatus({ keepPollingOnNetworkError: true });
   } catch (error) {
     isRunning.value = false;
@@ -742,6 +751,8 @@ const downloadResults = async () => {
 };
 
 const handleMessage = (message) => {
+  // Do not let another backend's subscription error stop an HTTP job.
+  if (activeJobId.value && ['ANALYSIS_STARTED', 'ANALYSIS_PROGRESS', 'ANALYSIS_FINISHED', 'ANALYSIS_FAILED'].includes(message.type)) return;
   if (message.type === 'ANALYSIS_BOOTSTRAP') {
     ensureValidSelection();
     if (!userSelectionTouched.value) {
@@ -786,12 +797,11 @@ const connect = () => {
     onOpen: () => {
       wsStatus.value = 'connected';
       client?.send('ANALYSIS_GET_INIT');
-      subscribeActiveAnalysisJob();
+      if (isRunning.value) resumeAnalysisPolling();
     },
     onMessage: handleMessage,
     onClose: () => {
       wsStatus.value = 'disconnected';
-      subscribedJobId = '';
     },
   });
   wsStatus.value = 'connecting';
@@ -801,7 +811,6 @@ const connect = () => {
 const disconnect = () => {
   client?.disconnect();
   client = null;
-  subscribedJobId = '';
   wsStatus.value = 'disconnected';
   stopAnalysisPolling();
 };

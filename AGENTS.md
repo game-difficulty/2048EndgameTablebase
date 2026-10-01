@@ -9,6 +9,13 @@
 - Use the SQLite online backup API (`tools/backup_sqlite.py`) rather than copying a live database file.
 - Do not clean another application's directories, unknown artifacts, active staging directories, replay history, or tablebases as part of deployment cleanup.
 - Do not schedule unattended deletion or broaden cleanup scope without explicit user authorization.
+- Before rebuilding a production frontend, verify the source baseline against
+  the deployed entry/assets and previous release manifest. Server-side source
+  can lag behind deployed bundles; a release.json revision alone is not proof
+  that those source files match. Use a verified Git snapshot plus an explicit
+  overlay list, and record both in the release manifest. Never build dirty WIP.
+- Main-site smoke checks must preserve the Play home link, the bottom-bar
+  leaderboard entry, and the 2048 AI card replacing the old leaderboard card.
 
 ## Desktop Git Directives
 
