@@ -817,12 +817,12 @@ function setObserverPending(side, pending) {
 function projectMetric(side) {
   return projectPerformanceMetric(match.value?.sessions?.[side]?.public_view, language.value);
 }
-function projectResultValue(result, side) { return rawProjectResultValue(result, side, language.value); }
 function ruleMetrics(side) {
   const game = match.value?.games?.find(item => item.game_key === match.value.current_game);
   const project = room.value?.projects?.find(item => item.key === game?.project_key) || {};
   return projectRuleMetrics(match.value?.sessions?.[side]?.public_view, language.value, project);
 }
+function projectResultValue(result, side) { return rawProjectResultValue(result, side, language.value); }
 
 function projectBoardSnapshot(side) {
   const view = match.value?.sessions?.[side]?.public_view;
@@ -1613,8 +1613,8 @@ onBeforeUnmount(() => {
               <article v-for="side in ['yellow', 'white']" :key="side" :class="['project-side-view', side, match.sessions[side]?.finished && 'finished']">
                 <header class="project-metrics" :style="{'--metric-count':ruleMetrics(side).length+2}" :aria-label="$t(`${sideName(side)}本场数据`)">
                   <div class="project-metric performance"><span>{{ $t(projectMetric(side).label) }}</span><strong>{{ $t(projectMetric(side).value) }}</strong></div>
-                  <div class="project-metric time"><span>{{ $t(projectRemainingMs(side) == null ? '用时' : '倒计时') }}</span><strong>{{ $t(formatProjectElapsed(projectRemainingMs(side) ?? projectElapsedMs(side))) }}</strong></div>
                   <div v-for="item in ruleMetrics(side)" :key="item.key" :class="['project-metric', 'rule-metric', {warning:item.warning}]"><span>{{ item.label }}</span><strong>{{ item.value }}</strong></div>
+                  <div class="project-metric time"><span>{{ $t(projectRemainingMs(side) == null ? '用时' : '倒计时') }}</span><strong>{{ $t(formatProjectElapsed(projectRemainingMs(side) ?? projectElapsedMs(side))) }}</strong></div>
                 </header>
                 <div class="project-board-stage" :class="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1' && 'cargo-board-stage'">
                 <div v-if="match.sessions[side]?.finished" class="board-complete-tag" role="status">{{ $t("本侧已完成") }}</div>
