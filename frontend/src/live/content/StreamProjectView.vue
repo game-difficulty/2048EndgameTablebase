@@ -2,7 +2,7 @@
   <div class="stream-project">
     <header><span><small>{{ metric.label }}</small><strong>{{ metric.value }}</strong></span>
       <span><small>{{ payload.time_limit_ms ? (lang === 'zh' ? '倒计时' : 'COUNTDOWN') : (lang === 'zh' ? '用时' : 'ELAPSED') }}</small><strong>{{ elapsed }}</strong></span></header>
-    <ObservedProjectBoard :view="view" :tile-styles="palette" @present="shown = $event" @pending="$emit('pending', $event)" />
+    <ObservedProjectBoard :view="view" :tile-styles="palette" @present="shown = $event" @pending="$emit('pending', $event)" @gap="$emit('gap', $event)" />
     <small>{{ payload.move_count || 0 }} {{ lang === 'zh' ? '步' : 'moves' }}</small>
   </div>
 </template>
@@ -13,7 +13,7 @@ import ObservedProjectBoard from '../../../../competition/shared/ObservedProject
 import { projectPerformanceMetric } from '../../../../competition/shared/projectMetrics.mjs';
 import { liveTileColors } from '../tilePalette.js';
 const props = defineProps({ view: Object, lang: String, suspended: Boolean });
-defineEmits(['pending']);
+defineEmits(['pending', 'gap']);
 const shown = shallowRef(null);
 const payload = computed(() => (shown.value || props.view)?.payload || {});
 const now = ref(performance.now()), receivedAt = ref(performance.now());

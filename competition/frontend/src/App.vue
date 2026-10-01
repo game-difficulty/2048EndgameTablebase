@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { language, t } from './i18n.js';
 import LanguageSwitch from './LanguageSwitch.vue';
-import { api, connectRoom } from './api';
+import { api, connectRoom, projectSocket, projectAuthentication } from './api';
+import { ProjectStreamSender } from './projects/projectStream.js';
 import { userFacingError } from './errorMessages.js';
 import ProjectPlayground from './projects/ProjectPlayground.vue';
 import PlayerAvatar from './PlayerAvatar.vue';
@@ -17,7 +18,7 @@ import PolyominoBoard from './projects/PolyominoBoard.vue';
 import { projectIconUrl } from '../../shared/projectIcons.js';
 import { projectPerformanceMetric, projectResultValue as rawProjectResultValue } from '../../shared/projectMetrics.mjs';
 import { ownDeadline, phaseSeconds, stageChange } from './stageMotion.js';
-import { MatchRuntime, LatestStateSender } from './projects/matchRuntime.js';
+import { MatchRuntime } from './projects/matchRuntime.js';
 import { receivedProjectView } from '../../shared/projectStateOrder.mjs';
 import {
   competitionProjectInput,
@@ -370,14 +371,18 @@ function synchronizeRuntime(nextRoom) {
     acknowledgedSequence = bootstrap.sequence;
     const instance = bootstrap.instance_id;
     const code = nextRoom.room_code;
-    stateSender = new LatestStateSender({
-      send: packet => api.syncClientGame(code, packet, room.value?.match?.phase_token),
+    stateSender = new ProjectStreamSender({
+      createSocket: () => projectSocket(code),
+      authenticate: () => projectAuthentication(instance),
+      phaseToken: () => room.value?.match?.phase_token,
       onAck: ack => {
         if (localRuntime?.bootstrap.instance_id !== instance) return;
         acknowledgedSequence = Math.max(acknowledgedSequence, ack.accepted_sequence || 0);
+        if (ack.accepted_sequence > localRuntime.sequence) disconnectRoom?.resync?.();
         projectSyncState.value = acknowledgedSequence >= (localPacket.value?.sequence || 0) ? 'synced' : 'syncing';
         if (ack.competition) applyRoom(ack.competition, { live: true });
         else if (ack.update) applyProjectUpdate(ack.update);
+        if (ack.resync_room || ack.stopped) disconnectRoom?.resync?.();
       },
       onError: cause => {
         if (localRuntime?.bootstrap.instance_id !== instance) return false;
@@ -386,7 +391,7 @@ function synchronizeRuntime(nextRoom) {
           api.room(code).then(data => { if (localRuntime?.bootstrap.instance_id === instance) applyRoom(data.competition); }).catch(() => {});
           return true;
         }
-        if ([400, 401, 403, 404, 413, 422].includes(cause.status)) {
+        if ([400, 401, 403, 404, 413, 422, 426].includes(cause.status)) {
           projectSyncState.value = 'blocked'; setError(cause); return false;
         }
         if (cause.code === 'TEAM_CLOCK_EXPIRED') return false;
@@ -1612,6 +1617,7 @@ onBeforeUnmount(() => {
                 <div v-if="sessionPayload(side)?.awaiting_client" class="project-view-fallback" role="status">{{ $t("等待选手载入棋盘…") }}</div>
                 <ObservedProjectBoard v-else-if="!isMyActiveSide(side)" class="embedded-project-board"
                   :view="match.sessions[side]?.public_view" :stream-key="match.sessions[side]?.instance_id"
+                  @gap="disconnectRoom?.resync?.()"
                   @pending="setObserverPending(side, $event)" />
                 <CargoBoard
                   v-else-if="match.sessions[side]?.public_view?.view_protocol === 'cargo-transport-v1'"

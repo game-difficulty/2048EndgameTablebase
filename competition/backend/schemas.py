@@ -131,6 +131,7 @@ class LineupRequest(BaseModel):
 
 
 class GameReadinessRequest(BaseModel):
+    stream_protocol: str = ''
     readiness_role: str
     ready: bool
     phase_token: str

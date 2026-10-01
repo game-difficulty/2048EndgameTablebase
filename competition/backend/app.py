@@ -18,6 +18,7 @@ from .hub import RoomHub
 from .practice_leaderboard import PracticeLeaderboard
 from .routes import router
 from .service import CompetitionService
+from .stream_routes import install_stream_routes
 
 
 def create_app() -> FastAPI:
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-Competition-Dev-User"],
     )
     app.include_router(router)
+    install_stream_routes(app, service, hub, settings)
 
     @app.exception_handler(CompetitionError)
     async def competition_error_handler(_request: Request, exc: CompetitionError):
@@ -120,19 +122,19 @@ def create_app() -> FastAPI:
             await websocket.close(code=4404)
             return
         await hub.connect(normalized_code, websocket, principal)
-        await websocket.send_json({"type": "room.snapshot", "data": snapshot})
+        await hub.send(websocket, {"type": "room.snapshot", "data": snapshot})
         try:
             while True:
                 message = await websocket.receive_json()
                 message_type = str(message.get("type") or "")
                 if message_type == "ping":
-                    await websocket.send_json({"type": "pong"})
+                    await hub.send(websocket, {"type": "pong"})
                 elif message_type == "room.resync":
                     fresh = await asyncio.to_thread(
                         service.snapshot, normalized_code, principal
                     )
-                    await websocket.send_json({"type": "room.snapshot", "data": fresh})
-        except WebSocketDisconnect:
+                    await hub.send(websocket, {"type": "room.snapshot", "data": fresh})
+        except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
             await hub.disconnect(normalized_code, websocket)

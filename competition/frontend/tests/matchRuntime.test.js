@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MatchRuntime, LatestStateSender } from '../src/projects/matchRuntime.js';
+import { MatchRuntime } from '../src/projects/matchRuntime.js';
 import { ALL_PROJECTS as TOURNAMENT_PROJECTS } from '../src/projects/catalog.js';
 import { projectionIsOlder, receivedProjectView } from '../../shared/projectStateOrder.mjs';
 
@@ -176,40 +176,6 @@ test('failed WASM computation restores board and RNG instead of substituting ran
   assert.deepEqual(runtime.checkpoint(), before);
   runtime.game.evilSpawn = options.evilSpawn;
   assert.ok(await runtime.move('left'));
-});
-
-test('held upload does not prevent 50 local moves; queued snapshots coalesce and stay ordered', async () => {
-  let release;
-  const sent = [];
-  const runtime = new MatchRuntime(bootstrap(project(5)), options);
-  const sender = new LatestStateSender({ interval: 10000, send: packet => {
-    sent.push(packet.sequence);
-    return new Promise(resolve => { release = () => resolve({ accepted_sequence: packet.sequence }); });
-  } });
-  sender.push(runtime.accept());
-  const first = sender.flush();
-  for (let i = 0; i < 50; i++) sender.push(runtime.move(['left', 'down', 'right', 'up'][i % 4]) || runtime.action('restart'));
-  assert.ok(runtime.sequence > 35);
-  assert.deepEqual(sent, [1]);
-  const latest = runtime.sequence;
-  release(); await first;
-  const second = sender.flush();
-  assert.deepEqual(sent, [1, latest]);
-  release(); await second; sender.close();
-});
-
-test('retry retains latest final state, not failed older state', async () => {
-  let reject;
-  const sent = [];
-  const sender = new LatestStateSender({ interval: 10000, send: packet => {
-    sent.push(packet.sequence);
-    return sent.length === 1 ? new Promise((_resolve, fail) => { reject = fail; }) : Promise.resolve({});
-  } });
-  sender.push({ sequence: 1 }); const first = sender.flush();
-  sender.push({ sequence: 4, finished: true });
-  reject(new Error('offline')); await first;
-  await sender.flush(); sender.close();
-  assert.deepEqual(sent, [1, 4]);
 });
 
 test('receiver rejects older generations/sequences and skips incompatible transition animations', () => {

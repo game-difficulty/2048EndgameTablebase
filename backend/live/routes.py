@@ -128,6 +128,12 @@ class LiveHub:
         history = [*self.chat, *await asyncio.to_thread(red_envelopes.events, room_id=self.room.id),
                    *await asyncio.to_thread(predictions.announcement_events, self.room.id)]
         self.chat = deque(sorted(history, key=lambda item: item['at'])[-100:], maxlen=100)
+        if getattr(self.content, 'push_stream', False):
+            def publish_projection():
+                snapshot = self.snapshot()
+                snapshot['match'] = self.content.incremental_projection
+                self.broadcast(snapshot)
+            self.content.on_update = publish_projection
         await self.content.start()
         if hasattr(self.content, 'batch'):
             self.content.hub = self
@@ -196,6 +202,8 @@ class LiveHub:
             self.task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self.task
+        if hasattr(self.content, 'stop'):
+            await self.content.stop()
         await self.content.save()
         if self.store:
             await asyncio.to_thread(self.store.add_likes, self.likes)
@@ -477,6 +485,7 @@ async def _reconcile_dynamic_room(room_id, runtime, definition, now):
                 await runtime.producer.close(code=1008)
         if not runtime.viewers and dynamic_hubs.get(room_id) is runtime:
             dynamic_hubs.pop(room_id, None)
+            await runtime.stop()
         return
     metadata = definition.metadata if isinstance(definition, RoomDefinition) else definition
     if int(runtime.room.metadata.get('generation', 0)) != int(metadata.get('generation', 0)):
@@ -490,7 +499,7 @@ async def _reconcile_dynamic_room(room_id, runtime, definition, now):
     if runtime.producer and now - runtime.last_seen >= 20:
         with contextlib.suppress(Exception):
             await runtime.producer.close(code=1013)
-    if hasattr(runtime.content, 'refresh'):
+    if hasattr(runtime.content, 'refresh') and not getattr(runtime.content, 'push_stream', False):
         try:
             if await runtime.content.refresh():
                 snapshot = runtime.snapshot()

@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
+import logging
+import os
 from copy import deepcopy
 
 from .dynamic_rooms import competition_provider
@@ -9,6 +13,7 @@ from .human_content import HumanLiveStore
 
 
 class CompetitionMatchContent:
+    push_stream = True
     def __init__(self, room):
         self.room = room
         self.store = HumanLiveStore()
@@ -20,6 +25,8 @@ class CompetitionMatchContent:
             self.projection = None
         self.online = self.projection is not None
         self.incremental_projection = self.projection
+        self.stream_task = None
+        self.on_update = lambda: None
 
     def _is_valid(self, projection):
         if not isinstance(projection, dict):
@@ -40,7 +47,42 @@ class CompetitionMatchContent:
         )
 
     async def start(self):
-        return None
+        self.stream_task = asyncio.create_task(self._subscribe())
+
+    async def stop(self):
+        if self.stream_task:
+            self.stream_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.stream_task
+            self.stream_task = None
+
+    async def _subscribe(self):
+        from websockets.legacy.client import connect
+        origin = os.environ.get('COMPETITION_LIVE_API_ORIGIN', '').rstrip('/')
+        token = os.environ.get('COMPETITION_LIVE_INTERNAL_TOKEN', '')
+        if not origin or not token:
+            return
+        url = origin.replace('https://', 'wss://').replace('http://', 'ws://')
+        url += '/ws/internal/live/' + self.room.metadata['public_key']
+        delay = .5
+        while True:
+            try:
+                async with connect(url, extra_headers={'X-Competition-Live-Token': token},
+                                   max_size=2*1024*1024, open_timeout=5, ping_interval=15, ping_timeout=15) as socket:
+                    delay = .5
+                    while True:
+                        message = json.loads(await asyncio.wait_for(socket.recv(), 35))
+                        if message.get('type') == 'projection' and self.accept_projection(message.get('projection')):
+                            self.on_update()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                if self.online:
+                    self.online = False
+                    self.on_update()
+                logging.getLogger(__name__).warning('competition relay reconnect room=%s error=%s', self.room.id, type(error).__name__)
+                await asyncio.sleep(delay)
+                delay = min(5, delay * 2)
 
     async def save(self):
         return None
@@ -62,6 +104,9 @@ class CompetitionMatchContent:
             {side: int(view.get('sequence', 0)) for side, view in
              ((self.projection or {}).get('project_public_views') or {}).items()},
         )
+        return self.accept_projection(fresh)
+
+    def accept_projection(self, fresh):
         previous = self.projection
         was_online = self.online
         if not self._is_valid(fresh):

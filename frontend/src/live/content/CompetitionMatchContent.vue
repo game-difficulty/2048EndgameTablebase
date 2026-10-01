@@ -135,6 +135,15 @@ function receive(data){
   const liveServerTime=Number(data.server_time)*1000,competitionServerTime=Date.parse(incoming.server_time||'');
   serverAnchor.value=Number.isFinite(liveServerTime)?liveServerTime:Number.isFinite(competitionServerTime)?competitionServerTime:receivedAt.value;
 }
+let resyncPending=false,lastResync=0;
+async function requestProjectResync(){
+  const key=match.value?.match_public_key;
+  if(!key||resyncPending||Date.now()-lastResync<1000)return;
+  resyncPending=true;lastResync=Date.now();
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3000);
+  try{const response=await fetch(`/api/live/rooms/competition-${encodeURIComponent(key)}/state`,{signal:controller.signal});if(response.ok){const data=await response.json();if(match.value?.match_public_key===key)receive({...data,type:'snapshot'})}}
+  catch{/* Playback has its own bounded snapshot fallback. */}finally{clearTimeout(timeout);resyncPending=false}
+}
 function resume(){const resumedAt=Date.now();serverAnchor.value+=resumedAt-receivedAt.value;receivedAt.value=resumedAt;now.value=resumedAt}
 function getPipFrame(){const currentMatch=match.value,lang=props.lang;return{key:`${currentMatch?.generation}:${currentMatch?.content_sequence}:${lang}`,width:960,height:540,draw(ctx){ctx.fillStyle='#111c30';ctx.fillRect(0,0,960,540);ctx.fillStyle='#f8fafc';ctx.textAlign='center';ctx.font='700 30px sans-serif';ctx.fillText(currentMatch?.name||(lang==='zh'?'2048 赛事':'2048 Competition'),480,105);ctx.font='800 86px sans-serif';ctx.fillText(`${currentMatch?.score?.yellow||0}  :  ${currentMatch?.score?.white||0}`,480,270);ctx.font='600 24px sans-serif';ctx.fillStyle='#aebbd0';ctx.fillText(competitionPhaseLabel(currentMatch?.phase,lang),480,345)}}}
 onMounted(()=>timer=setInterval(()=>{if(shouldRefreshLiveClock())now.value=Date.now()},250));onUnmounted(()=>clearInterval(timer));defineExpose({receive,resume,getPipFrame});
@@ -145,7 +154,7 @@ const ProjectPane=defineComponent({props:['side','view','status','player','lang'
   const Renderer=projectViewRenderer(p.view);
   const waiting=p.view?.payload?.awaiting_client;
   const body=waiting?h('div',{class:'view-fallback'},p.lang==='zh'?'等待选手载入棋盘…':'Waiting for the player to load…')
-    :Renderer?h(Renderer,{key:`${match.value?.match_public_key}:${match.value?.generation}:${match.value?.current_game}:${p.side}`,view:p.view,lang:p.lang,suspended:p.suspended,onPending:value=>setPlaybackPending(p.side,value)})
+    :Renderer?h(Renderer,{key:`${match.value?.match_public_key}:${match.value?.generation}:${match.value?.current_game}:${p.side}`,view:p.view,lang:p.lang,suspended:p.suspended,onPending:value=>setPlaybackPending(p.side,value),onGap:requestProjectResync})
       :h('div',{class:'view-fallback'},[h('b',p.lang==='zh'?'项目画面暂不可用':'Project view unavailable'),h('small',p.view?`${p.view.view_kind} · ${p.view.view_protocol}`:'')]);
   return h('article',{class:['project-pane',p.side,p.status?.finished?'finished':'']},[
     h('header',[h('div',{class:'project-player'},[h(PlayerAvatar,{player:p.player}),h('span',[

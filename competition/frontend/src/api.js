@@ -1,6 +1,15 @@
 const DEVICE_SESSION_KEY = '2048tables:device-session-token';
 const apiOrigin = String(import.meta.env.VITE_COMPETITION_API_ORIGIN || '').replace(/\/$/, '');
 const devUser = String(import.meta.env.VITE_COMPETITION_DEV_USER || '').trim();
+export function projectSocket(code) {
+  const url = new URL(apiOrigin || window.location.origin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = `/ws/projects/${encodeURIComponent(code)}`;
+  return new WebSocket(url.toString());
+}
+export function projectAuthentication(instance) {
+  return { token: storedToken(), dev_user: devUser, instance_id: instance, protocol: 'project-stream-v2' };
+}
 
 function storedToken() {
   for (const storage of [window.localStorage, window.sessionStorage]) {
@@ -142,6 +151,7 @@ export const api = {
       body: {
         readiness_role: readinessRole,
         ready,
+        stream_protocol: 'project-stream-v2',
         phase_token: phaseToken,
         command_id: commandId(),
       },
@@ -150,11 +160,6 @@ export const api = {
   startCurrentGame: (code, phaseToken) => request(
     `/api/competitions/${encodeURIComponent(code)}/games/current/start`,
     { method: 'POST', body: { phase_token: phaseToken, command_id: commandId() } },
-  ),
-  syncClientGame: (code, packet, phaseToken) => request(
-    `/api/competitions/${encodeURIComponent(code)}/games/current/state`,
-    { method: 'POST', timeoutMs: 8000,
-      body: { ...packet, elapsed_ms: Math.round(packet.elapsed_ms), phase_token: phaseToken } },
   ),
   confirmCurrentResult: (code, resultRevision, phaseToken) => request(
     `/api/competitions/${encodeURIComponent(code)}/games/current/result/confirm`,
@@ -244,6 +249,8 @@ export function connectRoom(code, handlers = {}) {
   let reconnectTimer;
   let closed = false;
   let failures = 0;
+  let heartbeat;
+  let lastReceived = 0;
   const open = () => {
     const base = apiOrigin ? new URL(apiOrigin, window.location.href) : new URL(window.location.href);
     base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -251,6 +258,11 @@ export function connectRoom(code, handlers = {}) {
     base.search = '';
     socket = new WebSocket(base.toString());
     socket.onopen = () => {
+      lastReceived = Date.now();
+      heartbeat = setInterval(() => {
+        if (Date.now() - lastReceived > 30000) { socket.close(4001, 'heartbeat_timeout'); return; }
+        if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'ping' }));
+      }, 10000);
       socket.send(JSON.stringify({
         type: 'authenticate',
         data: { token: storedToken(), dev_user: devUser },
@@ -258,6 +270,7 @@ export function connectRoom(code, handlers = {}) {
       handlers.onOpen?.();
     };
     socket.onmessage = (event) => {
+      lastReceived = Date.now();
       try {
         const message = JSON.parse(event.data);
         if (message?.type === 'room.snapshot') failures = 0;
@@ -268,6 +281,7 @@ export function connectRoom(code, handlers = {}) {
     };
     socket.onerror = (event) => handlers.onError?.(event);
     socket.onclose = (event) => {
+      clearInterval(heartbeat);
       handlers.onClose?.(event);
       if (!closed && ![4401, 4403, 4404, 1008].includes(event.code)) {
         reconnectTimer = window.setTimeout(open, Math.min(1200 * 2 ** failures++, 15000));
@@ -275,9 +289,12 @@ export function connectRoom(code, handlers = {}) {
     };
   };
   open();
-  return () => {
+  const close = () => {
     closed = true;
+    clearInterval(heartbeat);
     window.clearTimeout(reconnectTimer);
     socket?.close();
   };
+  close.resync = () => { if (socket?.readyState === 1) socket.send(JSON.stringify({ type: 'room.resync' })); };
+  return close;
 }

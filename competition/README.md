@@ -202,26 +202,55 @@ Live 侧未配置比赛服务地址时仅忽略比赛房间，不影响现有 AI
 ## 连续观战传输（2026-10-01）
 
 选手本机执行游戏，每次有效移动、撤销、重开或结束生成一个递增序号。
-上传仍使用 `POST /api/competitions/{room_code}/games/current/state`：最新完整
-`payload` / `checkpoint` 负责恢复和结算，新增 `frames` 保存所有尚未确认的
+使用独立的 `WS /ws/projects/{room_code}` 上传，握手协议为 `project-stream-v2`。
+`payload` / `checkpoint` 负责恢复和结算，`frames` 保存尚未确认的
 `{sequence, payload}`。每帧只含公开画面与真实移动轨迹，不含随机种子、撤销栈或秘密布阵。
 
-- 选手端每 100 ms 批量发送，最多一个请求在途。本机操作不等待网络。
-  等待回包期间可以合并最新 checkpoint，但不覆盖中间公开帧。
-  按 `accepted_sequence` 删除已确认帧，失败后重试；服务器按序号幂等。
+- 选手端按 80 ms 窗口批量发送，最多 4 批未确认数据在途，不逐批等待网络往返。
+  本机操作不等待网络。`stream.ack.accepted_sequence` 是累计、已经持久化的序号，
+  收到后才能删除对应帧；服务器按序号幂等。ACK 超过 8 秒未到或连接失活时重连，
+  通过 `stream.ready` 取得服务器游标并补发。一个对局实例只允许一个上传连接，
+  被新页面接管的旧连接以 4409 关闭并停止重连，防止两个页面互相抢写。
+- 普通批次以 `delta_base` 指向上一已发送批次，撤销栈、回头看看历史、指标历史
+  只传保留前缀长度和追加后缀；棋盘、RNG 游标等当前恢复状态仍随批次完整发送。
+  首次、重连、结束和至少每 2 秒发送完整 checkpoint。服务端按连接顺序还原并保存
+  完整存档后才确认，因此这里只降低传输量，不降低落盘频率或放宽 ACK 可靠性。
+  基准不符时要求重连，首包重新发送完整存档；不尝试猜测或拼接错误的撤销栈。
 - 服务器在原有 session 状态中保存连续的最近 128 帧，帧缓存上限 512 KiB，
   无需新表。批次必须递增，最后一帧必须与本次完整状态一致。
-  `frame_start` 表示当前可补齐范围；旧客户端或长断线留下缺口时，只保留连续后缀。
-- 比赛页 WebSocket 推送本批新增帧。直播站每 250 ms 按双方序号读取增量，
-  大厅目录仍每秒更新。直播进程保留最近 128 帧用于连接恢复，普通广播只发增量。
-  慢观众队列仍有数量与字节上限，超限断开后通过完整快照重新接入。
+  `frame_start` 表示当前可补齐范围；长断线留下缺口时，只保留连续后缀。
+- 比赛页通过原有房间 WebSocket 推送本批新增帧。每个连接只有一个写入协程，
+  发送队列限制 128 条/4 MiB，发送超时或溢出必须明确关闭连接，不能仅从广播集合移除。
+- 直播后端通过带内部令牌的 `WS /ws/internal/live/{public_key}` 订阅赛事服务，
+  通知可以合并，但依据双方游标从保留窗口取齐中间帧，不再每 250 ms HTTP 轮询画面。
+  初次建立仍可通过 HTTP 取快照，大厅目录仍每秒更新。直播进程保留最近 128 帧，
+  普通广播只发增量；重连重新取完整窗口。直播观众仍沿用已有的有界发送队列。
 - 两个观看入口共用 `ProjectPlayback` 队列与正式棋盘组件。乱序帧先等待缺口，
-  重复帧不重复播放；按顺序显示全部已收到的步。积压时减少播放间隔到 100/50/16 ms，
+  重复帧不重复播放；正常情况下按源 `elapsed_ms` 时间轴显示每一步，初始缓冲 60 ms，
+  积压时最短间隔 16 ms 追赶，不反复移动时间轴锚点，
   沿用棋盘快速连续输入的动画打断机制，不改变 slide/merge/pop 参数。
   正常结算前等队列播完并给最后一步 300 ms 动画时间。
 - 初次进入直接显示当前盘面。短断线在保留范围内逐步补齐；超过 128 帧、字节窗口，
-  或更换项目/代际时，明确恢复到最新快照，不伪造已丢失步骤。旧客户端仍可上传，
-  但无法提供它没有记录的中间帧。参赛者本人始终显示本机实时状态。
+  或更换项目/代际时，明确恢复到最新快照，不伪造已丢失步骤。每次出队都检查缺口，
+  请求补取后最多等 800 ms；没有后续消息也必须恢复，不能卡在缺失序号永久停播。
+  浏览器休眠超过 5 秒、播放积压超过 128 步时同样恢复快照。参赛者本人始终显示本机实时状态。
 
 上线需要同时更新赛事后端、赛事前端与直播后端/前端；比赛裁决和计时不等待观看队列。
-不需要数据库迁移，已有比赛状态仍可恢复。
+不需要数据库迁移，已有比赛状态仍可恢复。旧 HTTP 上传端点和旧准备请求返回 426，
+要求选手刷新；不能混用新前端与旧后端。应在无进行中比赛时一起切换四端并要求刷新。
+赛事服务目前依赖单进程内的房间 Hub，继续使用单 worker；扩容多 worker 前必须增加跨进程通知。
+生产 Nginx 的 `/ws/` 已支持 Upgrade，覆盖新路由；内部直播连接仍使用已有的
+`COMPETITION_LIVE_API_ORIGIN` / `COMPETITION_LIVE_INTERNAL_TOKEN`。
+
+### 定向验证
+
+- `python -m pytest competition/tests/test_stream_transport.py competition/tests/test_client_runtime.py competition/tests/test_project_registry_and_live.py tests/test_competition_live.py tests/test_live_routes.py -q`
+- `cd competition/frontend` 后执行 `node --test tests/projectStream.test.js tests/projectPlayback.test.js tests/matchRuntime.test.js`。
+- 浏览器联调仅用临时数据库：仓库根目录执行 `python -m competition.tests.stream_fixture_server`，
+  `frontend` 中执行 `npm run dev -- --host 127.0.0.1 --port 5198 --config ../competition/frontend/tests/streamQa.vite.config.mjs`。
+  浏览器打开 `http://127.0.0.1:5198/live/`，导入
+  `/@fs/<仓库绝对路径>/competition/frontend/tests/streamBrowserHarness.js` 并运行
+  `const qa = await mountStreamQA(); await qa.run(120); qa.close()`。
+  联调使用真实两端 Runtime、上传连接、房间观众、内部直播订阅及直播棋盘组件；
+  白方上下行各额外延迟 300 ms，第 40 次操作断线，记录两个入口实际显示的序号，
+  不仅比较最后收到的快照。该临时服务仅绑定 loopback，不用于生产部署。

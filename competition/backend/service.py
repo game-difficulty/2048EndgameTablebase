@@ -3200,6 +3200,15 @@ class CompetitionService:
                 if finished or str(session['state']) == 'completed':
                     result['competition'] = self._snapshot(db, room, principal)
                 return result
+            from .stream_protocol import expand_checkpoint
+            checkpoint = expand_checkpoint(checkpoint, extra.get('checkpoint'), accepted)
+            history = checkpoint.get('metric_history', [])
+            if (not isinstance(history, list) or any(
+                    not isinstance(item, list) or len(item) != 2
+                    or any(type(value) is not int or value < 0 for value in item)
+                    or item[0] > elapsed_ms for item in history)
+                    or any(a[0] > b[0] for a, b in zip(history, history[1:]))):
+                raise CompetitionError('INVALID_CLIENT_STATE', 'Malformed metric timeline.')
             control = self._match_control_row(db, competition_id)
             game_key = str(session["game_key"])
             if (str(room["status"]) != GAME_PLAYING_STATUS[game_key]

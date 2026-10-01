@@ -4,7 +4,7 @@ import asyncio
 import hmac
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from .auth import auth_user_exists, principal_from_request
 from .db import SCHEMA_VERSION
@@ -481,6 +481,8 @@ async def set_game_readiness(
     payload: GameReadinessRequest,
     principal: PrincipalDependency,
 ) -> dict:
+    if payload.ready and payload.stream_protocol != 'project-stream-v2':
+        raise HTTPException(426, detail={'code': 'CLIENT_UPDATE_REQUIRED', 'message': '请刷新页面后重新准备，当前客户端不支持连续观战。'})
     service = service_from_request(request)
     room = await asyncio.to_thread(
         service.set_game_readiness,
@@ -517,19 +519,9 @@ async def start_current_game(
 @router.post("/competitions/{room_code}/games/current/state")
 async def sync_client_game(
     request: Request, room_code: str, payload: ClientGameStateRequest,
-    principal: PrincipalDependency, background: BackgroundTasks,
+    principal: PrincipalDependency,
 ) -> dict:
-    result = await asyncio.to_thread(
-        service_from_request(request).sync_client_game,
-        room_code, principal, **payload.model_dump(),
-    )
-    # Acknowledge persistence first; slow viewers cannot hold up this request.
-    if result.get("competition"):
-        background.add_task(_broadcast, request, room_code.upper())
-    elif result.get("update"):
-        background.add_task(hub_from_request(request).broadcast_message, room_code.upper(),
-                            {"type": "project.snapshot", "data": result["update"]})
-    return result
+    raise HTTPException(426, detail={'code': 'CLIENT_UPDATE_REQUIRED', 'message': '请刷新页面，比赛已升级为连续步骤传输。'})
 
 
 @router.post("/competitions/{room_code}/games/current/result/confirm")
