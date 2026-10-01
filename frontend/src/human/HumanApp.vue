@@ -42,7 +42,7 @@
                 <div v-else class="gate-card" role="status">
                   <button v-if="gate === 'ended'" class="gate-dismiss" type="button" :aria-label="t('关闭')" @click="dismissTerminalOverlay">×</button>
                   <h2>{{ t(gateTitle) }}</h2><p>{{ t(gateDescription) }}</p>
-                  <div class="gate-actions"><button v-if="['network', 'checking', 'other-tab', 'missing'].includes(gate)" class="primary" :disabled="busy" @click="gate === 'other-tab' || !run ? session.activate() : session.retry()">{{ t(busy ? '检查中…' : '重新检查') }}</button>
+                  <div class="gate-actions"><button v-if="['network', 'checking', 'other-tab', 'missing'].includes(gate)" class="primary" :disabled="busy" @click="['other-tab', 'missing'].includes(gate) || !run ? session.activate() : session.retry()">{{ t(busy ? '检查中…' : '重新检查') }}</button>
                     <button v-if="gate === 'paused'" class="primary" @click="session.resume()">{{ t("继续本局") }}</button>
                     <button v-if="gate === 'ended'" class="primary" @click="requestRestart">{{ t("开始新局") }}</button>
                     <button v-if="gate === 'ended'" @click="openLocalReplay">{{ t("回看本局") }}</button>

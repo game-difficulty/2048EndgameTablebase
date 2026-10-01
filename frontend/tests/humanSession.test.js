@@ -44,6 +44,9 @@ mock.module('../src/human/client.js', { namedExports: {
   getStatus: async run => network('status', () => receipt(f.server.get(run.id))),
   json: async (path, { body } = {}) => {
     if (path === '/api/human/runs') {
+      f.creations ||= [];
+      f.creations.push(copy(body));
+      if (f.creationFailure) { const error = f.creationFailure; f.creationFailure = null; throw error; }
       const id = `fixture-${f.server.size}`;
       f.server.set(id, { id, seq: 0, epoch: 1, monitored: false, status: 'active' });
       return { run_id: id, seed: '00000001000000020000000300000004', threshold: f.threshold, epoch: 1 };
@@ -99,6 +102,33 @@ async function move(session) {
 async function cross(session) {
   while (session.run.value.score <= f.threshold) await move(session);
 }
+
+test('restart slot conflict offers explicit replacement of the server active run', async t => {
+  const s = await setup(t);
+  const old = s.run.value.id;
+  f.creationFailure = Object.assign(new Error('slot_exists'), { code: 'slot_exists', detail: { active_id: 'server-orphan' } });
+  await s.restart();
+  assert.equal(s.gate.value, 'missing');
+  assert.match(s.error.value, /明确重开/);
+  assert.equal(s.run.value.id, old, 'keep the local replay after a failed restart');
+  await s.restart();
+  assert.equal(f.creations.at(-1).replace_id, 'server-orphan');
+  assert.equal(s.gate.value, 'ready');
+  assert.notEqual(s.run.value.id, old);
+});
+
+test('missing server slot identity cannot leak across variants', async t => {
+  const s = await setup(t);
+  f.creationFailure = Object.assign(new Error('slot_exists'), { code: 'slot_exists', detail: { active_id: 'missing-2x4' } });
+  await s.activate('2x4');
+  assert.equal(s.gate.value, 'missing');
+  await s.activate('3x3');
+  const previous = s.run.value.id;
+  await s.restart();
+  assert.equal(f.creations.at(-1).replace_id, previous);
+  assert.equal(f.creations.at(-1).variant, '3x3');
+  assert.equal(s.gate.value, 'ready');
+});
 
 test('live checkpoints copy events only at a milestone and do not copy while uploading', async t => {
   const session = await setup(t, Number.MAX_SAFE_INTEGER);

@@ -46,7 +46,10 @@ export function useHumanSession(user, policies) {
   const explain = e => messages[e.code || e.message] || (e.status === 401 ? '登录已失效，请重新登录后检查本地进度。' : '无法连接服务器，请联网后重试。本地棋盘保持不变。');
   const recordError = e => {
     error.value = explain(e);
-    gate.value = fatalCodes.has(e.code || e.message) ? 'rejected' : 'network';
+    if (e.code === 'slot_exists') {
+      missingId = e.detail?.active_id || null;
+      gate.value = 'missing';
+    } else gate.value = fatalCodes.has(e.code || e.message) ? 'rejected' : 'network';
     permitEnd = 0;
   };
   async function commit(value, event) {
@@ -264,7 +267,7 @@ export function useHumanSession(user, policies) {
     generation += 1;
     await stateQueue;
     connectionGraceEnd = 0;
-    release?.(); release = null; permitEnd = 0; variant.value = id; run.value = null; events = new EventBuffer();
+    release?.(); release = null; permitEnd = 0; missingId = null; variant.value = id; run.value = null; events = new EventBuffer();
     try {
       browser ||= await storage.browserId();
       release = await storage.acquireSlot(slot());
@@ -303,8 +306,7 @@ export function useHumanSession(user, policies) {
         }, { grace: true });
       } else await createLocked();
     } catch (e) {
-      if (e.code === 'slot_exists') { missingId = e.detail.active_id; gate.value = 'missing'; error.value = messages.slot_exists; }
-      else if (e.message === 'local_storage_failed') { gate.value = 'storage'; error.value = messages.local_storage_failed; }
+      if (e.message === 'local_storage_failed') { gate.value = 'storage'; error.value = messages.local_storage_failed; }
       else recordError(e);
     } finally { busy.value = false; }
   }
@@ -394,7 +396,7 @@ export function useHumanSession(user, policies) {
     if (busy.value || !release) return;
     busy.value = true;
     try {
-      const previous = run.value?.id || missingId;
+      const previous = missingId || run.value?.id;
       // Finish this run's writer/checkpoint request before releasing its server slot.
       // Historical full replay uploads do not delay starting the replacement run.
       if (networkJob?.generation === generation) await networkJob.promise;
