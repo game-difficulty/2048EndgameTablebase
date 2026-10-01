@@ -12,10 +12,10 @@
         <i v-for="col in [1, 2]" :key="`exit-${col}`" :style="position(4, col)" />
         <span class="entry-label">{{ t('入口', 'IN') }}</span><span class="exit-label">{{ t('出口 ↓', 'OUT ↓') }}</span>
       </div>
-      <div v-if="visualCargo" :key="visualCargo.id" :class="['special-cargo', { instant: cargoInstant }]" :style="cargoPosition(visualCargo)">
+      <div v-if="visualCargo" :key="visualCargo.id" :class="['special-cargo', { instant: cargoInstant, 'cao-cargo': visualCargo.shape === 0 }]" :style="cargoPosition(visualCargo)">
         <span v-for="(cell, index) in shapeCells(visualCargo)" :key="index" class="cargo-cell" :style="partPosition(cell)" />
         <span v-for="(bridge, index) in bridges(visualCargo)" :key="`bridge-${index}`" class="cargo-bridge" :style="bridge" />
-        <strong :style="cargoLabelStyle(visualCargo)">◆</strong>
+        <strong :style="cargoLabelStyle(visualCargo)">{{ visualCargo.shape === 0 ? '曹' : '◆' }}</strong>
       </div>
     </div>
     <small>{{ payload.move_count || 0 }} {{ t('步', 'moves') }}</small>
@@ -150,4 +150,7 @@ onBeforeUnmount(() => { ++epoch; clearTimers(); clearInterval(timer); });
 .live-port{position:absolute;inset:0;z-index:5;pointer-events:none}.live-port i{border:1px dashed #9d8658}.live-port span{position:absolute;left:50%;transform:translateX(-50%);color:#d8bd69;font-size:9px;white-space:nowrap}.entry-label{top:0}.exit-label{bottom:0}
 .special-cargo{position:absolute;z-index:4;background:transparent;transition:left .1s ease-in-out,top .1s ease-in-out}.special-cargo.instant{transition:none}.cargo-cell,.cargo-bridge{position:absolute;background:#448d8a}.cargo-cell{border-radius:5px}.special-cargo strong{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#fff;font-size:25px;text-shadow:0 1px 2px #234}.cargo-live-shell>small{text-align:center;color:#94a3b8}
 @keyframes pop{50%{transform:scale(1.2)}}@keyframes appear{from{transform:scale(0);opacity:0}}
+.special-cargo.cao-cargo{background:#d8ab5d;border-radius:5px}
+.cao-cargo .cargo-cell,.cao-cargo .cargo-bridge{visibility:hidden}
+.special-cargo.cao-cargo strong{color:#50371b;font-weight:800;line-height:1;text-shadow:none}
 </style>
