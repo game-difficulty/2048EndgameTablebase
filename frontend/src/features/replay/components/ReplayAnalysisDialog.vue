@@ -2,14 +2,13 @@
   <teleport to="body">
     <div
       v-if="open"
-      class="fixed inset-0 z-[220] flex items-center justify-center bg-black/35 px-4 py-8 backdrop-blur-sm"
+      class="analysis-dialog-overlay"
       @click.self="$emit('close')"
     >
-      <div class="analysis-dialog-shell w-full max-w-5xl overflow-hidden rounded-[30px] border border-border-main bg-bg-card shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+      <div role="dialog" aria-modal="true" aria-labelledby="replay-analysis-title" :class="['analysis-dialog-shell', { 'analysis-dialog-shell--history': historyMode }]">
         <div class="analysis-dialog-header flex items-center justify-between border-b border-border-main/60 px-6 py-4">
           <div class="min-w-0">
-            <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.windowTag') }}</div>
-            <div class="mt-1 text-2xl font-black text-text-main">{{ $t('analysis.title') }}</div>
+            <div id="replay-analysis-title" class="analysis-dialog-title">{{ historyMode ? (String(locale).startsWith('zh') ? '分析历史' : 'Analysis history') : $t('analysis.title') }}</div>
           </div>
           <div class="flex min-w-0 items-center gap-3">
             <button
@@ -18,7 +17,10 @@
             >
               {{ historyMode ? $t('analysis.title') : (String(locale).startsWith('zh') ? '分析历史' : 'History') }}
             </button>
-            <span :class="[statusBadgeClass, 'badge-state-compact']" :title="statusBadgeText">{{ statusBadgeText }}</span>
+            <button v-if="historyMode" type="button" class="analysis-header-refresh" :title="String(locale).startsWith('zh') ? '刷新历史' : 'Refresh history'" :aria-label="String(locale).startsWith('zh') ? '刷新历史' : 'Refresh history'" @click="historyPanelRef?.refresh()">
+              <RefreshCw :size="18" aria-hidden="true" />
+            </button>
+            <span v-else :class="[statusBadgeClass, 'badge-state-compact']" :title="statusBadgeText">{{ statusBadgeText }}</span>
             <button
               class="rounded-full border border-border-main bg-bg-main/80 px-3 py-1.5 ui-control font-black uppercase tracking-wider text-text-main transition-colors hover:border-accent/40 hover:text-accent"
               @click="$emit('close')"
@@ -28,11 +30,11 @@
           </div>
         </div>
 
-        <div v-if="historyMode" class="p-6">
-          <AnalysisHistoryPanel :language="String(locale)" />
+        <div v-if="historyMode" class="analysis-history-view">
+          <AnalysisHistoryPanel ref="historyPanelRef" :language="String(locale)" />
         </div>
         <div v-else class="analysis-dialog-body grid grid-cols-[minmax(340px,0.95fr)_minmax(0,1.05fr)] gap-5 p-6">
-          <section class="rounded-[24px] border border-border-main/70 bg-bg-main/65 p-5 shadow-inner">
+          <section class="analysis-input-section">
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.input.title') }}</div>
             <div class="mt-4 space-y-4">
               <div class="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
@@ -97,7 +99,7 @@
               <div>
                 <div class="mb-2 ui-caption font-black uppercase tracking-[0.22em] text-text-secondary">{{ $t('analysis.input.paths') }}</div>
                 <textarea
-                  v-model="pathsInput"
+                  :value="displayPaths"
                   readonly
                   spellcheck="false"
                   class="analysis-textarea"
@@ -130,13 +132,13 @@
             </div>
           </section>
 
-          <section class="rounded-[24px] border border-border-main/70 bg-bg-main/65 p-5 shadow-inner">
+          <section class="analysis-results-section">
             <div class="flex items-center justify-between">
               <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.progress.title') }}</div>
               <span :class="[statusBadgeClass, 'badge-state-compact']" :title="statusBadgeText">{{ statusBadgeText }}</span>
             </div>
 
-            <div class="mt-4 rounded-2xl border border-border-main bg-bg-card/85 p-4">
+            <div class="analysis-progress-summary">
               <div class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
                 <div class="min-w-0">
                   <div class="ui-caption font-black uppercase tracking-[0.22em] text-text-secondary">{{ $t('analysis.progress.currentFile') }}</div>
@@ -158,29 +160,23 @@
               </div>
             </div>
 
-            <div class="mt-4 rounded-2xl border border-border-main bg-bg-card/85 p-4">
+            <div class="analysis-results-list">
               <div
                 v-if="visibleEntries.length"
-                ref="listViewportRef"
                 class="analysis-list-viewport"
-                @scroll="handleListScroll"
+                tabindex="0"
+                :aria-label="$t('analysis.progress.title')"
               >
-                <div :style="{ height: `${topSpacerHeight}px` }" />
                 <div
                   v-for="entry in visibleEntries"
                   :key="entry.key"
                   class="analysis-list-row"
                 >
-                  <div class="min-w-0">
-                    <div class="truncate ui-body font-black text-text-main" :title="entry.path">{{ entry.path }}</div>
+                  <div class="analysis-entry-content">
+                    <div class="analysis-entry-title">{{ entry.label }}</div>
+                    <div class="analysis-entry-meta">{{ entry.variant?.replace('x', '×') }}{{ entry.variant ? ' · ' : '' }}{{ selectedPattern }}-{{ selectedTarget }}</div>
                     <div v-if="entry.message" class="mt-0.5 truncate ui-caption font-black text-red-500/85" :title="userError(entry.message)">{{ userError(entry.message) }}</div>
-                    <div v-if="entry.artifacts?.length" class="mt-1 flex flex-wrap gap-1">
-                      <button v-for="artifact in entry.artifacts" :key="artifact.artifact_id" type="button"
-                        class="rounded-md border border-border-main px-2 py-1 ui-caption font-black text-text-main"
-                        @click="openAnalysisReplay(artifact.artifact_id)">
-                        {{ String(locale).startsWith('zh') ? '回放阶段' : 'Replay stage' }} {{ artifact.segment_index + 1 }} ↗
-                      </button>
-                    </div>
+                    <AnalysisStageList v-if="entry.artifacts?.length" :artifacts="entry.artifacts" :language="String(locale)" :opening="openingArtifact" @open="artifact => openAnalysisReplay(artifact.artifact_id)" />
                   </div>
                   <div
                     class="badge-state"
@@ -189,7 +185,6 @@
                     {{ getEntryStatusLabel(entry.status) }}
                   </div>
                 </div>
-                <div :style="{ height: `${bottomSpacerHeight}px` }" />
               </div>
               <div v-else class="rounded-xl border border-dashed border-border-main/60 bg-bg-main/50 px-3 py-5 text-center ui-control font-black uppercase tracking-[0.18em] text-text-secondary">
                 {{ $t('analysis.progress.empty') }}
@@ -203,13 +198,16 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
+import { RefreshCw } from '@lucide/vue';
 import { useI18n } from 'vue-i18n';
 import { openAsyncLink } from '../../../services/openAsyncLink.js';
 import { userError } from '../../../services/errors/userError.js';
 
 import UiSelect from '../../../components/UiSelect.vue';
 import AnalysisHistoryPanel from '../../../components/AnalysisHistoryPanel.vue';
+import AnalysisStageList from './AnalysisStageList.vue';
+import { analysisScoreLabel, replayDisplayName } from '../analysisPresentation.js';
 import { downloadResponse, pickBrowserFiles, postMultipart } from '../../../services/files/browserFiles';
 import { useAuthState } from '../../../services/auth/authState';
 import { emitTokenBalanceUpdated } from '../../../services/auth/authEvents';
@@ -256,19 +254,16 @@ const doneCount = ref(0);
 const failedCount = ref(0);
 const currentFile = ref('');
 const entries = ref([]);
-const listViewportRef = ref(null);
-const listScrollTop = ref(0);
+const openingArtifact = ref('');
 const analysisError = ref('');
 const isDownloading = ref(false);
 const activeJobId = ref('');
 const historyMode = ref(false);
+const historyPanelRef = ref(null);
 
 let client = null;
 let pollTimer = null;
 let subscribedJobId = '';
-const LIST_ITEM_HEIGHT = 62;
-const LIST_VIEWPORT_HEIGHT = 312;
-const LIST_OVERSCAN = 4;
 const ACTIVE_ANALYSIS_JOB_KEY = '2048tables:analysis-active-job:v1';
 const ANALYSIS_POLL_INTERVAL_MS = 2500;
 
@@ -298,7 +293,8 @@ const targetOptions = computed(() =>
   }))
 );
 
-const currentFileDisplay = computed(() => currentFile.value || t('analysis.progress.idle'));
+const currentFileDisplay = computed(() => currentFile.value ? replayDisplayName(currentFile.value, String(locale.value).startsWith('zh') ? '当前对局' : 'Current game') : t('analysis.progress.idle'));
+const displayPaths = computed(() => pathsInput.value ? pathsInput.value.split('\n').map((name, index) => replayDisplayName(name, `${String(locale.value).startsWith('zh') ? '对局' : 'Game'} ${index + 1}`)).join('\n') : '');
 const progressPercent = computed(() => {
   if (totalCount.value <= 0) return 0;
   return Math.max(0, Math.min(100, (completedCount.value / totalCount.value) * 100));
@@ -308,6 +304,8 @@ const normalizedEntries = computed(() =>
   entries.value.map((entry, index) => ({
     key: `${entry.filename || entry.path}-${entry.status}-${index}`,
     path: entry.filename || entry.path,
+    label: analysisScoreLabel(entry.score, locale.value) || replayDisplayName(entry.filename || entry.path, `${String(locale.value).startsWith('zh') ? '对局' : 'Game'} ${index + 1}`),
+    variant: entry.variant,
     status: entry.status,
     message: entry.message || '',
     artifacts: entry.artifacts || [],
@@ -315,6 +313,7 @@ const normalizedEntries = computed(() =>
 );
 
 async function openAnalysisReplay(artifactId) {
+  openingArtifact.value = artifactId;
   try {
     await openAsyncLink(async () => {
     const response = await fetch(getBackendUrl(`/api/analysis/replays/${encodeURIComponent(artifactId)}/open-link`), {
@@ -326,20 +325,11 @@ async function openAnalysisReplay(artifactId) {
     });
   } catch {
     analysisError.value = String(locale.value).startsWith('zh') ? '回放暂时无法打开。' : 'The replay cannot be opened right now.';
+  } finally {
+    openingArtifact.value = '';
   }
 }
-const visibleCount = computed(() => Math.ceil(LIST_VIEWPORT_HEIGHT / LIST_ITEM_HEIGHT) + LIST_OVERSCAN * 2);
-const startIndex = computed(() =>
-  Math.max(0, Math.floor(listScrollTop.value / LIST_ITEM_HEIGHT) - LIST_OVERSCAN)
-);
-const endIndex = computed(() =>
-  Math.min(normalizedEntries.value.length, startIndex.value + visibleCount.value)
-);
-const visibleEntries = computed(() => normalizedEntries.value.slice(startIndex.value, endIndex.value));
-const topSpacerHeight = computed(() => startIndex.value * LIST_ITEM_HEIGHT);
-const bottomSpacerHeight = computed(() =>
-  Math.max(0, (normalizedEntries.value.length - endIndex.value) * LIST_ITEM_HEIGHT)
-);
+const visibleEntries = normalizedEntries;
 
 const statusBadgeText = computed(() => {
   if (isRunning.value) return t('analysis.progress.running');
@@ -689,11 +679,6 @@ const restoreStoredAnalysisJob = () => {
   }
 };
 
-const handleListScroll = (event) => {
-  const target = event.target;
-  if (!(target instanceof HTMLElement)) return;
-  listScrollTop.value = target.scrollTop;
-};
 
 const startAnalysis = async () => {
   if (!requireAuth()) return;
@@ -711,8 +696,6 @@ const startAnalysis = async () => {
   subscribedJobId = '';
   stopAnalysisPolling();
   clearStoredAnalysisJob();
-  listScrollTop.value = 0;
-  if (listViewportRef.value) listViewportRef.value.scrollTop = 0;
   try {
     const payload = await postMultipart('/api/analysis/jobs', {
       files: selectedFiles.value,
@@ -770,8 +753,6 @@ const handleMessage = (message) => {
   if (message.type === 'ANALYSIS_STARTED') {
     applyAnalysisJobPayload({ ...(message.payload || {}), status: message.payload?.status || 'running' });
     startAnalysisPolling();
-    listScrollTop.value = 0;
-    if (listViewportRef.value) listViewportRef.value.scrollTop = 0;
     return;
   }
 
@@ -829,6 +810,7 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
+      historyMode.value = false;
       userSelectionTouched.value = false;
       document.addEventListener('click', closePatternMenuOnClick);
       loadCatalog();
@@ -875,28 +857,81 @@ onUnmounted(() => {
   stopAnalysisPolling();
 });
 
-onMounted(() => {
-  listScrollTop.value = 0;
-});
 </script>
 
 <style scoped>
+.analysis-dialog-overlay { position: fixed; inset: 0; z-index: 220; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, 0.4); }
 .analysis-dialog-shell {
   display: flex;
-  max-height: calc(100vh - 4rem);
+  width: 100%;
+  max-width: 1024px;
+  height: 780px;
+  max-height: calc(100vh - 32px);
   min-height: 0;
   flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-main);
+  border-radius: 12px;
+  background: var(--bg-card);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.analysis-dialog-shell--history {
+  max-height: calc(100vh - 32px);
 }
 
 .analysis-dialog-header {
   flex: 0 0 auto;
+  gap: 12px;
+  flex-wrap: wrap;
 }
+.analysis-dialog-title { font-size: 20px; font-weight: 800; color: var(--text-main); }
 
 .analysis-dialog-body {
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
   min-height: 0;
   flex: 1 1 auto;
-  overflow-y: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
+}
+.analysis-input-section, .analysis-results-section { min-width: 0; padding: 0; }
+.analysis-input-section { overflow-y: auto; border-right: 1px solid var(--border-main); padding-right: 20px; }
+.analysis-results-section { display: flex; flex-direction: column; min-height: 0; }
+.analysis-progress-summary { flex: 0 0 auto; margin-top: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-main); }
+.analysis-results-list { display: flex; flex: 1 1 auto; min-height: 0; margin-top: 16px; }
+.analysis-entry-content { min-width: 0; flex: 1; }
+
+.analysis-history-view {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.analysis-header-refresh {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-main);
+  border-radius: 8px;
+  background: var(--bg-main);
+  color: var(--text-main);
+}
+
+.analysis-header-refresh:hover {
+  color: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .analysis-history-view { padding: 0.75rem; }
+  .analysis-dialog-body { display: block; padding: 16px; overflow-y: auto; }
+  .analysis-input-section { overflow: visible; border-right: 0; padding-right: 0; border-bottom: 1px solid var(--border-main); padding-bottom: 16px; }
+  .analysis-results-section { margin-top: 20px; }
+  .analysis-results-list { flex: 0 0 auto; }
 }
 
 .analysis-input-btn,
@@ -985,19 +1020,39 @@ onMounted(() => {
 }
 
 .analysis-list-viewport {
-  height: 312px;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 6px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-main) transparent;
 }
 
 .analysis-list-row {
   display: flex;
-  height: 62px;
-  align-items: center;
+  flex: 0 0 auto;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
-  border-radius: 0.75rem;
+  border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--border-main) 60%, transparent);
   background: color-mix(in srgb, var(--bg-main) 65%, transparent);
   padding: 0.5rem 0.75rem;
+}
+.analysis-list-row > :first-child { flex: 1; }
+.analysis-list-row > .badge-state { flex: 0 0 auto; }
+.analysis-entry-title { margin-bottom: 8px; overflow-wrap: anywhere; font-size: 14px; font-weight: 700; color: var(--text-main); }
+.analysis-entry-meta { margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); }
+.analysis-input-btn, .analysis-secondary-btn, .analysis-primary-btn, .analysis-textarea,
+:deep(.analysis-select-trigger) { border-radius: 8px; letter-spacing: 0; }
+.analysis-list-viewport::-webkit-scrollbar { width: 8px; }
+.analysis-list-viewport::-webkit-scrollbar-thumb { border: 2px solid var(--bg-card); border-radius: 8px; background: var(--border-main); }
+@media (max-width: 640px) {
+  .analysis-list-viewport { height: auto; max-height: 460px; }
 }
 </style>

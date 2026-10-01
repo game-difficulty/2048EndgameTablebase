@@ -15,6 +15,7 @@
 }
 
 :root {
+  color-scheme: light;
   color: #776e65;
   background: #faf8ef;
   font-family: "Clear Sans", "Helvetica Neue", Arial, sans-serif;
@@ -27,6 +28,61 @@
   --line: rgba(119, 110, 101, 0.18);
   --shadow: 0 16px 40px rgba(119, 110, 101, 0.12);
 }
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  color: #f8fafc;
+  background: #0f172a;
+  --primary: #334155;
+  --board: #1e293b;
+  --cell: #334155;
+  --paper: #1e293b;
+  --line: #475569;
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.24);
+}
+
+:root[data-theme="dark"] body { background: #0f172a; }
+:root[data-theme="dark"] .eyebrow,
+:root[data-theme="dark"] .file-name,
+:root[data-theme="dark"] .stat-card span,
+:root[data-theme="dark"] .timeline-header small,
+:root[data-theme="dark"] .timeline-empty,
+:root[data-theme="dark"] .board-placeholder small,
+:root[data-theme="dark"] .progress-labels,
+:root[data-theme="dark"] .timing-note,
+:root[data-theme="dark"] .speed-option small { color: #94a3b8; }
+:root[data-theme="dark"] .stat-card,
+:root[data-theme="dark"] .timeline-panel,
+:root[data-theme="dark"] .modal,
+:root[data-theme="dark"] .speed-option { color: #f8fafc; background: #1e293b; }
+:root[data-theme="dark"] .stat-card-accent { background: #164e63; }
+:root[data-theme="dark"] .stat-card-accent span { color: #bae6fd; }
+:root[data-theme="dark"] .board-placeholder { color: #f8fafc; }
+:root[data-theme="dark"] .placeholder-mark { color: #64748b; }
+:root[data-theme="dark"] .timeline-header,
+:root[data-theme="dark"] .speed-option { border-color: #475569; }
+:root[data-theme="dark"] .node-time { background: #273449; }
+:root[data-theme="dark"] .node-time.is-reached { color: #f8fafc; background: #334155; }
+:root[data-theme="dark"] .node-timeline { scrollbar-color: #64748b transparent; }
+:root[data-theme="dark"] .board-code-inline { color: #cbd5e1; }
+:root[data-theme="dark"] .board-code-inline:focus,
+:root[data-theme="dark"] .icon-button,
+:root[data-theme="dark"] .input-with-unit { color: #f8fafc; background: #334155; }
+:root[data-theme="dark"] .progress-track { background: #334155; }
+:root[data-theme="dark"] .progress-fill { background: #38bdf8; }
+:root[data-theme="dark"] input[type="range"]::-webkit-slider-thumb { background: #38bdf8; }
+:root[data-theme="dark"] input[type="range"]::-moz-range-thumb { background: #38bdf8; }
+:root[data-theme="dark"] .control-buttons button { background: #334155; }
+:root[data-theme="dark"] .control-buttons .play-button { color: #082f49; background: #38bdf8; }
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] input[type="number"] { color: #f8fafc; background: #0f172a; border-color: #475569; }
+:root[data-theme="dark"] .speed-option input { accent-color: #38bdf8; }
+:root[data-theme="dark"] .drop-hint { color: #f8fafc; background: rgba(15, 23, 42, 0.94); border-color: #38bdf8; }
+:root[data-theme="dark"] .modal::backdrop { background: rgba(0, 0, 0, 0.6); }
+:root[data-theme="dark"] .error-message { color: #fecaca; background: #451a1a; border-color: #f87171; }
+:root[data-theme="dark"] button:focus-visible,
+:root[data-theme="dark"] input:focus-visible,
+:root[data-theme="dark"] textarea:focus-visible { outline-color: #38bdf8; }
 
 * {
   box-sizing: border-box;

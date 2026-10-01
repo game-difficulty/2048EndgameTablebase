@@ -89,6 +89,11 @@ def test_publish_replay_and_keep_history_when_artifact_is_pruned(tmp_path):
             db.execute("UPDATE analysis_history_jobs SET subject_user_id=2 WHERE job_id='job'")
             db.execute("UPDATE analysis_history_items SET score=7357 WHERE id=1")
             db.execute("UPDATE analysis_history_items SET source_run_id='missing-source' WHERE id=1")
+        payload = analysis_job_payload(job)
+        assert payload["entries"][0]["score"] == 7357
+        assert payload["entries"][0]["variant"] == "4x4"
+        from backend.analysis_history import job_item_metadata
+        assert job_item_metadata("job", 2) == {}
         with TestClient(app) as client, patch("backend.analysis_history.current_user_from_request", return_value={"id": 1}):
             for fit, expected in ((1.0, "100.0%"), (0.0, "0.0%"), (None, "—")):
                 with auth_db() as db:

@@ -107,7 +107,7 @@
 
   function tileClass(value) {
     if (value <= 65536) return `value-${value}`;
-    return 'value-super';
+    return `value-super value-${value}`;
   }
 
   function setTileAppearance(tile, exponent, extraClass = '') {

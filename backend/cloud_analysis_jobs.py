@@ -659,9 +659,10 @@ def get_analysis_job(job_id: str, user_id: int | None = None) -> AnalysisJob:
 
 
 def analysis_job_payload(job: AnalysisJob) -> dict[str, Any]:
-    from .analysis_history import job_artifacts
+    from .analysis_history import job_artifacts, job_item_metadata
     persisted_artifacts = job_artifacts(job.job_id, job.user_id) if job.entries else {}
-    entries = [{**entry, "artifacts": persisted_artifacts.get(index, entry.get("artifacts", []))}
+    metadata = job_item_metadata(job.job_id, job.user_id) if job.entries else {}
+    entries = [{**entry, **metadata.get(index, {}), "artifacts": persisted_artifacts.get(index, entry.get("artifacts", []))}
                for index, entry in enumerate(job.entries)]
     download_url = (
         f"/api/analysis/jobs/{job.job_id}/download"

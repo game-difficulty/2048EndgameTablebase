@@ -536,6 +536,20 @@ def _artifact_payload(row) -> dict:
     }
 
 
+def job_item_metadata(job_id: str, user_id: int) -> dict[int, dict]:
+    with auth_db() as db:
+        init_schema(db)
+        rows = db.execute("""SELECT i.work_index,i.score,i.variant,i.source_run_id
+            FROM analysis_history_items i JOIN analysis_history_jobs j ON j.job_id=i.job_id
+            WHERE j.job_id=? AND j.user_id=?""", (job_id, int(user_id))).fetchall()
+    source = _source_run_details([row['source_run_id'] for row in rows
+                                  if row['score'] is None or not row['variant']])
+    return {row['work_index']: {
+        'score': row['score'] if row['score'] is not None else source.get(row['source_run_id'], {}).get('score'),
+        'variant': row['variant'] or source.get(row['source_run_id'], {}).get('variant'),
+    } for row in rows}
+
+
 def job_artifacts(job_id: str, user_id: int) -> dict[int, list[dict]]:
     """Read persisted stage metadata, including results from older job manifests."""
     with auth_db() as db:

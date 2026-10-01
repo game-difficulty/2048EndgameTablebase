@@ -1,92 +1,152 @@
 <template>
-  <section class="analysis-history-panel">
-    <div class="analysis-history-toolbar">
-      <strong>{{ text('分析历史', 'Analysis history') }}</strong>
-      <button type="button" :disabled="loading" @click="load(true)">{{ text('刷新', 'Refresh') }}</button>
-    </div>
-    <p v-if="error" class="analysis-history-error">{{ error }}</p>
-    <p v-else-if="loading && !jobs.length" class="analysis-history-empty">{{ text('正在加载…', 'Loading…') }}</p>
-    <p v-else-if="!jobs.length" class="analysis-history-empty">{{ text('暂无分析记录', 'No analysis history yet') }}</p>
-    <div v-for="job in jobs" :key="job.job_id" class="analysis-history-job">
-      <button type="button" class="analysis-history-job-head" @click="toggle(job)">
-        <span><b>{{ originLabel(job.origin) }}</b><small>{{ formatTime(job.created_at) }}</small></span>
-        <span>{{ job.done }}/{{ job.total }} · {{ statusLabel(job.status) }}　{{ job.open ? '−' : '+' }}</span>
+  <section class="analysis-history-panel" tabindex="0" :aria-label="text('分析历史', 'Analysis history')">
+    <p v-if="error" class="analysis-history-message analysis-history-error" role="alert">{{ error }}</p>
+    <p v-else-if="loading && !jobs.length" class="analysis-history-message">{{ text('正在加载…', 'Loading…') }}</p>
+    <p v-else-if="!jobs.length" class="analysis-history-message">{{ text('暂无分析记录', 'No analysis history yet') }}</p>
+
+    <article v-for="job in jobs" :key="job.job_id" class="analysis-history-job">
+      <button type="button" class="analysis-history-job-head" :aria-expanded="Boolean(job.open)" @click="toggle(job)">
+        <span class="analysis-history-job-heading">
+          <strong>{{ originLabel(job.origin) }}</strong>
+          <small>{{ formatTime(job.created_at) }}</small>
+        </span>
+        <span class="analysis-history-job-summary">
+          <span>{{ job.done }}/{{ job.total }}</span>
+          <span>{{ statusLabel(job.status) }}</span>
+          <ChevronDown :size="17" :class="{ 'analysis-history-chevron-open': job.open }" aria-hidden="true" />
+        </span>
       </button>
+
       <div v-if="job.open" class="analysis-history-items">
-        <p v-if="job.detailLoading" class="analysis-history-empty">{{ text('正在读取阶段…', 'Loading stages…') }}</p>
-        <template v-for="item in job.items || []" :key="item.id">
+        <p v-if="job.detailLoading" class="analysis-history-message">{{ text('正在读取阶段…', 'Loading stages…') }}</p>
+        <section v-for="item in job.items || []" :key="item.id" class="analysis-history-item">
           <div class="analysis-history-item-title">
-            <span>{{ item.pattern }} · {{ item.target }}</span><small>{{ item.source_filename }}</small>
+            <strong>{{ itemLabel(item) }}</strong>
+            <span>{{ modeLabel(item.variant) }} · {{ item.pattern }}-{{ item.target }}</span>
           </div>
-          <div v-if="item.artifacts?.length" class="analysis-history-stages">
-            <button v-for="artifact in item.artifacts" :key="artifact.artifact_id" type="button"
-              :disabled="!artifact.available || opening === artifact.artifact_id" @click="openReplay(artifact)">
-              {{ text('阶段', 'Stage') }} {{ artifact.segment_index + 1 }}
-              <small>{{ artifact.source_start_index + 1 }}–{{ artifact.source_end_index }}</small>
-            </button>
-          </div>
-          <small v-else class="analysis-history-empty">{{ text('没有可跳转的回放阶段', 'No replay stage is available') }}</small>
-        </template>
+          <AnalysisStageList v-if="item.artifacts?.length" :artifacts="item.artifacts" :language="language" :opening="opening" @open="openReplay" />
+          <small v-else class="analysis-history-empty">{{ item.status === 'failed' ? text('分析失败', 'Analysis failed') : text('没有可跳转的回放阶段', 'No replay stage is available') }}</small>
+        </section>
       </div>
-    </div>
+    </article>
+
     <button v-if="nextCursor" type="button" class="analysis-history-more" :disabled="loading" @click="load(false)">
-      {{ text('下一页', 'Next page') }}
+      {{ text('加载更多', 'Load more') }}
     </button>
   </section>
 </template>
 
 <script setup>
 import { onMounted, ref } from 'vue';
+import { ChevronDown } from '@lucide/vue';
+import AnalysisStageList from '../features/replay/components/AnalysisStageList.vue';
+import { analysisScoreLabel } from '../features/replay/analysisPresentation.js';
 import { openAsyncLink } from '../services/openAsyncLink.js';
 import { authHeaders } from '../services/auth/sessionTokenStore.js';
 import { getBackendUrl } from '../services/runtime/backendUrl.js';
 
 const props = defineProps({ language: { type: String, default: 'zh' } });
-const jobs = ref([]), nextCursor = ref(''), loading = ref(false), error = ref(''), opening = ref('');
+const jobs = ref([]);
+const nextCursor = ref('');
+const loading = ref(false);
+const error = ref('');
+const opening = ref('');
 const text = (zh, en) => String(props.language).startsWith('en') ? en : zh;
 const formatTime = value => new Date(Number(value) * 1000).toLocaleString(String(props.language).startsWith('en') ? 'en-US' : 'zh-CN');
 const originLabel = value => value === 'human_archive' ? text('对局站归档', 'Play archive') : text('主站上传', 'Main-site upload');
 const statusLabel = value => ({ queued: text('等待', 'Queued'), running: text('分析中', 'Running'), finished: text('完成', 'Finished'), partial: text('部分完成', 'Partial'), failed: text('失败', 'Failed') })[value] || value;
+const modeLabel = variant => variant ? String(variant).replace('x', '×') : text('未知模式', 'Unknown mode');
+const itemLabel = item => analysisScoreLabel(item.score, props.language) || text('局分未记录', 'Score unavailable');
+
 async function api(path, init = {}) {
   const response = await fetch(getBackendUrl(path), { credentials: 'include', ...init, headers: authHeaders({ Accept: 'application/json', ...(init.headers || {}) }) });
   if (!response.ok) throw new Error(`${response.status}`);
   return response.json();
 }
+
 async function load(reset) {
   if (loading.value) return;
-  loading.value = true; error.value = '';
+  loading.value = true;
+  error.value = '';
   try {
     const cursor = reset ? '' : nextCursor.value;
     const data = await api(`/api/analysis/history?limit=10${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
     jobs.value = reset ? data.items : [...jobs.value, ...data.items];
     nextCursor.value = data.next_cursor || '';
-  } catch { error.value = text('分析历史读取失败，请稍后重试。', 'Could not load analysis history.'); }
-  finally { loading.value = false; }
+  } catch {
+    error.value = text('分析历史读取失败，请稍后重试。', 'Could not load analysis history.');
+  } finally {
+    loading.value = false;
+  }
 }
+
 async function toggle(job) {
   job.open = !job.open;
   if (!job.open || job.items) return;
   job.detailLoading = true;
-  try { Object.assign(job, await api(`/api/analysis/history/${encodeURIComponent(job.job_id)}`)); }
-  catch { error.value = text('分析详情读取失败。', 'Could not load analysis details.'); }
-  finally { job.detailLoading = false; }
+  try {
+    Object.assign(job, await api(`/api/analysis/history/${encodeURIComponent(job.job_id)}`));
+  } catch {
+    error.value = text('分析详情读取失败。', 'Could not load analysis details.');
+  } finally {
+    job.detailLoading = false;
+  }
 }
+
 async function openReplay(artifact) {
   opening.value = artifact.artifact_id;
   try {
     await openAsyncLink(async () => (await api(`/api/analysis/replays/${encodeURIComponent(artifact.artifact_id)}/open-link`, { method: 'POST' })).url);
-  } catch { error.value = text('回放暂时无法打开。', 'The replay cannot be opened right now.'); }
-  finally { opening.value = ''; }
+  } catch {
+    error.value = text('回放暂时无法打开。', 'The replay cannot be opened right now.');
+  } finally {
+    opening.value = '';
+  }
 }
+
+defineExpose({ refresh: () => load(true), loading });
 onMounted(() => load(true));
 </script>
 
 <style scoped>
-.analysis-history-panel{display:flex;flex-direction:column;gap:10px;max-height:min(66vh,620px);overflow:auto;padding:2px;color:var(--text-main,#463f3a)}
-.analysis-history-toolbar,.analysis-history-job-head,.analysis-history-item-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
-button{border:1px solid var(--border-main,#c9beb1);border-radius:9px;background:var(--bg-card,#fffaf2);color:inherit;padding:8px 11px;font:inherit;cursor:pointer}button:disabled{opacity:.45;cursor:default}
-.analysis-history-job{overflow:hidden;border:1px solid var(--border-main,#c9beb1);border-radius:13px;background:var(--bg-main,#f6efe5)}
-.analysis-history-job-head{width:100%;border:0;border-radius:0;text-align:left}.analysis-history-job-head span:first-child{display:flex;min-width:0;flex-direction:column}.analysis-history-job-head small,.analysis-history-item-title small{color:var(--text-secondary,#7d726a)}
-.analysis-history-items{display:flex;flex-direction:column;gap:8px;padding:10px}.analysis-history-item-title{padding-top:4px}.analysis-history-item-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.analysis-history-stages{display:flex;flex-wrap:wrap;gap:7px}.analysis-history-stages button{display:flex;flex-direction:column;min-width:92px}.analysis-history-empty{margin:6px 0;color:var(--text-secondary,#7d726a)}.analysis-history-error{color:#b43a32}.analysis-history-more{align-self:center}
+.analysis-history-panel {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 8px 2px 2px;
+  color: var(--text-main);
+  scrollbar-color: var(--border-main) transparent;
+  scrollbar-width: thin;
+}
+.analysis-history-panel::-webkit-scrollbar { width: 8px; }
+.analysis-history-panel::-webkit-scrollbar-thumb { border: 2px solid var(--bg-card); border-radius: 8px; background: var(--border-main); }
+.analysis-history-job { flex: 0 0 auto; overflow: hidden; border: 1px solid var(--border-main); border-radius: 8px; background: var(--bg-main); }
+.analysis-history-job-head { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; border: 0; background: transparent; padding: 12px 14px; color: inherit; text-align: left; cursor: pointer; }
+.analysis-history-job-head:hover { background: var(--bg-card); }
+.analysis-history-job-heading { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.analysis-history-job-heading small, .analysis-history-item-title span { color: var(--text-secondary); }
+.analysis-history-job-summary { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; font-size: 0.82rem; }
+.analysis-history-job-summary svg { transition: transform 0.2s ease; }
+.analysis-history-chevron-open { transform: rotate(180deg); }
+.analysis-history-items { display: flex; flex-direction: column; gap: 14px; border-top: 1px solid var(--border-main); padding: 12px 14px 14px; }
+.analysis-history-items, .analysis-history-item { flex: 0 0 auto; }
+.analysis-history-item { min-width: 0; }
+.analysis-history-item-title { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 8px; }
+.analysis-history-item-title strong { font-size: 1rem; }
+.analysis-history-item-title span { font-size: 0.82rem; }
+.analysis-history-message { margin: 6px 0; color: var(--text-secondary); }
+.analysis-history-error { color: #d14c45; }
+.analysis-history-empty { color: var(--text-secondary); }
+.analysis-history-more { align-self: center; margin: 4px 0 10px; border: 1px solid var(--border-main); border-radius: 6px; background: var(--bg-main); padding: 8px 16px; color: inherit; cursor: pointer; }
+.analysis-history-more:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 560px) {
+  .analysis-history-job-head { padding: 10px; }
+  .analysis-history-items { padding: 10px; }
+  .analysis-history-job-summary { gap: 6px; }
+}
 </style>

@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { buildRenderCompat } from './scripts/build-render-compat.mjs'
 import { precompress } from './scripts/precompress.mjs'
 import { buildRelease } from './scripts/build-release.mjs'
+import { replayThemeAssets } from './scripts/replay-theme-assets.mjs'
 
 function liveRoomEntry(req, res, next) {
   if (/^\/(?:live\/)?rooms\//.test(req.url || '') || /^\/lobby\/?(?:\?.*)?$/.test(req.url || '')) req.url = '/live/index.html';
@@ -15,7 +16,7 @@ function liveRoomEntry(req, res, next) {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue(), tailwindcss(), buildRelease(), {
+  plugins: [vue(), tailwindcss(), buildRelease(), replayThemeAssets(), {
     name: 'live-room-entry',
     configureServer(server) { server.middlewares.use(liveRoomEntry); },
     configurePreviewServer(server) { server.middlewares.use(liveRoomEntry); },
