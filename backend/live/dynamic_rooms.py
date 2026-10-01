@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Protocol
@@ -90,6 +91,7 @@ class CompetitionMatchRoomProvider:
                 'subtitle': data.get('subtitle'),
                 'preview': data.get('preview'),
                 'started_at': data.get('started_at'),
+                'expires_at': data.get('expires_at'),
                 'provider': 'competition-match',
             },
         )
@@ -97,21 +99,29 @@ class CompetitionMatchRoomProvider:
     def list_active_rooms(self):
         payload = self._request('/api/internal/live/rooms')
         if payload is None:
+            self._directory_cache = [room for room in self._directory_cache if self._unexpired(room)]
             return list(self._directory_cache)
         definitions = []
         for item in payload.get('rooms') or []:
             try:
-                definitions.append(self._definition(item))
+                definition = self._definition(item)
+                if self._unexpired(definition):
+                    definitions.append(definition)
             except (KeyError, TypeError, ValueError):
                 continue
         self._directory_cache = definitions
         return list(definitions)
 
+    @staticmethod
+    def _unexpired(room):
+        expires = room.metadata.get('expires_at')
+        return expires is None or time.time() < float(expires)
+
     def resolve_room(self, room_id):
         if not room_id.startswith('competition-'):
             return None
         for definition in self._directory_cache:
-            if definition.id == room_id:
+            if definition.id == room_id and self._unexpired(definition):
                 return definition
         for definition in self.list_active_rooms():
             if definition.id == room_id:

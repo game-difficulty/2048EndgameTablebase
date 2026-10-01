@@ -91,7 +91,10 @@ def test_live_directory_starts_at_draw_and_expires_after_result_retention(tmp_pa
             """,
             (ended_at.isoformat(),),
         )
-    assert len(service.list_live_rooms(now=ended_at + timedelta(seconds=59))) == 1
+    retained = service.list_live_rooms(now=ended_at + timedelta(seconds=59))
+    assert len(retained) == 1
+    assert retained[0]['expires_at'] == ended_at.timestamp() + 60
+    assert service.list_live_rooms(now=ended_at + timedelta(seconds=60)) == []
     assert service.list_live_rooms(now=ended_at + timedelta(seconds=61)) == []
 
     with service.database.transaction(immediate=True) as db:
@@ -102,6 +105,12 @@ def test_live_directory_starts_at_draw_and_expires_after_result_retention(tmp_pa
     with pytest.raises(CompetitionError) as captured:
         service.live_projection(public_key)
     assert captured.value.code == "LIVE_ROOM_NOT_FOUND"
+
+
+def test_live_result_retention_cannot_exceed_thirty_minutes(tmp_path):
+    service = CompetitionService(CompetitionDatabase(tmp_path / 'retention.sqlite3'),
+                                 live_result_retention_seconds=7200)
+    assert service.live_result_retention_seconds == 1800
 
 
 def test_project_registry_requires_exact_unique_version() -> None:

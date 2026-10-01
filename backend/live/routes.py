@@ -455,7 +455,7 @@ def resolve_hub(connection=None):
         return hub
     if room_id in ROOMS and room_id in room_hubs:
         return room_hubs[room_id]
-    if room_id in dynamic_hubs:
+    if room_id in dynamic_hubs and dynamic_hubs[room_id].room.content_kind != 'competition-match':
         return dynamic_hubs[room_id]
     return _dynamic_hub(room_id)
 
@@ -590,9 +590,15 @@ async def list_rooms():
 async def lobby(response: Response):
     response.headers['Cache-Control'] = 'public, max-age=5, stale-while-revalidate=5'
     entries = []
-    for definition in await asyncio.to_thread(dynamic_room_registry.list_active_rooms):
+    definitions = await asyncio.to_thread(dynamic_room_registry.list_active_rooms)
+    active_ids = {definition.id for definition in definitions}
+    for definition in definitions:
         _dynamic_hub_from_definition(definition)
     for runtime in [hub, *room_hubs.values(), *dynamic_hubs.values()]:
+        # A connected viewer may keep an expired runtime alive; that is not a
+        # reason to keep advertising the room after its directory entry expires.
+        if runtime.room.dynamic and runtime.room.id not in active_ids:
+            continue
         snapshot = runtime.snapshot()
         if not snapshot.get('online'):
             continue

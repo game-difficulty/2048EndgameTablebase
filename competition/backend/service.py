@@ -112,8 +112,8 @@ class CompetitionService:
         self.ready_preview_seconds = max(0, int(ready_preview_seconds))
         self.lineup_seconds = max(5, int(lineup_seconds))
         self.team_clock_ms = max(30, int(team_clock_seconds)) * 1000
-        self.live_result_retention_seconds = max(
-            60, int(live_result_retention_seconds)
+        self.live_result_retention_seconds = min(
+            1800, max(60, int(live_result_retention_seconds))
         )
         if project_registry is None:
             project_registry = ProjectRegistry()
@@ -1576,12 +1576,9 @@ class CompetitionService:
             "SELECT status FROM competitions WHERE id = ?", (competition_id,)
         ).fetchone()
         next_status = status or (str(current["status"]) if current else "")
-        live_status = next_status not in {
-            CompetitionStatus.CREATED.value,
-            CompetitionStatus.SEATING.value,
-            CompetitionStatus.READY_CHECK.value,
-            CompetitionStatus.CANCELLED.value,
-        }
+        # Only an actual draw starts a live feed. Attendance forfeits may go
+        # straight from seating/readiness to FINISHED without ever starting.
+        live_status = next_status == CompetitionStatus.DRAW.value
         ended = next_status in {
             CompetitionStatus.FINISHED.value,
             CompetitionStatus.CANCELLED.value,
@@ -1866,7 +1863,9 @@ class CompetitionService:
                 """
                 SELECT * FROM competitions
                 WHERE live_started_at IS NOT NULL
-                  AND (live_ended_at IS NULL OR live_ended_at >= ?)
+                  AND EXISTS (SELECT 1 FROM competition_drafts
+                              WHERE competition_id = competitions.id)
+                  AND (live_ended_at IS NULL OR live_ended_at > ?)
                 ORDER BY live_started_at DESC
                 """,
                 (cutoff,),
@@ -1879,11 +1878,13 @@ class CompetitionService:
                 "SELECT * FROM competitions WHERE public_key = ?",
                 (str(public_key),),
             ).fetchone()
-            if room is None or not room["live_started_at"]:
+            if room is None or not room["live_started_at"] or not db.execute(
+                "SELECT 1 FROM competition_drafts WHERE competition_id = ?", (room["id"],)
+            ).fetchone():
                 raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
             if room["live_ended_at"]:
                 ended = parse_time(str(room["live_ended_at"]))
-                if ended and datetime.now(timezone.utc) - ended > timedelta(
+                if ended and datetime.now(timezone.utc) - ended >= timedelta(
                     seconds=self.live_result_retention_seconds
                 ):
                     raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
@@ -1943,6 +1944,11 @@ class CompetitionService:
             },
             "started_at": str(room["live_started_at"]),
             "ended": bool(room["live_ended_at"]),
+            "expires_at": (
+                parse_time(str(room["live_ended_at"])).timestamp()
+                + self.live_result_retention_seconds
+                if room["live_ended_at"] else None
+            ),
         }
 
     def _public_match_projection(

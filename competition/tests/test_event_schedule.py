@@ -67,8 +67,10 @@ def test_one_team_late_is_three_zero_and_idempotent(scheduled):
     assert len(result['match']['results']) == 3
     with service.database.transaction() as db:
         key = service._room_row(db, 'SCHED2')['public_key']
-    projection = service.live_projection(key)
-    assert projection
+    assert service.list_live_rooms() == []
+    with pytest.raises(CompetitionError) as captured:
+        service.live_projection(key)
+    assert captured.value.code == 'LIVE_ROOM_NOT_FOUND'
     assert not service.settle_deadline('SCHED2', now=start+timedelta(minutes=20))
     service.schedule.check_in('SCHED2', Principal(6,'Late'))
     assert service.events.detail(SLUG)['rooms'][0]['series_score'] == {'yellow':3,'white':0}
@@ -83,6 +85,16 @@ def test_both_late_finishes_zero_zero(scheduled):
     assert result['status'] == 'FINISHED'
     assert result['match']['series_points']=={'yellow':0,'white':0}
     assert result['match']['results']==[]
+    with service.database.transaction(immediate=True) as db:
+        room = service._room_row(db, 'SCHED2')
+        assert room['live_started_at'] is None
+        # Previously written erroneous start timestamps must also stay hidden.
+        db.execute('UPDATE competitions SET live_started_at=live_ended_at WHERE id=?', (room['id'],))
+        key = room['public_key']
+    assert service.list_live_rooms(now=start + timedelta(minutes=16)) == []
+    with pytest.raises(CompetitionError) as captured:
+        service.live_projection(key)
+    assert captured.value.code == 'LIVE_ROOM_NOT_FOUND'
 
 
 def test_roster_unlock_does_not_change_scheduled_players(scheduled):

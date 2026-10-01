@@ -3,11 +3,12 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 from backend.live.competition_content import CompetitionMatchContent
 from backend.live.dynamic_rooms import CompetitionMatchRoomProvider
 from backend.live.routes import require_room_capability
+from backend.live import routes
 
 
 def directory_item():
@@ -60,6 +61,33 @@ def test_competition_provider_keeps_directory_during_transient_failure() -> None
     assert [room.id for room in cached] == ['competition-m1234567890abcdef1234']
     with patch.object(provider, '_request', return_value={'rooms': []}):
         assert provider.list_active_rooms() == []
+
+
+def test_ended_room_expires_even_when_source_is_unavailable():
+    provider = CompetitionMatchRoomProvider()
+    item = {**directory_item(), 'expires_at': 1800}
+    with patch('backend.live.dynamic_rooms.time.time', return_value=1799), \
+         patch.object(provider, '_request', return_value={'rooms': [item]}):
+        assert len(provider.list_active_rooms()) == 1
+    with patch('backend.live.dynamic_rooms.time.time', return_value=1800), \
+         patch.object(provider, '_request', return_value=None):
+        assert provider.resolve_room(item['room_id']) is None
+        assert provider.list_active_rooms() == []
+
+
+def test_lobby_does_not_advertise_expired_runtime_with_connected_viewers():
+    room = CompetitionMatchRoomProvider()._definition(directory_item())
+    retained = SimpleNamespace(room=room, viewers={'connected-viewer'},
+                               snapshot=lambda: {'online': True, 'match': projection()})
+    offline = SimpleNamespace(room=SimpleNamespace(dynamic=False), snapshot=lambda: {'online': False})
+    with patch.object(routes, 'hub', offline), patch.object(routes, 'room_hubs', {}), \
+         patch.object(routes, 'dynamic_hubs', {room.id: retained}), \
+         patch.object(routes.dynamic_room_registry, 'list_active_rooms', return_value=[]):
+        assert asyncio.run(routes.lobby(Response()))['rooms'] == []
+        with patch.object(routes.dynamic_room_registry, 'resolve_room', return_value=None):
+            with pytest.raises(HTTPException) as captured:
+                routes.resolve_hub(SimpleNamespace(path_params={'room_id': room.id}))
+            assert captured.value.status_code == 404
 
 
 def test_competition_content_rejects_wrong_generation() -> None:
