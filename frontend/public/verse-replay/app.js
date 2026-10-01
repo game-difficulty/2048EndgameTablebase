@@ -130,6 +130,7 @@
   function createBoard() {
     const replay = state.replay;
     elements.board.innerHTML = '';
+    elements.board.classList.toggle('board-three-by-three', replay.width === 3 && replay.height === 3);
     state.tileElements = [];
     elements.board.style.setProperty('--board-width', replay.width);
     elements.board.style.setProperty('--board-height', replay.height);

@@ -100,7 +100,7 @@ html[data-css-compat="ready"] .pointer-events-none { pointer-events:none; }
 html[data-css-compat="ready"] .board-stage { position:relative;width:100%;max-width:600px;margin-left:auto;margin-right:auto;touch-action:none; }
 html[data-css-compat="ready"] .board-stage::before { content:"";display:block;padding-top:100%; }
 html[data-css-compat="ready"] .board-stage > .board { position:absolute;background:var(--board-bg);border-radius:12px; }
-html[data-css-compat="ready"] .tile-inner { display:flex;align-items:center;justify-content:center;border-radius:8px;font-weight:700; }
+html[data-css-compat="ready"] .tile-inner { display:flex;align-items:center;justify-content:center;border-radius:var(--tile-corner-radius,8px);font-weight:700; }
 html[data-css-compat="ready"] .tile-label { flex-shrink:1; }
 
 /* Structural fallbacks for the first-stage shells, teleported dialogs and chat. */

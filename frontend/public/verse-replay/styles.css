@@ -313,6 +313,20 @@ h2 {
   box-shadow: none;
 }
 
+.board-three-by-three .board-cell,
+.board-three-by-three .tile {
+  border-radius: 3%;
+}
+
+.board.board-three-by-three {
+  padding: 3.6%;
+  gap: 3.88%;
+}
+
+.board-three-by-three .tile span {
+  line-height: 1;
+}
+
 .tile.is-animation-hidden {
   visibility: hidden;
 }

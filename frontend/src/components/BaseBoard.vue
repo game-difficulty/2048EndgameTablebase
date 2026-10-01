@@ -56,6 +56,7 @@
 import { computed, ref } from 'vue';
 import { useBoardAnimation } from './useBoardAnimation.js';
 import { getTileLabelStyle } from './tileLabelStyle.js';
+import { useThreeByThreeTileStyle } from './useThreeByThreeTileStyle.js';
 
 import { boardSwipeDirection } from './boardPointerGesture.js';
 import {
@@ -89,8 +90,12 @@ const props = defineProps({
 
 const boardRef = ref(null);
 const boardViewport = computed(() => createBoardViewport(props.frame?.toBoard, props.isVariant));
-const viewportLayout = computed(() => createBoardViewportLayout(boardViewport.value));
+const viewportLayout = computed(() => createBoardViewportLayout(boardViewport.value,
+  boardViewport.value.rows === 3 && boardViewport.value.cols === 3
+    ? { paddingRatio: 0.036, gapRatio: 0.036 } : undefined));
 const viewportSignature = computed(() => boardViewportSignature(boardViewport.value));
+const threeByThreeStyle = useThreeByThreeTileStyle(boardRef, () => boardViewport.value,
+  element => element.clientWidth * viewportLayout.value.widthPercent * viewportLayout.value.tileWidthPercent / 10000);
 const boardViewportStyle = computed(() => {
   const layout = viewportLayout.value;
   return {
@@ -106,6 +111,7 @@ const boardViewportStyle = computed(() => {
     '--grid-gap-y': `${layout.gapYPercent}%`,
     '--tile-width': `${layout.tileWidthPercent}%`,
     '--tile-height': `${layout.tileHeightPercent}%`,
+    ...threeByThreeStyle.value,
   };
 });
 const { activeTiles } = useBoardAnimation(props, boardViewport, viewportSignature, boardRef);
@@ -282,7 +288,7 @@ const getTileInnerStyle = (tile) => {
 
 .bg-cell {
   background-color: var(--color-empty);
-  border-radius: 0.5rem; /* rounded-lg */
+  border-radius: var(--tile-corner-radius, 0.5rem);
   width: 100%;
   height: 100%;
 }
@@ -303,6 +309,7 @@ const getTileInnerStyle = (tile) => {
 
 /* Inner block */
 .tile-inner {
+  border-radius: var(--tile-corner-radius, 0.5rem);
   width: 100%;
   height: 100%;
   line-height: 1;

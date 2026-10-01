@@ -1,5 +1,5 @@
 <template>
-  <div ref="boardRef" class="human-board" :class="{ editable }" :style="{ '--cols': cols, '--rows': rows, '--human-slide-duration': animate ? '100ms' : '0ms' }"
+  <div ref="boardRef" class="human-board" :class="{ editable }" :style="{ '--cols': cols, '--rows': rows, '--human-slide-duration': animate ? '100ms' : '0ms', ...threeByThreeStyle }"
        role="group" :aria-label="t(`${rows} 行 ${cols} 列棋盘`)" tabindex="0"
        @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="cancel" @lostpointercapture="cancel" @contextmenu.prevent @auxclick.prevent>
     <button v-for="(value, index) in board" :key="index" type="button" class="tile"
@@ -23,12 +23,19 @@ import { t } from './i18n.js';
 import { humanBoardFrame } from './boardAnimation.js';
 import { useBoardAnimation } from '../components/useBoardAnimation.js';
 import { getTileLabelStyle } from '../components/tileLabelStyle.js';
+import { useThreeByThreeTileStyle } from '../components/useThreeByThreeTileStyle.js';
 import { boardSwipeDirection } from '../components/boardPointerGesture.js';
 const props = defineProps({ overlayClass: String, board: Array, rows: Number, cols: Number, transition: Object, editable: Boolean, hide32k: Boolean,
   touchButton: { type: Number, default: 0 }, swipeSensitivity: { type: Number, default: 100 }, animate: { type: Boolean, default: true },
   palette: { type: Object, default: null } });
 const resolvedTileStyle = value => liveAppearanceTileStyle(props.palette, value) || tileStyle(value);
 const boardRef = ref(null);
+const threeByThreeStyle = useThreeByThreeTileStyle(boardRef, () => ({ rows: props.rows, cols: props.cols }), element => {
+  const css = getComputedStyle(element);
+  if (props.rows === 3 && props.cols === 3) return element.clientWidth * (1 - 4 * 0.036) / 3;
+  return (element.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight)
+    - (props.cols - 1) * parseFloat(css.columnGap)) / props.cols;
+});
 let revision = 0;
 const frame = shallowRef(null);
 const viewport = computed(() => ({ rows: props.rows, cols: props.cols, visibleIndices: props.board.map((_,i) => Math.floor(i / props.cols) * 4 + i % props.cols) }));
