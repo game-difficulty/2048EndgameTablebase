@@ -21,6 +21,13 @@ KINDS = {'winner': ('yellow', 'white'), 'first_two': ('2:0', '1:1', '0:2')}
 RULES = 'competition-fpmm-v1'
 
 
+def _initial_reserves(kind):
+    # FPMM marginal probabilities are proportional to inverse reserves.
+    # Two independent fair games give scores 2:0 / 1:1 / 0:2 weights 1:2:1.
+    return {option: INITIAL // 2 if kind == 'first_two' and option == '1:1' else INITIAL
+            for option in KINDS[kind]}
+
+
 def init_schema():
     with auth_db() as db:
         db.executescript('''
@@ -100,11 +107,22 @@ def reconcile(room_id, facts):
                 (id,room_id,public_key,generation,kind,rules,options,reserves,source_sequence,opened_at,minimum_until,status)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (market_id, room_id, facts['match_public_key'], facts['generation'], kind, RULES,
-                 json.dumps(options), json.dumps(dict.fromkeys(ids, INITIAL)), facts['content_sequence'],
+                 json.dumps(options), json.dumps(_initial_reserves(kind)), facts['content_sequence'],
                  window['opened_at'], window['minimum_until'], 'open' if window['open'] else 'closed'))
             market = db.execute('SELECT * FROM competition_prediction_markets WHERE id=?', (market_id,)).fetchone()
             if market['settled_at'] is not None or facts['content_sequence'] < market['source_sequence']:
                 continue
+            if (kind == 'first_two' and not terminal and window['open']
+                    and market['status'] == 'open' and market['revision'] == 0
+                    and json.loads(market['reserves']) == dict.fromkeys(ids, INITIAL)
+                    and not db.execute('SELECT 1 FROM competition_prediction_positions WHERE market_id=?',
+                                       (market_id,)).fetchone()
+                    and not db.execute('SELECT 1 FROM competition_prediction_orders WHERE market_id=?',
+                                       (market_id,)).fetchone()):
+                # Untouched markets may adopt the new prior. Invalidate old quotes;
+                # never reprice inventory after a user has purchased shares.
+                db.execute('UPDATE competition_prediction_markets SET reserves=?,revision=revision+1 WHERE id=?',
+                           (json.dumps(_initial_reserves(kind)), market_id))
             # Closed markets never reopen, even after stale polling or a restart.
             status = 'open' if market['status'] == 'open' and window['open'] else 'closed'
             db.execute('UPDATE competition_prediction_markets SET status=?,source_sequence=? WHERE id=?',

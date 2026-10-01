@@ -1,7 +1,9 @@
 import copy
+import json
 import math
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
@@ -38,6 +40,84 @@ def order(kind='winner', option='yellow', amount=1000, uid=1):
 def balance(uid=1):
     with auth_db() as db:
         return tuple(db.execute('SELECT paid_balance_units,bonus_balance_units FROM token_accounts WHERE user_id=?', (uid,)).fetchone())
+
+
+def test_opening_first_two_probability_weights_are_one_two_one(market):
+    public = p.listing(ROOM)
+    winner = next(item for item in public['markets'] if item['kind'] == 'winner')
+    scores = next(item for item in public['markets'] if item['kind'] == 'first_two')
+    assert [item['marginal_odds'] for item in winner['options']] == [2, 2]
+    assert [item['marginal_odds'] for item in scores['options']] == [4, 2, 4]
+    assert [1 / item['marginal_odds'] for item in scores['options']] == [.25, .5, .25]
+    assert balance() == (200000000, 777000)
+
+
+@pytest.mark.parametrize('option,odds', [('2:0', 4), ('1:1', 2), ('0:2', 4)])
+def test_weighted_first_two_quotes_preserve_product_and_slippage(option, odds):
+    reserves = p._initial_reserves('first_two')
+    stake = 1000 * p.UNIT
+    shares, updated = p.buy(reserves, option, stake)
+    assert stake < shares < odds * stake
+    assert math.prod(updated.values()) >= math.prod(reserves.values())
+    assert p.buy(updated, option, stake)[0] < shares
+
+
+def _restore_equal_first_two_reserves():
+    with auth_db() as db:
+        db.execute("UPDATE competition_prediction_markets SET reserves=? WHERE kind='first_two'",
+                   (json.dumps(dict.fromkeys(p.KINDS['first_two'], p.INITIAL)),))
+
+
+def test_untouched_open_market_adopts_weights_and_invalidates_old_quote(market):
+    _restore_equal_first_two_reserves()
+    old_order = order('first_two', '1:1')
+    before = balance()
+    with pytest.raises(HTTPException, match='competition_prediction_price_changed'):
+        p.place(ROOM, 1, old_order, lambda: market)
+    assert balance() == before
+    scores = next(item for item in p.listing(ROOM)['markets'] if item['kind'] == 'first_two')
+    assert scores['revision'] == 1
+    assert [item['marginal_odds'] for item in scores['options']] == [4, 2, 4]
+    p.reconcile(ROOM, market)
+    assert next(item for item in p.listing(ROOM)['markets'] if item['kind'] == 'first_two')['revision'] == 1
+
+
+def test_existing_equal_market_with_bets_preserves_inventory_and_payout(market):
+    _restore_equal_first_two_reserves()
+    # An order accepted under the previous equal-reserve model.
+    with patch.object(p, 'reconcile'):
+        placed = p.place(ROOM, 1, order('first_two', '1:1'), lambda: market)
+    with auth_db() as db:
+        before = tuple(db.execute("SELECT reserves,revision FROM competition_prediction_markets WHERE kind='first_two'").fetchone())
+    p.reconcile(ROOM, market)
+    with auth_db() as db:
+        assert tuple(db.execute("SELECT reserves,revision FROM competition_prediction_markets WHERE kind='first_two'").fetchone()) == before
+    final = copy.deepcopy(market)
+    final.update(phase='FINISHED', content_sequence=2)
+    final['prediction_window']['open'] = False
+    final['public_result']['games'] = [dict(game_key='A', winner_side='yellow'), dict(game_key='B', winner_side='white')]
+    p.reconcile(ROOM, final)
+    assert balance() == (199000000 + placed['shares'], 777000)
+
+
+def test_closed_or_stale_market_is_not_reinitialized(market):
+    _restore_equal_first_two_reserves()
+    with auth_db() as db:
+        db.execute("UPDATE competition_prediction_markets SET source_sequence=5 WHERE kind='first_two'")
+    p.reconcile(ROOM, market)
+    scores = next(item for item in p.listing(ROOM)['markets'] if item['kind'] == 'first_two')
+    assert scores['revision'] == 0
+    assert [item['marginal_odds'] for item in scores['options']] == [3, 3, 3]
+    market['content_sequence'] = 6
+    market['prediction_window']['open'] = False
+    p.reconcile(ROOM, market)
+    market['content_sequence'] = 7
+    market['prediction_window']['open'] = True
+    p.reconcile(ROOM, market)
+    scores = next(item for item in p.listing(ROOM)['markets'] if item['kind'] == 'first_two')
+    assert scores['status'] == 'closed'
+    assert scores['revision'] == 0
+    assert [item['marginal_odds'] for item in scores['options']] == [3, 3, 3]
 
 
 @pytest.mark.parametrize('count', [2, 3])
