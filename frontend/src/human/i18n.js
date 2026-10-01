@@ -68,7 +68,7 @@ const en = {
   '模式':'Variant', '全部模式':'All variants', '排序':'Sort',
   '时间：最新优先':'Date: newest first', '时间：最早优先':'Date: oldest first',
   '分数：从高到低':'Score: highest first', '分数：从低到高':'Score: lowest first',
-  '暂无可展示记录':'No visible games', '终盘预览':'Final board', '最终盘面':'Final board', '回放分析 ↗':'Analyze replay ↗', '加载更多':'Load more',
+  '暂无可展示记录':'No visible games', '终盘预览':'Final board', '最终盘面':'Final board', '盘面和':'Board sum', '回放分析 ↗':'Analyze replay ↗', '加载更多':'Load more',
   '每页':'Per page', '局':'games', '历史记录分页':'History pagination', '上一页':'Previous page', '下一页':'Next page',
   '第 {0}–{1} 条，共 {2} 条':'{0}–{1} of {2} games',
   '系统设置':'System settings', '游戏与记录':'Game & records', '界面与主题':'Interface & theme',

@@ -558,7 +558,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .history-page-number.active:disabled { opacity: 1; }
 .history-page-ellipsis { color: var(--muted); }
 .history-board-preview { position: fixed; z-index: 100; width: min(272px, calc(100vw - 16px)); padding: 10px; background: #32312f; border: 1px solid var(--line); border-radius: 5px; box-shadow: 0 10px 28px #0008; color: var(--text); }
-.history-board-preview-heading { display: flex; justify-content: space-between; align-items: baseline; margin: 0 2px 8px; font-size: 12px; }
+.history-board-preview-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; white-space: nowrap; margin: 0 2px 8px; font-size: 12px; }
 .history-board-preview-heading span { color: var(--muted); }
 .history-preview-board { --tile-label-small: 19px; --tile-label-medium: 15px; --tile-label-large: 11px; display: grid; width: 100%; grid-template-columns: repeat(var(--preview-cols), minmax(0, 1fr)); gap: 7px; padding: 7px; background: #716e69; border-radius: 3px; }
 .history-preview-cell { display: grid; place-items: center; min-width: 0; min-height: 0; aspect-ratio: 1; border-radius: 2px; font-weight: 700; font-variant-numeric: tabular-nums; }

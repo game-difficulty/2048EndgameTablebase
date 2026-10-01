@@ -67,7 +67,7 @@
     <PlayerSettings v-else-if="tab === 'settings' && isOwner" :play-settings="playSettings" @update:play-settings="$emit('update:play-settings',$event)" />
     <Teleport to="body">
       <div v-if="preview" id="history-board-preview" ref="previewElement" class="history-board-preview" :style="previewPosition" role="region" :aria-label="t('最终盘面')">
-        <div class="history-board-preview-heading"><strong>{{ t('最终盘面') }}</strong><span>{{ preview.variant.replace('x',' × ') }}</span></div>
+        <div class="history-board-preview-heading"><strong>{{ t('最终盘面') }}</strong><span>{{ t('盘面和') }} {{ number(previewBoardSum) }}</span><span>{{ preview.variant.replace('x',' × ') }}</span></div>
         <div class="history-preview-board" :style="{ '--preview-cols': previewDims[1], '--preview-rows': previewDims[0] }">
           <span v-for="(value,index) in preview.board" :key="index" class="history-preview-cell" :style="tileStyle(value)">
             <span v-if="value" class="history-preview-label" :style="previewTileLabelStyle(value)">{{ value }}</span>
@@ -143,6 +143,7 @@ const paginationItems = computed(() => {
   return items;
 });
 const previewDims = computed(() => ({'4x4':[4,4],'3x4':[3,4],'2x4':[2,4],'3x3':[3,3]})[preview.value?.variant] || [4,4]);
+const previewBoardSum = computed(() => (preview.value?.board || []).reduce((sum, value) => sum + (Number(value) || 0), 0));
 let themeObserver, posterResizeObserver, resourcesActive = false, posterGeneration = 0;
 function previewSize(canvas) {
   return bestTenPreviewSize(canvas.parentElement.getBoundingClientRect().width, window.devicePixelRatio || 1);
