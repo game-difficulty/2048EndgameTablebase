@@ -93,7 +93,7 @@ def test_old_duplicate_and_unauthorized_uploads_never_replace_latest_state(tmp_p
 
 
 def test_race_uses_completion_time_not_arrival_order_and_requests_peer_final_state(tmp_path):
-    service, players = setup_game(tmp_path, 'tournament-pure2-full-race-3x3')
+    service, players = setup_game(tmp_path, 'tournament-grand-full-undo-race-3x3')
     first = upload(service, players[0], finished=True, elapsed=8000, outcome='target_reached')['competition']
     assert first['status'] == 'GAME_A_PLAYING'
     peer = service.snapshot('MATCH5', players[3])
@@ -106,7 +106,7 @@ def test_race_uses_completion_time_not_arrival_order_and_requests_peer_final_sta
 
 
 def test_disconnected_race_peer_cannot_block_result_forever(tmp_path):
-    service, players = setup_game(tmp_path, 'tournament-pure2-full-race-3x3')
+    service, players = setup_game(tmp_path, 'tournament-grand-full-undo-race-3x3')
     upload(service, players[0], finished=True, outcome='target_reached')
     with service.database.transaction(immediate=True) as db:
         row = db.execute("SELECT * FROM competition_game_sessions WHERE side='white'").fetchone()
@@ -131,7 +131,7 @@ def test_final_state_has_transport_grace_and_duplicate_terminal_ack_has_snapshot
 
 
 def test_race_final_ack_deadline_does_not_run_during_referee_pause(tmp_path):
-    service, players = setup_game(tmp_path, 'tournament-pure2-full-race-3x3')
+    service, players = setup_game(tmp_path, 'tournament-grand-full-undo-race-3x3')
     upload(service, players[0], finished=True, outcome='target_reached')
     official = player(1, role='admin')
     paused = service.suspend_match('MATCH5', official, reason_code='network_device', reason_text='fixture network pause',
