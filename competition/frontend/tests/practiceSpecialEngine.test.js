@@ -100,6 +100,49 @@ test('a fixed seed reproduces special spawn sequence', () => {
   }
 });
 
+test('chemical color order stays shared when board-dependent spawn timings differ', () => {
+  const project = { id: 'chemical', rows: 4, cols: 4, specialRule: 'chemical', specialSpawnRate: .05 };
+  const a = new PracticeSpecialGame(project, { seed: 'shared-colors' });
+  const b = new PracticeSpecialGame(project, { seed: 'shared-colors' });
+  const colorsA = [], colorsB = [], stepsA = [], stepsB = [];
+  for (let step = 0; step < 10000; step++) {
+    a.tiles = [];
+    b.tiles = [special('existing-a', 'chemical-a', 0), special('existing-b', 'chemical-b', 1)];
+    for (const [game, colors, steps] of [[a, colorsA, stepsA], [b, colorsB, stepsB]]) {
+      const spawned = game.spawn();
+      if (spawned.kind !== 'number') { colors.push(spawned.kind); steps.push(step); }
+    }
+  }
+  assert.ok(colorsB.length > 50);
+  assert.ok(colorsA.length > colorsB.length);
+  assert.notDeepEqual(stepsA.slice(0, stepsB.length), stepsB);
+  assert.deepEqual(colorsA.slice(0, colorsB.length), colorsB);
+  assert.equal(a.randomState, b.randomState, 'colors do not consume numeric spawn tickets');
+  assert.equal(new Set(colorsA).size, 2);
+});
+
+test('ordinary spawns, blocked spawns and ineffective moves do not advance chemical colors; restart continues the sequence', () => {
+  const project = { id: 'chemical', rows: 4, cols: 4, specialRule: 'chemical', specialSpawnRate: 0 };
+  const game = new PracticeSpecialGame(project, { seed: 'colors-only-on-spawn' });
+  const state = game.chemicalColorState;
+  game.tiles = [];
+  assert.equal(game.spawn().kind, 'number');
+  game.tiles = [number('corner', 2, 0)];
+  assert.equal(game.move('left').changed, false);
+  game.tiles = Array.from({ length: 16 }, (_, cell) => number(String(cell), 2, cell));
+  assert.equal(game.spawn(), null);
+  game.reset();
+  assert.equal(game.chemicalColorState, state);
+  game.project = { ...project, specialSpawnRate: 1 };
+  game.tiles = [];
+  assert.ok(game.spawn().kind.startsWith('chemical-'));
+  const advanced = game.chemicalColorState;
+  assert.notEqual(advanced, state);
+  game.project = project;
+  game.reset();
+  assert.equal(game.chemicalColorState, advanced);
+});
+
 test('spawned bombs get varied integer countdowns within the inclusive 12–32 range', () => {
   const project = { id: 'bomb-range', rows: 4, cols: 4, specialRule: 'bomb', specialSpawnRate: 1,
     bombCountdownMin: 12, bombCountdownMax: 32 };

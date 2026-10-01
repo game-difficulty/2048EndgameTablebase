@@ -130,10 +130,12 @@ class ClassicContent:
 
 from .multi_content import MultiAiContent
 from .human_content import HumanPlayContent
+from .competition_content import CompetitionMatchContent
 
 CONTENT_FACTORIES = {('classic-ai', 'classic-step-v1'): ClassicContent,
                      ('classic-multi-ai', 'classic-multi-v1'): MultiAiContent,
-                     ('human-play', 'human-play-v1'): HumanPlayContent}
+                     ('human-play', 'human-play-v1'): HumanPlayContent,
+                     ('competition-match', 'competition-match-v1'): CompetitionMatchContent}
 
 
 def create_content(room):

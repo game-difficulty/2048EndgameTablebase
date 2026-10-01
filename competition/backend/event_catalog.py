@@ -26,9 +26,27 @@ class EventCatalog:
             raise CompetitionError('EVENT_NOT_FOUND', '赛事不存在。', 404)
         return row
 
+    def assign_organizer(self, slug, principal, *, user_id, dry_run=True):
+        if principal.site_role.lower() != 'admin':
+            raise CompetitionError('EVENT_OWNER_ADMIN_REQUIRED', '仅站长可指定赛事举办方。', 403)
+        with self.database.transaction(immediate=True) as db:
+            event = self._event(db, slug)
+            users = self.enrollment.account_reader([user_id])
+            if user_id not in users:
+                raise CompetitionError('EVENT_OWNER_NOT_FOUND', '找不到该用户或账号不可用。', 404)
+            organizer = {'user_id': user_id, 'display_name': users[user_id]}
+            if dry_run:
+                return {'organizer': organizer}
+            db.execute('UPDATE tournament_events SET owner_user_id=? WHERE slug=?', (user_id, slug))
+            self.enrollment._audit(db, slug, principal, 'assign_organizer', {
+                'previous_user_id': event['owner_user_id'], 'user_id': user_id})
+        return {'event': self.detail(slug, principal), 'organizer': organizer}
+
     def _view(self, db, row, principal):
         result = {key: row[key] for key in ('slug', 'name', 'description', 'rules', 'status', 'format_key')} | {
             'can_manage': self._manager(row, principal),
+            'can_assign_organizer': bool(principal and principal.site_role.lower() == 'admin'),
+            'organizer': {'user_id': row['owner_user_id']} if row['owner_user_id'] else None,
             'room_count': db.execute('SELECT COUNT(*) FROM tournament_room_links WHERE event_slug=?',
                                      (row['slug'],)).fetchone()[0],
             'entry_kind': 'team', **FORMATS[row['format_key']],

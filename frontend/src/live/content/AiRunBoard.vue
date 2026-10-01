@@ -63,13 +63,14 @@ async function copy() {
 }
 </script>
 <style scoped>
-.ai-run-card { min-width:0; padding:14px; border:1px solid var(--border-main); border-radius:16px; background:var(--bg-card); }
+.ai-run-card { min-width:0;min-height:0;box-sizing:border-box;display:grid;grid-template-rows:32px 22px minmax(0,1fr) 32px;gap:6px;padding:14px; border:1px solid var(--border-main); border-radius:16px; background:var(--bg-card); }
 .ai-run-card.leader { border-color:var(--accent); }
-header { display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:32px; }
+header { display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:0;overflow:hidden;line-height:1.2; }
+header > div { min-width:0;display:flex;align-items:center;overflow:hidden;white-space:nowrap; }
 .ai-name { font-weight:800;font-size:17px;white-space:nowrap; }
 .leader-badge { margin-left:8px;font-size:10px;color:var(--accent);font-weight:800;white-space:nowrap; }
-.score { font-size:24px;font-variant-numeric:tabular-nums; }
-.run-meta { display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--text-secondary);margin:8px 0 12px; }
+.score { flex:none;font-size:24px;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums; }
+.run-meta { display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;line-height:1.2;color:var(--text-secondary);margin:0;overflow:hidden; }
 .run-meta span:first-child { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .run-meta span:last-child { flex-shrink:0; }
 .board-wrap { position:relative;flex:1;min-height:0;width:100%; }
@@ -80,9 +81,9 @@ header { display:flex;justify-content:space-between;align-items:center;gap:8px;m
 .selectable:focus-visible { outline:3px solid var(--accent);outline-offset:4px; }
 .ai-overlay { position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#0f172ab8;color:white;border-radius:12px;pointer-events:none; }
 .ai-overlay strong { font-size:var(--board-notice-size,24px); }.ai-overlay span { font-size:12px; }
-footer { display:flex;justify-content:space-between;gap:6px;margin-top:10px; }
-footer button { font-size:11px;padding:5px 8px; }
-.compact { padding:10px; }.compact .score { font-size:17px; }.compact .ai-name { font-size:13px; }
-.compact .leader-badge { font-size:9px;margin-left:4px; }.compact .run-meta { font-size:10px;margin:5px 0 8px; }
-.compact footer { margin-top:7px; }.compact footer button { font-size:10px;padding:3px 5px; }
+footer { display:flex;align-items:stretch;justify-content:space-between;gap:6px;margin:0;min-height:0;overflow:hidden; }
+footer button { min-width:0;min-height:0;max-width:100%;font-size:11px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:5px 8px; }
+.compact { padding:10px;grid-template-rows:24px 16px minmax(0,1fr) 26px;gap:4px; }.compact .score { font-size:17px; }.compact .ai-name { font-size:13px; }
+.compact .leader-badge { font-size:9px;margin-left:4px;overflow:hidden;text-overflow:ellipsis; }.compact .run-meta { font-size:10px;margin:0; }
+.compact footer { margin:0; }.compact footer button { font-size:10px;padding:3px 5px; }
 </style>

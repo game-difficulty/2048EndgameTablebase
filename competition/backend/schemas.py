@@ -41,6 +41,11 @@ class LinkEventRoomRequest(BaseModel):
     room_code: str = Field(min_length=1, max_length=12)
 
 
+class AssignEventOrganizerRequest(BaseModel):
+    user_id: int = Field(gt=0)
+    dry_run: bool = True
+
+
 class UpdateEventRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     description: str = Field(default='', max_length=1000)

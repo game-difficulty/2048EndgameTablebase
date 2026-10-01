@@ -17,6 +17,34 @@ ADMIN = Principal(1, 'Admin', 'admin')
 PLAYER = Principal(2, 'Player')
 
 
+def test_assign_organizer_scoped_permissions_and_validation(service):
+    catalog = service.events
+    catalog.enrollment.account_reader = lambda ids: {i: f'User {i}' for i in ids if i in (2, 3)}
+    slug = '14360-cup-1'
+    assert catalog.detail(slug, ADMIN)['can_assign_organizer']
+    for principal in (PLAYER, Principal(9, 'Organizer', 'organizer')):
+        with pytest.raises(CompetitionError) as exc:
+            catalog.assign_organizer(slug, principal, user_id=2, dry_run=False)
+        assert exc.value.status_code == 403
+    with pytest.raises(CompetitionError):
+        catalog.assign_organizer(slug, ADMIN, user_id=999, dry_run=False)
+    assert catalog.assign_organizer(slug, ADMIN, user_id=2)['organizer']['display_name'] == 'User 2'
+    assert not catalog.detail(slug, PLAYER)['can_manage']
+    result = catalog.assign_organizer(slug, ADMIN, user_id=2, dry_run=False)
+    assert result['event']['organizer']['user_id'] == 2
+    assert catalog.detail(slug, PLAYER)['can_manage']
+    assert not catalog.detail('819984-cup-3', PLAYER)['can_manage']
+    catalog.update(slug, PLAYER, name='第一届14360杯', description='举办方公告', rules='规则', status='preparing')
+    snapshot = catalog.enrollment.snapshot(slug, PLAYER)
+    assert snapshot['me']['can_manage']
+    imported = catalog.enrollment.import_roster(slug, PLAYER, entries=[{'user_id':2,'team_name':'','is_external':False,'captain':False}], revision=snapshot['revision'], dry_run=False)
+    assert imported
+    catalog.assign_organizer(slug, ADMIN, user_id=3, dry_run=False)
+    assert not catalog.detail(slug, PLAYER)['can_manage']
+    with pytest.raises(CompetitionError):
+        catalog.update(slug, PLAYER, name='越权修改', description='', rules='', status='preparing')
+
+
 def test_catalog_seed_is_idempotent_and_does_not_adopt_old_rooms(service):
     service.create_competition(ADMIN, name='第三届819984杯测试', room_code='EVNT23')
     service.initialize()

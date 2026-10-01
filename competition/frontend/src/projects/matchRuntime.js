@@ -7,7 +7,7 @@ import { AftershockGame, LookBackGame } from './geometryVariants.js';
 import { PROJECT_BY_ID } from './catalog.js';
 
 const STATE_KEYS = ['board', 'tiles', 'cargo', 'score', 'moves', 'revision', 'randomState',
-  'shapeState', 'sealState', 'nextCargoId', 'nextTileId', 'restartCount', 'rows', 'cols',
+  'shapeState', 'chemicalColorState', 'sealState', 'nextCargoId', 'nextTileId', 'restartCount', 'rows', 'cols',
   'dice', 'wallIndex', 'sealedCells', 'sealRound', 'finished', 'outcome',
   'fissionSequence', 'fissionRandomState', 'originRow', 'originCol', 'quakeState', 'lookBackState'];
 const clone = value => JSON.parse(JSON.stringify(value));

@@ -127,6 +127,13 @@ onUnmounted(() => { clearInterval(timer); if (playbackTimer !== null) clearTimeo
 .focus { grid-template-columns:240px minmax(0,1fr) 260px;grid-template-rows:repeat(2,minmax(0,1fr)); }
 .focus .main-board { grid-column:2;grid-row:1 / 3; }.focus .preview-one { grid-column:1;grid-row:1; }.focus .preview-two { grid-column:1;grid-row:2; }.focus .history { grid-column:3;grid-row:1 / 3; }
 .equal { grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:minmax(0,1fr) 150px; }.equal .history { grid-column:1 / -1; }
-.multi-grid :deep(.ai-run-card) { min-height:0;display:flex;flex-direction:column;overflow:hidden; }
+.multi-grid :deep(.ai-run-card) { min-height:0;overflow:hidden; }
 .multi-grid :deep(.history) { min-height:0;max-height:100%;align-self:stretch;overflow:auto;box-sizing:border-box; }
+.content-title { flex:0 0 76px;min-height:0;overflow:hidden; }
+.content-title > div { min-width:0; }
+.content-title h1,.content-title p { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.room-best { flex:none;white-space:nowrap; }
+.view-controls { flex:0 0 48px;flex-wrap:nowrap;margin:8px 0 12px;overflow:hidden; }
+.segmented { flex:none; }
+.segmented button { white-space:nowrap;line-height:1.2; }
 </style>

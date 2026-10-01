@@ -21,6 +21,7 @@ from .schemas import (
     CreateEventRequest,
     LinkEventRoomRequest,
     UpdateEventRequest,
+    AssignEventOrganizerRequest,
     StatisticsRosterRequest,
     EnrollmentRosterRequest,
     EnrollmentActionRequest,
@@ -230,6 +231,11 @@ async def link_event_room(request: Request, slug: str, payload: LinkEventRoomReq
 @router.post('/events/{slug}/settings')
 async def update_event(request: Request, slug: str, payload: UpdateEventRequest, principal: PrincipalDependency):
     return {'event': await asyncio.to_thread(service_from_request(request).events.update, slug, principal, **payload.model_dump())}
+
+
+@router.post('/events/{slug}/organizer')
+async def assign_event_organizer(request: Request, slug: str, payload: AssignEventOrganizerRequest, principal: PrincipalDependency):
+    return await asyncio.to_thread(service_from_request(request).events.assign_organizer, slug, principal, **payload.model_dump())
 
 
 @router.get('/events/{slug}/statistics')

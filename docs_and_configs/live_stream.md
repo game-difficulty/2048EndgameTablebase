@@ -484,3 +484,19 @@ Follow-up: reject an entirely black shared palette, which matches the main-site
 selection guard against this case. Individual black entries in a varied custom
 palette remain valid. Existing placeholder cookies need no manual clearing.
 
+## Room focus view (2026-09-27)
+
+The room shell exposes a focus-view control next to Picture-in-Picture. It does
+not invoke the browser Fullscreen API: the current tab remains a normal window,
+while the room header, activity controls, gift strip, chat column, statistics and
+music bar are hidden. The fixed 1280x720 room stage is centered and scaled to the
+largest 16:9 rectangle that fits the viewport, so content components keep their
+contract and cannot resize the room rectangle. Stage overlays such as gift effects
+and room announcements remain visible.
+
+A small floating exit control and Escape both restore the room shell. Focus view
+is unavailable while the stage is detached into Document Picture-in-Picture; this
+prevents two presentation owners from competing for the same live surface. Entering
+or leaving focus view rebinds the existing stage measurement instead of recreating
+the content component, preserving playback queues and animation state.
+

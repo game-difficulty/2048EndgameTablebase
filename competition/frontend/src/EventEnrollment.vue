@@ -12,6 +12,7 @@ const mode = ref('solo'), capacity = ref(0), open = ref(false);
 const csv = ref(''), preview = ref(null);
 let disposed = false;
 let pollTimer;
+let lastEmittedRevision;
 const labels = { solo: '单人报名', self_team: '自由组队报名', organizer_team: '个人报名 · 举办方分队' };
 const mine = computed(() => state.value?.entries.find(e => e.user_id === state.value.me.user_id));
 const myTeam = computed(() => state.value?.teams.find(t => t.id === mine.value?.team_id));
@@ -24,7 +25,7 @@ function update(value, preserveDraft = false) {
   if (preview.value && preview.value.revision !== value.revision) preview.value = null;
   state.value = value;
   if (!preserveDraft) { mode.value = value.mode; capacity.value = value.capacity; open.value = !!value.registration_open; }
-  emit('changed', value.revision);
+  if (value.revision !== lastEmittedRevision) { lastEmittedRevision = value.revision; emit('changed', value.revision); }
 }
 async function load(preserveDraft = false) { try { update(await api.enrollment(props.slug), preserveDraft); } catch(cause) { error.value = userFacingError(cause); } }
 async function act(action, values = {}) {
@@ -70,7 +71,7 @@ onBeforeUnmount(() => { disposed = true; clearInterval(pollTimer); });
       <p class="enrollment-meta">{{ $t(labels[state.mode]) }} · {{ $t(state.entries.length) }}{{ $t(state.capacity ? `/${state.capacity}` : '') }}{{ $t(" 人 · ") }}{{ $t(state.roster_locked ? '最终名单已锁定' : state.registration_locked ? '参赛人员已锁定，分组可调整' : state.registration_open ? '报名开放' : '报名未开放') }}</p>
       <p v-if="!state.me.user_id"><a href="https://2048tables.online/">{{ $t("登录 Table 账号后报名或处理邀请 →") }}</a></p>
       <template v-else>
-        <p class="enrollment-meta">{{ $t("你的 Table 用户 ID：") }}{{ $t(state.me.user_id) }}。{{ $t("可将此 ID 提供给队长用于邀请。") }}</p>
+        <p class="enrollment-meta">{{ $t("你的 Table 用户 ID：") }}{{ $t(state.me.user_id) }}。<template v-if="state.mode==='self_team'">{{ $t("可将此 ID 提供给队长用于邀请。") }}</template></p>
         <p v-if="mine">{{ $t("你已") }}{{ $t(mine.source === 'imported' ? '由举办方登记' : '报名') }}：{{ myTeam?.name || (state.mode === 'solo' ? '单人参赛' : '待分组 / 待组队') }}。</p>
         <div class="enrollment-actions" v-if="editable"><button v-if="!mine" :disabled="busy" @click="act('signup')">{{ $t("报名参赛") }}</button><button v-else-if="!myTeam || state.mode !== 'self_team'" :disabled="busy" @click="act('withdraw')">{{ $t("退出报名") }}</button></div>
         <template v-if="state.mode === 'self_team'">
@@ -103,4 +104,9 @@ onBeforeUnmount(() => { disposed = true; clearInterval(pollTimer); });
 
 <style scoped>
 .enrollment-panel{padding:22px;border:1px solid #e3d8c9;border-radius:8px;margin:24px 0;background:#fffdf8}.enrollment-panel header{display:flex;justify-content:space-between;align-items:center;gap:12px}.enrollment-panel h2{margin:0;font-size:22px}.enrollment-panel p{line-height:1.7}.enrollment-meta,small{color:#817567;font-size:13px}.enrollment-panel button{padding:9px 14px;background:#fffdf8;color:inherit;border:1px solid #cbb895;border-radius:5px;cursor:pointer}.enrollment-panel button:disabled{opacity:.5;cursor:default}.enrollment-panel form{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:18px 0}.enrollment-panel label{display:grid;gap:8px}.enrollment-panel input,.enrollment-panel select,.enrollment-panel textarea{padding:10px;border:1px solid #cdd2d8;border-radius:5px;font:inherit;max-width:100%;box-sizing:border-box;background:#f5f6f8;color:inherit}.enrollment-actions{display:flex;gap:10px;flex-wrap:wrap;margin:15px 0}.enrollment-admin{margin-top:22px;border-top:1px solid #e3d8c9;padding-top:18px}.enrollment-admin summary{cursor:pointer}.enrollment-admin textarea{width:100%;margin:12px 0}.enrolled-teams{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.enrolled-teams article,.my-team{padding:16px;border:1px solid #e3d8c9;border-radius:6px;margin:16px 0}.enrolled-teams h3{margin:0}.checkbox-label{display:flex!important;align-items:center;padding:10px}.invite-row{padding:12px 0}.enrollment-panel a{color:inherit}@media(max-width:600px){.enrollment-panel{padding:16px}.enrollment-panel form{align-items:stretch;flex-direction:column}.enrollment-panel input:not([type=checkbox]),.enrollment-panel select{width:100%}.enrolled-teams{grid-template-columns:1fr}}
+.enrollment-panel{background:var(--competition-card);border-color:var(--competition-border)}
+.enrollment-meta,.enrollment-panel small{color:var(--competition-muted)}
+.enrollment-panel button{background:var(--competition-card);border-color:var(--competition-border)}
+.enrollment-panel input,.enrollment-panel select,.enrollment-panel textarea{background:var(--competition-page);border-color:var(--competition-border);color:var(--competition-text)}
+.enrollment-admin,.enrolled-teams article,.my-team{border-color:var(--competition-border)}
 </style>

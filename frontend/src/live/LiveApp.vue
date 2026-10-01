@@ -50,11 +50,12 @@ import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { ArrowLeft, LoaderCircle, Radio, RefreshCw, WifiOff } from '@lucide/vue';
 import LivePage from './LivePage.vue';
 import HumanLiveLobby from './HumanLiveLobby.vue';
+import { liveLanguage } from './language.js';
 import { roomIdFromPath, isLobbyPath } from './roomRoute.js';
 import { contentProtocols } from './content/registry.js';
 import { requestJson } from './roomContext.js';
 
-const lang = ref(navigator.language.startsWith('zh') ? 'zh' : 'en');
+const lang = ref(liveLanguage());
 const room = ref(null);
 const errorKind = ref('');
 const retryable = ref(false);

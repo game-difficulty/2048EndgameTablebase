@@ -23,7 +23,7 @@ async function refresh() {
 }
 watch(() => props.rosterRevision, refresh);
 function refreshVisible() { if (!document.hidden) refresh(); }
-onMounted(() => { refresh(); timer = setInterval(refreshVisible, 30000); document.addEventListener('visibilitychange', refreshVisible); });
+onMounted(() => { refresh(); timer = setInterval(refreshVisible, 180000); document.addEventListener('visibilitychange', refreshVisible); });
 onBeforeUnmount(() => { disposed = true; clearInterval(timer); document.removeEventListener('visibilitychange', refreshVisible); });
 </script>
 
@@ -32,9 +32,9 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); document.removeEv
     <header class="statistics-heading"><h2>{{ $t("赛事进程与成绩") }}</h2><button type="button" :disabled="loading" @click="refresh">{{ $t(loading ? '更新中…' : '刷新成绩') }}</button></header>
     <p v-if="error" class="alert" role="alert">{{ $t(error) }}<span v-if="data">{{ $t(" 以下为上次成功读取的数据。") }}</span></p>
     <template v-if="data">
-      <p class="statistics-meta">{{ $t({ upcoming: '尚未开赛', active: '比赛进行中', ended: '统计时间窗已结束' }[data.phase]) }}{{ $t(" · 更新于 ") }}{{ $t(date(data.as_of)) }}{{ $t("（北京时间） · 页面可见时每 30 秒刷新") }}</p>
+      <p class="statistics-meta">{{ $t({ upcoming: '尚未开赛', active: '比赛进行中', ended: '统计时间窗已结束' }[data.phase]) }}{{ $t(" · 更新于 ") }}{{ $t(date(data.as_of)) }}{{ $t("（北京时间）") }}</p>
       <p class="statistics-meta">{{ $t(data.rating_note) }}</p>
-      <p v-if="!data.players.length" class="statistics-empty">{{ $t("等待报名或举办方导入名单。目前尚未分组，不展示虚构队伍或成绩。") }}</p>
+      <p v-if="!data.teams.length" class="statistics-empty">{{ $t("目前尚未分组。") }}</p>
       <p v-if="data.unassigned_count" class="statistics-meta">{{ $t(data.unassigned_count) }}{{ $t(" 位选手待分组，个人成绩照常统计；团队成绩在分组后汇总。") }}</p>
       <div class="team-statistics">
         <article v-for="team in data.teams" :key="team.name" class="team-stat-card">
@@ -56,4 +56,10 @@ onBeforeUnmount(() => { disposed = true; clearInterval(timer); document.removeEv
 
 <style scoped>
 .event-statistics{margin:24px 0}.statistics-heading,.team-stat-card header{display:flex;justify-content:space-between;align-items:center;gap:16px}.statistics-heading h2{margin:0}.statistics-meta{font-size:13px;line-height:1.8;color:#817567}.team-statistics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.team-stat-card,.roster-import{border:1px solid #e3d8c9;border-radius:8px;padding:20px;background:#fffdf8}.team-stat-card h3{margin:0;font-size:22px}.team-stat-card header>span{font-size:12px;color:#817567}.team-metrics{display:flex;gap:30px;margin:24px 0}.team-metrics div{display:grid;gap:8px}.team-metrics small{color:#817567}.team-metrics strong{font-size:24px}progress{width:100%;height:8px;accent-color:#a18145}.team-member{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #eee7db}.team-member a{color:inherit;text-decoration:none}.team-member span{font-size:13px;color:#817567}.player-statistics{margin:32px 0}.player-stat-row{border-bottom:1px solid #e3d8c9;padding:16px 0}.player-stat-row summary{display:flex;flex-wrap:wrap;gap:12px 22px;cursor:pointer;font-size:14px}.player-stat-row summary strong{min-width:120px}.player-stat-row summary::before{content:'▸';color:#a18145}.player-stat-row[open] summary::before{content:'▾'}.games-scroll{overflow-x:auto;margin-top:16px}table{width:100%;border-collapse:collapse;font-size:13px;text-align:left;white-space:nowrap}td,th{padding:12px 10px;border-bottom:1px solid #eee7db}.roster-import{margin:24px 0}.roster-import summary{cursor:pointer}.roster-import p{line-height:1.7}.roster-import label{display:grid;gap:10px;margin:20px 0}textarea{box-sizing:border-box;width:100%;padding:12px;border:1px solid #cdd2d8;border-radius:5px;font:inherit;color:inherit;background:#f5f6f8}button{cursor:pointer;padding:9px 15px;border:1px solid #cbb895;border-radius:5px;background:#fffdf8;color:inherit}button:disabled{opacity:.5;cursor:default}.roster-preview{margin-top:20px}.statistics-empty{padding:30px;border:1px dashed #cbb895;border-radius:8px}.primary-button{background:#a18145;color:white}@media(max-width:650px){.team-statistics{grid-template-columns:1fr}.team-stat-card{padding:16px}.team-metrics{gap:20px}.team-metrics strong{font-size:22px}.statistics-heading h2{font-size:20px}.player-stat-row summary strong{width:calc(100% - 40px)}}
+.statistics-meta,.team-stat-card header>span,.team-metrics small,.team-member span{color:var(--competition-muted)}
+.team-stat-card,.roster-import,button{background:var(--competition-card);border-color:var(--competition-border)}
+.team-member,.player-stat-row,td,th,.statistics-empty{border-color:var(--competition-border)}
+textarea{background:var(--competition-page);border-color:var(--competition-border)}
+progress{accent-color:var(--competition-accent)}
+.player-stat-row summary::before{color:var(--competition-accent)}
 </style>

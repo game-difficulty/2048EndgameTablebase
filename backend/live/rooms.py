@@ -17,6 +17,7 @@ class RoomDefinition:
     publish_token_env: str = ''
     milestone_rewards: bool = False
     dynamic: bool = False
+    capabilities: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -32,12 +33,17 @@ class RoomDefinition:
         return base if self.id == DEFAULT_ROOM_ID else base.parent / 'rooms' / (self.id + '.sqlite3')
 
     def public(self):
+        defaults = dict(chat=True, likes=True, music=True, pip=True,
+                        gifts=True, red_envelopes=True,
+                        lucky_bags=self.milestone_rewards,
+                        predictions=self.content_kind=='classic-multi-ai',
+                        statistics=self.content_kind not in {'human-play', 'competition-match'})
+        defaults.update(self.capabilities)
         return dict(id=self.id, title=self.title, description=self.description,
                     content_kind=self.content_kind, protocol=self.protocol,
                     path='/rooms/' + self.id, api_base='/api/live/rooms/' + self.id,
                     participants=[dict(id=n.lower(),name=n,lane=i) for i,n in enumerate(('Lume','Clari','Vero'))] if self.content_kind=='classic-multi-ai' else [],
-                    capabilities=dict(gifts=True, red_envelopes=True, lucky_bags=self.milestone_rewards,
-                                      predictions=self.content_kind=='classic-multi-ai'),
+                    capabilities=defaults,
                     **self.metadata)
 
 

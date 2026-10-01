@@ -64,6 +64,21 @@ for (const item of TOURNAMENT_PROJECTS) test(`${item.order}: local deterministic
   assert.equal(a.packet().sequence, resumed.packet().sequence);
 });
 
+test('chemical color cursor survives a checkpoint and continues the same future sequence', () => {
+  const item = project(14);
+  const original = new MatchRuntime(bootstrap(item), options);
+  original.game.project = { ...original.game.project, specialSpawnRate: 1 };
+  for (let i = 0; i < 7; i++) { original.game.tiles = []; original.game.spawn(); }
+  const checkpoint = original.checkpoint();
+  assert.equal(checkpoint.state.chemicalColorState, original.game.chemicalColorState);
+  const resumed = new MatchRuntime({ ...bootstrap(item), checkpoint }, options);
+  resumed.game.project = { ...resumed.game.project, specialSpawnRate: 1 };
+  for (let i = 0; i < 20; i++) {
+    original.game.tiles = []; resumed.game.tiles = [];
+    assert.deepEqual(resumed.game.spawn(), original.game.spawn());
+  }
+});
+
 test('fission timers survive a match checkpoint just before splitting', () => {
   const item = project(18);
   const original = new MatchRuntime(bootstrap(item), options);

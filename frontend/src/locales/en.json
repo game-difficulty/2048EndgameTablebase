@@ -658,7 +658,7 @@
         "title": "Permanent Balance Sources",
         "note": "These Tokens **do not reset weekly**. Reward Tokens do not count as sponsorship payments.",
         "recharge": "**Recharge**: CNY 9.9 for **100,000**; CNY 99 for **2,000,000**. Credited after admin confirmation.",
-        "lucky": "**Live lucky bags**: 32K has a 5,000 pool, with **300–1,000** per winner; 65K has a 20,000 pool, with **1,000–3,000** per winner. Up to 10 winners per bag; **stay in the room for the draw**. Pools need not be fully distributed.",
+        "lucky": "**Live lucky bags**: 32K has a 5,000 pool with **300–1,000** per prize; 65K has a 20,000 pool with **1,000–3,000** per prize. Ten prizes are generated before the draw and add up to the full pool; **stay in the room for the draw**. If there are fewer than 10 winners, only their assigned prizes are awarded.",
         "envelope": "**Live red envelopes**: claim gifts from viewers. Each envelope contains **1,000–50,000** split into **5–20 shares**; your reward depends on your claim.",
         "weekly": "**Last 7 days weekly rewards**: Verified scores from the preceding 168 hours are frozen every Monday at **08:00 Beijing time**. Each player's best run counts on each board. Players may earn rewards on multiple boards; the amounts are listed below.",
         "weeklyTable": {
@@ -786,7 +786,14 @@
       "enableHint": "This allows the user to sign in again and restores live ranking records that are still eligible.",
       "confirmDisable": "Disable account",
       "confirmEnable": "Enable account",
-      "statusFailed": "Failed to update account status."
+      "statusFailed": "Failed to update account status.",
+      "managedAccount": "Admin-managed account",
+      "resetPassword": "Reset password",
+      "newPassword": "New password",
+      "resetPasswordHint": "Only for admin-managed test accounts. All sessions for this account will be revoked immediately.",
+      "confirmResetPassword": "Reset password",
+      "resetPasswordFailed": "Failed to reset password.",
+      "passwordTooShort": "Password must have at least 8 characters."
     },
     "entitlements": {
       "supporter": "Supporter"
@@ -1209,6 +1216,7 @@
   },
   "common": {
     "loading": "Loading",
+    "cancel": "Cancel",
     "refresh": "Refresh",
     "copied": "Copied",
     "yes": "Yes",

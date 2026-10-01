@@ -23,7 +23,7 @@
 | 位置 | 当前实现 | 三局需要改动 |
 | --- | --- | --- |
 | `tools/live_runner.py` | 单个 NativeAI、LiveRun、checkpoint；`to_thread(ai.choose)` 后更新棋盘 | 三个独立 AI 状态、三局调度和恢复 |
-| `tools/start_live_runner.ps1` | 单实例保护，一个计划任务，搜索线程=1、time_ratio=1.6、BelowNormal | 保留单协调器保护，增加三个子进程的启动、优先级与退出清理 |
+| `tools/start_live_runner.ps1` | 单实例保护，一个计划任务，搜索线程=1、time_ratio=2.5、BelowNormal | 保留单协调器保护，增加三个子进程的启动、优先级与退出清理 |
 | `backend/live/content.py` | ClassicContent 只有一个 run，房间拒绝第二发布者 | 新增 MultiAiContent，保留一个发布者 |
 | `backend/live/store.py` | `live_state(id=1)` 只保存一个当前局；历史按 UUID 去重 | 多席位当前局表，历史附带席位信息 |
 | `frontend/src/live/content/ClassicAiContent.vue` | 单 run/frame，左用时、中盘面、右历史 | 新内容组件，三套状态及主屏选择状态机 |
@@ -54,7 +54,7 @@ Windows 计划任务
 ```
 
 使用 Windows 支持的 spawn；每个子进程启动时加载一次引擎与定式，不逐步重新加载。
-默认三路均用相同配置，独立随机种子；每路 `threads=1`、`time_ratio=1.6`。
+默认三路均用相同配置，独立随机种子；每路 `threads=1`、`time_ratio=2.5`。
 搜索并行上限为三路，不额外让每路开三线程。明确给子进程设置 BelowNormal。
 
 协调器拥有 LiveRun；子进程只接收棋盘并返回走法、决策来源与计算耗时。

@@ -20,7 +20,9 @@ from .store import week_bounds
 from .rooms import DEFAULT_ROOM, DEFAULT_ROOM_ID, ROOMS, RoomDefinition
 from .content import create_content
 from . import human_rooms
+from .dynamic_rooms import dynamic_room_registry, competition_provider
 from backend.room_activities import predictions
+from backend.room_activities import competition_predictions
 from backend.room_activities.runtime import RoomActivities
 
 router = APIRouter(prefix='/api/live', tags=['live'])
@@ -108,6 +110,7 @@ class LiveHub:
         await asyncio.to_thread(lucky_bags.init_schema)
         await asyncio.to_thread(red_envelopes.init_schema)
         await asyncio.to_thread(predictions.init_schema)
+        await asyncio.to_thread(competition_predictions.init_schema)
         self.red_state = await asyncio.to_thread(red_envelopes.tick, room_id=self.room.id)
         self.lucky_bags = await asyncio.to_thread(lucky_bags.listing, room_id=self.room.id)
         self.gift_history.extend(await asyncio.to_thread(gifts.recent_events, self.room.target))
@@ -279,6 +282,11 @@ class LiveHub:
             await asyncio.sleep(1)
 
     def control_status(self):
+        if hasattr(self.content, 'online'):
+            online = bool(self.content.online)
+            return dict(self.control, connected=online, supported=False,
+                        applied=online, online=online and self.control['enabled'],
+                        run_id=self.content.run_id, lanes=[])
         connected = bool(self.producer) and self.producer_ready and time.monotonic() - self.last_seen < 20
         applied = connected and self.control_ack == self.control['revision']
         return dict(self.control, connected=connected, supported=self.control_supported,
@@ -410,43 +418,21 @@ dynamic_hubs = {}
 dynamic_task = None
 
 
-def _human_definition(data):
-    name = data.get('display_name') or 'Player'
-    return RoomDefinition(
-        id=data['room_id'], title={'zh': f'{name} 的直播', 'en': f'{name}\'s stream'},
-        description={'zh': f"{data['variant']} 玩家实时对局",
-                     'en': f"Live {data['variant']} player game"},
-        content_kind='human-play', protocol='human-play-v1',
-        milestone_rewards=True, dynamic=True,
-        metadata={'variant': data['variant'], 'owner_user_id': data['owner_user_id'],
-                  'run_id': data['run_id'], 'generation': int(data['generation']),
-                  'streamer': {'display_name': name, 'avatar_url': data.get('avatar_url')},
-                  'started_at': data['started_at']},
-    )
-
-
-def _dynamic_hub(room_id):
-    data = human_rooms.room(room_id)
-    if not data:
-        raise HTTPException(404, 'room_not_found')
+def _dynamic_hub_from_definition(definition):
+    room_id = definition.id
     runtime = dynamic_hubs.get(room_id)
-    if (runtime and runtime.room.metadata.get('variant') == data['variant']
-            and runtime.room.metadata.get('run_id') == data['run_id']
-            and int(runtime.room.metadata.get('generation', 0)) == int(data['generation'])):
-        # Name/avatar changes do not create a new run generation. Refresh the
-        # mutable presentation payload while preserving viewers and activities.
-        current = _human_definition(data)
-        runtime.room.title.clear(); runtime.room.title.update(current.title)
-        runtime.room.description.clear(); runtime.room.description.update(current.description)
-        runtime.room.metadata.clear(); runtime.room.metadata.update(current.metadata)
+    if (runtime and runtime.room.content_kind == definition.content_kind
+            and runtime.room.protocol == definition.protocol
+            and int(runtime.room.metadata.get('generation', 0))
+            == int(definition.metadata.get('generation', 0))):
+        runtime.room.title.clear(); runtime.room.title.update(definition.title)
+        runtime.room.description.clear(); runtime.room.description.update(definition.description)
+        runtime.room.metadata.clear(); runtime.room.metadata.update(definition.metadata)
         return runtime
     if runtime and (runtime.producer or runtime.viewers):
-        # A run switch changes the generation; the old publisher must reconnect.
         if runtime.producer:
             asyncio.create_task(runtime.producer.close(code=1012))
-    runtime = LiveHub(_human_definition(data))
-    # Dynamic rooms share the auth database and retain paid/social state across
-    # a live-service restart without allocating a per-room replay database.
+    runtime = LiveHub(definition)
     runtime.lucky_bags = lucky_bags.listing(room_id=room_id)
     runtime.gift_history.extend(gifts.recent_events(runtime.room.target))
     for event in runtime.gift_history:
@@ -455,13 +441,27 @@ def _dynamic_hub(room_id):
     return runtime
 
 
+def _dynamic_hub(room_id):
+    definition = dynamic_room_registry.resolve_room(room_id)
+    if not definition:
+        raise HTTPException(404, 'room_not_found')
+    return _dynamic_hub_from_definition(definition)
+
+
 def resolve_hub(connection=None):
     room_id = connection.path_params.get('room_id', DEFAULT_ROOM_ID) if connection is not None else DEFAULT_ROOM_ID
     if room_id == DEFAULT_ROOM_ID:
         return hub
     if room_id in ROOMS and room_id in room_hubs:
         return room_hubs[room_id]
+    if room_id in dynamic_hubs:
+        return dynamic_hubs[room_id]
     return _dynamic_hub(room_id)
+
+
+def require_room_capability(runtime, capability):
+    if not runtime.room.public()['capabilities'].get(capability, False):
+        raise HTTPException(404, 'room_capability_disabled')
 
 
 async def _reconcile_dynamic_room(room_id, runtime, definition, now):
@@ -488,7 +488,18 @@ async def _reconcile_dynamic_room(room_id, runtime, definition, now):
     if runtime.producer and now - runtime.last_seen >= 20:
         with contextlib.suppress(Exception):
             await runtime.producer.close(code=1013)
+    if hasattr(runtime.content, 'refresh'):
+        try:
+            if await runtime.content.refresh():
+                runtime.broadcast(runtime.snapshot())
+        except Exception:
+            logging.getLogger(__name__).exception('Dynamic content refresh delayed')
     if int(now) % 5 == 0:
+        if runtime.room.content_kind == 'competition-match':
+            try:
+                await runtime.activities.refresh()
+            except Exception:
+                logging.getLogger(__name__).exception('Competition activity refresh delayed')
         runtime.broadcast(dict(type='presence', online=runtime.control_status()['online'],
             paused=False, viewers=len(runtime.audience.identities())))
 
@@ -496,15 +507,27 @@ async def _reconcile_dynamic_room(room_id, runtime, definition, now):
 async def dynamic_maintenance():
     cursor = 0
     last_expiry = 0.0
+    last_competition_settlement = 0.0
     while True:
         await asyncio.sleep(1)
         items = list(dynamic_hubs.items())
         now = time.monotonic()
+        if now - last_competition_settlement >= 5:
+            # Recover after restarts and settle even with zero connected viewers,
+            # including matches already removed from the public lobby.
+            last_competition_settlement = now
+            try:
+                for pending in await asyncio.to_thread(competition_predictions.pending_rooms):
+                    facts = await asyncio.to_thread(competition_provider.settlement, pending['public_key'])
+                    await asyncio.to_thread(competition_predictions.reconcile, pending['room_id'], facts)
+            except Exception:
+                logging.getLogger(__name__).exception('Competition prediction reconciliation delayed')
         if now - last_expiry >= 15:
             await asyncio.to_thread(human_rooms.expire_stale,
                 stale_after=float(os.environ.get('HUMAN_LIVE_RECOVERY_SECONDS', '90')))
             last_expiry = now
-        active = {item['room_id']: item for item in await asyncio.to_thread(human_rooms.active_rooms)}
+        definitions = await asyncio.to_thread(dynamic_room_registry.list_active_rooms)
+        active = {item.id: item for item in definitions}
         for room_id, runtime in items:
             await _reconcile_dynamic_room(room_id, runtime, active.get(room_id), now)
         items = list(dynamic_hubs.items())
@@ -557,7 +580,8 @@ async def stop_rooms():
 
 @router.get('/rooms')
 async def list_rooms():
-    dynamic = [_human_definition(item).public() for item in human_rooms.active_rooms()]
+    definitions = await asyncio.to_thread(dynamic_room_registry.list_active_rooms)
+    dynamic = [item.public() for item in definitions]
     return {'rooms': [room.public() for room in ROOMS.values()] + dynamic}
 
 
@@ -565,6 +589,8 @@ async def list_rooms():
 async def lobby(response: Response):
     response.headers['Cache-Control'] = 'public, max-age=5, stale-while-revalidate=5'
     entries = []
+    for definition in await asyncio.to_thread(dynamic_room_registry.list_active_rooms):
+        _dynamic_hub_from_definition(definition)
     for runtime in [hub, *room_hubs.values(), *dynamic_hubs.values()]:
         snapshot = runtime.snapshot()
         if not snapshot.get('online'):
@@ -573,12 +599,20 @@ async def lobby(response: Response):
         if not run and snapshot.get('lanes'):
             running = [item.get('run') for item in snapshot['lanes'] if item.get('run')]
             run = max(running, key=lambda item: item.get('score', 0), default=None)
+        match = snapshot.get('match') or {}
+        preview = runtime.room.metadata.get('preview') or {}
+        score = ((match.get('score') or {}).get('yellow', 0)
+                 + (match.get('score') or {}).get('white', 0))
         entries.append({
             'id': runtime.room.id, 'path': '/rooms/' + runtime.room.id,
             'title': runtime.room.title, 'content_kind': runtime.room.content_kind,
+            'category_label': runtime.room.metadata.get('category_label'),
+            'badge': runtime.room.metadata.get('badge'),
+            'subtitle': runtime.room.metadata.get('subtitle'),
+            'preview': preview,
             'streamer': runtime.room.metadata.get('streamer'),
             'variant': (run or {}).get('variant', runtime.room.metadata.get('variant', '4x4')),
-            'board': (run or {}).get('board'), 'score': (run or {}).get('score', 0),
+            'board': (run or {}).get('board'), 'score': (run or {}).get('score', score),
             'appearance': (run or {}).get('appearance'),
             'max_tile': max((run or {}).get('board') or [0]),
             'seq': (run or {}).get('seq', 0), 'viewers': len(runtime.audience.identities()),
@@ -592,10 +626,10 @@ async def lobby(response: Response):
 async def room_detail(room_id: str):
     if room_id in ROOMS:
         return ROOMS[room_id].public()
-    data = human_rooms.room(room_id)
-    if not data:
+    definition = dynamic_room_registry.resolve_room(room_id)
+    if not definition:
         raise HTTPException(404, 'room_not_found')
-    return _human_definition(data).public()
+    return definition.public()
 
 
 def same_origin(headers):
@@ -644,6 +678,7 @@ async def run_history(request: Request, response: Response, page: int = Query(1,
 @router.get('/lucky-bags')
 async def lucky_list(request: Request, response: Response):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'lucky_bags')
     hub.limit(('lucky-read', client_ip(request)), 120)
     user = current_user_from_request(request)
     response.headers['Cache-Control'] = 'no-store'
@@ -653,9 +688,15 @@ async def lucky_list(request: Request, response: Response):
 @router.get('/rooms/{room_id}/predictions')
 async def prediction_state(request: Request, response: Response, market_id: str = Query(None, max_length=36)):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'predictions')
     hub.limit(('prediction-read', client_ip(request)), 120)
     response.headers['Cache-Control'] = 'no-store'
     user = current_user_from_request(request)
+    if hub.room.content_kind == 'competition-match':
+        facts = await asyncio.to_thread(competition_provider.settlement, hub.room.metadata['public_key'])
+        await asyncio.to_thread(competition_predictions.reconcile, hub.room.id, facts)
+        state = await asyncio.to_thread(competition_predictions.listing, hub.room.id, user['id'] if user else None)
+        return dict(state, available=bool(facts and not facts.get('suspended') and (facts.get('prediction_window') or {}).get('open')))
     state = await asyncio.to_thread(predictions.listing, hub.room.id, user['id'] if user else None, market_id)
     return dict(state, available=hub.control_status()['online'])
 
@@ -663,10 +704,19 @@ async def prediction_state(request: Request, response: Response, market_id: str 
 @router.post('/rooms/{room_id}/predictions')
 async def prediction_place(request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'predictions')
     user = require_user(request)
     body = await gift_body(request)
     hub.limit(('prediction-write', user['id']), 30)
     async with hub.activity_lock:
+        if hub.room.content_kind == 'competition-match':
+            result = await asyncio.to_thread(competition_predictions.place, hub.room.id, user['id'], body,
+                lambda: competition_provider.settlement(hub.room.metadata['public_key']))
+            # The purchase is committed; a transient broadcast error is not a payment failure.
+            with contextlib.suppress(Exception):
+                state = await asyncio.to_thread(competition_predictions.listing, hub.room.id)
+                hub.broadcast(dict(type='predictions', **state))
+            return result
         if hasattr(hub.content, 'advance_batch'):
             await hub.content.advance_batch()
         result = await asyncio.to_thread(predictions.place, hub.room.id, user['id'], body,
@@ -678,6 +728,7 @@ async def prediction_place(request: Request):
 @router.post('/lucky-bags/{bag_id}/join')
 async def lucky_join(bag_id: str, request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'lucky_bags')
     same_origin(request.headers)
     user = require_user(request)
     hub.limit(('lucky-join', user['id']), 12)
@@ -709,6 +760,7 @@ async def gift_body(request):
 @router.post('/red-envelopes')
 async def red_send(request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'red_envelopes')
     user = require_user(request)
     body = await gift_body(request)
     hub.limit(('red-send', user['id']), 20)
@@ -726,6 +778,7 @@ async def red_send(request: Request):
 @router.get('/red-envelopes/{envelope_id}')
 async def red_detail(envelope_id: str, request: Request, response: Response):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'red_envelopes')
     hub.limit(('red-read', client_ip(request)), 120)
     response.headers['Cache-Control'] = 'no-store'
     user = current_user_from_request(request)
@@ -736,6 +789,7 @@ async def red_detail(envelope_id: str, request: Request, response: Response):
 @router.post('/red-envelopes/{envelope_id}/claim')
 async def red_claim(envelope_id: str, request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'red_envelopes')
     same_origin(request.headers)
     user = require_user(request)
     hub.limit(('red-claim', user['id']), 30)
@@ -751,6 +805,7 @@ async def red_claim(envelope_id: str, request: Request):
 @router.get('/gifts/catalog')
 async def gift_catalog(request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'gifts')
     catalog, _ = await asyncio.to_thread(gifts.catalogue)
     return catalog
 
@@ -759,6 +814,7 @@ async def gift_catalog(request: Request):
 @router.get('/gifts/me')
 async def gift_me(request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'gifts')
     return await asyncio.to_thread(gifts.mine, require_user(request)['id'])
 
 
@@ -766,6 +822,7 @@ async def gift_me(request: Request):
 @router.post('/gifts/preferences')
 async def gift_preferences(request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'gifts')
     user = require_user(request)
     body = await gift_body(request)
     return await asyncio.to_thread(gifts.set_preferences, user['id'], body.get('daily_limit_units'), body.get('entrance_enabled'))
@@ -786,6 +843,7 @@ async def gift_order_preferences(request: Request):
 @router.get('/gifts/orders/{request_id}')
 async def gift_order(request_id: str, request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'gifts')
     return await asyncio.to_thread(gifts.order, require_user(request)['id'], request_id, hub.room.target)
 
 
@@ -793,6 +851,7 @@ async def gift_order(request_id: str, request: Request):
 @router.post('/gifts/send')
 async def gift_send(request: Request):
     hub = resolve_hub(request)
+    require_room_capability(hub, 'gifts')
     user = require_user(request)
     body = await gift_body(request)
     hub.limit(('gift-second', user['id']), 5, seconds=1)

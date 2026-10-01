@@ -32,6 +32,7 @@ import {
   exactBoardCodes,
   MAX_RANKED_MOVES,
   RANKED_RECORD,
+  RANKED_RULES_VERSION,
 } from '../engine/rankedReplayEncoder';
 import {
   GAMER_SPAWN_POLICY,
@@ -240,8 +241,8 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
   });
 
   let animIdCounter = 0;
-  let boardFrameRevision = 0;
   let disposed = false;
+  let boardFrameRevision = 0;
   let aiContinuationTimer = null;
   let aiRunning = false;
   let evilCoreModule = null;
@@ -403,8 +404,8 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
 
   const heartbeatCurrentRankedRun = async ({ immediateRetry = false } = {}) => {
     clearRankedHeartbeatTimer();
-    const runId = ranked.value.runId;
     if (disposed) return false;
+    const runId = ranked.value.runId;
     const leaseToken = ranked.value.leaseToken;
     if (!runId || !leaseToken || !rankedRunLock?.isHeld(runId)) return false;
     try {
@@ -510,7 +511,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     }, delay);
   };
 
-  const spawnEvil = async (values, { strict = false, spawnRate4 = configuredSpawnRate4() } = {}) => {
+  const spawnEvil = async (values, { strict = false, spawnRate4 = configuredSpawnRate4(), tieSeed = null } = {}) => {
     const fallback = () => randomSpawnWithRng(values, ordinaryRng, spawnRate4);
     try {
       const module = evilCoreModule || await getEvilCore();
@@ -522,7 +523,12 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
       const encoded = boardToEncoded(values);
       evilGen = evilGen || new module.EvilGen(encoded);
       evilGen.reset_board(encoded);
-      const result = evilGen.gen_new_num(5);
+      if (tieSeed !== null && typeof evilGen.gen_new_num_seeded !== 'function') {
+        throw new Error('Seeded EvilGen is unavailable.');
+      }
+      const result = tieSeed === null
+        ? evilGen.gen_new_num(5)
+        : evilGen.gen_new_num_seeded(5, tieSeed >>> 0);
       const index = Number(result?.[1]);
       const exponent = Number(result?.[2]);
       if (!Number.isInteger(index) || index < 0 || index >= 16 || exponent <= 0 || values[index] !== 0) {
@@ -733,13 +739,13 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
 
   const pollRankedRun = async () => {
     clearRankedPollTimer();
+    if (disposed) return;
     const runId = ranked.value.runId;
     if (!runId || !['pending', 'validating'].includes(ranked.value.status)) return;
     try {
       const payload = await fetchRankedRun(runId);
       if (disposed || runId !== ranked.value.runId) return;
       applyRankedServerStatus(payload);
-    if (disposed) return;
       if (['pending', 'validating'].includes(String(payload.status))) {
         rankedPollTimer = window.setTimeout(pollRankedRun, 2000);
       }
@@ -843,7 +849,11 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
       rankedRng = new Xoshiro128StarStar(planned.state);
       if (planned.evil) {
         try {
-          spawn = await spawnEvil(simulated.board, { strict: true, spawnRate4: runSpawnRate4 });
+          spawn = await spawnEvil(simulated.board, {
+            strict: true,
+            spawnRate4: runSpawnRate4,
+            tieSeed: ranked.value.rulesVersion >= 2 ? planned.state[0] : null,
+          });
         } catch (error) {
           console.error('Ranked EvilGen failed; this game is no longer rank eligible.', error);
           disqualifyRanked('evilgen_failed');
@@ -857,7 +867,9 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
       const planned = planGamerSpawn(simulated.board, ordinaryRng,
         { difficulty: Number(difficulty.value), spawnRate4 });
       ordinaryRng = new Xoshiro128StarStar(planned.state);
-      spawn = planned.evil ? await spawnEvil(simulated.board, { spawnRate4 }) : planned.spawn;
+      spawn = planned.evil
+        ? await spawnEvil(simulated.board, { spawnRate4, tieSeed: planned.state[0] })
+        : planned.spawn;
     }
     if (moveGeneration !== gameGeneration) return false;
     randomAfterUndo = false;
@@ -965,6 +977,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
         requestedSpawnRate4,
         leaseToken,
         replacement,
+        RANKED_RULES_VERSION,
       );
       issuedRunId = String(run.run_id || '');
       if (serial !== rankedStartSerial) {
@@ -1429,6 +1442,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
   });
 
   onUnmounted(() => {
+    disposed = true;
     aiCatalog.clear();
     tableAiCache.close();
     window.removeEventListener('keydown', handleKeydown);
@@ -1442,7 +1456,6 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     if (evilGen?.delete) {
       evilGen.delete();
       evilGen = null;
-    disposed = true;
     }
     persistState({ immediate: true });
   });

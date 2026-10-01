@@ -1,7 +1,7 @@
 """Bridge persisted content facts to room activities; no board rules here."""
 import asyncio
 import time
-from . import predictions, lucky_bags
+from . import predictions, lucky_bags, competition_predictions
 
 
 class RoomActivities:
@@ -23,6 +23,13 @@ class RoomActivities:
             await asyncio.to_thread(predictions.settle, room, batch['id'], batch.get('winners',()), batch['phase']=='void')
 
     async def refresh(self):
+        if getattr(self.hub.room, 'content_kind', None) == 'competition-match':
+            await asyncio.to_thread(competition_predictions.reconcile, self.hub.room.id, self.hub.content.projection)
+            state = await asyncio.to_thread(competition_predictions.listing, self.hub.room.id)
+            if state['markets'] != self.state.get('markets'):
+                self.state = state
+                self.hub.broadcast(dict(type='predictions', **state))
+            return
         state = await asyncio.to_thread(predictions.listing, self.hub.room.id)
         # server_time changes do not cause a per-second broadcast.
         if state['market'] != self.state.get('market'):

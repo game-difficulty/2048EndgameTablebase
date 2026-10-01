@@ -72,6 +72,7 @@ export const api = {
   importEventRoster: (slug, body) => request(`/api/events/${encodeURIComponent(slug)}/roster`, { method: 'POST', body }),
   createEvent: (body) => request('/api/events', { method: 'POST', body }),
   updateEvent: (slug, body) => request(`/api/events/${encodeURIComponent(slug)}/settings`, { method: 'POST', body }),
+  assignEventOrganizer: (slug, body) => request(`/api/events/${encodeURIComponent(slug)}/organizer`, { method: 'POST', body }),
   linkEventRoom: (slug, roomCode) => request(`/api/events/${encodeURIComponent(slug)}/rooms`, {
     method: 'POST', body: { room_code: roomCode },
   }),

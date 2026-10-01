@@ -45,11 +45,12 @@ async function requestJson(path, { method = 'GET', body } = {}) {
   return payload;
 }
 
-export const createRankedRun = (requestId, spawnRate4, leaseToken, replacement = {}) => requestJson('/api/gamer/runs', {
+export const createRankedRun = (requestId, spawnRate4, leaseToken, replacement = {}, rulesVersion = 1) => requestJson('/api/gamer/runs', {
   method: 'POST',
   body: {
     request_id: requestId,
     spawn_rate4: spawnRate4,
+    rules_version: rulesVersion,
     lease_token: leaseToken,
     ...(replacement.runId ? { replace_run_id: replacement.runId } : {}),
     ...(replacement.leaseToken ? { replace_lease_token: replacement.leaseToken } : {}),

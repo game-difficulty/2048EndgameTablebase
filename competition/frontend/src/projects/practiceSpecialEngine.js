@@ -124,6 +124,7 @@ export class PracticeSpecialGame {
     this.rows = Number(project.rows || 4);
     this.cols = Number(project.cols || 4);
     this.randomState = seed32(`${this.seed}:spawn`);
+    if (project.specialRule === 'chemical') this.chemicalColorState = seed32(`${this.seed}:chemical-color`);
     this.nextTileId = 0;
     this.revision = 0;
     this.restartCount = 0;
@@ -153,7 +154,10 @@ export class PracticeSpecialGame {
     } else if (this.project.specialRule === 'pair') {
       tile = { id: this.id(), kind: 'pair-single', value: 0, cells: [cell] };
     } else if (this.project.specialRule === 'chemical') {
-      tile = { id: this.id(), kind: ticketFloat(ticket, 'value') < .5 ? 'chemical-a' : 'chemical-b', value: 0, cells: [cell] };
+      // Advance only when a chemical actually spawns. Its ordinal color stays
+      // shared even when the two players spawn chemicals on different moves.
+      this.chemicalColorState = nextRandom(this.chemicalColorState);
+      tile = { id: this.id(), kind: this.chemicalColorState / 0x100000000 < .5 ? 'chemical-a' : 'chemical-b', value: 0, cells: [cell] };
     } else {
       // The value channel of this spawn ticket is unused by bombs. Reusing it
       // selects an inclusive integer without advancing the shared spawn RNG.

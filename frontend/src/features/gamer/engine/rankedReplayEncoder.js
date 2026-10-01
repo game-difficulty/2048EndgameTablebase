@@ -8,7 +8,7 @@ const EXT_RANKED_METADATA = 100;
 const EXT_DIFFICULTY_CHANGE = 101;
 const EXT_AI_USED = 102;
 
-export const RANKED_RULES_VERSION = 1;
+export const RANKED_RULES_VERSION = 2;
 export const MAX_RANKED_RECORD_BYTES = 500 * 1024;
 export const MAX_RANKED_MOVES = 100000;
 

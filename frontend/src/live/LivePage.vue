@@ -1,6 +1,6 @@
 <template>
-  <div class="live-page">
-    <header class="live-header">
+  <div :class="['live-page', { 'room-focus-active': focusActive }]">
+    <header v-show="!focusActive" class="live-header">
       <a href="https://2048tables.online/" class="brand"
         ><Radio :size="24" /><strong>2048 <span>LIVE</span></strong></a
       >
@@ -9,6 +9,7 @@
         <a class="room-address" :href="room.path">{{ room.title[lang] || room.title.en }}</a>
         <RoomPipControls ref="roomPip" :get-surface="() => roomStage?.element()" :get-frame="() => content?.getPipFrame?.()"
           :lang="lang" :title="room.title[lang] || room.title.en" @active="setPipActive" @surface="setSurfaceDetached" />
+        <RoomFocusControls v-model:active="focusActive" :disabled="pipDetached" :lang="lang" />
         <span :class="['live-status', streamState === 'live' ? 'on' : '']">{{
           streamState === 'loading' ? t('连接中', 'CONNECTING') : streamState === 'reconnecting' ? t('重连中', 'RECONNECTING') : streamState === 'live' ? t("直播中", "LIVE") : t("暂停", "OFFLINE")
         }}</span
@@ -28,18 +29,18 @@
     </header>
     <main>
       <div class="live-layout">
-      <aside id="room-activity-dock" class="room-activity-dock" :aria-label="t('直播间活动','Room activities')"></aside>
+      <aside v-show="!focusActive" id="room-activity-dock" class="room-activity-dock" :aria-label="t('直播间活动','Room activities')"></aside>
       <div class="stage-column">
       <div class="room-stage-home">
       <div v-show="pipDetached" class="room-stage-placeholder"><p>{{ t('直播内容正在小窗中显示','The stream is playing in the mini player') }}</p><button @click="roomPip?.close()">{{ t('返回页面观看','Watch here') }}</button></div>
-      <RoomStage ref="roomStage"><div class="content-stage">
+      <RoomStage ref="roomStage" :immersive="focusActive"><div class="content-stage">
         <component :is="contentComponent" ref="content" :lang="lang" :stream-state="streamState" :pip-active="pipActive" @notice="showNotice" />
       </div><template #overlays>
-        <GiftEffects ref="giftEffects" overlay v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
+        <GiftEffects v-if="room.capabilities.gifts" ref="giftEffects" overlay v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
       </template></RoomStage></div>
-      <RoomActivities ref="redEnvelopes" :room="room" :transport="{api,url}" dock-target="#room-activity-dock" prediction-target="#room-prediction-entry" :lucky-state="luckyState" :red-state="redState" :prediction-state="predictionState" :user="user" :connected="connected" :online="online && synchronized && connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
+      <RoomActivities v-if="hasRoomActivities" v-show="!focusActive" ref="redEnvelopes" :room="room" :transport="{api,url}" dock-target="#room-activity-dock" prediction-target="#room-prediction-entry" :lucky-state="luckyState" :red-state="redState" :prediction-state="predictionState" :user="user" :connected="connected" :online="online && synchronized && connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
         <template #default="{ bag, open, caption }">
-          <GiftPanel :red-envelopes="room.capabilities.red_envelopes" ref="giftPanel" :user="user" :online="online && connected && synchronized" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
+          <GiftPanel v-if="room.capabilities.gifts" :red-envelopes="room.capabilities.red_envelopes" ref="giftPanel" :user="user" :online="online && connected && synchronized" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
             <template #leading>
               <div v-if="room.capabilities.predictions" id="room-prediction-entry" class="room-prediction-entry"></div>
               <button v-if="bag" class="lucky-strip-entry" @click="open(bag)" :title="t('福袋','Lucky bags')"><LuckyBagIcon /><b>{{ t('福袋','Lucky bags') }}</b><small>{{ caption }}</small></button>
@@ -48,7 +49,7 @@
         </template>
       </RoomActivities>
       </div>
-      <section v-if="room.content_kind !== 'human-play'" class="history-stats-strip">
+      <section v-if="room.capabilities.statistics" v-show="!focusActive" class="history-stats-strip">
         <label class="stats-range">
           <span>{{ t('统计范围', 'STATISTICS') }}</span>
           <UiSelect
@@ -88,7 +89,7 @@
           <strong>{{ allTime.stage32_rate == null ? '—' : `${(allTime.stage32_rate * 100).toFixed(2)}%` }}</strong>
         </div>
       </section>
-        <div class="chat-panel">
+        <div v-show="!focusActive" class="chat-panel">
           <RoomAudience :lang="lang" :count="viewers" @count="viewers=$event" @help="giftPanel?.showContributionHelp()" />
         <aside class="about">
           <h2>{{ t("2048 练习与对战", "2048 Practice & Battles") }}</h2>
@@ -128,8 +129,8 @@
             </div>
           </div>
           <div class="chat-tools">
-            <label class="effect-controls"><Sparkles :size="15" /><select v-model="effectsMode" :aria-label="t('礼物特效','Gift effects')"><option value="full">{{ t('特效','Effects') }}</option><option value="simple">{{ t('简洁','Simple') }}</option><option value="off">{{ t('关闭','Off') }}</option></select></label>
-            <div class="like-control">
+            <label v-if="room.capabilities.gifts" class="effect-controls"><Sparkles :size="15" /><select v-model="effectsMode" :aria-label="t('礼物特效','Gift effects')"><option value="full">{{ t('特效','Effects') }}</option><option value="simple">{{ t('简洁','Simple') }}</option><option value="off">{{ t('关闭','Off') }}</option></select></label>
+            <div v-if="room.capabilities.likes" class="like-control">
               <LikeReaction ref="likeReaction" />
               <button class="like-button" @click="like" :aria-label="t('点赞', 'Like')" :aria-busy="likes.pending">
                 <Heart :size="18" /> {{ format(likes.count) }}
@@ -155,7 +156,7 @@
           </form>
           <p v-if="notice" class="notice" role="status">{{ notice }}</p>
         </div>
-        <LiveMusicPlayer class="music-footer" :lang="lang" :extra-url="musicUrl" compact />
+        <LiveMusicPlayer v-show="!focusActive" class="music-footer" :lang="lang" :extra-url="musicUrl" compact />
       </div>
     </main>
     <dialog
@@ -196,6 +197,7 @@
 import { serverErrorText } from '../services/errors/serverErrorText.js';
 import { chatLength, CHAT_LIMIT } from './chatLength.js';
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
+import { liveLanguage, saveLiveLanguage } from './language.js';
 import {
   Radio,
   Users,
@@ -234,8 +236,10 @@ import { isRoomEndedEvent } from './roomLifecycle.js';
 import { canConnectLive, backgroundExpired } from './pipPolicy.js';
 import RoomStage from './RoomStage.vue';
 import RoomPipControls from './pip/RoomPipControls.vue';
+import RoomFocusControls from './RoomFocusControls.vue';
 const pipActive = ref(false);
 const roomPip = ref(null), roomStage = ref(null), pipDetached = ref(false);
+const focusActive = ref(false);
 function setSurfaceDetached(detached) {
   pipDetached.value = detached;
   roomStage.value?.refreshLayout();
@@ -245,20 +249,29 @@ const props = defineProps({ room: { type: Object, required: true } });
 const emit = defineEmits(['room-ended']);
 useLiveLayoutScale();
 const room = props.room;
+const hasRoomActivities = computed(() => Boolean(
+  room.capabilities.gifts || room.capabilities.red_envelopes
+  || room.capabilities.lucky_bags || room.capabilities.predictions
+));
 const contentComponent = contentRegistry[room.content_kind];
 const content = ref(null);
 const { api, url } = provideRoom(room);
 provideGiftClient(createGiftClient({ base: `${room.api_base}/gifts`, target: `live:${room.id}` }));
 
-const lang = ref(navigator.language.startsWith("zh") ? "zh" : "en");
+const lang = ref(liveLanguage());
 const { locale } = useI18n();
-watch(lang, value => { locale.value = value; }, { immediate: true });
+watch(lang, value => { locale.value = value; saveLiveLanguage(value); }, { immediate: true });
 const giftEffects = ref(null), giftCatalog = ref([]);
 const effectsMode = ref('full');
 const giftPanel = ref(null), luckyState = ref(null);
 const redEnvelopes = ref(null), redState = ref(null);
 const predictionState = ref(null);
 const t = (zh, en) => (lang.value === "zh" ? zh : en);
+watch(focusActive, async value => {
+  document.body.classList.toggle('live-focus-document', value);
+  await nextTick();
+  roomStage.value?.refreshLayout();
+});
 const online = ref(false),
   connected = ref(false),
   viewers = ref(0),
@@ -616,12 +629,14 @@ onUnmounted(() => {
   clearInterval(ping);
   socket?.close();
   document.removeEventListener("visibilitychange", visibility);
+  document.body.classList.remove('live-focus-document');
 });
 </script>
 
 <style scoped>
 :global(body.live-document) { --live-scale:1;overflow:auto;zoom:var(--live-scale);background:var(--bg-main); }
 :global(body.live-document) { -webkit-text-size-adjust:100%;text-size-adjust:100%; }
+:global(body.live-document.live-focus-document) { overflow:hidden;zoom:1; }
 .live-page {
   -webkit-text-size-adjust:100%;
   text-size-adjust:100%;
@@ -726,6 +741,11 @@ main {
   margin: auto;
   padding: 26px 20px;
 }
+.room-focus-active { min-width:0;width:100vw;height:100vh;height:100dvh;margin:0;overflow:hidden; }
+.room-focus-active main { width:100%;height:100%;max-width:none;margin:0;padding:0;box-sizing:border-box; }
+.room-focus-active .live-layout { display:flex;width:100%;height:100%;align-items:center;justify-content:center;gap:0; }
+.room-focus-active .stage-column,.room-focus-active .room-stage-home { width:100%;height:100%; }
+.room-focus-active .room-stage-home { display:flex;align-items:center;justify-content:center; }
 h2 { font-size:15px;margin:0; }
 p { line-height:1.65; }
 .live-page .like-button {

@@ -83,4 +83,8 @@ export const adminClient = {
     method: 'POST',
     body: { status },
   }),
+  resetManagedPassword: (userId, newPassword) => requestJson(`/api/admin/users/${encodeURIComponent(userId)}/managed-password`, {
+    method: 'POST',
+    body: { new_password: newPassword },
+  }),
 };

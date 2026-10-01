@@ -239,6 +239,7 @@
                   <div v-if="item.entitlements?.is_supporter" class="mt-1">
                     <span class="admin-tier-pill">{{ $t('admin.entitlements.supporter') }}</span>
                   </div>
+                  <div v-if="item.managed_test_account" class="mt-1 ui-caption text-text-secondary">{{ $t('admin.actions.managedAccount') }}</div>
                 </td>
                 <td>
                   <span :class="['admin-status', item.status === 'active' ? 'active' : 'disabled']">
@@ -267,6 +268,7 @@
                     <div v-if="actionMenuUserId === item.id" class="admin-user-action-menu" role="menu">
                       <button type="button" role="menuitem" @click="openTokenAdjust(item)">{{ $t('admin.tokens.adjust') }}</button>
                       <button type="button" role="menuitem" @click="openApprovals(item)">{{ $t('admin.actions.approvals') }}</button>
+                      <button v-if="item.managed_test_account" type="button" role="menuitem" @click="openManagedPassword(item)">{{ $t('admin.actions.resetPassword') }}</button>
                       <button type="button" role="menuitem" :class="{ danger: item.status === 'active' }" @click="openStatusChange(item)">
                         {{ $t(item.status === 'active' ? 'admin.actions.disable' : 'admin.actions.enable') }}
                       </button>
@@ -371,6 +373,27 @@
             {{ statusChange.submitting ? $t('common.updating') : $t(statusChange.target === 'disabled' ? 'admin.actions.confirmDisable' : 'admin.actions.confirmEnable') }}
           </button>
         </div>
+      </section>
+    </div>
+
+    <div v-if="managedPassword.open" class="admin-modal">
+      <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeManagedPassword" />
+      <section class="admin-modal-panel">
+        <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('admin.actions.managedAccount') }}</div>
+        <h2 class="mt-1 ui-metric font-black text-text-main">{{ $t('admin.actions.resetPassword') }}</h2>
+        <p class="mt-2 ui-body text-text-secondary">{{ managedPassword.user?.display_name }} · {{ managedPassword.user?.email }}</p>
+        <p class="mt-4 ui-body text-text-secondary">{{ $t('admin.actions.resetPasswordHint') }}</p>
+        <form class="mt-4 grid gap-3" @submit.prevent="submitManagedPassword">
+          <label class="admin-form-row">
+            <span>{{ $t('admin.actions.newPassword') }}</span>
+            <input v-model="managedPassword.password" type="password" autocomplete="new-password" minlength="8" required class="admin-input" />
+          </label>
+          <div v-if="managedPassword.error" class="admin-alert error">{{ managedPassword.error }}</div>
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" class="action-btn-small justify-center" :disabled="managedPassword.submitting" @click="closeManagedPassword">{{ $t('common.cancel') }}</button>
+            <button type="submit" class="action-btn-small btn-prominent justify-center" :disabled="managedPassword.submitting">{{ $t('admin.actions.confirmResetPassword') }}</button>
+          </div>
+        </form>
       </section>
     </div>
 
@@ -502,6 +525,7 @@ const activeChartIndex = ref(null);
 const actionMenuUserId = ref(null);
 const approvals = ref({ open: false, user: null });
 const statusChange = ref({ open: false, user: null, target: 'disabled', submitting: false, error: '' });
+const managedPassword = ref({ open: false, user: null, password: '', submitting: false, error: '' });
 const tokenAdjust = ref({
   open: false,
   user: null,
@@ -797,6 +821,36 @@ const submitStatusChange = async () => {
     statusChange.value = { ...statusChange.value, open: false, submitting: false, user: response.user };
   } catch (requestError) {
     statusChange.value = { ...statusChange.value, submitting: false, error: userError(requestError, t('admin.actions.statusFailed')) };
+  }
+};
+
+const openManagedPassword = (user) => {
+  actionMenuUserId.value = null;
+  managedPassword.value = { open: true, user, password: '', submitting: false, error: '' };
+};
+
+const closeManagedPassword = () => {
+  if (managedPassword.value.submitting) return;
+  managedPassword.value = { open: false, user: null, password: '', submitting: false, error: '' };
+};
+
+const submitManagedPassword = async () => {
+  const { user, password } = managedPassword.value;
+  if (!user?.managed_test_account) return;
+  if (password.length < 8) {
+    managedPassword.value.error = t('admin.actions.passwordTooShort');
+    return;
+  }
+  managedPassword.value.submitting = true;
+  managedPassword.value.error = '';
+  try {
+    await adminClient.resetManagedPassword(user.id, password);
+    managedPassword.value.submitting = false;
+    closeManagedPassword();
+  } catch (requestError) {
+    managedPassword.value.error = userError(requestError, t('admin.actions.resetPasswordFailed'));
+  } finally {
+    managedPassword.value.submitting = false;
   }
 };
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=2048 Competition Test Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/2048tables/tournament-app/current
+EnvironmentFile=/etc/2048tables/cloud.env
+EnvironmentFile=/etc/2048tables/competition-test.env
+Environment=PYTHONPATH=/opt/2048tables/tournament-app/current:/opt/2048tables/app
+ExecStart=/opt/2048tables/venv/bin/python -m uvicorn competition.backend.app:app --host 127.0.0.1 --port 8770 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

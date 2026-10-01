@@ -1,10 +1,11 @@
 <template>
   <div class="room-activities">
-    <LuckyBags ref="lucky" :state="luckyState" v-bind="common" @open="activate('lucky')" @login="emit('login')" @balance="emit('balance')">
+    <LuckyBags v-if="room.capabilities.lucky_bags" ref="lucky" :state="luckyState" v-bind="common" @open="activate('lucky')" @login="emit('login')" @balance="emit('balance')">
       <template #default="slot"><slot v-bind="slot" /></template>
     </LuckyBags>
+    <slot v-else :bag="null" :open="() => {}" caption="" />
     <RedEnvelopes v-if="room.capabilities.red_envelopes" ref="red" :state="redState" v-bind="common" @open="activate('red')" @login="emit('login')" @balance="emit('balance')" />
-    <Predictions v-if="room.capabilities.predictions" ref="predictions" :state="predictionState" :online="online" v-bind="common" :entry-target="predictionTarget" @open="activate('predictions')" @login="emit('login')" @balance="emit('balance')" />
+    <component :is="room.content_kind === 'competition-match' ? CompetitionPredictions : Predictions" v-if="room.capabilities.predictions" ref="predictions" :state="predictionState" :online="online" v-bind="common" :entry-target="predictionTarget" @open="activate('predictions')" @login="emit('login')" @balance="emit('balance')" />
   </div>
 </template>
 <script setup>
@@ -12,6 +13,7 @@ import { ref, computed } from 'vue';
 import LuckyBags from './LuckyBags.vue';
 import RedEnvelopes from './RedEnvelopes.vue';
 import Predictions from './Predictions.vue';
+import CompetitionPredictions from './CompetitionPredictions.vue';
 import { provideActivities } from './context.js';
 const props = defineProps({room:Object,transport:Object,user:Object,connected:Boolean,online:Boolean,lang:String,luckyState:Object,redState:Object,predictionState:Object,dockTarget:String,predictionTarget:String});
 const emit = defineEmits(['login','balance']);

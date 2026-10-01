@@ -13,7 +13,8 @@
         <div class="lucky-countdown"><span>{{ selected.drawn_at != null ? t('已开奖','Draw complete') : t('距离开奖','Draw in') }}</span><b>{{ caption(selected) }}</b></div>
         <div class="lucky-rules">
           <p><UserRound :size="16" /><span>{{ t('登录即可免费参与','Free to enter when signed in') }}</span></p>
-          <p><Gift :size="16" /><span>{{ t('最多 10 人中奖，每人','Up to 10 winners, each receiving') }} {{ format(selected.minimum) }}–{{ format(selected.maximum) }} Token</span></p>
+          <p><Gift :size="16" /><span>{{ t(`开奖前生成 ${selected.max_winners} 份，合计等于奖池；每份`,`Before the draw, ${selected.max_winners} prizes are generated to exactly fill the pool; each is`) }} {{ format(selected.minimum) }}–{{ format(selected.maximum) }} Token</span></p>
+          <p><UserRound :size="16" /><span>{{ t('中奖人数不足时，仅发放对应份数','If there are fewer winners, only their assigned prizes are awarded') }}</span></p>
           <p><Radio :size="16" /><span>{{ t('开奖时请留在直播间，奖励自动到账','Stay in the room for the draw. Prizes are credited automatically.') }}</span></p>
         </div>
         <template v-if="selected.drawn_at != null">
