@@ -149,8 +149,9 @@ onBeforeUnmount(() => { ++animationEpoch; clearTimeout(revealTimer); });
 <style scoped>
 .cargo-stage{position:relative;width:min(100%,500px);aspect-ratio:4/7;margin:auto;touch-action:none;user-select:none;outline:none;overflow:hidden}
 .cargo-number-board{position:absolute;left:0;top:28.5714285714%;width:100%;max-width:none;z-index:1}
-.cargo-port{position:absolute;inset:0;z-index:4;pointer-events:none}.cargo-port span{position:absolute;box-sizing:border-box;border:2px dashed #ab8e5c;border-radius:8px;background:transparent}
-.cargo-port b{position:absolute;left:50%;transform:translateX(-50%);font-size:11px;color:#937443;letter-spacing:.14em;white-space:nowrap}
+/* Keep guides below cargo, but labels above it; the port must not create a stacking context. */
+.cargo-port{position:absolute;inset:0;pointer-events:none}.cargo-port span{position:absolute;z-index:2;box-sizing:border-box;border:2px dashed #ab8e5c;border-radius:8px;background:transparent}
+.cargo-port b{position:absolute;z-index:4;left:50%;transform:translateX(-50%);font-size:11px;color:#937443;letter-spacing:.14em;white-space:nowrap}
 .cargo-entry b{top:1px}.cargo-exit b{bottom:1px}
 .cargo-piece-box{position:absolute;z-index:3;pointer-events:none;transition:left var(--board-slide-duration) ease-in-out,top var(--board-slide-duration) ease-in-out}
 .cargo-piece-box.instant{transition:none}
