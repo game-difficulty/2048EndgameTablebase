@@ -14,6 +14,47 @@ from .stream_protocol import PROTOCOL
 
 log = logging.getLogger(__name__)
 
+LIVE_RECHECK_SECONDS = 15
+
+
+async def relay_live_projections(socket, service, public_key, queue, *, interval=LIVE_RECHECK_SECONDS):
+    """Notifications are hints; periodically verify the durable source watermark."""
+    loop = asyncio.get_running_loop()
+    cursors = {}
+    game = None
+    revision = None
+
+    async def publish():
+        nonlocal cursors, game, revision
+        projection = await asyncio.wait_for(asyncio.to_thread(service.live_projection, public_key,
+            after_yellow=cursors.get('yellow', 0), after_white=cursors.get('white', 0)), 5)
+        current = (projection.get('generation'), projection.get('current_game'))
+        if game is not None and current != game:
+            projection = await asyncio.wait_for(asyncio.to_thread(service.live_projection, public_key), 5)
+        await asyncio.wait_for(socket.send_json({'type': 'projection', 'projection': projection}), 5)
+        game = (projection.get('generation'), projection.get('current_game'))
+        revision = (projection['generation'], projection['content_sequence'])
+        cursors = {s: v['sequence'] for s, v in projection.get('project_public_views', {}).items() if v}
+
+    await publish()
+    check_at = loop.time() + interval
+    while True:
+        notified = False
+        try:
+            await asyncio.wait_for(queue.get(), max(0, check_at - loop.time()))
+            notified = True
+        except asyncio.TimeoutError:
+            pass
+        if loop.time() >= check_at:
+            source_revision = await asyncio.wait_for(asyncio.to_thread(service.live_revision, public_key), 5)
+            check_at = loop.time() + interval
+            if notified or source_revision != revision:
+                await publish()
+            else:
+                await asyncio.wait_for(socket.send_json({'type': 'heartbeat'}), 5)
+        elif notified:
+            await publish()
+
 def install_stream_routes(app, service, hub, settings):
     publishers = {}
     @app.websocket('/ws/projects/{room_code}')
@@ -113,22 +154,8 @@ def install_stream_routes(app, service, hub, settings):
         code = row['room_code']
         queue = hub.subscribe(code)
         await socket.accept()
-        cursors = {}; game = None
         try:
-            while True:
-                projection = await asyncio.to_thread(service.live_projection, public_key,
-                    after_yellow=cursors.get('yellow', 0), after_white=cursors.get('white', 0))
-                current = (projection.get('generation'), projection.get('current_game'))
-                if game is not None and current != game:
-                    projection = await asyncio.to_thread(service.live_projection, public_key)
-                game = current
-                await asyncio.wait_for(socket.send_json({'type': 'projection', 'projection': projection}), 5)
-                cursors = {s: v['sequence'] for s,v in projection.get('project_public_views', {}).items()}
-                while True:
-                    try:
-                        await asyncio.wait_for(queue.get(), 15); break
-                    except asyncio.TimeoutError:
-                        await asyncio.wait_for(socket.send_json({'type': 'heartbeat'}), 5)
+            await relay_live_projections(socket, service, public_key, queue)
         except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError):
             pass
         except CompetitionError:

@@ -1903,22 +1903,37 @@ class CompetitionService:
             ).fetchall()
             return [self._live_directory_entry(db, row) for row in rows]
 
+    def _live_room(self, db, public_key):
+        room = db.execute(
+            "SELECT * FROM competitions WHERE public_key = ?",
+            (str(public_key),),
+        ).fetchone()
+        if room is None or not room["live_started_at"] or not db.execute(
+            "SELECT 1 FROM competition_drafts WHERE competition_id = ?", (room["id"],)
+        ).fetchone():
+            raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
+        if room["live_ended_at"]:
+            ended = parse_time(str(room["live_ended_at"]))
+            if ended and datetime.now(timezone.utc) - ended >= timedelta(
+                seconds=self.live_result_retention_seconds
+            ):
+                raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
+        return room
+
+    def live_revision(self, public_key: str) -> tuple[int, int]:
+        """Cheap durable watermark; does not build boards, frames or account profiles."""
+        with self.database.transaction() as db:
+            room = self._live_room(db, public_key)
+            sequence = db.execute(
+                'SELECT COALESCE(MAX(sequence), 0) FROM competition_live_outbox '
+                'WHERE competition_id = ? AND generation = ?',
+                (room['id'], room['live_generation']),
+            ).fetchone()[0]
+            return int(room['live_generation']), int(sequence)
+
     def live_projection(self, public_key: str, *, after_yellow: int = 0, after_white: int = 0) -> dict[str, Any]:
         with self.database.transaction() as db:
-            room = db.execute(
-                "SELECT * FROM competitions WHERE public_key = ?",
-                (str(public_key),),
-            ).fetchone()
-            if room is None or not room["live_started_at"] or not db.execute(
-                "SELECT 1 FROM competition_drafts WHERE competition_id = ?", (room["id"],)
-            ).fetchone():
-                raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
-            if room["live_ended_at"]:
-                ended = parse_time(str(room["live_ended_at"]))
-                if ended and datetime.now(timezone.utc) - ended >= timedelta(
-                    seconds=self.live_result_retention_seconds
-                ):
-                    raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
+            room = self._live_room(db, public_key)
             projection = self._public_match_projection(db, room)
             for side, after in [('yellow', after_yellow), ('white', after_white)]:
                 view = projection.get('project_public_views', {}).get(side)
