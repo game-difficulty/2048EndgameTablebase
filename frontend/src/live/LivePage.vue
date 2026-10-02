@@ -232,6 +232,7 @@ import { provideGiftClient } from '../features/gifts/context.js';
 import { useI18n } from 'vue-i18n';
 import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
+import { createWatchConnection } from './watchConnection.js';
 import { isRoomEndedEvent } from './roomLifecycle.js';
 import { canConnectLive, backgroundExpired } from './pipPolicy.js';
 import RoomStage from './RoomStage.vue';
@@ -302,15 +303,23 @@ watch(loginOpen, async (open) => {
   if (open) loginDialog.value?.showModal();
 });
 const musicUrl = ref("");
-let socket,
-  backgroundTimer,
+let backgroundTimer,
   backgroundDeadline = 0,
-  retry,
-  ping,
   noticeTimer,
-  stopped = false,
-  failures = 0;
+  stopped = false;
 let roomEnded = false;
+const watchConnection = createWatchConnection({
+  room,
+  url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${room.api_base}/watch`,
+  canConnect: () => !stopped && canConnectLive(document.hidden, pipActive.value),
+  expired: () => backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now()),
+  onOpen: () => { connected.value = true; void refreshSummary(); },
+  onDisconnect: () => { connected.value = false; synchronized.value = false; },
+  onMessage: receive,
+  onSnapshot: () => { synchronized.value = true; seenSnapshot.value = true; },
+  onEnded: endRoom,
+  onActivity: () => roomPip.value?.refresh(),
+});
 const format = (n) =>
   Number(n || 0).toLocaleString(lang.value === "zh" ? "zh-CN" : "en-US");
 const showNotice = (text) => {
@@ -357,30 +366,16 @@ function installSnapshot(data) {
   viewers.value = data.viewers;
   content.value?.receive(data);
 }
-async function receive(event) {
-  if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) {
-    socket?.close();
+async function receive(data) {
+  if (data instanceof ArrayBuffer) {
+    content.value?.receive(data);
     return;
   }
-  if (event.data instanceof ArrayBuffer) {
-    try {
-      content.value?.receive(event.data);
-    } catch {
-      socket?.close();
-    }
-    return;
-  }
-  let data;
-  try { data = JSON.parse(event.data); }
-  catch { event.target?.close(); return; }
   if (data.type === 'room_ended') {
     if (isRoomEndedEvent(data, room.id)) endRoom();
   }
   else if (data.type === "snapshot") {
-    if (data.room_id !== room.id || data.protocol !== room.protocol) { socket?.close(); return; }
-    try { installSnapshot(data); } catch { socket?.close(); return; }
-    synchronized.value = true;
-    seenSnapshot.value = true;
+    installSnapshot(data);
   }
   else if (data.type === 'lucky_bags') luckyState.value = data;
   else if (data.type === 'red_envelopes') redState.value = data;
@@ -408,7 +403,7 @@ async function receive(event) {
   else if (data.type === "chat") {
     await appendChat(data);
   } else {
-    try { content.value?.receive(data); } catch { socket?.close(); }
+    content.value?.receive(data);
   }
 }
 
@@ -416,26 +411,8 @@ function endRoom() {
   if (roomEnded) return;
   roomEnded = true;
   stopped = true;
-  clearTimeout(retry);
-  clearInterval(ping);
-  socket?.close();
+  watchConnection.stop();
   emit('room-ended');
-}
-
-async function reconnectOrEndRoom() {
-  if (stopped || roomEnded || !canConnectLive(document.hidden, pipActive.value)) return;
-  if (room.dynamic) {
-    try {
-      const response = await fetch(room.api_base, { cache: 'no-store' });
-      if (response.status === 404) { endRoom(); return; }
-    } catch { /* A network failure remains eligible for normal reconnection. */ }
-  }
-  if (!stopped && !roomEnded && canConnectLive(document.hidden, pipActive.value)) {
-    retry = setTimeout(
-      connect,
-      Math.min(15000, 1000 * 2 ** failures++) + Math.random() * 300,
-    );
-  }
 }
 async function appendChat(data) {
     const el = chatList.value,
@@ -447,38 +424,7 @@ async function appendChat(data) {
     }
 }
 function connect() {
-  if (stopped || !canConnectLive(document.hidden, pipActive.value)) return;
-  if (socket && socket.readyState < 2) return;
-  clearTimeout(retry);
-  clearInterval(ping);
-  synchronized.value = false;
-  const ws = new WebSocket(
-    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${room.api_base}/watch`,
-  );
-  socket = ws;
-  ws.binaryType = "arraybuffer";
-  ws.onopen = () => {
-    if (socket !== ws) return;
-    connected.value = true;
-    failures = 0;
-    ping = setInterval(() => {
-      if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) {
-        ws.close();
-        return;
-      }
-      if (ws.readyState === 1) ws.send("ping");
-    }, 10000);
-    refreshSummary();
-  };
-  ws.onmessage = event => { if (socket === ws) receive(event).finally(() => roomPip.value?.refresh()); };
-  ws.onclose = () => {
-    if (socket !== ws) return;
-    socket = null;
-    connected.value = false;
-    synchronized.value = false;
-    clearInterval(ping);
-    void reconnectOrEndRoom();
-  };
+  watchConnection.connect();
 }
 async function ensureActor() {
   if (!user.value) {
@@ -546,7 +492,7 @@ async function login() {
     password.value = "";
     loginOpen.value = false;
     loginError.value = "";
-    socket?.close();
+    watchConnection.reconnect();
   } catch (error) {
     loginError.value = serverErrorText(error, lang.value);
   }
@@ -557,7 +503,7 @@ async function logout() {
     user.value = null;
     actorPromise = null;
     await ensureActor().catch(() => {});
-    socket?.close();
+    watchConnection.reconnect();
   } catch {
     showNotice(t("退出失败，请重试。", "Could not sign out."));
   }
@@ -571,7 +517,7 @@ async function refreshIdentity() {
     const previousUserId = user.value?.id;
     user.value = (await api('/api/auth/me')).user;
     actorPromise = null;
-    if (previousUserId !== user.value?.id) socket?.close();
+    if (previousUserId !== user.value?.id) watchConnection.reconnect();
   } catch {}
 }
 function setPipActive(value) {
@@ -582,13 +528,13 @@ function setPipActive(value) {
   else if (document.hidden) visibility();
 }
 async function visibility() {
-  clearTimeout(retry);
+  watchConnection.cancelRetry();
   clearTimeout(backgroundTimer);
   if (document.hidden) {
     if (pipActive.value) { backgroundDeadline = 0; connect(); return; }
     backgroundDeadline = Date.now() + 180000;
     backgroundTimer = setTimeout(() => {
-      if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) socket?.close();
+      if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) watchConnection.disconnect();
     }, 180000);
   }
   else {
@@ -596,14 +542,14 @@ async function visibility() {
     backgroundDeadline = 0;
     content.value?.resume();
     const previousUserId = user.value?.id;
-    if (expired) socket?.close();
-    else if (socket?.readyState === 1) socket.send('ping');
+    if (expired) watchConnection.disconnect();
+    else watchConnection.check();
     connect();
     await refreshIdentity();
     if (stopped || document.hidden) return;
     await ensureActor().catch(() => {});
     if (stopped || document.hidden) return;
-    if (previousUserId !== user.value?.id) socket?.close();
+    if (previousUserId !== user.value?.id) watchConnection.reconnect();
     connect();
     refreshSummary();
   }
@@ -623,11 +569,9 @@ onMounted(async () => {
 onUnmounted(() => {
   stopped = true;
   clearTimeout(backgroundTimer);
-  clearTimeout(retry);
   clearTimeout(noticeTimer);
   clearTimeout(likeFlushTimer);
-  clearInterval(ping);
-  socket?.close();
+  watchConnection.stop();
   document.removeEventListener("visibilitychange", visibility);
   document.body.classList.remove('live-focus-document');
 });
