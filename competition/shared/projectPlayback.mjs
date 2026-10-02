@@ -1,3 +1,5 @@
+import { projectAnimationHoldMs } from '../frontend/src/projects/boardMotion.js';
+
 // Ordered presentation only. Authoritative scores/clocks never wait for playback.
 export class ProjectPlayback {
   constructor(present, { schedule = (fn, delay) => setTimeout(fn, delay), cancel = id => clearTimeout(id),
@@ -8,6 +10,7 @@ export class ProjectPlayback {
     this.pending = new Map();
     this.timer = null;
     this.latest = null; this.waitingGap = false; this.anchor = null;
+    this.holdUntil = 0;
   }
   reset(view, key, reason = 'initial') {
     this.close();
@@ -43,13 +46,21 @@ export class ProjectPlayback {
       this.cancel(this.timer); this.timer = null; this.waitingGap = false;
     }
     this.start();
-    this.onPending(this.pending.size > 0);
+    this.onPending(this.pending.size > 0 || this.holdUntil > this.now());
   }
   start() {
     if (this.timer != null || !this.view) return;
     const frame = this.pending.get(this.view.sequence + 1);
     if (!frame) {
-      if (!this.latest || this.latest.sequence <= this.view.sequence) { this.anchor = null; return; }
+      if (!this.latest || this.latest.sequence <= this.view.sequence) {
+        // Keep a final quake mounted through its spawn animation even when
+        // there is no following move (or the result snapshot has arrived).
+        const remaining = this.holdUntil - this.now();
+        if (remaining > 0) {
+          this.timer = this.schedule(() => { this.timer = null; this.start(); this.onPending(this.pending.size > 0 || this.holdUntil > this.now()); }, remaining);
+        } else this.anchor = null;
+        return;
+      }
       // Recheck at every dequeue: a gap may be hidden behind queued good steps.
       if (Number(this.latest.frame_start ?? this.latest.sequence) > this.view.sequence + 1) {
         this.reset(this.latest, this.key, 'history_expired'); return;
@@ -66,22 +77,23 @@ export class ProjectPlayback {
     const due = this.anchor.wall + elapsed - this.anchor.source;
     // Never repeatedly shift the anchor while catching up: doing so compounds
     // lateness and can discard a completely intact queue on a slow connection.
-    const delay = Math.max(16, Math.min(300, due - at));
+    const delay = Math.max(16, Math.min(300, due - at), this.holdUntil - at);
     this.timer = this.schedule(() => {
       this.timer = null;
       if (this.now() - at > 5000) { this.reset(this.latest, this.key, 'browser_suspended'); return; }
       this.pending.delete(frame.sequence);
       this.view = frame;
+      this.holdUntil = this.now() + projectAnimationHoldMs(frame.payload);
       this.present(frame);
       this.start();
-      this.onPending(this.pending.size > 0);
+      this.onPending(this.pending.size > 0 || this.holdUntil > this.now());
     }, delay);
   }
   close() {
     if (this.timer != null) this.cancel(this.timer);
     this.timer = null;
     this.pending.clear();
-    this.waitingGap = false; this.anchor = null;
+    this.waitingGap = false; this.anchor = null; this.holdUntil = 0;
     this.onPending(false);
   }
 }

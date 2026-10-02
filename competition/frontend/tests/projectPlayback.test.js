@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ProjectPlayback } from '../../shared/projectPlayback.mjs';
 import { receivedProjectView } from '../../shared/projectStateOrder.mjs';
+import { BOARD_QUAKE_DURATION, projectAnimationHoldMs } from '../src/projects/boardMotion.js';
 
 const frame = sequence => ({ sequence, payload: { board: [[sequence]], elapsed_ms: sequence * 80, last_transition: { kind: 'move' } } });
 const view = (sequence, frames = [], frame_start = 1) => ({ generation: 1, ...frame(sequence), frames, frame_start });
@@ -72,4 +73,50 @@ test('a suspended viewer cannot accumulate an unbounded playback queue', () => {
   drain();
   assert.deepEqual(seen,[0,129]);
   assert.equal(player.pending.size,0);
+});
+
+function timedPlayback() {
+  const timers=new Map(), seen=[], pending=[];let at=0, serial=0;
+  const player=new ProjectPlayback(v=>seen.push({sequence:v?.sequence,at}),{
+    now:()=>at,
+    schedule(fn,delay){timers.set(++serial,{fn,at:at+delay});return serial;},
+    cancel:id=>timers.delete(id),onPending:value=>pending.push(value),
+  });
+  function tick(ms) {
+    const end=at+ms;
+    while(timers.size){
+      const [id,timer]=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];
+      if(timer.at>end)break;
+      timers.delete(id);at=timer.at;timer.fn();
+    }
+    at=end;
+  }
+  return {player,seen,pending,tick};
+}
+const quakeFrame=sequence=>({...frame(sequence),payload:{...frame(sequence).payload,aftershock:true,last_transition:{kind:'reshape',quake:{cells:[]}}}});
+
+test('catch-up preserves the full quake/shift/spawn timing without slowing ordinary spam',()=>{
+  const {player,seen,tick}=timedPlayback();
+  player.receive(view(0),'A');
+  player.receive(view(4,[quakeFrame(1),frame(2),frame(3),frame(4)]),'A');
+  tick(60);assert.equal(seen.at(-1).sequence,1);
+  tick(BOARD_QUAKE_DURATION-1);assert.equal(seen.at(-1).sequence,1);
+  tick(1);assert.equal(seen.at(-1).sequence,2);
+  tick(32);assert.equal(seen.at(-1).sequence,4);
+  assert.equal(projectAnimationHoldMs(frame(2).payload),0);
+  assert.equal(projectAnimationHoldMs({...quakeFrame(1).payload,last_transition:{kind:'restore'}}),0);
+  player.close();
+});
+
+test('a final quake remains pending through completion metadata, then releases the result view',()=>{
+  const {player,seen,pending,tick}=timedPlayback();
+  player.receive(view(0),'A');
+  player.receive(view(1,[quakeFrame(1)]),'A');
+  tick(60);
+  assert.equal(pending.at(-1),true);
+  player.receive({...view(1),payload:{...quakeFrame(1).payload,finished:true}},'A');
+  tick(BOARD_QUAKE_DURATION-1);assert.equal(pending.at(-1),true);
+  tick(1);assert.equal(pending.at(-1),false);
+  assert.equal(seen.at(-1).sequence,1);
+  player.close();
 });
