@@ -1,11 +1,11 @@
 <script setup>
 import { ref, watch } from 'vue';
 import { api } from './api.js';
-const props = defineProps({ slug: String });
+const props = defineProps({ slug: String, teamSize: {type:Number,default:3} });
 const emit = defineEmits(['change']);
 const enabled = ref(false), roster = ref(null), yellow = ref(''), white = ref(''), start = ref(''), error = ref('');
 let requestId = 0;
-watch(() => props.slug, async slug => {
+watch(() => [props.slug, props.teamSize], async ([slug]) => {
   const id = ++requestId;
   enabled.value = false; roster.value = null; yellow.value = ''; white.value = ''; error.value = '';
   if (!slug) return;
@@ -22,7 +22,7 @@ watch([enabled, yellow, white, start], () => {
     <legend>{{ $t("赛程与锁定名单") }}</legend>
     <p v-if="error" role="alert">{{ $t(error) }}</p>
     <p v-else-if="!roster?.roster_locked">{{ $t("自由房间：任意已登录选手可落座。正式赛程请先锁定报名名单及队内序号。") }}</p>
-    <p v-else-if="roster.mode === 'solo' || roster.team_size !== 3">{{ $t("当前对战房间需要三人团队名单；单人赛和统计赛不使用此对战流程。") }}</p>
+    <p v-else-if="roster.mode === 'solo' || roster.team_size !== teamSize">{{ $t("赛事名单人数须与房间每队人数一致；统计赛不使用此对战流程。") }}</p>
     <template v-else>
       <label><input v-model="enabled" type="checkbox" />{{ $t("使用锁定队伍创建赛程房间") }}</label>
       <div v-if="enabled" class="schedule-fields">
@@ -31,7 +31,7 @@ watch([enabled, yellow, white, start], () => {
       </div>
     </template>
     <label>{{ $t("预定开战时间（本设备时区）") }}<input v-model="start" type="datetime-local" :required="enabled" /></label>
-    <p>{{ $t("未绑定队伍时为自由房间，不计入正式赛事纪录。设置开战时间后，到点方可开始抽签；超过15分钟，已全员落座且队长准备的一方3:0获胜，双方均未就位则0:0。") }}</p>
+    <p>{{ $t("未绑定队伍时为自由房间，不计入正式赛事纪录。设置开战时间后，到点方可开始抽签；超过15分钟，已全员落座且队长准备的一方获胜，未就位方判全部对局负，双方均未就位则0:0。") }}</p>
   </fieldset>
 </template>
 <style scoped>

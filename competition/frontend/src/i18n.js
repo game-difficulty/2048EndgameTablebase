@@ -47,7 +47,8 @@ const patterns=[
  [/^(\d+) 个比赛房间$/,'$1 match rooms'],
  [/^赛事方 #(\d+)$/,'Staff #$1'],
  [/^Table 用户 ID (\d+)$/,'Table user ID $1'],
- [/^([黄白])([123])$/ ,(_,side,n)=>`${side==='黄'?'Yellow':'White'} ${n}`],
+ [/^([黄白])(\d+)$/ ,(_,side,n)=>`${side==='黄'?'Yellow':'White'} ${n}`],
+ [/^项目 ([A-O]) (开局检查|对局|结果)$/,(_,key,state)=>`Game ${key} · ${{开局检查:'Ready check',对局:'In progress',结果:'Result'}[state]}`],
  [/^(\d+) 号位$/,'Seat $1'],
  [/^(\d+)号 ·$/,'$1 ·'],
  [/^上移 (.+)$/,'Move $1 up'],[/^下移 (.+)$/,'Move $1 down'],
@@ -56,7 +57,7 @@ const patterns=[
  [/^(.+)本场数据$/,'$1 game statistics'],
  [/^(.+)真·华容道棋盘$/,'$1 Huarong Dao board'],[/^(.+)越来越大棋盘$/,'$1 Getting Bigger board'],[/^(.+)项目棋盘$/,'$1 game board'],
  [/^([黄白])方局分 (.+)$/,(_,s,n)=>`${s==='黄'?'Yellow':'White'} game score ${n}`],
- [/^第 (\d+) 行有误：.*$/,'Invalid row $1: user ID, team name (optional), guest 0/1, captain 0/1, team position (1/2/3).'],
+ [/^第 (\d+) 行有误：.*$/,'Invalid row $1: user identity, team name (optional), guest 0/1, captain 0/1, and a valid team position.'],
  [/^(.+)已入选(\d+)局，共需25局$/,'$1: $2 of 25 games selected'],
  [/^(\d+) 号 · (.+)（(已签到|未到场)）$/,(_,n,name,state)=>`Seat ${n} · ${name} (${state==='已签到'?'Checked in':'Absent'})`],
 ];

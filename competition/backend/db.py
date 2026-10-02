@@ -6,10 +6,21 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS competition_room_rules (
+  competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
+  rules_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS competition_draft_steps (
+  competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
+  step_index INTEGER NOT NULL DEFAULT 0,
+  selected_json TEXT NOT NULL DEFAULT '[]',
+  banned_json TEXT NOT NULL DEFAULT '[]',
+  history_json TEXT NOT NULL DEFAULT '[]'
+);
 CREATE TABLE IF NOT EXISTS competition_schedule (
   competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
   starts_at TEXT NOT NULL, roster_revision INTEGER NOT NULL,
@@ -30,7 +41,7 @@ CREATE TABLE IF NOT EXISTS competition_flow_rules (
   late_minutes INTEGER NOT NULL DEFAULT 15, ready_seconds INTEGER NOT NULL DEFAULT 60
 );
 CREATE TABLE IF NOT EXISTS tournament_roster_positions (
-  event_slug TEXT NOT NULL, user_id INTEGER NOT NULL, position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 3),
+  event_slug TEXT NOT NULL, user_id INTEGER NOT NULL, position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 16),
   PRIMARY KEY(event_slug,user_id)
 );
 CREATE TABLE IF NOT EXISTS competition_time_refunds (
@@ -168,7 +179,7 @@ CREATE TABLE IF NOT EXISTS competition_seats (
   UNIQUE (competition_id, user_id),
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
   CHECK (side IN ('yellow', 'white')),
-  CHECK (position BETWEEN 1 AND 3)
+  CHECK (position BETWEEN 1 AND 16)
 );
 
 CREATE TABLE IF NOT EXISTS competition_team_readiness (
@@ -262,11 +273,10 @@ CREATE TABLE IF NOT EXISTS competition_lineups (
   submitted_at TEXT NOT NULL,
   revealed_at TEXT,
   PRIMARY KEY (competition_id, side, game_key),
-  UNIQUE (competition_id, side, position),
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
   CHECK (side IN ('yellow', 'white')),
-  CHECK (game_key IN ('A', 'B', 'C')),
-  CHECK (position BETWEEN 1 AND 3),
+  CHECK (length(game_key) = 1 AND game_key BETWEEN 'A' AND 'O'),
+  CHECK (position BETWEEN 1 AND 16),
   CHECK (automatic IN (0, 1))
 );
 
@@ -282,7 +292,7 @@ CREATE TABLE IF NOT EXISTS competition_match_control (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
-  CHECK (current_game_key IN ('A', 'B', 'C'))
+  CHECK (length(current_game_key) = 1 AND current_game_key BETWEEN 'A' AND 'O')
 );
 
 CREATE TABLE IF NOT EXISTS competition_game_readiness (
@@ -295,7 +305,7 @@ CREATE TABLE IF NOT EXISTS competition_game_readiness (
   captain_ready_at TEXT,
   PRIMARY KEY (competition_id, game_key, side),
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
-  CHECK (game_key IN ('A', 'B', 'C')),
+  CHECK (length(game_key) = 1 AND game_key BETWEEN 'A' AND 'O'),
   CHECK (side IN ('yellow', 'white'))
 );
 
@@ -339,7 +349,7 @@ CREATE TABLE IF NOT EXISTS competition_game_sessions (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (competition_id, game_key, side),
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
-  CHECK (game_key IN ('A', 'B', 'C')),
+  CHECK (length(game_key) = 1 AND game_key BETWEEN 'A' AND 'O'),
   CHECK (side IN ('yellow', 'white')),
   CHECK (state IN ('playing', 'completed'))
 );
@@ -371,7 +381,7 @@ CREATE TABLE IF NOT EXISTS competition_game_results (
   published_at TEXT NOT NULL,
   PRIMARY KEY (competition_id, game_key),
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
-  CHECK (game_key IN ('A', 'B', 'C')),
+  CHECK (length(game_key) = 1 AND game_key BETWEEN 'A' AND 'O'),
   CHECK (winner_side IN ('yellow', 'white', 'draw'))
 );
 
@@ -425,7 +435,7 @@ CREATE TABLE IF NOT EXISTS competition_result_confirmations (
   confirmed_at TEXT NOT NULL,
   PRIMARY KEY (competition_id, game_key, side),
   FOREIGN KEY (competition_id) REFERENCES competitions(id) ON DELETE CASCADE,
-  CHECK (game_key IN ('A', 'B', 'C')),
+  CHECK (length(game_key) = 1 AND game_key BETWEEN 'A' AND 'O'),
   CHECK (side IN ('yellow', 'white'))
 );
 
@@ -655,6 +665,8 @@ class CompetitionDatabase:
                 FROM competition_match_control
                 """
             )
+            from .room_rules_migration import migrate_room_constraints
+            migrate_room_constraints(setup)
             setup.execute(
                 "INSERT OR REPLACE INTO competition_schema_meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),

@@ -64,6 +64,10 @@ export function commandId() {
 }
 
 export const api = {
+  roomRulePresets: () => request('/api/room-rule-presets'),
+  submitDraftStep: (code, selections, phaseToken) => request(`/api/competitions/${encodeURIComponent(code)}/draft/step`, {
+    method: 'POST', body: { ...selections, phase_token: phaseToken, command_id: commandId() },
+  }),
   preferredLanguage: () => request('/api/preferences/language', { timeoutMs: 2500 }),
   session: (options) => request('/api/session', options),
   practiceAppearance: () => request('/api/practice/appearance'),

@@ -25,6 +25,9 @@ test('dynamic confirmations retain participant content and language switching is
  assert.equal(t('我的剩余 01:23'),'Your time remaining: 01:23');
  assert.equal(t('确定关闭「队伍甲」？关闭后无法重新落座或开赛，房间记录仍会保留。'),'Close “队伍甲”? Seating and play will be disabled. The room record will be retained.');
  assert.equal(t('极限速通（3×3）'),'Extreme Speedrun (3×3)');
+ assert.equal(t('黄16'),'Yellow 16');
+ assert.equal(t('白5'),'White 5');
+ assert.equal(t('项目 G 结果'),'Game G · Result');
  language.value='zh';assert.equal(t('我的剩余 01:23'),'我的剩余 01:23');
 });
 test('account language sync is read-only and local override wins until Auto is restored',async()=>{

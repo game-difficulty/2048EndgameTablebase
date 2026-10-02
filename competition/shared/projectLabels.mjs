@@ -43,13 +43,13 @@ export function competitionProjectDescription(project, lang='zh') {
 }
 const phases = {
   SEATING:['选手落座','Player seating'], READY_CHECK:['队长准备','Captain ready check'],
-  DRAW:['先后手抽签','First-pick draw'], FIRST_PICK_BAN:['先手选禁','First pick / ban'],
+  DRAW:['先后手抽签','First-pick draw'], DRAFT_STEP:['项目选禁','Project draft'], FIRST_PICK_BAN:['先手选禁','First pick / ban'],
   SECOND_PICK_BAN:['后手选禁','Second pick / ban'], BLIND_PICK:['双方盲选','Blind picks'],
   C_DRAW:['第三项目抽签','Game C draw'], LINEUP:['秘密布阵','Secret lineups'],
   FINISHED:['全场结算','Match finished'], CANCELLED:['比赛取消','Cancelled'],
 };
 export function competitionPhaseLabel(phase, lang='zh') {
-  const game = /^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(phase || '');
+  const game = /^GAME_([A-O])_(READY|PLAYING|RESULT)$/.exec(phase || '');
   if(game){const state={READY:['开局检查','Ready check'],PLAYING:['对局中','In progress'],RESULT:['单局结果','Game result']}[game[2]];return `${lang==='zh'?'项目':'Game'} ${game[1]} · ${state[lang==='zh'?0:1]}`;}
   return phases[phase]?.[lang==='zh'?0:1] || (lang==='zh'?'比赛准备中':'Preparing match');
 }

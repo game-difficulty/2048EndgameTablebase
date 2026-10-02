@@ -51,6 +51,9 @@ class EventCatalog:
                                      (row['slug'],)).fetchone()[0],
             'entry_kind': 'team', **FORMATS[row['format_key']],
         }
+        result['team_size'] = self.enrollment.config(db, row['slug'])['team_size']
+        if result['capabilities']['rooms']:
+            result['label'] = '团队选 Ban 赛事'
         if result['capabilities']['statistics']:
             window = db.execute('SELECT starts_at,ends_at FROM tournament_statistics_config WHERE event_slug=?', (row['slug'],)).fetchone()
             now = datetime.now(timezone.utc)
@@ -116,7 +119,9 @@ class EventCatalog:
                             result['record_candidates'].append({**dict(session),'game_key':game['game_key'],'score':game[f'{side}_score'],'elapsed_ms':game.get(f'{side}_elapsed_ms'),'public_key':room['public_key']})
             return result
 
-    def create(self, principal, *, slug, name, description='', rules=''):
+    def create(self, principal, *, slug, name, description='', rules='', team_size=3):
+        if type(team_size) is not int or not 1 <= team_size <= 16:
+            raise CompetitionError('INVALID_EVENT', '每队人数须为 1 至 16。')
         if not self.rooms._is_platform_organizer(principal):
             raise CompetitionError('EVENT_MANAGER_REQUIRED', '仅赛事管理员可创建赛事。', 403)
         if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', slug) or not 2 <= len(slug) <= 64:
@@ -129,7 +134,7 @@ class EventCatalog:
                 db.execute('''INSERT INTO tournament_events
                     (slug,name,description,rules,owner_user_id,created_at) VALUES(?,?,?,?,?,?)''',
                     (slug, name, description, rules, principal.user_id, datetime.now(timezone.utc).isoformat()))
-                db.execute('INSERT INTO tournament_enrollment_config(event_slug,mode,team_size) VALUES(?,\'self_team\',3)', (slug,))
+                db.execute('INSERT INTO tournament_enrollment_config(event_slug,mode,team_size) VALUES(?,\'self_team\',?)', (slug, team_size))
             except sqlite3.IntegrityError as exc:
                 raise CompetitionError('EVENT_SLUG_TAKEN', '该赛事地址已存在。', 409) from exc
         return self.detail(slug, principal)

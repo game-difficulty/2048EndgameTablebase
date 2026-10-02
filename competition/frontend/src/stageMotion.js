@@ -6,13 +6,21 @@ export const STAGE_ORDER = [
   'GAME_C_READY', 'GAME_C_PLAYING', 'GAME_C_RESULT', 'FINISHED',
 ];
 
-const GAME_PHASE = /^GAME_([ABC])_(READY|PLAYING|RESULT)$/;
+const GAME_PHASE = /^GAME_([A-O])_(READY|PLAYING|RESULT)$/;
 
 // A reconnect or a skipped server phase must show the latest snapshot immediately.
 export function stageChange(previous, next, live = false) {
   if (!live || !previous || !next || previous.room_code !== next.room_code) return null;
   const from = STAGE_ORDER.indexOf(previous.status);
   const to = STAGE_ORDER.indexOf(next.status);
+  if (next.rules?.version && next.draft?.workflow) {
+    const key = next.status.match(GAME_PHASE)?.[1] || null;
+    if (previous.status===next.status) return null;
+    if (next.status==='FINISHED') return {from:previous.status,to:next.status,kind:'match-finished',game:key};
+    if (key && previous.match?.current_game_key===key && next.status.endsWith('_RESULT')) return {from:previous.status,to:next.status,kind:'game-result',game:key};
+    if (key && previous.status===`GAME_${key}_READY` && next.status.endsWith('_PLAYING')) return {from:previous.status,to:next.status,kind:'game-start',game:key};
+    return null;
+  }
   if (from < 0 || to !== from + 1) return null;
   const game = next.status.match(GAME_PHASE)?.[1] || null;
   let kind = 'advance';

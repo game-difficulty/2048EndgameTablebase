@@ -28,9 +28,11 @@ class CreateCompetitionRequest(BaseModel):
     starts_at: str | None = Field(default=None, max_length=64)
     yellow_team_id: str | None = Field(default=None, max_length=150)
     white_team_id: str | None = Field(default=None, max_length=150)
+    rules: dict | None = None
 
 
 class CreateEventRequest(BaseModel):
+    team_size: int = Field(default=3, ge=1, le=16)
     slug: str = Field(min_length=2, max_length=64)
     name: str = Field(min_length=2, max_length=100)
     description: str = Field(default='', max_length=1000)
@@ -59,7 +61,7 @@ class StatisticsRosterEntry(BaseModel):
     team_name: str = Field(default='', max_length=40)
     is_external: bool = False
     captain: bool = False
-    position: int | None = Field(default=None, ge=1, le=3)
+    position: int | None = Field(default=None, ge=1, le=16)
 
     @model_validator(mode='after')
     def identity(self):
@@ -124,6 +126,13 @@ class PickBanRequest(BaseModel):
     pick_project_key: str
     ban_project_key: str
     phase_token: str
+    command_id: str
+
+
+class DraftStepRequest(BaseModel):
+    picks: list[str] = Field(default_factory=list, max_length=15)
+    bans: list[str] = Field(default_factory=list, max_length=15)
+    phase_token: str = Field(max_length=100)
     command_id: str
 
 

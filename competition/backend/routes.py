@@ -33,6 +33,7 @@ from .schemas import (
     IssueResolutionRequest,
     LineupRequest,
     PickBanRequest,
+    DraftStepRequest,
     PracticeResultRequest,
     ReadinessRequest,
     ResultConfirmationRequest,
@@ -43,6 +44,14 @@ from .schemas import (
 
 
 router = APIRouter(prefix="/api")
+
+
+@router.get('/room-rule-presets')
+async def room_rule_presets():
+    from .room_rules import normalize_rules
+    return {'presets': [normalize_rules({'preset': name}) for name in ('bo3', 'bo5', 'bo7')]}
+
+
 
 
 @router.post('/competitions/{room_code}/members/manage')
@@ -67,6 +76,13 @@ def current_principal(request: Request) -> Principal:
 
 
 PrincipalDependency = Annotated[Principal, Depends(current_principal)]
+
+@router.post('/competitions/{room_code}/draft/step')
+async def draft_step(request: Request, room_code: str, payload: DraftStepRequest, principal: PrincipalDependency):
+    room = await asyncio.to_thread(service_from_request(request).submit_draft_step, room_code, principal, **payload.model_dump())
+    await _broadcast(request, room['room_code'])
+    return {'competition': room}
+
 
 
 def optional_principal(request: Request) -> Principal | None:
@@ -282,6 +298,7 @@ async def create_competition(
         yellow_team_id=payload.yellow_team_id,
         white_team_id=payload.white_team_id,
         room_code=payload.room_code,
+        rules=payload.rules,
         projects=[
             {
                 "key": item.key,

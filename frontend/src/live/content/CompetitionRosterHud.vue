@@ -41,6 +41,7 @@ const profileUrl = player => `https://play.2048tables.online/user/${encodeURICom
 </script>
 
 <style scoped>
+.hud-players{max-height:480px;overflow-y:auto;scrollbar-width:thin}
 .roster-hud{--accent:var(--match-accent,#e1bd59);position:absolute;z-index:5;top:50%;left:-22px;width:154px;display:flex;align-items:center;transform:translateY(-50%);transition:transform 240ms cubic-bezier(.2,.8,.2,1);pointer-events:none}
 .roster-hud.white{--accent:var(--match-copy,#cbd5e1);left:auto;right:-22px;flex-direction:row-reverse}
 .roster-hud.collapsed{transform:translate(-130px,-50%)}

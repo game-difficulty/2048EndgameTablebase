@@ -221,7 +221,7 @@ class EventEnrollment:
                     fail('所有队伍需由队长提交报名后才能锁定。')
                 if self.catalog._event(db, slug)['format_key'] == 'team-draft-v1' and not team['captain_user_id']:
                     fail('团队对战名单中的每队需指定一位队长。')
-                if self.catalog._event(db,slug)['format_key']=='team-draft-v1' and sorted(e.get('position') or 0 for e in members)!=[1,2,3]:
+                if self.catalog._event(db,slug)['format_key']=='team-draft-v1' and sorted(e.get('position') or 0 for e in members)!=list(range(1,config['team_size']+1)):
                     fail('请由举办方导入或编辑各队明确的 1、2、3 号位后再锁定。')
         if self.catalog._event(db, slug)['format_key'] == 'team-top5-3x3-v1':
             if len(entries) != 20 or len(teams) != 4 or sum(e['is_external'] for e in entries) != 1:
@@ -277,6 +277,8 @@ class EventEnrollment:
                     groups.setdefault(e['team_name'], []).append(e)
             for group in groups.values():
                 positions = [e['position'] for e in group if e['position'] is not None]
+                if any(type(p) is not int or not 1 <= p <= config['team_size'] for p in positions):
+                    fail('队内序号超出本赛事队伍人数范围。')
                 if positions and (len(positions) != len(group) or len(set(positions)) != len(positions)
                                   or any(e['captain'] != (e['position'] == 1) for e in group)):
                     fail('队内序号须完整填写且不重复，1 号位必须为队长。')

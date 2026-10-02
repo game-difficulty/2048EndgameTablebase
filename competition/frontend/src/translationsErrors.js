@@ -1,4 +1,16 @@
 const entries=`
+请选择本房间范围内的有效席位。|Choose a valid seat in this room.
+本队全部选手均需落座。|All players on your team must be seated.
+项目选禁|Project draft
+团队选 Ban 赛事|Team draft event
+队内序号超出本赛事队伍人数范围。|A seat number is outside this event’s team size.
+项目池须包含 1–32 个项目，且满足所选流程的最低要求。|The pool must contain 1–32 projects and meet the selected format’s minimum.
+请为每局安排选手，并满足本房间的出场限制。|Assign a player to each game and satisfy this room’s lineup policy.
+请检查 BP 步骤、每队人数、计时及项目池是否符合房间规则。|Check the draft steps, team size, timers and project pool against the room rules.
+选禁数量不符，或项目已被选择、禁用。|Incorrect selection counts, or a project has already been picked or banned.
+当前不是本方的选禁回合。|It is not your team’s draft turn.
+赛事名单人数须与房间每队人数一致；统计赛不使用此对战流程。|The roster size must match the room’s team size. Statistical events do not use this match flow.
+未绑定队伍时为自由房间，不计入正式赛事纪录。设置开战时间后，到点方可开始抽签；超过15分钟，已全员落座且队长准备的一方获胜，未就位方判全部对局负，双方均未就位则0:0。|Unbound rooms are open rooms and do not count toward event records. The draw starts no earlier than the scheduled time. After 15 minutes, the ready team wins all games by forfeit; if neither team is ready, the result is 0:0.
 已进入布阵阶段，不再因落位错误重赛。|Lineup selection has begun. Incorrect seating can no longer trigger a rematch.
 请按报名表上的队内序号落座。|Take the seat matching your registered team position.
 请先登录后再操作。|Please sign in first.

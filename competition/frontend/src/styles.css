@@ -769,3 +769,9 @@ html[lang=en] .game-actions{flex-wrap:wrap}
  html[lang=en] .progress-step{font-size:10px;white-space:normal;overflow-wrap:break-word}
 }
 .phase-language{display:flex;justify-content:center;margin:18px 0}
+@media(max-width:700px){.match-header-inner{display:flex;flex-wrap:wrap;gap:10px;padding-block:14px}.match-header-actions{flex:1 0 100%;flex-wrap:wrap;gap:8px;min-width:0}.match-header-actions button{font-size:12px}.match-identity{flex:1;min-width:0}.match-identity h1{font-size:22px;line-height:1.3;overflow-wrap:anywhere}.match-header .stage-chip{display:flex;font-size:12px}.progress-strip{grid-template-columns:repeat(6,minmax(78px,1fr))}}
+.frozen-room-rules{margin-bottom:20px;padding:16px 20px;border:1px solid var(--competition-border);border-radius:10px;font-size:14px;background:var(--competition-card)}.frozen-room-rules summary{cursor:pointer;font-weight:700}.frozen-room-rules p{color:var(--competition-muted);line-height:1.6}.frozen-steps{display:flex;gap:12px;flex-wrap:wrap}.frozen-steps span{padding:6px 8px;border:1px solid var(--competition-border);border-radius:5px}
+@media(max-width:600px){.site-header{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;padding:10px 14px}.site-header .brand{min-width:0;padding:0;grid-column:1;grid-row:1}.site-header .brand strong{font-size:14px}.site-header .brand small{font-size:9px}.site-header .brand-mark{flex:none}.site-header .account-chip{grid-column:1;grid-row:2;font-size:11px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-left:0!important}.site-header>:last-child{grid-column:2;grid-row:1/3}html[lang=en] .site-header{gap:4px 10px}}
+.game-hud-progress{flex-wrap:wrap;max-width:150px;justify-content:center}
+.game-roster-edge{max-height:calc(100dvh - 180px);overflow-y:auto;scrollbar-width:thin}
+@media(max-width:1100px){.game-roster-edge{overflow-x:auto;max-height:none}.game-roster-edge .roster-edge-player{flex:none}}

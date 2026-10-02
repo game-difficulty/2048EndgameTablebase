@@ -8,10 +8,11 @@
 
     <div v-if="!match" class="waiting">{{ t('正在读取比赛公开状态…','Loading public match state…') }}</div>
 
+    <DraftWorkflow v-else-if="stage==='draft' && draft?.workflow && match.phase!=='DRAW'" class="live-workflow" :workflow="draft.workflow" :projects="match.projects" :phase="match.phase" :lang="lang" :name-of="projectName" :icon-of="key=>gameIcon({project_key:key})" />
     <div v-else-if="stage==='draft'" class="draft-layout">
       <TeamRoster side="yellow" :team="team('yellow')" :lang="lang" />
       <main class="draft-main"><div class="section-title"><span>{{ t('项目选定','PROJECT DRAFT') }}</span><div class="phase-info"><em v-if="phaseActor">{{ phaseActor }}</em><b>{{ phaseLabel }}</b><time v-if="phaseCountdown">{{ phaseCountdown }}</time></div></div>
-        <div v-if="match.phase==='DRAW' && draft?.first_side" class="draw-reveal" :class="draft.first_side"><small>{{ t('先手抽签结果','FIRST-PICK DRAW') }}</small><strong>{{ team(draft.first_side).name || sideLabel(draft.first_side) }}{{ t('获得先手',' takes first pick') }}</strong><span>{{ t('先选择项目 A，并 BAN 一项','Select project A and ban one project first') }}</span></div>
+        <div v-if="match.phase==='DRAW' && draft?.first_side" class="draw-reveal" :class="draft.first_side"><small>{{ t('先手抽签结果','FIRST-PICK DRAW') }}</small><strong>{{ team(draft.first_side).name || sideLabel(draft.first_side) }}{{ t('获得先手',' takes first pick') }}</strong><span>{{ match.rules ? t(`首步选择 ${match.rules.steps[0].picks} 项，禁用 ${match.rules.steps[0].bans} 项`,`First step: ${match.rules.steps[0].picks} pick(s), ${match.rules.steps[0].bans} ban(s)`) : t('先选择项目 A，并 BAN 一项','Select project A and ban one project first') }}</span></div>
         <div v-if="match.phase==='C_DRAW'" class="candidate-reveal">
           <h2>{{ draft.c_reveal_at ? t('双方盲选候选','BLIND CANDIDATES') : t('抽签结果 · 项目 C','DRAW RESULT · GAME C') }}</h2>
           <div><article v-for="side in sides" :key="side">
@@ -70,6 +71,7 @@
   </section>
 </template>
 <script setup>
+import DraftWorkflow from '../../../../competition/shared/DraftWorkflow.vue';
 import { shouldRefreshLiveClock } from '../displayClock.js';
 import { observeAdaptiveBoards } from './adaptiveBoardLayout.js';
 import MatchSettlement from '../../../../competition/shared/MatchSettlement.vue';
@@ -94,14 +96,14 @@ const match=ref(null),now=ref(Date.now()),receivedAt=ref(Date.now()),serverAncho
 const t=(zh,en)=>props.lang==='zh'?zh:en;
 const score=computed(()=>match.value?.score||{}),draft=computed(()=>match.value?.public_draft||{}),views=computed(()=>match.value?.project_public_views||{});
 const current=computed(()=>match.value?.games?.find(item=>item.game_key===match.value.current_game));
-const nextGame=computed(()=>{const index=['A','B','C'].indexOf(match.value?.current_game);return index>=0?match.value?.games?.find(item=>item.game_key===['A','B','C'][index+1]):null});
+const nextGame=computed(()=>{const index=(match.value?.games || []).map(g=>g.game_key).indexOf(match.value?.current_game);return index>=0?match.value?.games?.find(item=>item.game_key===(match.value?.games || []).map(g=>g.game_key)[index+1]):null});
 const sides=['yellow','white'];
 const stageWait=computed(()=>Math.max(0,Math.ceil((Date.parse((stage.value==='game-result'?match.value?.rest_until:match.value?.preview_until)||'')-currentServerNow())/1000))||0);
 const readyWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.ready_deadline_at||'')-currentServerNow())/1000))||0);
 const predictionWait=computed(()=>Math.max(0,Math.ceil((Date.parse(match.value?.prediction_window?.minimum_until||'')-currentServerNow())/1000))||0);
-const stage=computed(()=>{const value=match.value?.phase||'';if(['DRAW','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(value))return'draft';if(value==='LINEUP')return'lineup';if(value.endsWith('_READY'))return'ready';if(value.endsWith('_RESULT'))return now.value<finishPlaybackUntil.value||Object.values(playbackPending.value).some(Boolean)?'game':'game-result';if(value==='FINISHED'||value==='CANCELLED')return'result';return'game'});
+const stage=computed(()=>{const value=match.value?.phase||'';if(['DRAW','DRAFT_STEP','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(value))return'draft';if(value==='LINEUP')return'lineup';if(value.endsWith('_READY'))return'ready';if(value.endsWith('_RESULT'))return now.value<finishPlaybackUntil.value||Object.values(playbackPending.value).some(Boolean)?'game':'game-result';if(value==='FINISHED'||value==='CANCELLED')return'result';return'game'});
 const phaseLabels={DRAW:['抽签','DRAW'],FIRST_PICK_BAN:['先手选禁','FIRST PICK / BAN'],SECOND_PICK_BAN:['后手选禁','SECOND PICK / BAN'],BLIND_PICK:['双方盲选','BLIND PICK'],C_DRAW:['项目 C 抽签','PROJECT C DRAW'],LINEUP:['秘密布阵','SECRET LINEUP'],FINISHED:['全场结束','FINAL']};
-const phaseLabel=computed(()=>{const value=match.value?.phase||'';const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([ABC])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`${t('项目','GAME')} ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('单局结果','RESULT')}[gamePhase[2]]}`;return competitionPhaseLabel(value,props.lang)});
+const phaseLabel=computed(()=>{const value=match.value?.phase||'';if(value==='C_DRAW'&&draft.value?.workflow)return t('BP 已完成','DRAFT COMPLETE');const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([A-O])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`${t('项目','GAME')} ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('单局结果','RESULT')}[gamePhase[2]]}`;return competitionPhaseLabel(value,props.lang)});
 const phaseActor=computed(()=>{const side=match.value?.phase_timing?.active_side;if(!side)return'';const name=team(side).name||(side==='yellow'?t('黄方','Yellow'):t('白方','White'));return`${name} · ${t('操作中','ON TURN')}`});
 const currentServerNow=()=>serverAnchor.value+(now.value-receivedAt.value);
 const phaseCountdown=computed(()=>{const deadline=Date.parse(match.value?.phase_timing?.deadline_at||'');if(!Number.isFinite(deadline))return'';const seconds=Math.max(0,Math.ceil((deadline-currentServerNow())/1000));return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`});
@@ -112,7 +114,7 @@ const projectName=key=>key?competitionProjectLabel(match.value?.projects?.find(i
 const gameIcon=game=>projectIconUrl(match.value?.projects?.find(item=>item.key===(game?.project_key||game?.project_ref))?.project_ref||game?.project_ref,darkTheme.value?'dark':'light');
 const currentRule=computed(()=>competitionProjectDescription(match.value?.projects?.find(item=>item.key===current.value?.project_key),props.lang)||t('玩法说明待公布','Rules pending'));
 const projectMark=key=>key===draft.value.project_a?'A':key===draft.value.project_b?'B':key===draft.value.project_c?'C':key===draft.value.ban_m?`${sideLabel(draft.value.first_side)} BAN`:key===draft.value.ban_n?`${sideLabel(draft.value.first_side==='yellow'?'white':'yellow')} BAN`:'';
-const projectClass=key=>({picked:['A','B','C'].includes(projectMark(key)),banned:projectMark(key).includes('BAN')});
+const projectClass=key=>({picked:(match.value?.games || []).map(g=>g.game_key).includes(projectMark(key)),banned:projectMark(key).includes('BAN')});
 const blindStatus=computed(()=>`${t('黄方','Yellow')} ${draft.value.blind_submissions?.yellow?t('已密封','sealed'):t('等待','waiting')} · ${t('白方','White')} ${draft.value.blind_submissions?.white?t('已密封','sealed'):t('等待','waiting')}`);
 const sealed=side=>match.value?.lineup_submission_status?.[side]?.submitted;
 const session=side=>match.value?.session_status?.[side]||{};
@@ -174,6 +176,18 @@ const ProjectPane=defineComponent({props:['side','view','status','player','lang'
 }}});
 </script>
 <style scoped>
+.competition-content .live-workflow{max-height:calc(100% - 100px);overflow:auto;margin-top:12px;box-sizing:border-box}
+.competition-content .lineup-layout{height:calc(100% - 100px);overflow:auto;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));grid-template-rows:max-content;grid-auto-rows:max-content;align-content:start}
+.competition-content .lineup-layout .game-card{min-width:0;display:grid;grid-template-columns:56px minmax(0,1fr);gap:8px;padding:16px;text-align:left;align-content:start}
+.competition-content .lineup-layout .lineup-icon{grid-column:1;grid-row:1/3;width:56px;height:56px;margin:0}
+.competition-content .lineup-layout .game-card>small{grid-column:2;align-self:end}
+.competition-content .lineup-layout .game-card>h2{grid-column:2;height:auto;margin:0;font-size:16px;line-height:1.4;overflow-wrap:anywhere}
+.competition-content .lineup-layout .game-card>div{grid-column:1/-1;gap:6px}
+.competition-content .lineup-layout .game-card :deep(section){padding:8px;font-size:13px}
+.competition-content .lineup-layout .game-card :deep(section .live-player-avatar){width:28px;height:28px}
+.competition-content .series-track{flex-wrap:wrap;gap:4px}
+.competition-content .series-panel{min-height:0;overflow:auto}
+.competition-content .roster{min-height:0;overflow:auto}
 .competition-content.showing-settlement{overflow:auto;display:block;padding:12px 18px}
 .competition-content.showing-settlement .live-settlement{height:auto;min-height:100%;padding:12px 8px}
 .live-settlement :deep(.settlement-row){padding:9px 0}
