@@ -33,7 +33,7 @@ const elapsed = computed(() => {
 });
 </script>
 <style scoped>
-.stream-project{height:100%;display:grid;grid-template-rows:48px minmax(0,1fr) 22px;gap:8px;align-items:center}
+.stream-project{height:100%;min-height:0;min-width:0;display:grid;grid-template-rows:48px minmax(0,1fr) 22px;gap:8px;align-items:center}
 header{display:grid;grid-template-columns:repeat(var(--metric-count,2),minmax(0,1fr));gap:8px;align-items:end;height:48px;box-sizing:border-box;border-bottom:1px solid var(--match-line,#334155);padding:0 2px 7px}
 header small{line-height:1}
 header span{display:grid;gap:3px;min-width:0}header .time-metric{text-align:right}small{color:var(--match-muted,#94a3b8);font-size:11px}header strong{color:var(--match-text,#f8fafc);font-size:24px;font-variant-numeric:tabular-nums;line-height:1}

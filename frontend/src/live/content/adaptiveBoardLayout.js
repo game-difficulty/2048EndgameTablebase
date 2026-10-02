@@ -16,6 +16,10 @@ export function chooseRuleSize(budget, measure) {
   }
 }
 
+export function fitBoard(width, height, ratio) {
+  return Math.max(0, Math.min(width, 330, height * ratio));
+}
+
 // The renderer owns its intrinsic aspect ratio. No project IDs or shape lists
 // belong here; measure the direct board root, including any entrance/exit area.
 export function observeAdaptiveBoards(root) {
@@ -59,8 +63,9 @@ export function observeAdaptiveBoards(root) {
     }
     // Read after the rule allocation, then fit every board without distorting it.
     for (const { area, ratio } of entries) {
-      const width = Math.max(0, Math.min(area.clientWidth, 330, area.clientHeight * ratio));
-      area.style.setProperty('--stream-board-width', `${width}px`);
+      const width = fitBoard(area.clientWidth, area.clientHeight, ratio);
+      const value = `${width}px`;
+      if (area.style.getPropertyValue('--stream-board-width') !== value) area.style.setProperty('--stream-board-width', value);
       area.classList.add('adaptive-board-fit');
     }
   }

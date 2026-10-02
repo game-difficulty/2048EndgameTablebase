@@ -46,11 +46,11 @@
     </div>
 
     <div v-else-if="stage==='game'" class="game-layout">
-      <CompetitionRosterHud v-model:collapsed="hudCollapsed.yellow" side="yellow" :team="team('yellow')" :active-player="currentPlayer('yellow')" :finished="session('yellow').finished" :lang="lang" />
+      <CompetitionRosterHud v-model:collapsed="hudCollapsed.yellow" side="yellow" :team="team('yellow')" :assignments="playerProjects('yellow')" :active-player="currentPlayer('yellow')" :finished="session('yellow').finished" :lang="lang" />
       <ProjectPane side="yellow" :view="views.yellow" :status="session('yellow')" :player="currentPlayer('yellow')" :lang="lang" :suspended="match?.suspended" />
       <aside class="series-panel"><small>{{ t('当前项目','CURRENT PROJECT') }}</small><img v-if="gameIcon(current)" class="current-icon" :src="gameIcon(current)" alt="" /><h2>{{ projectName(current?.project_key) }}</h2><div class="series-track"><span v-for="game in match.games" :key="game.game_key" :class="{active:game.game_key===match.current_game,done:game.result}">{{ game.game_key }}</span></div><p>{{ gameState }}</p><dl><template v-for="game in match.games" :key="game.game_key"><dt>{{ game.game_key }}</dt><dd>{{ resultText(game.result) }}</dd></template></dl></aside>
       <ProjectPane side="white" :view="views.white" :status="session('white')" :player="currentPlayer('white')" :lang="lang" :suspended="match?.suspended" />
-      <CompetitionRosterHud v-model:collapsed="hudCollapsed.white" side="white" :team="team('white')" :active-player="currentPlayer('white')" :finished="session('white').finished" :lang="lang" />
+      <CompetitionRosterHud v-model:collapsed="hudCollapsed.white" side="white" :team="team('white')" :assignments="playerProjects('white')" :active-player="currentPlayer('white')" :finished="session('white').finished" :lang="lang" />
       <p class="game-rule-strip"><b>{{ t('当前玩法','RULES') }}</b><span>{{ currentRule }}</span></p>
     </div>
 
@@ -119,6 +119,9 @@ const session=side=>match.value?.session_status?.[side]||{};
 const readiness=side=>match.value?.game_readiness?.[side]||{};
 const confirmed=side=>Boolean(match.value?.captain_confirmation_status?.[side]);
 const currentPlayer=side=>current.value?.players?.[side];
+const playerProjects=side=>Object.fromEntries((match.value?.games||[]).filter(game=>game.players?.[side]?.position).map(game=>[
+  game.players[side].position, `${game.game_key} · ${projectName(game.project_key).replace(/\s*[（(]\d+\s*[×x]\s*\d+[）)]\s*$/, '')}`,
+]));
 const clock=side=>{const value=match.value?.team_clocks?.[side];if(!value)return'30:00';const projectionTime=Date.parse(match.value?.server_time||'');const elapsed=value.state==='running'&&Number.isFinite(projectionTime)?Math.max(0,currentServerNow()-projectionTime):0;const ms=Math.max(0,Number(value.remaining_ms||0)-elapsed),seconds=Math.ceil(ms/1000);return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`};
 const gameState=computed(()=>match.value?.phase?.endsWith('_RESULT')?t('休整后自动继续','Continuing after rest'):Object.values(match.value?.session_status||{}).some(item=>item.finished)?t('等待另一方完成','Waiting for the other side'):t('双方对局进行中','Both players in progress'));
 const resultText=result=>!result?t('待进行','Pending'):result.winner_side==='draw'?t('平局','Draw'):result.winner_side==='yellow'?t('黄方胜','Yellow win'):t('白方胜','White win');

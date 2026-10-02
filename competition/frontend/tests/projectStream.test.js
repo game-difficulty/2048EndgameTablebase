@@ -78,3 +78,47 @@ test('withheld ACKs never block new local states; reconnect retains the final st
     assert.equal(sender.frames.length,0);
   }finally{sender.close();}
 });
+
+test('a blackholed connection retries without waiting for the browser close handshake',t=>{
+  t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:1000});
+  const {sender,sockets,receive}=fixture();
+  try {
+    sender.push(packet(1));sender.flush();
+    const old=sockets[0];old.close=()=>{old.readyState=2;};
+    t.mock.timers.tick(10000);
+    assert.equal(sender.ready,false);
+    t.mock.timers.tick(500);
+    assert.equal(sockets.length,2);
+    receive({type:'stream.ready',protocol:PROJECT_STREAM_PROTOCOL,accepted_sequence:0});
+    sender.flush();
+    assert.equal(sockets[1].sent[0].data.sequence,1);
+    old.onclose({code:4409});
+    assert.equal(sender.closed,false,'a delayed close from the old socket cannot block the new sender');
+  } finally { sender.close(); }
+});
+
+test('a socket stuck before its first ready response automatically retries',t=>{
+  t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:1000});
+  const {sender,sockets}=fixture();
+  try {
+    sender.open(); // Connected transport, but no stream.ready this time.
+    sockets[1].close=()=>{};
+    t.mock.timers.tick(12000);t.mock.timers.tick(500);
+    assert.equal(sockets.length,3);
+  } finally { sender.close(); }
+});
+
+test('temporary active-player denial resyncs and retries, another-page takeover remains blocked',t=>{
+  t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:1000});
+  const {sender,sockets,errors}=fixture();
+  try {
+    sockets[0].onclose({code:4403,reason:'active_player_required'});
+    assert.equal(sender.closed,false);
+    assert.equal(errors.at(-1).code,'STREAM_DISCONNECTED');
+    t.mock.timers.tick(500);
+    sockets[1].onclose({code:4409,reason:'publisher_replaced'});
+    assert.equal(sender.closed,true);
+    sender.recover();t.mock.timers.tick(20000);
+    assert.equal(sockets.length,2);
+  } finally { sender.close(); }
+});

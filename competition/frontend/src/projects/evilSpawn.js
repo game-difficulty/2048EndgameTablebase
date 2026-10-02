@@ -6,11 +6,10 @@ let nextRequestId = 1;
 const pending = new Map();
 
 function disableWorker(cause) {
-  workerUnavailable = true;
   worker?.terminate();
   worker = null;
   const error = cause instanceof Error ? cause : new Error('EvilGen worker stopped unexpectedly.');
-  for (const request of pending.values()) request.reject(error);
+  for (const request of pending.values()) { clearTimeout(request.timeout); request.reject(error); }
   pending.clear();
 }
 
@@ -23,6 +22,7 @@ function getWorker() {
       const request = pending.get(data?.id);
       if (!request) return;
       pending.delete(data.id);
+      clearTimeout(request.timeout);
       if (data.error) request.reject(new Error(data.error));
       else request.resolve(data.result);
     });
@@ -41,7 +41,11 @@ export function evilSpawn(board, depth, tieSeed) {
   const id = nextRequestId;
   nextRequestId += 1;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    activeWorker.postMessage({ id, board: Array.from(board), depth, tieSeed });
+    // A stalled WASM load/worker must not hold the player's input lock forever.
+    // Rejecting restores the pre-move state; the next move creates a new worker.
+    const timeout = setTimeout(() => disableWorker(new Error('AI 计算暂时未响应，请重新操作。')), 20000);
+    pending.set(id, { resolve, reject, timeout });
+    try { activeWorker.postMessage({ id, board: Array.from(board), depth, tieSeed }); }
+    catch (error) { disableWorker(error); }
   });
 }

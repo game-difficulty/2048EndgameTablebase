@@ -89,7 +89,7 @@ export const api = {
     method: 'POST',
     body: { name, projects, event_slug: eventSlug, ...schedule },
   }),
-  room: (code) => request(`/api/competitions/${encodeURIComponent(code)}`),
+  room: (code, options) => request(`/api/competitions/${encodeURIComponent(code)}`, options),
   rematch: (code) => request(`/api/competitions/${encodeURIComponent(code)}/rematch`, {method:'POST',body:{command_id:commandId()}}),
   checkIn: (code) => request(`/api/competitions/${encodeURIComponent(code)}/check-in`, { method: 'POST' }),
   closeRoom: (code) => request(`/api/competitions/${encodeURIComponent(code)}/close`, {
@@ -251,42 +251,61 @@ export function connectRoom(code, handlers = {}) {
   let failures = 0;
   let heartbeat;
   let lastReceived = 0;
+  let openedAt = 0;
+  let ready = false;
+  let lastSnapshot = 0;
+  const retry = (current, event) => {
+    if (closed || socket !== current) return;
+    socket = null; ready = false;
+    clearInterval(heartbeat); clearTimeout(reconnectTimer);
+    try { current.close(); } catch { /* Already closed. */ }
+    handlers.onClose?.(event);
+    if (![4401, 4403, 4404, 1008].includes(event.code)) {
+      reconnectTimer = window.setTimeout(open, Math.min(1200 * 2 ** failures++, 15000));
+    }
+  };
   const open = () => {
+    if (closed) return;
+    clearInterval(heartbeat); clearTimeout(reconnectTimer);
     const base = apiOrigin ? new URL(apiOrigin, window.location.href) : new URL(window.location.href);
     base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
     base.pathname = `/ws/rooms/${encodeURIComponent(code)}`;
     base.search = '';
-    socket = new WebSocket(base.toString());
-    socket.onopen = () => {
+    const current = socket = new WebSocket(base.toString());
+    ready = false; openedAt = lastReceived = Date.now();
+    heartbeat = setInterval(() => {
+      if (socket !== current || closed) return;
+      if ((!ready && Date.now() - openedAt > 10000) || Date.now() - lastReceived > 30000) {
+        retry(current, {code:4001,reason:'heartbeat_timeout'}); return;
+      }
+      if (ready && current.readyState === 1) {
+        const resync = Date.now() - lastSnapshot > 15000;
+        current.send(JSON.stringify({ type: resync ? 'room.resync' : 'ping' }));
+        if (resync) lastSnapshot = Date.now();
+      }
+    }, 2000);
+    current.onopen = () => {
+      if (socket !== current || closed) return;
       lastReceived = Date.now();
-      heartbeat = setInterval(() => {
-        if (Date.now() - lastReceived > 30000) { socket.close(4001, 'heartbeat_timeout'); return; }
-        if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'ping' }));
-      }, 10000);
-      socket.send(JSON.stringify({
+      current.send(JSON.stringify({
         type: 'authenticate',
         data: { token: storedToken(), dev_user: devUser },
       }));
       handlers.onOpen?.();
     };
-    socket.onmessage = (event) => {
+    current.onmessage = (event) => {
+      if (socket !== current || closed) return;
       lastReceived = Date.now();
       try {
         const message = JSON.parse(event.data);
-        if (message?.type === 'room.snapshot') failures = 0;
+        if (message?.type === 'room.snapshot') { failures = 0; ready = true; lastSnapshot = Date.now(); }
         handlers.onMessage?.(message);
       } catch (error) {
         handlers.onError?.(error);
       }
     };
-    socket.onerror = (event) => handlers.onError?.(event);
-    socket.onclose = (event) => {
-      clearInterval(heartbeat);
-      handlers.onClose?.(event);
-      if (!closed && ![4401, 4403, 4404, 1008].includes(event.code)) {
-        reconnectTimer = window.setTimeout(open, Math.min(1200 * 2 ** failures++, 15000));
-      }
-    };
+    current.onerror = (event) => { if (socket === current && !closed) handlers.onError?.(event); };
+    current.onclose = (event) => retry(current, event);
   };
   open();
   const close = () => {
@@ -295,6 +314,11 @@ export function connectRoom(code, handlers = {}) {
     window.clearTimeout(reconnectTimer);
     socket?.close();
   };
-  close.resync = () => { if (socket?.readyState === 1) socket.send(JSON.stringify({ type: 'room.resync' })); };
+  close.resync = () => {
+    if (closed) return;
+    if (!socket || socket.readyState > 1) { open(); return; }
+    if (Date.now() - lastReceived > 10000) { retry(socket, {code:4001,reason:'resync_timeout'}); return; }
+    if (ready && socket.readyState === 1) socket.send(JSON.stringify({ type: 'room.resync' }));
+  };
   return close;
 }

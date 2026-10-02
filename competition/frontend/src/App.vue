@@ -4,6 +4,7 @@ import { language, t } from './i18n.js';
 import LanguageSwitch from './LanguageSwitch.vue';
 import { api, connectRoom, projectSocket, projectAuthentication } from './api';
 import { ProjectStreamSender } from './projects/projectStream.js';
+import { ServerClock } from './serverClock.js';
 import { userFacingError } from './errorMessages.js';
 import ProjectPlayground from './projects/ProjectPlayground.vue';
 import PlayerAvatar from './PlayerAvatar.vue';
@@ -72,8 +73,9 @@ const forceAdvanceReason = ref('');
 const forceFinishWinner = ref('draw');
 const forceFinishReason = ref('');
 const clockNow = ref(Date.now());
-const serverOffsetMs = ref(0);
-const predictionWait = computed(() => Math.max(0, Math.ceil((Date.parse(match.value?.prediction_window?.minimum_until || '') - clockNow.value - serverOffsetMs.value) / 1000)) || 0);
+const serverClock = new ServerClock();
+let roomRefreshPending = false;
+const predictionWait = computed(() => Math.max(0, Math.ceil((Date.parse(match.value?.prediction_window?.minimum_until || '') - clockNow.value) / 1000)) || 0);
 const movePending = ref(false);
 const projectThinking = ref(false);
 const observerPending = ref({ yellow: false, white: false });
@@ -179,10 +181,10 @@ const remainingSeconds = computed(() => {
     (room.value?.status === 'LINEUP' ? lineup.value?.deadline_at : draft.value?.deadline_at) || '',
   );
   if (!Number.isFinite(deadline)) return null;
-  return Math.max(0, Math.ceil((deadline - (clockNow.value + serverOffsetMs.value)) / 1000));
+  return Math.max(0, Math.ceil((deadline - clockNow.value) / 1000));
 });
 const ownRemainingSeconds = computed(() => phaseSeconds(
-  ownDeadline(room.value), clockNow.value + serverOffsetMs.value,
+  ownDeadline(room.value), clockNow.value,
 ));
 const motionEnabled = () => !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const visibleStageMotion = computed(() => stageMotion.value?.to === room.value?.status ? stageMotion.value : null);
@@ -279,9 +281,11 @@ function applyRoom(nextRoom, { live = false } = {}) {
     if (Number.isFinite(currentSequence) && Number.isFinite(nextSequence)
       && (nextSequence < currentSequence
         || (nextSequence === currentSequence && nextVersion < currentVersion))) return false;
+    if (nextSequence === currentSequence && nextVersion === currentVersion
+      && Date.parse(nextRoom.server_time) < Date.parse(room.value.server_time)) return false;
   }
   const phaseChange = stageChange(room.value, nextRoom, live);
-  if (isGamePlaying.value && /^GAME_[ABC]_RESULT$/.test(nextRoom.status)) finishPlaybackUntil.value = Date.now() + 500;
+  if (isGamePlaying.value && /^GAME_[ABC]_RESULT$/.test(nextRoom.status)) finishPlaybackUntil.value = serverClock.now() + 500;
   if (room.value?.status !== nextRoom.status) beginStageMotion(phaseChange, nextRoom);
   const nextToken = String(nextRoom?.draft?.phase_token || '');
   if (nextToken !== previousPhaseToken) {
@@ -311,8 +315,8 @@ function applyRoom(nextRoom, { live = false } = {}) {
     overrideReason.value = '';
     previousResultKey = nextResultKey;
   }
-  const serverTime = Date.parse(nextRoom?.server_time || '');
-  if (Number.isFinite(serverTime)) serverOffsetMs.value = serverTime - Date.now();
+  serverClock.observe(nextRoom.server_time);
+  clockNow.value = serverClock.now();
   for (const side of ['yellow', 'white']) {
     const previous = room.value?.match?.sessions?.[side];
     const next = nextRoom.match?.sessions?.[side];
@@ -389,9 +393,10 @@ function synchronizeRuntime(nextRoom) {
         if (localRuntime?.bootstrap.instance_id !== instance) return false;
         projectSyncState.value = 'reconnecting';
         if (['STALE_PHASE', 'MATCH_SUSPENDED'].includes(cause.code)) {
-          api.room(code).then(data => { if (localRuntime?.bootstrap.instance_id === instance) applyRoom(data.competition); }).catch(() => {});
+          void refreshRoom();
           return true;
         }
+        if (cause.code === 'STREAM_DISCONNECTED') void refreshRoom();
         if ([400, 401, 403, 404, 413, 422, 426].includes(cause.status)) {
           projectSyncState.value = 'blocked'; setError(cause); return false;
         }
@@ -427,9 +432,10 @@ function applyProjectUpdate(update) {
     || state.instance_id !== update.instance_id || !/^GAME_[ABC]_PLAYING$/.test(current.status)) return;
   // A full checkpoint may skip intermediate frames. Never animate a move from
   // a board that the receiver did not actually display.
+  const previousSequence = Number(state.public_view?.sequence || 0);
   const view = receivedProjectView(state.public_view, update.public_view);
   state.public_view = view;
-  if (Number(update.public_view.sequence) === Number(view.sequence)) {
+  if (Number(update.public_view.sequence) === Number(view.sequence) && Number(view.sequence) > previousSequence) {
     state.project_clock = { ...state.project_clock, elapsed_ms: view.payload.elapsed_ms, sampled_at: update.server_time };
   }
   current.version = Math.max(current.version, update.version);
@@ -444,6 +450,25 @@ function setError(cause) {
     room.value = null;
     connection.value = 'offline';
   }
+}
+
+async function refreshRoom() {
+  const code = currentCode.value, epoch = routeEpoch;
+  if (!code || roomRefreshPending) return;
+  roomRefreshPending = true;
+  try {
+    const data = await api.room(code, { timeoutMs: 5000 });
+    if (epoch === routeEpoch && currentCode.value === code) applyRoom(data.competition, { live: true });
+  } catch { /* The socket retry continues while the network is unavailable. */ }
+  finally { roomRefreshPending = false; }
+}
+
+function recoverConnections() {
+  if (document.hidden) return;
+  clockNow.value = serverClock.now();
+  disconnectRoom?.resync?.();
+  stateSender?.recover();
+  void refreshRoom();
 }
 
 async function loadDashboard(epoch) {
@@ -693,7 +718,7 @@ const canSurrender = computed(() => {
 });
 const stageWait = computed(() => {
   const deadline = isGameResult.value ? match.value?.rest_until : match.value?.preview_until;
-  return Math.max(0, Math.ceil((Date.parse(deadline || '') - clockNow.value - serverOffsetMs.value) / 1000)) || 0;
+  return Math.max(0, Math.ceil((Date.parse(deadline || '') - clockNow.value) / 1000)) || 0;
 });
 function manageMember(userId, remove = true) {
   if (!Number(userId) || !window.confirm(t(remove ? '移出此人并禁止其重新进入本房间？赛中会暂停并保留历史记录。' : '允许此人重新进入？比赛不会自动解除暂停。'))) return;
@@ -811,7 +836,7 @@ function sessionPayload(side) {
 function setObserverPending(side, pending) {
   const wasPending = observerPending.value[side];
   observerPending.value[side] = pending;
-  if (wasPending && !pending && isGameResult.value) finishPlaybackUntil.value = Math.max(finishPlaybackUntil.value, Date.now() + 300);
+  if (wasPending && !pending && isGameResult.value) finishPlaybackUntil.value = Math.max(finishPlaybackUntil.value, serverClock.now() + 300);
 }
 
 function projectMetric(side) {
@@ -848,7 +873,7 @@ function projectElapsedMs(side) {
   let elapsed = Math.max(0, Number(elapsedBase));
   const snapshotAt = Date.parse(clock?.sampled_at || room.value?.server_time || '');
   if (clock?.running && Number.isFinite(snapshotAt)) {
-    elapsed += Math.max(0, clockNow.value + serverOffsetMs.value - snapshotAt);
+    elapsed += Math.max(0, clockNow.value - snapshotAt);
   }
   return elapsed;
 }
@@ -931,7 +956,7 @@ function teamClockMs(side) {
   if (!clock) return 0;
   const deadline = Date.parse(clock.deadline_at || '');
   if (clock.state === 'running' && Number.isFinite(deadline)) {
-    return Math.max(0, deadline - (clockNow.value + serverOffsetMs.value));
+    return Math.max(0, deadline - clockNow.value);
   }
   return Math.max(0, Number(clock.remaining_ms || 0));
 }
@@ -996,16 +1021,20 @@ onMounted(() => {
   window.addEventListener('popstate', handleLocationChange);
   window.addEventListener('keydown', handleGameKeys);
   ticker = window.setInterval(() => {
-    clockNow.value = Date.now();
+    clockNow.value = serverClock.now();
     if (localRuntime && !movePending.value) commitLocal(localRuntime.tick());
   }, 16);
   window.addEventListener('pagehide', saveLocalState);
+  window.addEventListener('online', recoverConnections);
+  document.addEventListener('visibilitychange', recoverConnections);
   route();
 });
 
 onBeforeUnmount(() => {
   disposeRuntime();
   window.removeEventListener('pagehide', saveLocalState);
+  window.removeEventListener('online', recoverConnections);
+  document.removeEventListener('visibilitychange', recoverConnections);
   ++routeEpoch;
   window.removeEventListener('popstate', handleLocationChange);
   window.removeEventListener('keydown', handleGameKeys);
@@ -1579,7 +1608,7 @@ onBeforeUnmount(() => {
           <div v-if="lineup?.revealed_lineups" class="public-matchups"><p v-for="game in ['A','B','C']" :key="game">{{ lineup.revealed_lineups.yellow[game]?.display_name }}{{ $t(" — 项目 ") }}{{ $t(game) }} · {{ $t(projectName(gameProject(game))) }} — {{ lineup.revealed_lineups.white[game]?.display_name }}</p></div>
           <p v-if="predictionWait > 0" class="muted" role="status">{{ $t("赛事下注最短窗口剩余 ") }}{{ $t(predictionWait) }}{{ $t(" 秒；双方就绪后将自动开局，此处等待不扣队伍用时。") }}</p>
           <section class="pregame-panel">
-            <p>{{ $t("双方独立确认，剩余 ") }}{{ $t(Math.max(0,Math.ceil((Date.parse(match.ready_deadline_at)-clockNow-serverOffsetMs)/1000)) || 0) }}{{ $t(" 秒后自动确认。期间不扣队伍包干时间。") }}</p>
+            <p>{{ $t("双方独立确认，剩余 ") }}{{ $t(Math.max(0,Math.ceil((Date.parse(match.ready_deadline_at)-clockNow)/1000)) || 0) }}{{ $t(" 秒后自动确认。期间不扣队伍包干时间。") }}</p>
             <div class="pregame-heading"><p class="eyebrow">PRE-GAME CHECK</p><h1>{{ $t("项目 ") }}{{ $t(match.current_game_key) }}{{ $t(" 开局检查") }}</h1><p>{{ $t("双方出战者和队长全部就绪后，项目与两队包干计时自动开始。") }}</p></div>
             <div class="pregame-project"><img v-if="roomProjectIcon(match.project_key)" class="project-icon pregame-project-icon" :src="roomProjectIcon(match.project_key)" alt="" /><div><span>{{ $t("本场项目") }}</span><h2>{{ $t(projectName(match.project_key)) }}</h2><p>{{ $t(projectDescription(match.project_key)) }}</p></div></div>
             <div class="pregame-versus">
