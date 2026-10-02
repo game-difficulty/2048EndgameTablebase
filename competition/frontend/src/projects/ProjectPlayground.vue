@@ -455,6 +455,7 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.cle
   .practice-account{max-width:95px}
 }
 /* Shared typography for both languages: longer labels wrap, not larger panels. */
+.project-lab{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .project-heading h1{font-size:clamp(24px,2.3vw,30px);line-height:1.2;overflow-wrap:anywhere}
 .project-heading p,.index-intro p,.rules-panel>p{letter-spacing:.08em}
 .project-heading{grid-template-columns:96px minmax(0,1fr) auto}
@@ -476,6 +477,12 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.cle
 .project-entry>small{font-size:12px}
 .finish-panel h2{max-width:100%;padding:0 16px;font-size:clamp(22px,3vw,28px);line-height:1.25;overflow-wrap:anywhere}
 @media(max-width:820px){
+  .lab-header{height:auto;min-height:66px;flex-wrap:wrap;gap:10px;padding:12px}
+  .lab-header .lab-brand{width:100%;font-size:15px}
+  .lab-header nav{width:100%;gap:10px;flex-wrap:wrap;justify-content:flex-start;font-size:12px}
+  .lab-header nav button{white-space:nowrap}
+  .lab-header nav .full-label{display:none}
+  .lab-header nav .compact-label{display:inline}
   .project-heading{grid-template-columns:72px minmax(0,1fr);row-gap:10px}
   .project-heading .practice-tag{grid-column:2;grid-row:2;padding:5px 9px}
   .project-heading .heading-art{grid-row:1 / span 2;align-self:center}

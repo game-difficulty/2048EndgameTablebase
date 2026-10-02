@@ -45,9 +45,9 @@ test('same-color chemicals disappear; unlike chemicals merge into one wall at th
   assert.equal(merged.score, 0);
 });
 
-test('special spawn chance loses two percentage points per active single special', () => {
+test('special spawn chance loses two percentage points per active special', () => {
   const examples = [
-    { rule: 'pair', kinds: ['pair-single', 'pair-single', 'pair-single'], ignored: { id: 'double', kind: 'pair-double', value: 0, cells: [12, 13] } },
+    { rule: 'pair', kinds: ['pair-single', 'pair-single', 'pair-single'], ignored: { id: 'ordinary', kind: 'number', value: 2, cells: [12] } },
     { rule: 'chemical', kinds: ['chemical-a', 'chemical-b', 'chemical-a'] },
     { rule: 'bomb', kinds: ['bomb', 'bomb', 'bomb'] },
   ];
@@ -59,6 +59,24 @@ test('special spawn chance loses two percentage points per active single special
       assert.ok(Math.abs(game.specialSpawnChance() - chance) < 1e-10, `${rule}: ${count} specials`);
     }
   }
+});
+
+test('a bonded domino counts as one special for spawn probability', () => {
+  const game = new PracticeSpecialGame({ id:'pair', specialRule:'pair', specialSpawnRate:.05 }, { seed:'domino-count' });
+  const domino = { id:'double', kind:'pair-double', value:0, cells:[12,13] };
+  game.tiles = [domino];
+  assert.ok(Math.abs(game.specialSpawnChance() - .03) < 1e-10);
+  game.tiles.push(special('single', 'pair-single', 0));
+  assert.ok(Math.abs(game.specialSpawnChance() - .01) < 1e-10);
+  game.tiles.push(special('another', 'pair-single', 2));
+  assert.equal(game.specialSpawnChance(), 0);
+  game.tiles = [domino];
+  const ticket = Array.from({length:10000}, (_,i)=>i).find(i=>ticketFloat(i,'special')>=.03 && ticketFloat(i,'special')<.05);
+  assert.notEqual(ticket, undefined);
+  let draws = 0;
+  game.nextTicket = () => { draws++; return ticket; };
+  assert.equal(game.spawn().kind, 'number');
+  assert.equal(draws, 1);
 });
 
 test('spawn applies reduced chance to the fixed ticket without consuming extra randomness', () => {

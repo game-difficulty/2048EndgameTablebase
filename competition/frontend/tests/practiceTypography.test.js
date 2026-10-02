@@ -30,3 +30,13 @@ test('practice uses shared responsive typography and readable wrapping stats', (
   assert.match(css, /\.game-hud strong\{[^}]*white-space:nowrap/);
   assert.doesNotMatch(css, /:lang\(|\[lang[=|]|\.is-english|\.lang-en/);
 });
+
+test('practice controls mobile text inflation without disabling zoom or language-specific navigation', () => {
+  const source = readFileSync(new URL('../src/projects/ProjectPlayground.vue', import.meta.url), 'utf8');
+  const globalCss = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(source, /\.project-lab\{-webkit-text-size-adjust:100%;text-size-adjust:100%\}/);
+  assert.match(source, /\.lab-header nav\{width:100%;gap:10px;flex-wrap:wrap/);
+  assert.doesNotMatch(globalCss, /html\[lang=en\] \.lab-header/);
+  assert.doesNotMatch(html, /user-scalable\s*=\s*no|maximum-scale\s*=\s*1/);
+});

@@ -135,7 +135,7 @@ export class PracticeSpecialGame {
   nextTicket() { this.randomState = nextRandom(this.randomState); return this.randomState; }
   specialSpawnChance() {
     const count = this.tiles.filter(tile => this.project.specialRule === 'pair'
-      ? tile.kind === 'pair-single'
+      ? tile.kind === 'pair-single' || tile.kind === 'pair-double'
       : this.project.specialRule === 'chemical'
         ? tile.kind === 'chemical-a' || tile.kind === 'chemical-b'
         : tile.kind === 'bomb').length;
