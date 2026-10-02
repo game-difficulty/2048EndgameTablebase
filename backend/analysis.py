@@ -1,4 +1,5 @@
 from __future__ import annotations
+from engine_core.GoalSpec import GoalSpec
 
 import multiprocessing
 import os
@@ -55,7 +56,7 @@ def resolve_analysis_inputs(paths: list[str]) -> list[str]:
 def run_analysis_file(
     file_path: str,
     pattern: str,
-    target_value: int,
+    target_value: int | str,
     full_pattern: str,
 ) -> dict[str, Any]:
     analyzer = Analyzer(
@@ -76,7 +77,7 @@ def run_analysis_file(
 def run_batch_analysis(
     file_list: list[str],
     pattern: str,
-    target_value: int,
+    target_value: int | str,
     full_pattern: str,
     on_progress: AnalysisUpdateCallback,
 ) -> list[dict[str, Any]]:
@@ -127,11 +128,14 @@ def run_batch_analysis(
     return entries
 
 
-def normalize_target_value(target: Any) -> tuple[str, int, str]:
+def normalize_target_value(target: Any) -> tuple[str, int | str, str]:
     target_tile = str(target or "").strip()
     if not target_tile:
         raise ValueError("Missing target tile")
 
+    if target_tile.startswith("sum-"):
+        goal = GoalSpec.parse(target_tile)
+        return goal.token, goal.token, goal.token
     try:
         numeric_target = int(target_tile)
     except (TypeError, ValueError) as exc:

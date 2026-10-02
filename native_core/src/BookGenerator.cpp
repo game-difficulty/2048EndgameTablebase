@@ -761,9 +761,9 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> handle_restart(
     bool started,
     FileIOUtils::DirectIoConfig io_config
 ) {
-    auto path_i = options.pathname + std::to_string(step_index);
-    auto path_i_plus_1 = options.pathname + std::to_string(step_index + 1);
-    auto path_i_minus_1 = options.pathname + std::to_string(step_index - 1);
+    auto path_i = options.pathname + std::to_string(logical_layer(options, step_index));
+    auto path_i_plus_1 = options.pathname + std::to_string(logical_layer(options, step_index + 1));
+    auto path_i_minus_1 = options.pathname + std::to_string(logical_layer(options, step_index - 1));
     const uint64_t raw_alignment = sizeof(uint64_t);
     const uint64_t book_alignment = success_entry_size_for_dtype(options.success_rate_dtype);
     auto read_temp_layer = [&options, &io_config](int step) {
@@ -1429,7 +1429,7 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process(
             " live=" + std::to_string(d0.size())
         );
         FormationProgress::update_build_progress(static_cast<uint32_t>(i), progress_total);
-        bool do_check = i > options.docheck_step;
+        bool do_check = !options.sum_target && i > options.docheck_step;
         ClassicGenerateStatsRecord stats_record;
         bool has_stats_record = false;
         stats_record.step = i;

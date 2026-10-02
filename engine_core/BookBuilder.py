@@ -1,4 +1,5 @@
 from __future__ import annotations
+from engine_core.GoalSpec import GoalSpec, sum_target_from_prefix
 
 import os
 import shutil
@@ -50,6 +51,25 @@ def _symm_mode_value(name: str) -> int:
     return int(mode.value if hasattr(mode, "value") else mode)
 
 
+def free_layer_offset(pattern: str) -> int:
+    """File numbering stays relative to the legacy seed, including for new builds."""
+    if pattern.startswith("free") and pattern[4:].isdigit():
+        n = int(pattern[4:])
+        if 10 <= n <= 16:
+            return 1 - n
+    return 0
+
+
+def generate_free_empty_inits(free_cells: int) -> np.ndarray:
+    """All fixed-tile placements, symmetry-reduced; no moves or corner filter."""
+    if not 10 <= free_cells <= 16:
+        raise ValueError("empty free seeds require free10..free16")
+    boards = [sum(15 << (4 * pos) for pos in positions)
+              for positions in combinations(range(16), 16 - free_cells)]
+    return np.unique(np.asarray([mover_runtime.canonical_full(np.uint64(board))
+                                 for board in boards], dtype=np.uint64))
+
+
 def _build_native_run_options(
     target: int,
     steps: int,
@@ -59,13 +79,20 @@ def _build_native_run_options(
     is_variant: bool,
     spawn_rate4: float,
     cold_pathnames: list[str] | None = None,
+    layer_offset: int = 0,
 ):
     _require_native_build()
     config = SingletonConfig().config
     options = formation_core.RunOptions()
     options.target = int(target)
-    options.steps = int(steps)
-    options.docheck_step = int(docheck_step)
+    sum_target = sum_target_from_prefix(pathname)
+    if hasattr(options, "sum_target"):
+        options.sum_target = sum_target
+    elif sum_target:
+        raise RuntimeError("Sum targets require rebuilding the native formation_core module")
+    options.layer_offset = int(layer_offset)
+    options.steps = int(steps) - int(layer_offset)
+    options.docheck_step = int(docheck_step) - int(layer_offset)
     options.pathname = str(pathname)
     if cold_pathnames and hasattr(options, "cold_pathnames"):
         options.cold_pathnames = [str(path) for path in cold_pathnames if str(path)]
@@ -314,7 +341,7 @@ def _count_bc_prefixed_files_multi(folders: tuple[Path, ...], prefix: str, suffi
         # RAW values are still a pruned BC archive, not an exact frontier.
         names = _bc_prefixed_file_names(folders, prefix, ".bccmp")
         names |= _bc_prefixed_file_names(folders, prefix, ".bcraw")
-        return len({name[:-6] for name in names if name[len(prefix):-6].isdigit()})
+        return len({name[:-6] for name in names if name[len(prefix):-6].removeprefix("-").isdigit()})
     return len(_bc_prefixed_file_names(folders, prefix, suffix))
 
 
@@ -330,8 +357,8 @@ def _count_bc_contiguous_prefixed_files(folder: Path, prefix: str, suffix: str) 
             if not name.startswith(prefix) or not name.endswith(suffix):
                 continue
             ordinal_text = name[len(prefix):-len(suffix)]
-            if ordinal_text.isdigit():
-                ordinals.add(int(ordinal_text))
+            if ordinal_text.removeprefix("-").isdigit():
+                ordinals.add(int(ordinal_text) - free_layer_offset(prefix.split("_", 1)[0]))
     except OSError:
         return 0
     expected = 0
@@ -344,8 +371,8 @@ def _count_bc_contiguous_prefixed_files_multi(folders: tuple[Path, ...], prefix:
     ordinals: set[int] = set()
     for name in _bc_prefixed_file_names(folders, prefix, suffix):
         ordinal_text = name[len(prefix):-len(suffix)]
-        if ordinal_text.isdigit():
-            ordinals.add(int(ordinal_text))
+        if ordinal_text.removeprefix("-").isdigit():
+            ordinals.add(int(ordinal_text) - free_layer_offset(prefix.split("_", 1)[0]))
     expected = 0
     while expected in ordinals:
         expected += 1
@@ -365,8 +392,8 @@ def _bc_generated_ordinals(folders: tuple[Path, ...], prefix: str) -> set[int]:
                 for suffix in suffixes:
                     if item.name.endswith(suffix):
                         ordinal_text = item.name[len(prefix):-len(suffix)]
-                        if ordinal_text.isdigit():
-                            ordinals.add(int(ordinal_text))
+                        if ordinal_text.removeprefix("-").isdigit():
+                            ordinals.add(int(ordinal_text) - free_layer_offset(prefix.split("_", 1)[0]))
                         break
         except OSError:
             continue
@@ -513,9 +540,9 @@ def _build_bc_runtime_options(
     )
 
     is_free_pattern = pattern.startswith("free")
-    success_check_min_source_layer_sum = 0
-    if not is_free_pattern:
-        success_check_min_source_layer_sum = int(tile_sum) + 2 * (int(docheck_step) + 1)
+    # Use the same absolute success-check boundary as Classic/EX. The native
+    # fallback historically assumes a particular seed small-tile sum.
+    success_check_min_source_layer_sum = int(tile_sum) + 2 * (int(docheck_step) + 1)
 
     if is_free_pattern:
         bc_pattern_masks = []
@@ -535,8 +562,11 @@ def _build_bc_runtime_options(
 
     return {
         "pattern": pattern,
-        "target_rank": int(target),
-        "success_target_rank": int(target),
+        "target_rank": (14 if sum_target_from_prefix(prefix) and any(
+            ((int(board) >> shift) & 15) == 14
+            for board in bc_seed_boards for shift in range(0, 64, 4)) else int(target)),
+        "success_target_rank": 0 if sum_target_from_prefix(prefix) else int(target),
+        "sum_target": sum_target_from_prefix(prefix),
         "extra_steps": int(extra_steps),
         "seed_boards": [int(board) for board in np.asarray(bc_seed_boards, dtype=np.uint64)],
         "pattern_masks": bc_pattern_masks,
@@ -582,19 +612,19 @@ def _path_exists_any(paths) -> bool:
     return any(os.path.exists(path) for path in paths)
 
 
-def _count_existing_steps(pathname: str, steps: int, suffixes) -> int:
+def _count_existing_steps(pathname: str, steps: int, suffixes, layer_offset=0) -> int:
     return sum(
         1
-        for step in range(max(0, int(steps)))
+        for step in range(layer_offset, layer_offset + max(0, int(steps)))
         if _path_exists_any(f"{pathname}{step}{suffix}" for suffix in suffixes)
     )
 
 
-def _count_existing_steps_multi(pathnames, steps: int, suffixes) -> int:
+def _count_existing_steps_multi(pathnames, steps: int, suffixes, layer_offset=0) -> int:
     prefixes = [str(pathname) for pathname in pathnames if str(pathname)]
     return sum(
         1
-        for step in range(max(0, int(steps)))
+        for step in range(layer_offset, layer_offset + max(0, int(steps)))
         if _path_exists_any(
             f"{pathname}{step}{suffix}"
             for pathname in prefixes
@@ -603,12 +633,12 @@ def _count_existing_steps_multi(pathnames, steps: int, suffixes) -> int:
     )
 
 
-def _all_existing_steps(pathname: str, steps: int, suffixes) -> bool:
+def _all_existing_steps(pathname: str, steps: int, suffixes, layer_offset=0) -> bool:
     if steps <= 0:
         return False
     return all(
         _path_exists_any(f"{pathname}{step}{suffix}" for suffix in suffixes)
-        for step in range(int(steps))
+        for step in range(layer_offset, layer_offset + int(steps))
     )
 
 
@@ -620,7 +650,7 @@ def _read_int_marker(path: str) -> int | None:
         return None
 
 
-def _all_existing_steps_multi(pathnames, steps: int, suffixes) -> bool:
+def _all_existing_steps_multi(pathnames, steps: int, suffixes, layer_offset=0) -> bool:
     prefixes = [str(pathname) for pathname in pathnames if str(pathname)]
     if steps <= 0 or not prefixes:
         return False
@@ -630,7 +660,7 @@ def _all_existing_steps_multi(pathnames, steps: int, suffixes) -> bool:
             for pathname in prefixes
             for suffix in suffixes
         )
-        for step in range(int(steps))
+        for step in range(layer_offset, layer_offset + int(steps))
     )
 
 
@@ -642,8 +672,13 @@ def estimate_build_progress(
 ) -> tuple[int, int]:
     config = SingletonConfig().config
     meta, tile_sum, _seed_boards, extra_steps = _resolve_build_meta(pattern)
-    steps, _docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
+    goal = GoalSpec.parse(target, rank=not str(target).startswith("sum-"))
+    target = goal.encoding_rank
+    steps, _docheck_step = goal.build_range(tile_sum, extra_steps, start_offset=free_layer_offset(pattern))
+    layer_offset = free_layer_offset(pattern)
+    steps -= layer_offset
     algorithm_mode = _selected_algorithm_mode(config)
+    goal.validate_algorithm(algorithm_mode)
     use_ex_algo = algorithm_mode in {"ex", "exad"}
     use_ad_algo = algorithm_mode in {"ad", "exad"}
     use_exad_algo = algorithm_mode == "exad"
@@ -683,44 +718,45 @@ def estimate_build_progress(
     current = 0
     result_pathnames = [pathname, *([str(path) for path in cold_pathnames] if cold_pathnames else [])]
     if use_exad_algo:
-        solved_count = _count_existing_steps_multi(result_pathnames, steps, (".exadbook", ".exadzbook"))
+        solved_count = _count_existing_steps_multi(result_pathnames, steps, (".exadbook", ".exadzbook"), layer_offset)
         if solved_count:
             current = steps + solved_count
         else:
-            current = _count_existing_steps_multi(result_pathnames, steps, (".exadtmp", ".exadtmp.7z"))
+            current = _count_existing_steps_multi(result_pathnames, steps, (".exadtmp", ".exadtmp.7z"), layer_offset)
     elif use_ex_algo:
-        if optimal and os.path.exists(pathname + "ex_optimal_complete"):
+        if (optimal and os.path.exists(pathname + "ex_optimal_complete")
+                and _all_existing_steps_multi(result_pathnames, steps, (".exzbook",), layer_offset)):
             current = total
-        elif not optimal and _all_existing_steps_multi(result_pathnames, steps, (".exzbook",)):
+        elif not optimal and _all_existing_steps_multi(result_pathnames, steps, (".exzbook",), layer_offset):
             current = total
         else:
-            solved_count = _count_existing_steps_multi(result_pathnames, steps, (".zbook", ".exzbook"))
+            solved_count = _count_existing_steps_multi(result_pathnames, steps, (".zbook", ".exzbook"), layer_offset)
             if solved_count:
                 current = steps + solved_count
             else:
-                current = _count_existing_steps_multi(result_pathnames, steps, (".exgen", ".exgen.7z"))
+                current = _count_existing_steps_multi(result_pathnames, steps, (".exgen", ".exgen.7z"), layer_offset)
             if optimal:
                 opt_step = _read_int_marker(pathname + "ex_optlayer")
                 if opt_step is not None:
-                    current = max(current, 2 * steps + opt_step + 1)
+                    current = max(current, 2 * steps + opt_step - layer_offset + 1)
                 elif solved_count >= steps:
                     current = max(current, 2 * steps)
     elif use_ad_algo:
-        solved_count = _count_existing_steps_multi(result_pathnames, steps, ("b", ".z", "b.7z"))
+        solved_count = _count_existing_steps_multi(result_pathnames, steps, ("b", ".z", "b.7z"), layer_offset)
         if solved_count:
             current = steps + solved_count
         else:
-            current = _count_existing_steps(pathname, steps, ("", ".7z"))
+            current = _count_existing_steps(pathname, steps, ("", ".7z"), layer_offset)
     else:
-        solved_count = _count_existing_steps_multi(result_pathnames, steps, (".book", ".z", ".book.7z"))
+        solved_count = _count_existing_steps_multi(result_pathnames, steps, (".book", ".z", ".book.7z"), layer_offset)
         if solved_count:
             current = steps + solved_count
         else:
-            current = _count_existing_steps(pathname, steps, ("", ".7z"))
+            current = _count_existing_steps(pathname, steps, ("", ".7z"), layer_offset)
         if optimal:
             opt_step = _read_int_marker(pathname + "optlayer")
             if opt_step is not None:
-                current = max(current, 2 * steps + opt_step + 1)
+                current = max(current, 2 * steps + opt_step - layer_offset + 1)
 
     return max(0, min(int(current), int(total))), int(total)
 
@@ -836,6 +872,7 @@ def _run_classic_build(
         is_variant,
         spawn_rate4,
         cold_pathnames,
+        layer_offset=free_layer_offset(pattern) if not is_variant else 0,
     )
     formation_core.run_pattern_build(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
@@ -864,6 +901,7 @@ def _run_advanced_build(
         is_variant,
         spawn_rate4,
         cold_pathnames,
+        layer_offset=free_layer_offset(pattern) if not is_variant else 0,
     )
     formation_core.run_pattern_build_ad(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
@@ -893,6 +931,7 @@ def _run_zmask_build(
         is_variant,
         spawn_rate4,
         cold_pathnames,
+        layer_offset=free_layer_offset(pattern) if not is_variant else 0,
     )
     run_options.chunked_solve = False
     formation_core.run_pattern_build_zmask(
@@ -923,6 +962,7 @@ def _run_exad_build(
         is_variant,
         spawn_rate4,
         cold_pathnames,
+        layer_offset=free_layer_offset(pattern) if not is_variant else 0,
     )
     formation_core.run_pattern_build_exad(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
@@ -956,7 +996,7 @@ def _run_bc_build(
     for folder in (generated_dir, solved_dir, archive_dir, stats_dir):
         folder.mkdir(parents=True, exist_ok=True)
 
-    expected_layers = max(1, _bc_expected_generated_layers(steps))
+    expected_layers = max(1, _bc_expected_generated_layers(steps - free_layer_offset(pattern)))
 
     if formation_core is None or not hasattr(formation_core, "run_bc_family_build"):
         raise RuntimeError("formation_core does not expose BC family build runtime")
@@ -986,6 +1026,14 @@ def _run_bc_build(
         solve_resume_exists or
         max(archived_count, compressed_count) >= expected_layers
     )
+    if free_layer_offset(pattern):
+        # A legacy solve marker alone cannot certify the new negative prefix.
+        negative_ready = all(any(
+            (folder / f"{prefix}{layer}{suffix}").exists()
+            for folder in (*generated_dirs, *solved_dirs, *archive_dirs)
+            for suffix in (".bcpos", ".bcposc", ".bcpos.7z", ".bccmp", ".bcraw")
+        ) for layer in range(free_layer_offset(pattern), 0))
+        skip_generation = skip_generation and negative_ready
     logger.info(
         "BC resume scan: generated=%s generated_contiguous=%s archived_exact=%s compressed=%s solve_resume=%s skip_generation=%s expected=%s",
         generation_count,
@@ -1091,13 +1139,21 @@ def start_build(
     config = SingletonConfig().config
     spawn_rate4 = float(config["4_spawn_rate"])
     meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
-    steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
+    goal = GoalSpec.parse(target, rank=not str(target).startswith("sum-"))
+    target = goal.encoding_rank
+    steps, docheck_step = goal.build_range(tile_sum, extra_steps, start_offset=free_layer_offset(pattern))
     is_variant = pattern in category_info.get("variant", [])
     algorithm_mode = _selected_algorithm_mode(config)
+    goal.validate_algorithm(algorithm_mode)
     use_ex_algo = algorithm_mode in {"ex", "exad"}
     use_ad_algo = algorithm_mode in {"ad", "exad"}
     use_exad_algo = algorithm_mode == "exad"
+    for goal_prefix in [pathname, *(cold_pathnames or [])]:
+        goal.save_metadata(goal_prefix, tile_sum, extra_steps, free_layer_offset(pattern), algorithm_mode)
     save_config_to_txt(pathname + "config.txt")
+    with open(pathname + "config.txt", "a", encoding="utf-8") as stream:
+        stream.write(f"layer_offset: {free_layer_offset(pattern)}\n")
+        stream.write(f"free_seed_policy: {'fixed_only' if free_layer_offset(pattern) else 'legacy'}\n")
 
     if algorithm_mode == "bc":
         try:
@@ -1123,7 +1179,9 @@ def start_build(
         decoded_seed = mover_runtime.decode_board(seed_boards[0])
         num_32k = int(np.sum(decoded_seed == 32768))
         extra_tile_sum = tile_sum - 32768 * num_32k
-        if extra_tile_sum <= (15 - num_32k) * 2:
+        if free_layer_offset(pattern):
+            arr_init = generate_free_empty_inits(int(pattern[4:]))
+        elif extra_tile_sum <= (15 - num_32k) * 2:
             arr_init = generate_free_inits(num_32k, extra_tile_sum // 2)
         else:
             arr_init = seed_boards
@@ -1224,8 +1282,11 @@ def v_start_build(
     config = SingletonConfig().config
     spawn_rate4 = float(config["4_spawn_rate"])
     meta, tile_sum, seed_boards, extra_steps = _resolve_build_meta(pattern)
-    steps, docheck_step = _steps_and_docheck(tile_sum, target, extra_steps)
+    goal = GoalSpec.parse(target, rank=not str(target).startswith("sum-"))
+    target = goal.encoding_rank
+    steps, docheck_step = goal.build_range(tile_sum, extra_steps, start_offset=free_layer_offset(pattern))
     algorithm_mode = _selected_algorithm_mode(config)
+    goal.validate_algorithm(algorithm_mode)
     if algorithm_mode == "bc":
         raise ValueError("Variant patterns do not support BC algorithm")
     use_ex_algo = algorithm_mode in {"ex", "exad"}
@@ -1233,6 +1294,8 @@ def v_start_build(
     use_exad_algo = algorithm_mode == "exad"
     if use_ad_algo:
         raise ValueError("Variant patterns do not support advanced or EXAD algorithms; use classic or EX.")
+    for goal_prefix in [pathname, *(cold_pathnames or [])]:
+        goal.save_metadata(goal_prefix, tile_sum, extra_steps, free_layer_offset(pattern), algorithm_mode)
     save_config_to_txt(pathname + "config.txt")
     ex_resolution = None
     seed_boards_for_build = seed_boards

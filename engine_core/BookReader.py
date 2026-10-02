@@ -4,6 +4,7 @@ import os
 from typing import Any, Callable
 
 import numpy as np
+from engine_core.GoalSpec import GoalSpec
 from numpy.typing import NDArray
 
 from Config import SingletonConfig, category_info, pattern_catalog
@@ -40,6 +41,8 @@ def _symm_mode_value(name: str) -> int:
 
 
 def _target_rank(target: str | int) -> int:
+    if str(target).startswith("sum-"):
+        return GoalSpec.parse(target).encoding_rank
     value = int(target)
     if value >= 32 and (value & (value - 1)) == 0:
         return int(np.log2(value))
@@ -149,7 +152,7 @@ class BookReaderDispatcher:
         self.book_reader_ad = BookReaderAD(pattern, target)
 
     def set_book_reader_ex(self, pattern: str, target: int):
-        if self.book_reader_ex is not None and pattern == self.book_reader_ex.pattern and target == self.book_reader_ex.target:
+        if self.book_reader_ex is not None and pattern == self.book_reader_ex.pattern and str(target) == self.book_reader_ex.goal_token:
             return
         self.book_reader_ex = BookReaderEX(pattern, target)
 
@@ -161,7 +164,7 @@ class BookReaderDispatcher:
 
     def set_book_reader_bc(self, pattern: str, target: int):
         if self.book_reader_bc is not None:
-            if pattern == self.book_reader_bc.pattern and target == self.book_reader_bc.target:
+            if pattern == self.book_reader_bc.pattern and str(target) == self.book_reader_bc.goal_token:
                 return
         self.book_reader_bc = BookReaderBC(pattern, target)
 
@@ -183,6 +186,16 @@ class BookReaderDispatcher:
         return self._book_reader.move_on_dic(board, pattern, target, pattern_full)
 
     def get_random_state(self, path_list: list, pattern_full: str):
+        if "_sum-" not in pattern_full:
+            return self._get_random_state(path_list, pattern_full)
+        goal = GoalSpec.from_prefix(pattern_full)
+        for _ in range(64):
+            board = self._get_random_state(path_list, pattern_full)
+            if not board or not goal.reached(board):
+                return board
+        return np.uint64(0)
+
+    def _get_random_state(self, path_list: list, pattern_full: str):
         if self.use_exad and self.book_reader_exad is not None:
             return self.book_reader_exad.get_random_state(path_list, pattern_full)
         if self.use_ad and self.book_reader_ad is not None:
@@ -194,6 +207,7 @@ class BookReaderDispatcher:
         return self._book_reader.get_random_state(path_list, pattern_full)
 
     def dispatch(self, path_list: list, pattern: str, target: str | int):
+        goal_token = str(target) if str(target).startswith("sum-") else None
         try:
             target = _target_rank(target)
         except ValueError:
@@ -212,7 +226,7 @@ class BookReaderDispatcher:
         has_exad_layer = False
         bc_positions: set[str] = set()
         bc_successes: set[str] = set()
-        ex_prefix = f"{pattern}_{2 ** target}_"
+        ex_prefix = f"{pattern}_{goal_token or 2 ** target}_"
         for path, _success_rate_dtype in path_list:
             if not os.path.exists(path):
                 continue
@@ -238,7 +252,7 @@ class BookReaderDispatcher:
                     elif entry.name.startswith(ex_prefix) and entry.name.endswith(".bcsuc"):
                         bc_successes.add(entry.name[:-len(".bcsuc")])
                     for rank in (1, 0.75, 0.5, 0.25):
-                        if entry.name.endswith(f"_{int(2 ** target * rank)}b"):
+                        if not goal_token and entry.name.endswith(f"_{int(2 ** target * rank)}b"):
                             found_ad = True
                             break
                     if bc_positions.intersection(bc_successes):
@@ -256,6 +270,9 @@ class BookReaderDispatcher:
             if found_ex and not prefer_bc:
                 break
 
+        if goal_token and (found_ad or found_exad):
+            raise ValueError("Sum goal tables cannot use AD/EXAD")
+
         if prefer_bc and found_bc:
             self.use_ad = False
             self.use_ex = False
@@ -263,7 +280,7 @@ class BookReaderDispatcher:
             self.book_reader_ad = None
             self.book_reader_ex = None
             self.book_reader_exad = None
-            self.set_book_reader_bc(pattern, target)
+            self.set_book_reader_bc(pattern, goal_token or target)
             self.use_bc = self.book_reader_bc is not None
             return
 
@@ -285,7 +302,7 @@ class BookReaderDispatcher:
             self.book_reader_ad = None
             self.book_reader_exad = None
             self.book_reader_bc = None
-            self.set_book_reader_ex(pattern, target)
+            self.set_book_reader_ex(pattern, goal_token or target)
             self.use_ex = self.book_reader_ex is not None
             return
 
@@ -297,7 +314,7 @@ class BookReaderDispatcher:
             self.use_ad = False
             self.book_reader_ad = None
             if found_bc:
-                self.set_book_reader_bc(pattern, target)
+                self.set_book_reader_bc(pattern, goal_token or target)
                 self.use_bc = self.book_reader_bc is not None
                 return
             self.use_bc = False

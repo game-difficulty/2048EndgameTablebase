@@ -1,4 +1,5 @@
 {
+  "goals": {"type": "Goal type", "tile": "Single tile", "sum": "Board sum", "sumLabel": "Board sum {value}", "sumHint": "Excludes 16384 and 32768. A valid move succeeds when the next spawn is guaranteed to reach the target sum.", "invalidSum": "Enter an even integer from 4 to 16382.", "unsupportedAD": "Sum goals do not support AD/EXAD. Select Classic, EX or an available BC pattern.", "completed": "Goal reached"},
   "tabs": {
     "home": "Home",
     "gamer": "Gamer",

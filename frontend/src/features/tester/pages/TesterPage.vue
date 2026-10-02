@@ -204,6 +204,7 @@
 </template>
 
 <script setup>
+import { goalLabel } from '../../../utils/goalTarget';
 import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
@@ -330,7 +331,7 @@ const resultMiniBoardStyle = computed(() => {
 const targetOptions = computed(() =>
   availableTargets.value.map((target) => ({
     value: target,
-    label: target,
+    label: goalLabel(target),
     disabled: !isTargetAvailable(target),
   }))
 );

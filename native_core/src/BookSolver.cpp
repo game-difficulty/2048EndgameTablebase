@@ -517,6 +517,7 @@ template <typename T> LayerVector<T> final_situation_process(
     const std::vector<uint64_t> &boards,
     const PatternSpec &spec,
     int target,
+    int sum_target,
     const std::string &success_rate_dtype
 ) {
     LayerVector<T> result(boards.size());
@@ -527,7 +528,7 @@ template <typename T> LayerVector<T> final_situation_process(
     for (int64_t i = 0; i < static_cast<int64_t>(boards.size()); ++i) {
         result[static_cast<size_t>(i)].board = boards[static_cast<size_t>(i)];
         result[static_cast<size_t>(i)].success =
-            is_success_by_shifts(boards[static_cast<size_t>(i)], target, spec.success_shifts) ? max_scale : zero_val;
+            goal_success(boards[static_cast<size_t>(i)], target, sum_target, spec.success_shifts) ? max_scale : zero_val;
     }
     size_t count = 0U;
     for (size_t i = 0; i < result.size(); ++i) {
@@ -549,8 +550,8 @@ template <typename T> std::pair<PatternLayer, PatternLayer> final_steps(
     LayerVector<T> layer0;
     LayerVector<T> layer1;
     if (started) {
-        layer0 = final_situation_process<T>(d0, spec, options.target, options.success_rate_dtype);
-        layer1 = final_situation_process<T>(d1, spec, options.target, options.success_rate_dtype);
+        layer0 = final_situation_process<T>(d0, spec, options.target, options.sum_target, options.success_rate_dtype);
+        layer1 = final_situation_process<T>(d1, spec, options.target, options.sum_target, options.success_rate_dtype);
         const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
         write_routed_layer_file(options, options.steps - 2, layer0, io_config);
         write_routed_layer_file(options, options.steps - 1, layer1, io_config);
@@ -1233,7 +1234,7 @@ void recalculate_layer(
     #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 1024)
     for (int64_t k = 0; k < static_cast<int64_t>(arr0.size()); ++k) {
         uint64_t board = arr0.boards[static_cast<size_t>(k)];
-        if (do_check && is_success_by_shifts(board, options.target, spec.success_shifts)) {
+        if (do_check && goal_success(board, options.target, options.sum_target, spec.success_shifts)) {
             arr0.success[static_cast<size_t>(k)] = max_scale;
             continue;
         }
@@ -1287,7 +1288,7 @@ bool handle_restart_recalculate(
     bool &started,
     const RunOptions &options
 ) {
-    auto path_i = options.pathname + std::to_string(i);
+    auto path_i = options.pathname + std::to_string(logical_layer(options, i));
     const uint64_t book_alignment = sizeof(SuccessEntry<T>);
     const bool allow_opt_temp_archive =
         options.optimal_branch_only &&
@@ -1582,7 +1583,7 @@ bool handle_restart_opt_only(
     auto optlayer_path = options.pathname + "optlayer";
     if (started) {
         std::ofstream out(NativePath::from_utf8(optlayer_path), std::ios::trunc);
-        out << (i - 1);
+        out << logical_layer(options, i - 1);
         return true;
     }
 
@@ -1590,6 +1591,7 @@ bool handle_restart_opt_only(
     std::ifstream in(NativePath::from_utf8(optlayer_path));
     if (in) {
         in >> current_layer;
+        current_layer -= options.layer_offset;
     }
     if (current_layer >= i) {
         return false;

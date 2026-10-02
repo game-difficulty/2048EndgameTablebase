@@ -14,6 +14,7 @@ namespace BC {
 struct BCFamilyGenerationRunOptions {
     std::string pattern = "free9";
     uint32_t target_rank = 8U;
+    int sum_target = 0;
     uint32_t extra_steps = 36U;
     std::vector<uint64_t> seed_boards;
     std::vector<uint64_t> pattern_masks;

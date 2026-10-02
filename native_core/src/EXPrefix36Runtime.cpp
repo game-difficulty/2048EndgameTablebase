@@ -1347,7 +1347,7 @@ bool all_layers_exist(const RunOptions &options) {
         return false;
     }
     for (int step = 0; step < options.steps; ++step) {
-        if (!NativePath::exists(layer_file_path(options.pathname, step))) {
+        if (!NativePath::exists(layer_file_path(options.pathname, logical_layer(options, step)))) {
             return false;
         }
     }
@@ -1371,6 +1371,7 @@ int read_optimal_layer_marker(const RunOptions &options) {
     int step = kOptimalBranchOnlyStartStep - 1;
     if (in) {
         in >> step;
+        step -= options.layer_offset;
     }
     return step;
 }
@@ -1380,7 +1381,7 @@ void write_optimal_layer_marker(const RunOptions &options, int step) {
     if (!out) {
         throw std::runtime_error("failed to write EX optimal branch marker");
     }
-    out << step;
+    out << logical_layer(options, step);
 }
 
 void write_optimal_complete_marker(const RunOptions &options) {
@@ -1401,7 +1402,7 @@ std::string generated_layer_archive_path(const std::string &pathname, int step) 
 
 std::string existing_raw_layer_file_path(const RunOptions &options, int step) {
     const std::string path = StoragePaths::existing_path_for(options, step, kLayerFileExtension, false);
-    return path.empty() ? layer_file_path(options.pathname, step) : path;
+    return path.empty() ? layer_file_path(options.pathname, logical_layer(options, step)) : path;
 }
 
 std::string existing_generated_layer_file_path(const RunOptions &options, int step) {
@@ -1426,7 +1427,7 @@ std::string compressed_layer_file_path(const RunOptions &options, int step) {
 
 std::string existing_compressed_layer_file_path(const RunOptions &options, int step) {
     for (const std::string &pathname : StoragePaths::candidate_pathnames(options, true)) {
-        const std::string path = compressed_layer_file_path(pathname, step);
+        const std::string path = compressed_layer_file_path(pathname, logical_layer(options, step));
         if (NativePath::exists(path)) {
             return path;
         }
@@ -1536,11 +1537,11 @@ std::string existing_layer_input_path(const RunOptions &options, int step) {
     if (!generated_archive.empty()) {
         return generated_archive;
     }
-    return layer_file_path(options.pathname, step);
+    return layer_file_path(options.pathname, logical_layer(options, step));
 }
 
 void materialize_compressed_layer_input(const RunOptions &options, int step) {
-    const std::string final_path = layer_file_path(options.pathname, step);
+    const std::string final_path = layer_file_path(options.pathname, logical_layer(options, step));
     if (raw_solved_layer_exists(options, step)) {
         return;
     }
@@ -2208,7 +2209,7 @@ void build_terminal_success(Prefix36LayerT<T> &layer, const DenseLow24RankLut &d
         auto set_success = [&](uint32_t rank) {
             const uint64_t board = (prefix36 << kSuffixBits) | dense_lut.unrank_array[unrank_offset + rank];
             layer.success_values[static_cast<size_t>(success_base + ordinal)] =
-                is_success_by_shifts(board, options.target, spec.success_shifts) ? max_scale : zero_value;
+                goal_success(board, options.target, options.sum_target, spec.success_shifts) ? max_scale : zero_value;
             ++ordinal;
         };
         if (valid_count <= layer.threshold_bits) {
@@ -3224,7 +3225,7 @@ RecalcStats recalculate_current_layer(
                     (prefix36 << kSuffixBits) | static_cast<uint64_t>(dense_lut.unrank_array[unrank_offset + rank]);
                 const uint32_t output_pos = success_base + ordinal;
                 ++ordinal;
-                if (do_check && is_success_by_shifts(board, options.target, spec.success_shifts)) {
+                if (do_check && goal_success(board, options.target, options.sum_target, spec.success_shifts)) {
                     current.success_values[static_cast<size_t>(output_pos)] = max_scale;
                     stats.boards += 1U;
                     stats.checksum += success_checksum_bits(max_scale) * (static_cast<uint64_t>(output_pos) + 1ULL);
@@ -3386,7 +3387,7 @@ void prefix36_dynamic_generate_into_production(
             const uint32_t valid_count = dense_lut.size_table[group];
             const uint32_t unrank_offset = dense_lut.offset_table[group];
             auto handle_board = [&](uint64_t board) {
-                if (do_check && is_success_by_shifts(board, options.target, spec.success_shifts)) {
+                if (do_check && goal_success(board, options.target, options.sum_target, spec.success_shifts)) {
                     return;
                 }
                 uint32_t empty_mask = zero_cell_mask16(board);
@@ -4333,7 +4334,16 @@ void run_pattern_solve_typed(
     }
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
 
-    if (options.optimal_branch_only && !optimal_complete_marker_exists(options)) {
+    // A legacy optimal marker covers only its old prefix. Solve newly added
+    // negative layers before resuming the existing optimal-filter phase.
+    bool new_prefix_solved = true;
+    for (int step = 0; step < -options.layer_offset; ++step) {
+        if (!solved_layer_exists(options, step)) {
+            new_prefix_solved = false;
+            break;
+        }
+    }
+    if (options.optimal_branch_only && new_prefix_solved && !optimal_complete_marker_exists(options)) {
         const int last_done = read_optimal_layer_marker(options);
         if (last_done >= kOptimalBranchOnlyStartStep) {
             SolveStepSummary optimal_summary = keep_only_optimal_branches_prefix36<T>(spec, options, lut);

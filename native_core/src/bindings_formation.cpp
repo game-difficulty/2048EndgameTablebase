@@ -100,6 +100,7 @@ BC::BCFamilyGenerationRunOptions bc_generation_options_from_dict(const nb::dict 
     BC::BCFamilyGenerationRunOptions run;
     run.pattern = dict_get_or<std::string>(options, "pattern", run.pattern);
     run.target_rank = dict_get_or<uint32_t>(options, "target_rank", run.target_rank);
+    run.sum_target = dict_get_or<int>(options, "sum_target", 0);
     run.extra_steps = dict_get_or<uint32_t>(options, "extra_steps", run.extra_steps);
     run.seed_boards = dict_get_or<std::vector<uint64_t>>(
         options,
@@ -183,6 +184,7 @@ BC::BCFamilySolveRunOptions bc_solve_options_from_dict(const nb::dict &options) 
     run.archive_output_dirs = dict_get_path_vector(options, "archive_dirs");
     run.prefix = dict_get_or<std::string>(options, "prefix", run.prefix);
     run.target_rank = dict_get_or<uint32_t>(options, "target_rank", run.target_rank);
+    run.sum_target = dict_get_or<int>(options, "sum_target", 0);
     run.success_target_rank = dict_get_or<int>(
         options,
         "success_target_rank",
@@ -400,7 +402,9 @@ NB_MODULE(formation_core, m) {
     nb::class_<RunOptions>(m, "RunOptions")
         .def(nb::init<>())
         .def_rw("target", &RunOptions::target)
+        .def_rw("sum_target", &RunOptions::sum_target)
         .def_rw("steps", &RunOptions::steps)
+        .def_rw("layer_offset", &RunOptions::layer_offset)
         .def_rw("docheck_step", &RunOptions::docheck_step)
         .def_rw("pathname", &RunOptions::pathname)
         .def_rw("cold_pathnames", &RunOptions::cold_pathnames)
@@ -757,6 +761,7 @@ NB_MODULE(formation_core, m) {
         "run_pattern_build_ad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
             NativeDiagnostics::Scope scope("formation_core.run_pattern_build_ad pattern=" + spec.name);
+            if (options.sum_target) throw std::invalid_argument("Sum targets do not support AD");
             run_pattern_build_ad_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -769,6 +774,7 @@ NB_MODULE(formation_core, m) {
         "run_pattern_build_exad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
             NativeDiagnostics::Scope scope("formation_core.run_pattern_build_exad pattern=" + spec.name);
+            if (options.sum_target) throw std::invalid_argument("Sum targets do not support EXAD");
             run_pattern_build_exad_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,
@@ -780,6 +786,7 @@ NB_MODULE(formation_core, m) {
     m.def(
         "run_pattern_solve_exad",
         [](const U64Array &arr_init, const AdvancedPatternSpec &spec, const RunOptions &options) {
+            if (options.sum_target) throw std::invalid_argument("Sum targets do not support EXAD");
             run_pattern_solve_exad_cpp(to_u64_vector(arr_init), spec, options);
         },
         "arr_init"_a,

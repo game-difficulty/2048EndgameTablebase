@@ -9,6 +9,8 @@ import numpy as np
 
 import engine_core.BoardMover as bm
 import Config
+from engine_core.GoalSpec import GoalSpec
+from backend.trainer_helpers import replace_board_for_lookup
 import engine_core.VBoardMover as vbm
 from backend.replay_2048next import (
     MoveRecord as Replay2048NextMove,
@@ -470,13 +472,15 @@ class Analyzer:
     pattern_map = Config.pattern_32k_tiles_map
 
     def __init__(
-        self, file_path: str, pattern: str, target: int, full_pattern: str, target_path: str
+        self, file_path: str, pattern: str, target: int | str, full_pattern: str, target_path: str
     ) -> None:
         self.full_pattern = full_pattern
         self.pattern = pattern
         self.variant = ""
-        self.target = target
+        self.goal = GoalSpec.parse(target, rank=not str(target).startswith("sum-"))
+        self.target = self.goal.encoding_rank
         self.n_large_tiles = self.pattern_map[pattern][0]
+        self.sum_goal_completed = False
         self.large_tile_sum = 0
 
         self.bm = bm
@@ -571,6 +575,7 @@ class Analyzer:
         return board
 
     def generate_reports(self) -> None:
+        final_step = len(self.record_list)
         for i in range(len(self.record_list)):
             is_endgame, large_tile_changed = self.analyze_one_step(i)
             if is_endgame is None:
@@ -585,9 +590,13 @@ class Analyzer:
                 self.save_rec_to_file(i)
                 self.clear_analysis()
 
-        if len(self.text_list) >= REPORT_MIN_TEXT_LINES:
-            self.write_analysis(len(self.record_list))
-        self.save_rec_to_file(len(self.record_list))
+            if self.sum_goal_completed:
+                final_step = i + 1
+                break
+
+        if len(self.text_list) >= REPORT_MIN_TEXT_LINES or (self.goal.kind == "sum" and self.step_count):
+            self.write_analysis(final_step)
+        self.save_rec_to_file(final_step)
         self.clear_analysis()
 
     def print_board(self, board: np.typing.NDArray) -> None:
@@ -619,7 +628,7 @@ class Analyzer:
         if not move:
             return False
 
-        target = str(2**self.target)
+        target = self.goal.token
         self.result, success_rate_dtype = self.book_reader.move_on_dic(
             masked_board, self.pattern, target, self.full_pattern
         )
@@ -634,7 +643,7 @@ class Analyzer:
         best_result = self.result[best_move]
         if not best_result or best_result == "?":
             return False
-        if best_result == 1:
+        if best_result == 1 and self.goal.kind != "sum":
             self.record_replay(
                 board, move, new_tile, spawn_position, forced=True
             )
@@ -663,7 +672,7 @@ class Analyzer:
 
         self.record_replay(board, move, new_tile, spawn_position)
         self.step_count += 1
-        if self.step_count < ANALYSIS_START_STEP:
+        if self.goal.kind != "sum" and self.step_count < ANALYSIS_START_STEP:
             return True
 
         move_result = self.result[move.lower()]
@@ -728,10 +737,16 @@ class Analyzer:
         return True
 
     def analyze_one_step(self, i: int) -> tuple[bool | None, bool]:
+        if self.sum_goal_completed:
+            return False, False
         board_encoded, _, move_encoded, new_tile, spawn_position = self.record_list[i]
         board = self.bm.decode_board(board_encoded)
 
-        if self.pattern in category_info.get("variant", []):
+        if self.goal.kind == "sum":
+            masked = replace_board_for_lookup(board_encoded, self.pattern, self.n_large_tiles,
+                self.goal.token, self.pattern in category_info.get("variant", []))
+            masked_board = self.bm.decode_board(masked)
+        elif self.pattern in category_info.get("variant", []):
             masked_board = self.mask_variant_large_tiles(board.copy())
         elif self.check_nth_largest(board_encoded):
             masked_board = self.mask_large_tiles(board.copy())
@@ -746,6 +761,12 @@ class Analyzer:
         is_endgame = self._analyze_one_step(
             board, masked_board, move, new_tile, spawn_position
         )
+        if self.goal.kind == "sum" and move_encoded:
+            mover = self.vbm if self.pattern in category_info.get("variant", []) else self.bm
+            moved, _ = mover.s_move_board(self.bm.encode_board(masked_board), int(move_encoded))
+            value = self.result.get(move.lower())
+            if int(moved) != int(self.bm.encode_board(masked_board)) and self.goal.reached(moved) and value == 1:
+                self.sum_goal_completed = True
         return is_endgame, large_tile_changed
 
     def write_error(self, text: str) -> None:
@@ -811,7 +832,7 @@ class Analyzer:
         *,
         forced: bool = False,
     ) -> None:
-        if self.step_count < ANALYSIS_START_STEP:
+        if self.goal.kind != "sum" and self.step_count < ANALYSIS_START_STEP:
             return
 
         rec_step_count = self.rec_step_count
@@ -838,7 +859,7 @@ class Analyzer:
 
     def save_rec_to_file(self, step: int) -> None:
         rec_step_count = self.rec_step_count
-        if self.full_pattern is None or rec_step_count < 2:
+        if self.full_pattern is None or rec_step_count < (1 if self.goal.kind == "sum" else 2):
             return
 
         filename = (

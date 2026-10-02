@@ -7,6 +7,8 @@ from engine_core.BookReader import BookReader
 from Config import DTYPE_CONFIG, SingletonConfig, pattern_32k_tiles_map, pattern_catalog
 from engine_core.VBoardMover import decode_board
 
+from engine_core.GoalSpec import GoalSpec
+
 from .serialization import sanitize_config
 from .session import safe_hex, u64
 
@@ -74,6 +76,16 @@ def replace_board_for_lookup(
     target: str,
     use_variant: bool,
 ):
+    if str(target).startswith("sum-"):
+        GoalSpec.parse(target)
+        result = int(board_encoded)
+        if use_variant:
+            seeds = pattern_catalog.get(pattern, {}).get("seed_boards", ())
+            if len(seeds):
+                for shift in range(0, 64, 4):
+                    if (int(seeds[0]) >> shift) & 15 == 15:
+                        result |= 15 << shift
+        return np.uint64(result)
     if use_variant:
         return replace_variant_large_tiles(board_encoded, pattern, target)
     return replace_largest_tiles(board_encoded, n, target)
@@ -191,6 +203,7 @@ async def send_trainer_results(session, websocket, request_id=None):
 
 
 def _clear_record_replay(session):
+    session.sum_goal_completed_at = None
     session.record_result_history = []
     session.record_result_dtype = None
     session.record_animation_history = []

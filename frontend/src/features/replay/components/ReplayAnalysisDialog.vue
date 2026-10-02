@@ -179,6 +179,7 @@
 </template>
 
 <script setup>
+import { goalLabel } from '../../../utils/goalTarget';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -248,7 +249,7 @@ const isTargetAvailable = (target, pattern = selectedPattern.value) => (
 const targetOptions = computed(() =>
   targetTiles.value.map((target) => ({
     value: target,
-    label: target,
+    label: goalLabel(target),
     disabled: !isTargetAvailable(target),
   }))
 );

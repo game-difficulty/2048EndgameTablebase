@@ -1,4 +1,5 @@
 from __future__ import annotations
+from engine_core.GoalSpec import GoalSpec
 
 import asyncio
 import os
@@ -195,10 +196,16 @@ async def handle_trainer_action(
         return True
 
     if action == Action.TRAINER_STEP:
+        if getattr(session, "sum_goal_completed_at", None) == (session.current_pattern, int(session.board_encoded)):
+            await websocket.send_json({"action": Message.TRAINER_STEP_FAILED, "data": {}})
+            return True
         if session.trainer_results:
             move = list(session.trainer_results.keys())[0]
             val = session.trainer_results.get(move)
-            if isinstance(val, (int, float)) and val:
+            rate = val
+            if isinstance(val, (int, float)) and str(session.success_rate_dtype).startswith("1-float"):
+                rate = 1.0 + val
+            if isinstance(rate, (int, float)) and rate > 0:
                 await websocket.send_json(
                     {"action": Message.DO_AI_MOVE_CMD, "data": {"dir": move}}
                 )
@@ -234,6 +241,15 @@ async def handle_trainer_action(
         if session.score > session.best_score:
             session.best_score = session.score
 
+        completed_goal = False
+        goal_token = str(session.pattern_settings[1])
+        if goal_token.startswith("sum-") and GoalSpec.parse(goal_token).reached(new_board):
+            # Native reader enforces the same pattern-valid direction constraint.
+            result, dtype = session.ensure_book_reader().move_on_dic(
+                decode_board(old_board_encoded), session.pattern_settings[0], goal_token, session.current_pattern)
+            value = result.get(direction_str)
+            completed_goal = isinstance(value, (int, float)) and (
+                value == (0.0 if str(dtype).startswith("1-float") else 1.0))
         num_pos_1d, val_exp = -1, 0
         if session.spawn_mode == 0:
             session.moved = 0
@@ -262,6 +278,8 @@ async def handle_trainer_action(
                 new_board = np_u64(new_board)
 
         session.board_encoded = np_u64(new_board)
+        if completed_goal:
+            session.sum_goal_completed_at = (session.current_pattern, int(session.board_encoded))
         session.history.append((session.board_encoded, session.score))
         session.move_history.append(direction_str)
         session.played_length = len(session.history) - 1

@@ -13,6 +13,8 @@
 #include <fstream>
 #include <sstream>
 #include <limits>
+#include <optional>
+#include <charconv>
 #include <mutex>
 #include <system_error>
 #include <type_traits>
@@ -44,8 +46,10 @@ struct PatternSpec {
 };
 
 struct RunOptions {
-    int target = 0;
+    int target = 0; // Encoding exponent (legacy tile goal also uses this exponent).
+    int sum_target = 0; // 0 = legacy tile goal; otherwise post-move sum modulo 16384.
     int steps = 0;
+    int layer_offset = 0; // File layer = internal step + offset; sums use the actual seed.
     int docheck_step = 0;
     std::string pathname;
     std::vector<std::string> cold_pathnames;
@@ -65,6 +69,63 @@ struct RunOptions {
     int direct_io_queue_depth = 16;
     int direct_io_chunk_mib = 8;
 };
+
+// Accept a pattern name or a reader's freeN_target prefix, never a variant.
+inline int free_layer_offset(const std::string &pattern) {
+    if (pattern.compare(0, 4, "free") != 0) return 0;
+    const size_t end = pattern.find('_', 4);
+    const std::string number = pattern.substr(4, end == std::string::npos ? end : end - 4);
+    int n = 0;
+    auto parsed = std::from_chars(number.data(), number.data() + number.size(), n);
+    return parsed.ec == std::errc{} && parsed.ptr == number.data() + number.size() && n >= 10 && n <= 16
+        ? 1 - n : 0;
+}
+
+inline std::optional<int64_t> parse_layer_number(const std::string &text) {
+    int64_t value = 0;
+    auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size()) return std::nullopt;
+    return value;
+}
+
+inline std::optional<uint32_t> internal_layer_number(const std::string &text, int offset) {
+    const auto logical = parse_layer_number(text);
+    if (!logical || *logical < offset || *logical > static_cast<int64_t>(UINT32_MAX) + offset)
+        return std::nullopt;
+    return static_cast<uint32_t>(*logical - offset);
+}
+
+inline int logical_layer(const RunOptions &options, int step) {
+    return step + options.layer_offset;
+}
+
+inline uint32_t goal_board_sum(uint64_t board) {
+    uint32_t sum = 0;
+    for (int shift = 0; shift < 64; shift += 4) {
+        const auto tile = static_cast<unsigned>((board >> shift) & 15U);
+        if (tile) sum += 1U << tile;
+    }
+    return sum;
+}
+
+inline bool sum_goal_success(uint64_t board, int target) {
+    return target >= 4 && goal_board_sum(board) % 16384U >= static_cast<uint32_t>(target - 2);
+}
+
+inline int sum_goal_from_name(const std::string &name) {
+    const auto begin = name.rfind("_sum-");
+    if (begin == std::string::npos) return 0;
+    const auto end = name.find('_', begin + 5);
+    const auto parsed = parse_layer_number(name.substr(begin + 5, end == std::string::npos ? end : end - begin - 5));
+    return parsed && *parsed >= 4 && *parsed < 16384 && *parsed % 2 == 0 ? static_cast<int>(*parsed) : 0;
+}
+
+inline bool goal_success(uint64_t board, int tile_target, int sum_target,
+                         const std::vector<uint8_t> &shifts) {
+    if (sum_target) return sum_goal_success(board, sum_target);
+    for (auto shift : shifts) if (((board >> shift) & 15U) == static_cast<unsigned>(tile_target)) return true;
+    return false;
+}
 
 namespace StoragePaths {
 
@@ -100,7 +161,7 @@ inline std::string path_for(
     int step,
     const std::string &suffix
 ) {
-    return pathname_for(options, role) + std::to_string(step) + suffix;
+    return pathname_for(options, role) + std::to_string(logical_layer(options, step)) + suffix;
 }
 
 inline std::string hot_path_for(const RunOptions &options, int step, const std::string &suffix) {
@@ -153,7 +214,7 @@ inline std::string existing_path_for(
     bool cold_first = true
 ) {
     for (const std::string &pathname : candidate_pathnames(options, cold_first)) {
-        const std::string path = pathname + std::to_string(step) + suffix;
+        const std::string path = pathname + std::to_string(logical_layer(options, step)) + suffix;
         if (filename_exists(path)) {
             return path;
         }
@@ -178,7 +239,7 @@ inline void remove_all_candidates(
 ) {
     std::error_code ec;
     for (const std::string &pathname : candidate_pathnames(options, cold_first)) {
-        NativePath::remove(pathname + std::to_string(step) + suffix, ec);
+        NativePath::remove(pathname + std::to_string(logical_layer(options, step)) + suffix, ec);
         ec.clear();
     }
 }
@@ -240,7 +301,7 @@ inline std::vector<std::string> write_path_candidates(
     const bool cold_first = role == ArtifactRole::Cold;
     std::vector<std::string> paths;
     for (const std::string &pathname : candidate_pathnames(options, cold_first)) {
-        paths.push_back(pathname + std::to_string(step) + suffix);
+        paths.push_back(pathname + std::to_string(logical_layer(options, step)) + suffix);
     }
     return paths;
 }

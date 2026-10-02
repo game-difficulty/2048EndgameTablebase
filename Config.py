@@ -380,6 +380,7 @@ def load_patterns_from_file(file_path=None):
             "seed_boards": fmt_seeds,
             "nums_adjust": -board_sum,
             "extra_steps": data.get("extra steps", 36),
+            "sum_targets": tuple(data.get("sum targets", ())),
             "count_32k": count,
             "free_count_32k": free_count,
             "fixed_pos_32k": fixed_pos,

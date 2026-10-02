@@ -1,5 +1,7 @@
 from __future__ import annotations
+from engine_core.GoalSpec import available_target_tokens
 
+from engine_core.GoalSpec import GoalSpec
 import asyncio
 import html
 import json
@@ -13,6 +15,7 @@ import markdown
 from Config import (
     SingletonConfig,
     category_info,
+    pattern_catalog,
     logger,
     normalize_bc_family_modulus,
     normalize_deletion_threshold_mode,
@@ -97,7 +100,8 @@ async def handle_settings_action(
                     "config": sanitize_config(config),
                     "categories": sanitize_config(category_info),
                     "theme_map": sanitize_config(theme_map),
-                    "target_tiles": [2**i for i in range(6, 15)],
+                    "target_tiles": available_target_tokens(),
+                    "sum_target_presets": {name: list(meta.get("sum_targets", ())) for name, meta in pattern_catalog.items()},
                     "performance_config": sanitize_config(
                         public_performance_config()
                     ),
@@ -172,7 +176,8 @@ async def handle_settings_action(
                             "config": sanitize_config(config),
                             "categories": sanitize_config(category_info),
                             "theme_map": sanitize_config(theme_map),
-                            "target_tiles": [2**i for i in range(6, 15)],
+                            "target_tiles": available_target_tokens(),
+                    "sum_target_presets": {name: list(meta.get("sum_targets", ())) for name, meta in pattern_catalog.items()},
                         },
                     }
                 )
@@ -209,15 +214,18 @@ async def handle_settings_action(
         folder_path = payload.get("folder_path")
         folder_paths_payload = payload.get("folder_paths")
         pathname = payload.get("pathname")
-        try:
+        if str(target_tile or target).startswith("sum-"):
+            goal = GoalSpec.parse(target_tile or target)
+            goal.validate_algorithm(BookBuilder._selected_algorithm_mode(SingletonConfig().config))
+            target, target_tile = goal.token, goal.token
+        else:
             target = int(target)
-        except (TypeError, ValueError):
-            raise ValueError(f"Invalid build target: {target}")
-
-        if target > 63 and target > 0 and (target & (target - 1)) == 0:
-            target = int(math.log2(target))
-        if target_tile is None and target > 0:
-            target_tile = str(2**target)
+            if target > 63 and target & (target - 1) == 0:
+                target = target.bit_length() - 1
+            goal = GoalSpec.parse(target, rank=True)
+            if target_tile is not None and str(target_tile) != goal.token:
+                raise ValueError("Build target and target_tile disagree")
+            target_tile = goal.token
         folder_paths = normalize_build_folder_paths(
             folder_paths_payload,
             folder_path=folder_path,
@@ -240,7 +248,7 @@ async def handle_settings_action(
         try:
             initial_current, initial_total = BookBuilder.estimate_build_progress(
                 str(pattern),
-                int(target),
+                target,
                 str(pathname),
                 cold_pathnames=cold_pathnames,
             )

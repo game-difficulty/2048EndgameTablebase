@@ -1,3 +1,4 @@
+import { validSumTarget } from '../../../utils/goalTarget';
 import { computed, onUnmounted, ref, watch } from 'vue';
 
 import { createWsClient } from '../../../services/ws/createWsClient';
@@ -15,6 +16,7 @@ export function useSettingsSession(activeRef) {
     config,
     categories,
     targetTiles,
+    sumTargetPresets,
     themes,
     currentPalette,
     refreshSettings,
@@ -35,6 +37,10 @@ export function useSettingsSession(activeRef) {
   const selectedCategory = ref('');
   const selectedPattern = ref('');
   const selectedTarget = ref('512');
+  const goalKind = ref('tile');
+  const sumTarget = ref(1792);
+  const goalValid = computed(() => goalKind.value !== 'sum' || validSumTarget(sumTarget.value));
+  const goalAlgorithmValid = computed(() => goalKind.value !== 'sum' || !['ad', 'exad'].includes(builderAlgorithm.value));
   const buildPath = ref(DEFAULT_BUILD_PATH);
   const builderAlgorithm = ref('ex');
   const builderAdvancedAlgo = ref(false);
@@ -529,7 +535,7 @@ export function useSettingsSession(activeRef) {
 
   const startBuild = () => {
     const buildPaths = normalizedBuildPaths.value;
-    if (!selectedPattern.value || !selectedTarget.value || !buildPaths.length) {
+    if (!selectedPattern.value || !selectedTarget.value || !buildPaths.length || !goalValid.value || !goalAlgorithmValid.value) {
       return;
     }
 
@@ -537,6 +543,7 @@ export function useSettingsSession(activeRef) {
     buildProgressCurrent.value = 0;
     buildProgressTotal.value = 0;
 
+    const goalToken = goalKind.value === 'sum' ? `sum-${Number(sumTarget.value)}` : selectedTarget.value;
     const targetTileValue = parseInt(selectedTarget.value, 10);
     const targetExponent =
       Number.isFinite(targetTileValue) && targetTileValue > 0
@@ -602,11 +609,11 @@ export function useSettingsSession(activeRef) {
 
     buildClient?.send('START_BUILD', {
       pattern: selectedPattern.value,
-      target: targetExponent,
-      target_tile: selectedTarget.value,
+      target: goalKind.value === 'sum' ? goalToken : targetExponent,
+      target_tile: goalToken,
       folder_paths: buildPaths,
       folder_path: buildPaths[0],
-      pathname: `${buildPaths[0]}/${selectedPattern.value}_${selectedTarget.value}_`,
+      pathname: `${buildPaths[0]}/${selectedPattern.value}_${goalToken}_`,
     });
   };
 
@@ -633,12 +640,14 @@ export function useSettingsSession(activeRef) {
     wsStatus,
     categories,
     targetTiles,
+    sumTargetPresets,
     config,
     themes,
     currentPalette,
     selectedCategory,
     selectedPattern,
     selectedTarget,
+    goalKind, sumTarget, goalValid, goalAlgorithmValid,
     selectedPatternIsVariant,
     buildPath,
     normalizedBuildPaths,

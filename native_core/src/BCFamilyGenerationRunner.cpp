@@ -327,6 +327,7 @@ struct ProcessMemorySnapshot {
 struct Args {
     std::string pattern = "free9";
     uint32_t target_rank = 8U;
+    int sum_target = 0;
     uint32_t extra_steps = 36U;
     uint32_t target_extra_override = 0U;
     std::vector<uint64_t> seed_boards;
@@ -787,7 +788,7 @@ void commit_family_route_decision(
 }
 
 [[nodiscard]] std::string layer_file_prefix(const Args &args) {
-    return args.pattern + "_" + std::to_string(parse_rank_to_extra(args.target_rank));
+    return args.pattern + "_" + (args.sum_target ? "sum-" + std::to_string(args.sum_target) : std::to_string(parse_rank_to_extra(args.target_rank)));
 }
 
 [[nodiscard]] uint32_t layer_ordinal_for_sum(uint32_t seed_sum, uint32_t layer_sum) {
@@ -817,7 +818,7 @@ void commit_family_route_decision(
 ) {
     return args.output_dir /
         (layer_file_prefix(args) + "_" +
-         std::to_string(layer_ordinal_for_sum(seed_sum, layer_sum)) + ".bcpos");
+         std::to_string(static_cast<int64_t>(layer_ordinal_for_sum(seed_sum, layer_sum)) + free_layer_offset(args.pattern)) + ".bcpos");
 }
 
 [[nodiscard]] std::filesystem::path layer_archive_path(const std::filesystem::path &position_path) {
@@ -939,17 +940,9 @@ void commit_family_route_decision(
             } else {
                 continue;
             }
-            if (ordinal_text.empty() ||
-                !std::all_of(ordinal_text.begin(), ordinal_text.end(), [](char ch) {
-                    return ch >= '0' && ch <= '9';
-                })) {
-                continue;
-            }
-            const unsigned long parsed = std::stoul(ordinal_text);
-            if (parsed > std::numeric_limits<uint32_t>::max()) {
-                continue;
-            }
-            const uint32_t ordinal = static_cast<uint32_t>(parsed);
+            const auto parsed = internal_layer_number(ordinal_text, free_layer_offset(args.pattern));
+            if (!parsed) continue;
+            const uint32_t ordinal = *parsed;
             const auto existing = layers.find(ordinal);
             const bool replace_archive =
                 is_cell_compressed &&
@@ -1255,7 +1248,7 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
         throw std::invalid_argument("free initial generator requires 2..16 free cells");
     }
     const uint32_t large_tile_count = 16U - free_cells;
-    const uint32_t initial_twos = free_cells - 1U;
+    const uint32_t initial_twos = free_cells >= 10U ? 0U : free_cells - 1U;
     std::vector<uint8_t> cells(16U);
     for (uint8_t i = 0U; i < cells.size(); ++i) {
         cells[i] = i;
@@ -1287,6 +1280,11 @@ void sort_unique_boards(std::vector<uint64_t> &boards) {
     });
     sort_unique_boards(generated);
 
+    if (free_cells >= 10U) {
+        for (uint64_t &board : generated) board = Calculator::canonical_full(board);
+        sort_unique_boards(generated);
+        return generated;
+    }
     std::vector<uint64_t> canonical_a = collect_canonical_successors(generated);
     std::vector<uint64_t> canonical_b = collect_canonical_successors(canonical_a);
     if (!canonical_b.empty()) {
@@ -2359,13 +2357,13 @@ void cleanup_temp_file(const std::filesystem::path &path) {
     options.family_partition_policy = BC::BCFamilyPartitionPolicy::modulo(target_modulus);
     options.family_possible_8tile_sums = &possible_8tile_sums;
     options.pattern_masks = &args.pattern_masks;
-    options.success_target_rank = static_cast<int>(args.target_rank);
+    options.success_target_rank = args.sum_target ? 0 : static_cast<int>(args.target_rank);
     options.success_shifts = &success_shifts;
     options.success_check_min_source_layer_sum = success_check_min_source_layer_sum;
     const bool is_free_pattern = args.pattern.rfind("free", 0U) == 0U;
     options.success_check_all_cells =
         is_free_pattern || args.success_shifts.empty();
-    options.keep_only_success_generated_boards = terminal;
+    options.keep_only_success_generated_boards = terminal && !args.sum_target;
     options.finalize_options.keyvalue_sort = nullptr;
     options.finalize_options.simd_sort_min_bucket_count = 10000U;
     return options;
@@ -2388,7 +2386,7 @@ void cleanup_temp_file(const std::filesystem::path &path) {
         args.pending_buffer != 0U ? args.pending_buffer : route_default_pending_buffer;
     options.tile_sum_values = &tile_sums;
     options.pattern_masks = &args.pattern_masks;
-    options.success_target_rank = static_cast<int>(args.target_rank);
+    options.success_target_rank = args.sum_target ? 0 : static_cast<int>(args.target_rank);
     options.success_shifts = &success_shifts;
     options.success_check_min_source_layer_sum = success_check_min_source_layer_sum;
     options.finalize_options.keyvalue_sort = nullptr;
@@ -2560,7 +2558,7 @@ void apply_route_decision_to_result(
         success_check_min_source_layer_sum,
         kResidentRoutePendingBuffer
     );
-    options.keep_only_success_generated_boards = terminal;
+    options.keep_only_success_generated_boards = terminal && !args.sum_target;
     cleanup_temp_file(output_path);
     cleanup_temp_file(layer_archive_path(output_path));
     cleanup_temp_file(layer_cell_compressed_path(output_path));
@@ -2666,8 +2664,8 @@ void apply_route_decision_to_result(
     );
     options.dynamic_reserve_factor = dynamic_reserve_factor;
     options.dynamic_secondary_reserve_factor = dynamic_secondary_reserve_factor;
-    options.keep_only_success_generated_boards = primary_terminal;
-    options.keep_only_success_secondary_generated_boards = secondary_terminal;
+    options.keep_only_success_generated_boards = primary_terminal && !args.sum_target;
+    options.keep_only_success_secondary_generated_boards = secondary_terminal && !args.sum_target;
     options.collect_mutable_output_stats = false;
     cleanup_temp_file(output_path);
     cleanup_temp_file(layer_archive_path(output_path));
@@ -2797,8 +2795,8 @@ void apply_route_decision_to_result(
     );
     options.dynamic_reserve_factor = dynamic_reserve_factor;
     options.dynamic_secondary_reserve_factor = dynamic_secondary_reserve_factor;
-    options.keep_only_success_generated_boards = primary_terminal;
-    options.keep_only_success_secondary_generated_boards = secondary_terminal;
+    options.keep_only_success_generated_boards = primary_terminal && !args.sum_target;
+    options.keep_only_success_secondary_generated_boards = secondary_terminal && !args.sum_target;
     options.collect_mutable_output_stats = false;
 
     BC::BCResidentGenerationPairResult pair =
@@ -2908,7 +2906,7 @@ void apply_route_decision_to_result(
     options.dynamic_reserve_factor = dynamic_secondary_reserve_factor;
     options.collect_mutable_output_stats = false;
     options.collect_dynamic_state_stats = false;
-    options.keep_only_success_generated_boards = terminal;
+    options.keep_only_success_generated_boards = terminal && !args.sum_target;
     (void)current_layer;
     BC::BCResidentMutableGenerationResult carry =
         BC::generate_resident_mutable_layer_from_streaming_source(
@@ -2967,8 +2965,8 @@ void apply_route_decision_to_result(
     );
     options.dynamic_reserve_factor = dynamic_reserve_factor;
     options.dynamic_secondary_reserve_factor = dynamic_secondary_reserve_factor;
-    options.keep_only_success_generated_boards = primary_terminal;
-    options.keep_only_success_secondary_generated_boards = secondary_terminal;
+    options.keep_only_success_generated_boards = primary_terminal && !args.sum_target;
+    options.keep_only_success_secondary_generated_boards = secondary_terminal && !args.sum_target;
     options.collect_mutable_output_stats = false;
     cleanup_temp_file(output_path);
     cleanup_temp_file(layer_archive_path(output_path));
@@ -3368,7 +3366,7 @@ void apply_route_decision_to_result(
             success_check_min_source_layer_sum,
             kSingleRoutePendingBuffer
         );
-        options.keep_only_success_generated_boards = terminal;
+        options.keep_only_success_generated_boards = terminal && !args.sum_target;
         cleanup_temp_file(output_path);
         cleanup_temp_file(layer_archive_path(output_path));
         cleanup_temp_file(layer_cell_compressed_path(output_path));
@@ -3805,8 +3803,15 @@ int run_bc_chain(const Args &args) {
     if (seed_sum64 > std::numeric_limits<uint32_t>::max()) {
         throw std::overflow_error("BC generation seed sum exceeds uint32");
     }
-    const uint32_t seed_sum = static_cast<uint32_t>(seed_sum64);
-    const uint32_t forward_steps = ex_forward_steps(args);
+    const int layer_offset = free_layer_offset(args.pattern);
+    const uint32_t seed_sum = static_cast<uint32_t>(static_cast<int64_t>(seed_sum64) + 2 * layer_offset);
+    if (args.sum_target && (args.sum_target < 4 || args.sum_target >= 16384 || args.sum_target % 2 ||
+            seed_sum % 16384U >= static_cast<uint32_t>(args.sum_target - 2))) {
+        throw std::invalid_argument("Invalid sum target or initial layer already reaches the target");
+    }
+    const uint32_t forward_steps = args.sum_target
+        ? (seed_sum - seed_sum % 16384U + static_cast<uint32_t>(args.sum_target) - seed_sum) / 2U
+        : ex_forward_steps(args) - layer_offset;
     const uint32_t final_sum = seed_sum + forward_steps * 2U;
     const bool ex_terminal_mode = args.target_extra_override == 0U && final_sum >= seed_sum + 4U;
     // EX finalizes BOTH outputs of the last expansion: spawn-2 and spawn-4.
@@ -3816,7 +3821,7 @@ int run_bc_chain(const Args &args) {
     const uint32_t terminal_start_sum = ex_terminal_mode ? final_sum - 2U : final_sum;
     const uint32_t docheck_step = ex_docheck_step_for_target_rank(args.target_rank);
     const uint32_t default_success_check_min_source_layer_sum =
-        seed_sum + 2U * (docheck_step + 1U);
+        static_cast<uint32_t>(seed_sum64) + 2U * (docheck_step + 1U);
     const uint32_t success_check_min_source_layer_sum =
         args.success_check_min_source_layer_sum_override != 0U
             ? args.success_check_min_source_layer_sum_override
@@ -4014,6 +4019,18 @@ int run_bc_chain(const Args &args) {
     for (uint32_t layer_sum = seed_sum + first_generation_ordinal * 2U;
          layer_sum <= final_primary_sum;
          layer_sum += 2U) {
+        // A newly added prefix can meet older generated layers. Preserve them;
+        // users decide which layers to remove, just as for the other engines.
+        const uint32_t ordinal = layer_ordinal_for_sum(seed_sum, layer_sum);
+        if (existing_layer_paths.find(ordinal) != existing_layer_paths.end()) {
+            layers[layer_sum] = load_existing_layer(ordinal);
+            resident_carry.reset();
+            resident_carry_layer_sum = 0U;
+            single_carry.reset();
+            single_carry_layer_sum = 0U;
+            resident_memory_layers.clear();
+            continue;
+        }
         g_current_generation_layer_sum.store(layer_sum, std::memory_order_relaxed);
         const uint32_t current_step = layer_ordinal_for_sum(seed_sum, layer_sum) - 1U;
         const bool terminal = ex_terminal_mode && layer_sum >= terminal_start_sum;
@@ -4541,6 +4558,7 @@ BCFamilyGenerationRunResult bc_family_generation_full_run(
     Args args;
     args.pattern = options.pattern;
     args.target_rank = options.target_rank;
+    args.sum_target = options.sum_target;
     args.extra_steps = options.extra_steps;
     args.seed_boards = options.seed_boards;
     args.pattern_masks = options.pattern_masks;

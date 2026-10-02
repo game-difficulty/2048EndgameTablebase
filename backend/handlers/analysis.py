@@ -1,4 +1,5 @@
 from __future__ import annotations
+from engine_core.GoalSpec import available_target_tokens
 
 import asyncio
 import threading
@@ -25,7 +26,7 @@ async def handle_analysis_action(
                 "type": EventType.ANALYSIS_BOOTSTRAP,
                 "payload": {
                     "categories": category_info,
-                    "target_tiles": [str(2**i) for i in range(6, 15)],
+                    "target_tiles": available_target_tokens(),
                     "available_tables": SingletonConfig.get_available_pattern_targets(),
                 },
             }

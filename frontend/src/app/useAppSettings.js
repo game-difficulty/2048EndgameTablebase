@@ -48,6 +48,7 @@ const config = ref({ ...DEFAULT_CONFIG });
 const categories = ref({});
 const themeMap = ref({});
 const targetTiles = ref([]);
+const sumTargetPresets = ref({});
 const performanceConfig = ref(normalizePerformanceConfig(DEFAULT_PERFORMANCE_CONFIG));
 const buildProgressCurrent = ref(0);
 const buildProgressTotal = ref(0);
@@ -198,6 +199,7 @@ const handleSettingsData = (payload = {}) => {
   categories.value = payload.categories || {};
   themeMap.value = payload.theme_map || {};
   targetTiles.value = payload.target_tiles || [];
+  sumTargetPresets.value = payload.sum_target_presets || {};
   performanceConfig.value = normalizePerformanceConfig(payload.performance_config);
   mergeConfig(payload.config || {});
   if (Object.prototype.hasOwnProperty.call(payload, 'build_state')) {
@@ -380,6 +382,7 @@ export function useAppSettingsStore() {
     categories,
     themeMap,
     targetTiles,
+    sumTargetPresets,
     performanceConfig,
     buildProgressCurrent,
     buildProgressTotal,

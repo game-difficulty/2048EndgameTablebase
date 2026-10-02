@@ -99,6 +99,7 @@ class ConnectionManager:
                     "record_results": record_results,
                     "record_results_dtype": record_results_dtype,
                     "awaiting_spawn": (session.spawn_mode == 3 and session.moved == 1),
+                    "goal_reached": getattr(session, "sum_goal_completed_at", None) == (session.current_pattern, int(session.board_encoded)),
                     "tablebase_path": tablebase_path,
                     "settings": {
                         "difficulty": getattr(session, "difficulty", 0) * 100.0,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from engine_core.GoalSpec import GoalSpec, available_target_tokens
 
 import asyncio
 from typing import Any
@@ -57,7 +58,7 @@ async def handle_tester_action(
                 "action": Message.TESTER_BOOTSTRAP,
                 "data": {
                     "categories": category_info,
-                    "target_tiles": [2**i for i in range(6, 15)],
+                    "target_tiles": available_target_tokens(),
                     "available_tables": SingletonConfig.get_available_pattern_targets(),
                     "settings": {
                         "colors": SingletonConfig().config.get("colors", []),
@@ -216,6 +217,10 @@ async def handle_tester_action(
         if new_board == old_board_encoded:
             return True
 
+        goal_token = str(session.tester_pattern[1])
+        sum_goal = GoalSpec.parse(goal_token) if goal_token.startswith("sum-") else None
+        completed_goal = sum_goal is not None and sum_goal.reached(new_board) and selected_rate == 1.0
+
         result_lines = []
         for key, value in session.tester_results.items():
             label = key[:1].upper()
@@ -313,10 +318,15 @@ async def handle_tester_action(
             session.tester_results.get(session.tester_best_move),
             session.tester_result_dtype,
         )
-        if session.tester_best_move is None:
+        if completed_goal:
+            session.tester_ready = False
+            session.tester_status = "Board sum goal reached."
+            _tester_append_log(session, session.tester_status)
+            _tester_append_summary(session)
+        elif session.tester_best_move is None:
             _tester_append_log(session, "Game Over: no possible moves left.")
             _tester_append_summary(session)
-        elif next_best_rate is not None and is_perfect_result(next_best_rate, 1.0):
+        elif sum_goal is None and next_best_rate is not None and is_perfect_result(next_best_rate, 1.0):
             _tester_append_log(
                 session,
                 "Congratulations! You're about to reach the target tile.",

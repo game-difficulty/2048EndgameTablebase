@@ -54,6 +54,7 @@ struct BCFamilySolveRunOptions {
     std::vector<std::filesystem::path> archive_output_dirs;
     std::string prefix;
     uint32_t target_rank = 8U;
+    int sum_target = 0;
     int success_target_rank = -1;
     int canonical_symm_mode = static_cast<int>(SymmMode::Full);
     std::vector<uint64_t> pattern_masks;
@@ -269,7 +270,7 @@ namespace detail {
     const std::string &prefix,
     uint32_t ordinal
 ) {
-    return dir / (prefix + std::to_string(ordinal) + ".bcpos");
+    return dir / (prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(prefix)) + ".bcpos");
 }
 
 [[nodiscard]] inline bool bc_family_runner_is_position_archive_path(
@@ -292,7 +293,7 @@ namespace detail {
     const std::string &prefix,
     uint32_t ordinal
 ) {
-    return dir / (prefix + std::to_string(ordinal) + ".bcsuc");
+    return dir / (prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(prefix)) + ".bcsuc");
 }
 
 [[nodiscard]] inline std::filesystem::path bc_family_runner_checkpoint_path(
@@ -507,7 +508,7 @@ bc_family_runner_discover_layers_impl(
             options.generated_position_dir.string()
         );
     }
-    const std::regex pattern("^" + options.prefix + "([0-9]+)\\.bcpos(c|\\.7z)?$");
+    const std::regex pattern("^" + options.prefix + "(-?[0-9]+)\\.bcpos(c|\\.7z)?$");
     std::map<uint32_t, BCFamilySolveRunLayerFile> layers;
     for (const std::filesystem::path &dir : generated_dirs) {
         if (!std::filesystem::is_directory(dir)) {
@@ -523,7 +524,9 @@ bc_family_runner_discover_layers_impl(
             if (!std::regex_match(name, match, pattern)) {
                 continue;
             }
-            const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+            const auto parsed_ordinal = internal_layer_number(match[1].str(), free_layer_offset(options.prefix));
+            if (!parsed_ordinal) continue;
+            const uint32_t ordinal = *parsed_ordinal;
             const auto existing = layers.find(ordinal);
             const bool is_raw = !bc_family_runner_is_position_archive_path(entry.path()) &&
                 !bc_family_runner_is_cell_compressed_position_path(entry.path());
@@ -560,7 +563,7 @@ bc_family_runner_discover_layers_or_empty(const BCFamilySolveRunOptions &options
 [[nodiscard]] inline std::map<uint32_t, BCFamilySolveArchiveExactLayer>
 bc_family_runner_discover_archive_exact_layers(const BCFamilySolveRunOptions &options) {
     std::map<uint32_t, BCFamilySolveArchiveExactLayer> layers;
-    const std::regex pattern("^" + options.prefix + "([0-9]+)\\.bcpos$");
+    const std::regex pattern("^" + options.prefix + "(-?[0-9]+)\\.bcpos$");
     for (const std::filesystem::path &archive_dir : bc_family_runner_archive_dirs(options)) {
         if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
             continue;
@@ -575,7 +578,9 @@ bc_family_runner_discover_archive_exact_layers(const BCFamilySolveRunOptions &op
             if (!std::regex_match(name, match, pattern)) {
                 continue;
             }
-            const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+            const auto parsed_ordinal = internal_layer_number(match[1].str(), free_layer_offset(options.prefix));
+            if (!parsed_ordinal) continue;
+            const uint32_t ordinal = *parsed_ordinal;
             const std::filesystem::path success_path =
                 bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
             std::error_code ec;
@@ -594,7 +599,7 @@ bc_family_runner_discover_archive_exact_layers(const BCFamilySolveRunOptions &op
 bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOptions &options) {
     std::map<uint32_t, std::filesystem::path> layers;
     const std::regex pattern(
-        "^" + options.prefix + "([0-9]+)\\.(?:bccmp|bcraw)$");
+        "^" + options.prefix + "(-?[0-9]+)\\.(?:bccmp|bcraw)$");
     for (const std::filesystem::path &archive_dir : bc_family_runner_archive_dirs(options)) {
         if (archive_dir.empty() || !std::filesystem::is_directory(archive_dir)) {
             continue;
@@ -609,7 +614,9 @@ bc_family_runner_discover_archive_compressed_layers(const BCFamilySolveRunOption
             if (!std::regex_match(name, match, pattern)) {
                 continue;
             }
-            const uint32_t ordinal = static_cast<uint32_t>(std::stoul(match[1].str()));
+            const auto parsed_ordinal = internal_layer_number(match[1].str(), free_layer_offset(options.prefix));
+            if (!parsed_ordinal) continue;
+            const uint32_t ordinal = *parsed_ordinal;
             const auto existing = layers.find(ordinal);
             if (existing != layers.end() && existing->second.extension() != entry.path().extension()) {
                 throw std::runtime_error("BC conflicting archive formats for layer " + std::to_string(ordinal));
@@ -795,7 +802,11 @@ bc_family_runner_find_exact_layer_paths(
     const BCFamilySolveRunOptions &options,
     uint32_t ordinal
 ) {
-    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
+    auto lookup_dirs = bc_family_runner_solved_dirs(options);
+    for (const auto &dir : bc_family_runner_archive_dirs(options)) {
+        if (std::find(lookup_dirs.begin(), lookup_dirs.end(), dir) == lookup_dirs.end()) lookup_dirs.push_back(dir);
+    }
+    for (const std::filesystem::path &dir : lookup_dirs) {
         const std::filesystem::path position_path =
             bc_family_runner_position_path(dir, options.prefix, ordinal);
         const std::filesystem::path success_path =
@@ -818,7 +829,11 @@ template <typename StorageT>
     const BCLut &lut,
     bool remove_invalid = false
 ) {
-    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
+    auto lookup_dirs = bc_family_runner_solved_dirs(options);
+    for (const auto &dir : bc_family_runner_archive_dirs(options)) {
+        if (std::find(lookup_dirs.begin(), lookup_dirs.end(), dir) == lookup_dirs.end()) lookup_dirs.push_back(dir);
+    }
+    for (const std::filesystem::path &dir : lookup_dirs) {
         const std::filesystem::path position_path =
             bc_family_runner_position_path(dir, options.prefix, ordinal);
         const std::filesystem::path success_path =
@@ -1190,7 +1205,7 @@ inline void bc_family_runner_add_final_compress_stats(
     compress_options.worker_count =
         options.num_threads > 0 ? static_cast<uint32_t>(options.num_threads) : 0U;
     compress_options.value_policy = options.archive_value_policy;
-    compress_options.ordinal = ordinal;
+    compress_options.ordinal = static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix);
     return compress_options;
 }
 
@@ -1205,7 +1220,7 @@ inline void bc_family_runner_add_final_compress_stats(
         std::filesystem::create_directories(output_dir);
     }
     return output_dir / (
-        options.prefix + std::to_string(ordinal) +
+        options.prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix)) +
         BCCompressedResult::kCompressedLayerFileExtension);
 }
 
@@ -1222,9 +1237,9 @@ inline void bc_family_runner_add_final_compress_stats(
     paths.reserve(dirs.size());
     for (const std::filesystem::path &dir : dirs) {
         paths.push_back(dir / (
-            options.prefix + std::to_string(ordinal) +
+            options.prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix)) +
             BCCompressedResult::kCompressedLayerFileExtension));
-        paths.push_back(dir / (options.prefix + std::to_string(ordinal) +
+        paths.push_back(dir / (options.prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix)) +
             BCCompressedResult::kRawLayerFileExtension));
     }
     return paths;
@@ -1348,17 +1363,7 @@ inline void bc_family_runner_add_final_compress_stats(
     }
     const size_t begin = prefix.size();
     const size_t count = name.size() - prefix.size() - suffix.size();
-    for (size_t i = 0U; i < count; ++i) {
-        const char ch = name[begin + i];
-        if (ch < '0' || ch > '9') {
-            return std::nullopt;
-        }
-    }
-    const unsigned long value = std::stoul(name.substr(begin, count));
-    if (value > std::numeric_limits<uint32_t>::max()) {
-        return std::nullopt;
-    }
-    return static_cast<uint32_t>(value);
+    return internal_layer_number(name.substr(begin, count), free_layer_offset(prefix));
 }
 
 [[nodiscard]] inline bool bc_family_runner_file_magic_matches(
@@ -1435,7 +1440,7 @@ inline void bc_family_runner_cleanup_archive_tmp_layers(
                 bc_family_runner_success_path(archive_dir, options.prefix, ordinal);
             const std::filesystem::path compressed_target =
                 archive_dir / (
-                    options.prefix + std::to_string(ordinal) +
+                    options.prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix)) +
                     BCCompressedResult::kCompressedLayerFileExtension);
 
             std::error_code ec;
@@ -1492,7 +1497,7 @@ inline void bc_family_runner_cleanup_solve_tmp_layers(
     const BCFamilySolveRunOptions &options
 ) {
     const std::regex pattern(
-        "^" + options.prefix + "[0-9]+_(single|family)_tmp$");
+        "^" + options.prefix + "-?[0-9]+_(single|family)_tmp$");
     for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
         std::error_code ec;
         if (!std::filesystem::is_directory(dir, ec) || ec) {
@@ -1723,7 +1728,7 @@ template <typename StorageT>
                 layer.dtype,
                 position_path,
                 success_path,
-                true));
+                false));
         return true;
     }
     if (retired.single_frontier_cache) {
@@ -1740,7 +1745,7 @@ template <typename StorageT>
                 layer.dtype,
                 position_path,
                 success_path,
-                true));
+                false));
         return true;
     }
     return false;
@@ -1807,9 +1812,9 @@ inline void bc_family_runner_write_checkpoint(
             );
         }
         out << "next_ordinal,exact_future2_ordinal,exact_future4_ordinal,dtype,family_modulus\n"
-            << checkpoint.next_ordinal << ','
-            << checkpoint.exact_future2_ordinal << ','
-            << checkpoint.exact_future4_ordinal << ','
+            << (checkpoint.next_ordinal + free_layer_offset(options.prefix)) << ','
+            << (checkpoint.exact_future2_ordinal + free_layer_offset(options.prefix)) << ','
+            << (checkpoint.exact_future4_ordinal + free_layer_offset(options.prefix)) << ','
             << checkpoint.dtype << ','
             << checkpoint.family_modulus << '\n';
         out.flush();
@@ -1847,9 +1852,10 @@ bc_family_runner_read_checkpoint_file(const std::filesystem::path &path) {
         throw std::runtime_error("BC family runner checkpoint has too few fields");
     }
     BCFamilySolveCheckpoint checkpoint;
-    checkpoint.next_ordinal = std::stoll(fields[0]);
-    checkpoint.exact_future2_ordinal = std::stoll(fields[1]);
-    checkpoint.exact_future4_ordinal = std::stoll(fields[2]);
+    const int offset = free_layer_offset(path.filename().string());
+    checkpoint.next_ordinal = std::stoll(fields[0]) - offset;
+    checkpoint.exact_future2_ordinal = std::stoll(fields[1]) - offset;
+    checkpoint.exact_future4_ordinal = std::stoll(fields[2]) - offset;
     checkpoint.dtype = static_cast<uint32_t>(std::stoul(fields[3]));
     checkpoint.family_modulus = static_cast<uint32_t>(std::stoul(fields[4]));
     return checkpoint;
@@ -1960,7 +1966,8 @@ template <typename StorageT>
     const std::vector<uint8_t> &success_shifts,
     int target_rank,
     BCSuccessDTypeMode dtype,
-    int num_threads
+    int num_threads,
+    int sum_target = 0
 ) {
     if (!bc_success_dtype_matches_type<StorageT>(dtype)) {
         throw std::invalid_argument("BC family runner terminal dtype mismatch");
@@ -1980,7 +1987,7 @@ template <typename StorageT>
         const uint64_t cell_base = offsets[static_cast<size_t>(cid)];
         BCPositionCellScanner(position, cid).for_each_board(
             [&](const BCScannedBoardEntry &entry) {
-                if (bc_family_runner_board_has_target_rank(
+                if (sum_target ? sum_goal_success(entry.board, sum_target) : bc_family_runner_board_has_target_rank(
                         entry.board,
                         target_rank,
                         success_shifts)) {
@@ -2165,6 +2172,7 @@ template <typename StorageT>
     solve.edge_options.canonical_batch_size = options.canonical_batch_size;
     solve.edge_options.canonical_symm_mode = options.canonical_symm_mode;
     solve.edge_options.spawn_rate4 = options.spawn_rate4;
+    solve.edge_options.sum_target = options.sum_target;
     solve.edge_options.success_target_rank =
         options.success_target_rank < 0
             ? static_cast<int>(options.target_rank)
@@ -3079,8 +3087,12 @@ template <typename StorageT>
                     retired,
                     exact_position_path,
                     exact_success_path);
+            // Close exact readers before deleting sources (required on Windows).
             retired = BCFamilySolveFrontierLayer<StorageT>();
-            if (!compressed_in_memory) {
+            if (compressed_in_memory) {
+                (void)bc_family_runner_final_compression_hook(
+                    options, metric.ordinal, exact_position_path, exact_success_path, true);
+            } else {
                 bc_family_runner_add_final_compress_stats(
                     metric,
                     bc_family_runner_final_compression_hook(
@@ -3147,8 +3159,12 @@ template <typename StorageT>
                     retired,
                     exact_position_path,
                     exact_success_path);
+            // Close exact readers before deleting sources (required on Windows).
             retired = BCFamilySolveFrontierLayer<StorageT>();
-            if (!compressed_in_memory) {
+            if (compressed_in_memory) {
+                (void)bc_family_runner_final_compression_hook(
+                    options, metric.ordinal, exact_position_path, exact_success_path, true);
+            } else {
                 bc_family_runner_add_final_compress_stats(
                     metric,
                     bc_family_runner_final_compression_hook(
@@ -3667,7 +3683,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                         ? static_cast<int>(options.target_rank)
                         : options.success_target_rank,
                     options.success_dtype,
-                    options.num_threads);
+                    options.num_threads, options.sum_target);
             BCFamilySolveRunLayerMetric top_metric =
                 bc_family_runner_write_resident_layer<StorageT>(
                     options,
@@ -3990,9 +4006,9 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         const std::filesystem::path output_success =
             bc_family_runner_success_path(work_dir, options.prefix, ordinal);
         const std::filesystem::path single_temp_dir =
-            work_dir / (options.prefix + std::to_string(ordinal) + "_single_tmp");
+            work_dir / (options.prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix)) + "_single_tmp");
         const std::filesystem::path family_temp_dir =
-            work_dir / (options.prefix + std::to_string(ordinal) + "_family_tmp");
+            work_dir / (options.prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix)) + "_family_tmp");
 
         std::unique_ptr<BCResidentSolvedLayer<StorageT>> produced_resident_cache;
         std::unique_ptr<BCSingleChunkFrontierLayer<StorageT>> produced_single_future4_cache;
@@ -4218,6 +4234,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             solve_options.solve.edge_options.canonical_batch_size = options.canonical_batch_size;
             solve_options.solve.edge_options.canonical_symm_mode = options.canonical_symm_mode;
             solve_options.solve.edge_options.spawn_rate4 = options.spawn_rate4;
+            solve_options.solve.edge_options.sum_target = options.sum_target;
             solve_options.solve.edge_options.success_target_rank =
                 options.success_target_rank < 0
                     ? static_cast<int>(options.target_rank)

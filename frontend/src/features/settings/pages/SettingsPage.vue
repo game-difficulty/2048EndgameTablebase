@@ -54,6 +54,23 @@
             <div class="flex flex-col">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.target') }}</label>
               <UiSelect
+                v-model="goalKind"
+                class="w-full mb-2"
+                :options="[{value: 'tile', label: $t('goals.tile')}, {value: 'sum', label: $t('goals.sum')}]"
+                :aria-label="$t('goals.type')"
+                trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-body font-bold text-text-main"
+              />
+              <input v-if="goalKind === 'sum'" v-model.number="sumTarget" type="number" min="4" max="16382" step="2"
+                :aria-label="$t('goals.sum')" class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 text-text-main" />
+              <div v-if="goalKind === 'sum'" class="flex flex-wrap gap-2 mt-2">
+                <button v-for="value in (sumTargetPresets[selectedPattern] || [])" :key="value" type="button"
+                  class="rounded border border-border-main px-2 py-1 text-sm hover:border-accent"
+                  @click="sumTarget = value">{{ value }}</button>
+              </div>
+              <p v-if="goalKind === 'sum'" class="mt-2 text-xs text-text-muted">{{ $t('goals.sumHint') }}</p>
+              <p v-if="!goalValid" class="mt-2 text-sm text-red-500" role="alert">{{ $t('goals.invalidSum') }}</p>
+              <p v-if="!goalAlgorithmValid" class="mt-2 text-sm text-red-500" role="alert">{{ $t('goals.unsupportedAD') }}</p>
+              <UiSelect v-if="goalKind === 'tile'"
                 v-model="selectedTarget"
                 class="w-full"
                 :options="targetOptions"
@@ -95,10 +112,10 @@
                   class="w-full"
                   :options="[
                     { value: 'classic', label: $t('settings.builder.algorithmClassic') },
-                    { value: 'ad', label: $t('settings.builder.algorithmAD'), disabled: selectedPatternIsVariant },
+                    { value: 'ad', label: $t('settings.builder.algorithmAD'), disabled: selectedPatternIsVariant || goalKind === 'sum' },
                     { value: 'ex', label: $t('settings.builder.algorithmEX') },
-                    { value: 'exad', label: $t('settings.builder.algorithmEXAD'), disabled: selectedPatternIsVariant },
-                    { value: 'bc', label: $t('settings.builder.algorithmBC'), badge: 'beta' },
+                    { value: 'exad', label: $t('settings.builder.algorithmEXAD'), disabled: selectedPatternIsVariant || goalKind === 'sum' },
+                    { value: 'bc', label: $t('settings.builder.algorithmBC'), badge: 'beta', disabled: selectedPatternIsVariant },
                   ]"
                   :aria-label="$t('settings.builder.algorithmMode')"
                   trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-control font-black text-text-main shadow-sm hover:border-accent/45"
@@ -246,7 +263,7 @@
         <div class="border-t border-border-main pt-6">
           <button
             @click="startBuild"
-            :disabled="isBuilding"
+            :disabled="isBuilding || !goalValid || !goalAlgorithmValid"
             :class="[
               'relative isolate w-full overflow-hidden rounded-xl py-4 shadow-lg transition-all active:scale-[0.98]',
               isBuilding
@@ -400,12 +417,14 @@ const props = defineProps({
     wsStatus,
     categories,
   targetTiles,
+  sumTargetPresets,
   config,
   themes,
   currentPalette,
   selectedCategory,
   selectedPattern,
   selectedTarget,
+  goalKind, sumTarget, goalValid, goalAlgorithmValid,
   selectedPatternIsVariant,
   buildPath,
   normalizedBuildPaths,
@@ -459,7 +478,7 @@ const patternOptions = computed(() =>
 );
 
 const targetOptions = computed(() =>
-  (targetTiles.value || []).map((target) => ({
+  (targetTiles.value || []).filter((target) => !String(target).startsWith('sum-')).map((target) => ({
     value: target,
     label: target,
   }))

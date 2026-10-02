@@ -1,4 +1,5 @@
 {
+  "goals": {"type": "目标类型", "tile": "单个数字", "sum": "盘面和", "sumLabel": "盘面和 {value}", "sumHint": "不计入 16384、32768；有效移动后，保证下一次出数能使盘面和达到目标即判成功。", "invalidSum": "请输入 4 至 16382 之间的偶数。", "unsupportedAD": "盘面和目标不支持 AD/EXAD，请选择 Classic、EX 或可用的 BC。", "completed": "目标已达成"},
   "tabs": {
     "home": "首页",
     "gamer": "游戏",

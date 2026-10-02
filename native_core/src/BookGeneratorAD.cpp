@@ -589,9 +589,9 @@ RestartResult handle_restart_ad(
     bool compress_temp_files
 ) {
     const std::string &pathname = options.pathname;
-    const std::string path_i = pathname + std::to_string(step_index);
-    const std::string path_i_plus_1 = pathname + std::to_string(step_index + 1);
-    const std::string path_i_minus_1 = pathname + std::to_string(step_index - 1);
+    const std::string path_i = pathname + std::to_string(options.layer_offset + step_index);
+    const std::string path_i_plus_1 = pathname + std::to_string(options.layer_offset + step_index + 1);
+    const std::string path_i_minus_1 = pathname + std::to_string(options.layer_offset + step_index - 1);
     (void)path_i;
     (void)path_i_plus_1;
     (void)path_i_minus_1;

@@ -44,6 +44,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const tablebasePath = ref('');
   const patternType = ref('');
   const targetValue = ref('');
+  const goalReached = ref(false);
   const tableResult = ref({ dtype: '?', results: {} });
   const currentBoardHex = ref('');
   const resultsBoardHex = ref('');
@@ -432,7 +433,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const pumpQueuedSteps = () => {
-    if (!queuedStepCount.value || stepExecutionPending.value || awaitingSpawn.value) return;
+    if (goalReached.value || !queuedStepCount.value || stepExecutionPending.value || awaitingSpawn.value) return;
 
     const boardHex = currentBoardHex.value || hexInput.value;
     const resultsAreFresh = resultsBoardHex.value === boardHex && hasUsableResults.value;
@@ -478,6 +479,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
 
     if (data.action === 'UPDATE_STATE') {
+      goalReached.value = !!data.data.goal_reached;
+      if (goalReached.value) { demoActive.value = false; clearDemoTimer(); clearStepQueue(); }
       metadata.value = data.data.animation;
       board.value = data.data.board;
       if (typeof data.data.tablebase_path === 'string') {
@@ -1004,6 +1007,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     activePatternCategory,
     activePatternOptions,
     targetValue,
+    goalReached,
     availableTargets,
     onPatternChange,
     selectFolder,

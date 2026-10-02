@@ -400,7 +400,7 @@ export function useReplaySession(activeRef, emit) {
     if (replayPattern.value && String(replayPattern.value).includes('_')) return replayPattern.value;
     const source = String(replaySource.value || '');
     const fileName = source.split(/[\\/]/u).pop() || '';
-    const match = fileName.match(/^([A-Za-z0-9]+_\d+)/u);
+    const match = fileName.match(/^([A-Za-z0-9]+_(?:sum-)?\d+)(?=[_.]|$)/u);
     return match ? match[1] : '';
   };
 

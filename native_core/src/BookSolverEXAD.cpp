@@ -352,11 +352,11 @@ struct EXADCurrentChunkRange {
 };
 
 std::string exad_chunk_dir_path(const RunOptions &options, int step) {
-    return EXAD::solved_file_path(options.pathname, step) + ".chunks.tmp";
+    return EXAD::solved_file_path(options.pathname, logical_layer(options, step)) + ".chunks.tmp";
 }
 
 std::string exad_chunk_writing_path(const RunOptions &options, int step) {
-    return EXAD::solved_file_path(options.pathname, step) + ".writing";
+    return EXAD::solved_file_path(options.pathname, logical_layer(options, step)) + ".writing";
 }
 
 std::string exad_slot_chunk_path(const std::string &chunk_dir, size_t slot) {
@@ -469,13 +469,13 @@ std::string exad_compressed_file_path(const RunOptions &options, int step) {
 
 std::string exad_solved_file_path(const RunOptions &options, int step) {
     const std::string existing = StoragePaths::existing_path_for(options, step, ".exadbook", false);
-    return existing.empty() ? EXAD::solved_file_path(options.pathname, step) : existing;
+    return existing.empty() ? EXAD::solved_file_path(options.pathname, logical_layer(options, step)) : existing;
 }
 
 std::string exad_existing_compressed_file_path(const RunOptions &options, int step) {
     for (const std::string &pathname : StoragePaths::candidate_pathnames(options, true)) {
         const std::string path =
-            pathname + std::to_string(step) + EXADCompressedResult::kCompressedLayerFileExtension;
+            pathname + std::to_string(logical_layer(options, step)) + EXADCompressedResult::kCompressedLayerFileExtension;
         if (NativePath::exists(path)) {
             return path;
         }
@@ -506,17 +506,17 @@ bool exad_compressed_file_exists(const RunOptions &options, int step) {
 
 std::string exad_existing_temp_layer_path(const RunOptions &options, int step) {
     for (const std::string &pathname : StoragePaths::candidate_pathnames(options, false)) {
-        const std::string path = EXAD::layer_file_path(pathname, step);
+        const std::string path = EXAD::layer_file_path(pathname, logical_layer(options, step));
         if (EXAD::layer_file_exists(path)) {
             return path;
         }
     }
-    return EXAD::layer_file_path(options.pathname, step);
+    return EXAD::layer_file_path(options.pathname, logical_layer(options, step));
 }
 
 bool exad_temp_layer_exists(const RunOptions &options, int step) {
     for (const std::string &pathname : StoragePaths::candidate_pathnames(options, false)) {
-        if (EXAD::layer_file_exists(EXAD::layer_file_path(pathname, step))) {
+        if (EXAD::layer_file_exists(EXAD::layer_file_path(pathname, logical_layer(options, step)))) {
             return true;
         }
     }

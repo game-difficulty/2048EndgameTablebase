@@ -620,7 +620,7 @@ std::string ad_book_folder_path(const RunOptions &options, int step) {
     if (!existing.empty()) {
         return existing;
     }
-    return options.pathname + std::to_string(step) + "b";
+    return options.pathname + std::to_string(logical_layer(options, step)) + "b";
 }
 
 template <typename T>
@@ -2338,8 +2338,8 @@ void recalculate_process_ad_chunked_impl(
     if (started_from_generate) {
         std::error_code create_ec1;
         std::error_code create_ec2;
-        NativePath::create_directories(options.pathname + std::to_string(options.steps - 1) + "b", create_ec1);
-        NativePath::create_directories(options.pathname + std::to_string(options.steps - 2) + "b", create_ec2);
+        NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 1)) + "b", create_ec1);
+        NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 2)) + "b", create_ec2);
     }
     StoragePaths::remove_all_candidates(options, options.steps - 2, "", false);
     StoragePaths::remove_all_candidates(options, options.steps - 2, ".7z", false);
@@ -2609,8 +2609,8 @@ void recalculate_process_ad_impl(
     if (started_from_generate) {
         std::error_code create_ec1;
         std::error_code create_ec2;
-        NativePath::create_directories(options.pathname + std::to_string(options.steps - 1) + "b", create_ec1);
-        NativePath::create_directories(options.pathname + std::to_string(options.steps - 2) + "b", create_ec2);
+        NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 1)) + "b", create_ec1);
+        NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 2)) + "b", create_ec2);
     }
     StoragePaths::remove_all_candidates(options, options.steps - 2, "", false);
     StoragePaths::remove_all_candidates(options, options.steps - 2, ".7z", false);

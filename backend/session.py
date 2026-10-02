@@ -11,7 +11,6 @@ from engine_core.performance_evaluation import build_performance_stats
 
 _SHARED_EVIL_GEN = None
 _SHARED_AI_DISPATCHER = None
-_SHARED_BOOK_READER = None
 
 
 def u64(val):
@@ -229,8 +228,8 @@ class GameSession:
         return self.ai_fallback_player, self.ai_fallback_logic
 
     def ensure_book_reader(self):
-        global _SHARED_BOOK_READER
-        if _SHARED_BOOK_READER is None:
-            _SHARED_BOOK_READER = BookReaderDispatcher()
-        self.book_reader = _SHARED_BOOK_READER
+        # A dispatcher carries the selected pattern, goal and encoding LUT.
+        # Trainer/tester tabs may select different goals concurrently.
+        if self.book_reader is None:
+            self.book_reader = BookReaderDispatcher()
         return self.book_reader

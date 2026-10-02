@@ -53,6 +53,7 @@ struct BCSolveEdgeOptions {
     uint8_t spawn4_tile_rank = 2U;
     double spawn_rate4 = 0.1;
     int success_target_rank = 0;
+    int sum_target = 0;
     const std::vector<uint8_t> *success_shifts = nullptr;
     bool success_check_all_cells = false;
     const std::vector<uint64_t> *pattern_masks = nullptr;
@@ -138,7 +139,7 @@ struct BCSolveEdgeWorkspace {
 }
 
 [[nodiscard]] inline bool bc_solve_success_check_enabled(const BCSolveEdgeOptions &options) {
-    return options.success_target_rank > 0 &&
+    return options.sum_target > 0 || options.success_target_rank > 0 &&
         (options.success_check_all_cells ||
          (options.success_shifts != nullptr && !options.success_shifts->empty()));
 }
@@ -147,6 +148,7 @@ struct BCSolveEdgeWorkspace {
     uint64_t board,
     const BCSolveEdgeOptions &options
 ) {
+    if (options.sum_target) return sum_goal_success(board, options.sum_target);
     if (!bc_solve_success_check_enabled(options)) {
         return false;
     }

@@ -71,6 +71,7 @@
           menu-class="z-[160]"
           @change="handleTargetChange"
         />
+        <span v-if="goalReached" role="status" class="text-accent font-bold">{{ $t('goals.completed') }}</span>
         <button
           @click="selectFolder"
           class="ml-2 ui-kicker bg-btn-bg hover:bg-btn-hover text-white px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
@@ -274,6 +275,7 @@
 </template>
 
 <script setup>
+import { goalLabel } from '../../../utils/goalTarget';
 import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
@@ -303,6 +305,7 @@ const {
   activePatternCategory,
   activePatternOptions,
   targetValue,
+  goalReached,
   availableTargets,
   onPatternChange,
   selectFolder,
@@ -349,7 +352,7 @@ const {
 const targetOptions = computed(() =>
   availableTargets.value.map((target) => ({
     value: target,
-    label: target,
+    label: goalLabel(target),
   }))
 );
 

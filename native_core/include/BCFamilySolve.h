@@ -2296,6 +2296,7 @@ inline void bc_family_push_moved_candidate_no_stats(
     bool success_check_all_cells,
     uint64_t success_target_pattern
 ) {
+    if (options.sum_target) return sum_goal_success(board, options.sum_target);
     if (success_check_all_cells) {
         const uint64_t diff = board ^ success_target_pattern;
         constexpr uint64_t kMask7 = 0x7777777777777777ULL;

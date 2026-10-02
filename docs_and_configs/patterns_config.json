@@ -315,6 +315,7 @@
     "extra steps": 36
   },
   "2x4": {
+    "sum targets": [768, 896],
     "category": "variant",
     "valid pattern": [],
     "target pos": "0xffffffff0000",
@@ -325,6 +326,7 @@
     "extra steps": 48
   },
   "3x3": {
+    "sum targets": [1536, 1792],
     "category": "variant",
     "valid pattern": [],
     "target pos": "0xfff0fff0fff00000",
@@ -335,6 +337,7 @@
     "extra steps": 60
   },
   "3x4": {
+    "sum targets": [3072, 3584],
     "category": "variant",
     "valid pattern": [],
     "target pos": "0xffffffffffff0000",
