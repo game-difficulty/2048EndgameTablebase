@@ -1,0 +1,9 @@
+.venv/
+.env
+.env.*.local
+runtime/
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+.pytest_cache/
+tests/__pycache__/

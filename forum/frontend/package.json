@@ -1,0 +1,20 @@
+{
+  "name": "2048-forum",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "dev": "vite --host 127.0.0.1 --port 5175",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4175"
+  },
+  "dependencies": {
+    "vue": "3.5.30",
+    "vue-router": "4.5.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.5",
+    "vite": "8.3.2"
+  }
+}

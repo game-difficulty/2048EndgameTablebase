@@ -1,0 +1,19 @@
+name: tables2048-forum-local
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: forum
+      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_DB: forum
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - forum_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forum -d forum"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+volumes:
+  forum_pgdata:
