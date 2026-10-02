@@ -176,6 +176,53 @@ def test_single_option_limit_is_per_market(market):
     assert balance()[0]==139000000
 
 
+@pytest.mark.parametrize('outcome', ['yellow', 'white', None])
+def test_personal_history_survives_new_generation_and_is_private(market, outcome):
+    placed = p.place(ROOM, 1, order(), lambda: market)
+    assert p.listing(ROOM, 1)['recent'] == []
+    final = copy.deepcopy(market)
+    final.update(phase='FINISHED', content_sequence=3)
+    final['prediction_window']['open'] = False
+    final['public_result'] = dict(winner_side=outcome, games=[])
+    p.reconcile(ROOM, final)
+    result = p.listing(ROOM, 1)['recent'][0]
+    payout = placed['shares'] if outcome == 'yellow' else 0 if outcome == 'white' else 1000000
+    assert result['payout_units'] == payout
+    assert result['stake_units'] == 1000000
+    assert result['net_profit_units'] == payout - 1000000
+    assert result['status'] == ('void' if outcome is None else 'settled')
+    assert result['kind'] == 'winner' and result['option_id'] == 'yellow'
+    next_match = copy.deepcopy(market)
+    next_match.update(generation=2, content_sequence=1)
+    p.reconcile(ROOM, next_match)
+    assert p.listing(ROOM, 1)['recent'][0] == result
+    assert p.listing(ROOM, 2)['recent'] == []
+    assert p.listing('another-room', 1)['recent'] == []
+    assert 'recent' not in p.listing(ROOM)
+
+
+def test_room_activity_broadcast_tracks_pause_without_market_changes(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from backend.room_activities.runtime import RoomActivities
+    messages = []
+    facts = {'prediction_window': {'open': True}, 'suspended': False}
+    hub = SimpleNamespace(room=SimpleNamespace(id=ROOM, content_kind='competition-match'),
+                          content=SimpleNamespace(projection=facts), broadcast=messages.append)
+    monkeypatch.setattr(p, 'reconcile', lambda *args: None)
+    monkeypatch.setattr(p, 'listing', lambda *args: {'markets': [{'id':'m', 'status':'open'}]})
+    activity = RoomActivities(hub)
+    asyncio.run(activity.refresh())
+    assert messages[-1]['available'] is True
+    facts['suspended'] = True
+    asyncio.run(activity.refresh())
+    assert messages[-1]['available'] is False
+    facts['suspended'] = False
+    asyncio.run(activity.refresh())
+    assert messages[-1]['available'] is True
+    assert len(messages) == 3
+
+
 def test_duplicate_concurrent_requests_charge_once_even_after_close(market):
     body=order()
     with ThreadPoolExecutor(max_workers=2) as pool:

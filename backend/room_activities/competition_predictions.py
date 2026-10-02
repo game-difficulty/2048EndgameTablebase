@@ -164,8 +164,24 @@ def listing(room_id, user_id=None):
                                       (row['id'], user_id)).fetchone()
                 market['mine'] = dict(position) if position else None
             markets.append(market)
-        return dict(protocol=RULES, markets=markets, amounts=list(AMOUNTS), limit_units=LIMIT,
-                    initial_reserve_units=INITIAL, server_time=time.time())
+        response = dict(protocol=RULES, markets=markets, amounts=list(AMOUNTS), limit_units=LIMIT,
+                        initial_reserve_units=INITIAL, server_time=time.time())
+        if user_id is not None:
+            recent = db.execute('''SELECT m.id,m.kind,m.generation,m.opened_at AS started_at,
+                m.settled_at,m.status,m.winner,m.options,p.option_id,p.stake AS stake_units,
+                p.payout AS payout_units,p.payout-p.stake AS net_profit_units
+                FROM competition_prediction_positions p
+                JOIN competition_prediction_markets m ON m.id=p.market_id
+                WHERE m.room_id=? AND p.user_id=? AND m.status IN ('settled','void')
+                  AND p.payout IS NOT NULL
+                ORDER BY m.settled_at DESC,m.id DESC LIMIT 20''', (room_id, user_id)).fetchall()
+            response['recent'] = []
+            for row in recent:
+                item = dict(row)
+                options = json.loads(item.pop('options'))
+                item['selection'] = next((o['name'] for o in options if o['id'] == item['option_id']), item['option_id'])
+                response['recent'].append(item)
+        return response
 
 
 def place(room_id, user_id, body, source):

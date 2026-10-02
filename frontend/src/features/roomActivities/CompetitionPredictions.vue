@@ -36,6 +36,7 @@
         <p v-else class="note">{{ t('先后手抽签完成后开放。','Opens after the first-pick draw completes.') }}</p>
       </section>
     </div>
+    <PredictionHistory :results="data.recent" :lang="lang" />
     <p v-if="error" role="alert" class="error">{{ error }}</p>
     <details><summary>{{ t('赔率与结算规则','Pricing and settlement rules') }}</summary>
       <p>{{ t('采用固定乘积 AMM，无手续费。全场胜方初始虚拟储备各 10,000 Token，参考赔率均为 ×2。前两局比分按两局独立、双方每局胜率相同且无平局的假设，以 1:2:1 初始化概率权重；2:0、1:1、0:2 的虚拟储备分别为 10,000、5,000、10,000 Token，参考赔率分别为 ×4、×2、×4。新比例适用于新开及尚未下注的开放市场，已有下注的市场保留原储备。参考赔率不是本笔成交赔率：下注金额越大，滑点越明显。每笔买入的兑付份额锁定，后续下注不会改变已成交返还。','A fixed-product AMM is used, with no fees. Match-winner outcomes each start with 10,000 virtual Tokens and marginal odds of ×2. Assuming independent games, equal win chances and no draws, the first-two-games scores start with probability weights of 1:2:1. Virtual reserves for 2:0, 1:1 and 0:2 are 10,000, 5,000 and 10,000 Tokens, giving marginal odds of ×4, ×2 and ×4. The new weights apply to new markets and open markets with no bets; markets with existing bets retain their reserves. Marginal odds are not your execution odds: larger orders incur more slippage. Each order locks its payout shares; later orders do not change them.') }}</p>
@@ -47,6 +48,7 @@
 import { computed, ref, reactive, watch, onMounted, onUnmounted } from 'vue';
 import { useActivities } from './context.js';
 import artwork from './assets/prediction-colored.webp';
+import PredictionHistory from './PredictionHistory.vue';
 const props = defineProps({ user:Object, connected:Boolean, online:Boolean, lang:String, state:Object, entryTarget:String });
 const emit = defineEmits(['login','balance','open']);
 const { room, url } = useActivities();
@@ -59,7 +61,12 @@ const t=(zh,en)=>props.lang==='zh'?zh:en;
 const tokens=value=>(Number(value||0)/1000).toLocaleString(undefined,{maximumFractionDigits:3});
 const market=kind=>data.value.markets.find(item=>item.kind===kind);
 const remaining=computed(()=>Math.max(0,Math.ceil((Date.parse(data.value.markets[0]?.minimum_until||'')-now.value-serverOffset.value)/1000))||0);
-const caption=computed(()=>data.value.markets.some(item=>item.status==='open')?t('下注开放','Open'):data.value.markets.length?t('已封盘','Closed'):t('等待抽签','Awaiting draw'));
+const caption=computed(()=>{
+  const markets=data.value.markets;
+  if(markets.some(item=>item.status==='open'))return data.value.available && props.connected && props.online?t('下注开放','Open'):t('下注暂不可用','Entries suspended');
+  if(markets.length && markets.every(item=>['settled','void'].includes(item.status)))return t('已结算 · 查看个人结果','Settled · View your results');
+  return markets.length?t('已封盘','Closed'):t('等待抽签','Awaiting draw');
+});
 const statusText=item=>item.status==='open'?t('开放','Open'):item.status==='void'?t('已退款','Refunded'):item.status==='settled'?t('已结算','Settled'):t('已封盘','Closed');
 const canBet=kind=>props.connected && props.online && data.value.available && market(kind)?.status==='open';
 const quote=kind=>market(kind)?.options.find(item=>item.id===selection[kind])?.quotes?.[amountsByKind[kind]]||0;
@@ -95,7 +102,7 @@ watch(()=>props.user?.id,()=>{epoch++;busy.value=false;fetching=false;close();da
 watch(()=>props.state,()=>{if(props.state?.protocol==='competition-fpmm-v1')refresh();});
 onMounted(()=>{load();refresh();timer=setInterval(()=>{now.value=Date.now();if(props.connected&&!busy.value)refresh();},3000);});
 onUnmounted(()=>{epoch++;clearInterval(timer);});
-defineExpose({close});
+defineExpose({open,close});
 </script>
 <style scoped>
 .prediction-entry{width:78px;display:flex;flex-direction:column;align-items:center;gap:3px;border:0;border-right:1px solid var(--border-main);background:transparent;color:var(--text-main);padding:5px;cursor:pointer}.prediction-entry img{width:52px;height:52px}.prediction-entry b,.prediction-entry small{font-size:11px}

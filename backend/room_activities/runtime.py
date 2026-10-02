@@ -26,7 +26,9 @@ class RoomActivities:
         if getattr(self.hub.room, 'content_kind', None) == 'competition-match':
             await asyncio.to_thread(competition_predictions.reconcile, self.hub.room.id, self.hub.content.projection)
             state = await asyncio.to_thread(competition_predictions.listing, self.hub.room.id)
-            if state['markets'] != self.state.get('markets'):
+            facts = self.hub.content.projection or {}
+            state['available'] = bool(not facts.get('suspended') and (facts.get('prediction_window') or {}).get('open'))
+            if state['markets'] != self.state.get('markets') or state['available'] != self.state.get('available'):
                 self.state = state
                 self.hub.broadcast(dict(type='predictions', **state))
             return

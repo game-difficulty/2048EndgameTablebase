@@ -2,9 +2,6 @@
   <Teleport v-if="entryTarget" defer :to="entryTarget">
     <button ref="entry" class="prediction-entry prediction-strip-entry" @click="open"><img :src="predictionArtwork" alt="" width="40" height="40" draggable="false" /><b>{{ t('下注','Predict') }}</b><small>{{ caption }}</small></button>
   </Teleport>
-  <RoomActivityEntry v-if="dockOpen && !dismissed.includes(state.market.id)" :target="dockTarget" kind="prediction"
-    :label="t('下注','Predict')" :caption="marketCaption(state.market)" :dismiss-label="t('收起下注','Dismiss predictions')"
-    @dismiss="dismiss(state.market.id)" @open="open"><img :src="predictionArtwork" alt="" draggable="false" /></RoomActivityEntry>
   <dialog ref="dialog" class="prediction-dialog" aria-labelledby="prediction-title" @cancel.prevent="close" @click="backdrop">
     <header><h2 id="prediction-title">{{ t('本批下注','Batch predictions') }}</h2><button ref="help" :aria-label="t('下注规则','Prediction rules')" @click="showRules"><CircleHelp :size="20" /></button><button :aria-label="t('关闭','Close')" @click="close"><X :size="20" /></button></header>
     <p class="deadline" role="status">{{ caption }}<span v-if="market?.status === 'open' && !online"> · {{ t('直播暂停或离线，暂不接单','Paused or offline · Entries suspended') }}</span></p>
@@ -38,11 +35,7 @@
       </section>
     </div>
     <p v-else>{{ t('当前为过渡批或准备阶段。下一批三位选手同时起跑后开放下注。','The room is preparing or finishing a transition batch. Entries open when all three players start the next batch.') }}</p>
-    <details v-if="data.recent?.length" class="recent-results"><summary>{{ t('最近个人结算','Recent results') }}</summary>
-      <table><thead><tr><th>{{ t('开局时间','Started') }}</th><th>{{ t('本金','Stake') }} (Token)</th><th>{{ t('净收益','Net profit') }} (Token)</th></tr></thead>
-        <tbody><tr v-for="result in data.recent.slice(0,5)" :key="result.id"><td>{{ startedTime(result.started_at) }}</td><td>{{ tokens(result.stake_units) }}</td><td>{{ result.net_profit_units > 0 ? '+' : '' }}{{ tokens(result.net_profit_units) }}</td></tr></tbody>
-      </table>
-    </details>
+    <PredictionHistory :results="data.recent" :lang="lang" />
     <p v-if="error" class="error" role="alert">{{ error }}</p><button class="refresh" :disabled="busy" @click="refresh">{{ t('刷新','Refresh') }}</button>
   </dialog>
   <dialog ref="rules" class="prediction-dialog rules-dialog" aria-labelledby="prediction-rules-title" @cancel.prevent="hideRules" @click="rulesBackdrop">
@@ -73,14 +66,11 @@ import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { CircleHelp, X } from '@lucide/vue';
 import predictionArtwork from './assets/prediction-colored.webp';
 import { useActivities } from './context.js';
-import RoomActivityEntry from './RoomActivityEntry.vue';
-import { useActivityDismissals } from './useActivityDismissals.js';
+import PredictionHistory from './PredictionHistory.vue';
 import { predictionIsOpen } from './activityAvailability.js';
 const props=defineProps({state:Object,user:Object,connected:Boolean,online:Boolean,lang:String,dockTarget:String,entryTarget:String});
 const emit=defineEmits(['login','balance','open']);
 const {url,room}=useActivities();
-const { dismissed, dismiss } = useActivityDismissals('prediction');
-const dockOpen = computed(() => predictionIsOpen(props.state?.market, now.value, props.connected, props.online));
 const t=(zh,en)=>props.lang==='zh'?zh:en;
 const data=ref({market:null}),dialog=ref(null),rules=ref(null),help=ref(null),entry=ref(null),opened=ref(false),rulesOpen=ref(false);
 const amount=ref(100),targetAmount=ref(100),selection=ref(''),pending=ref(null),busy=ref(false),slowConfirm=ref(false),submittingKind=ref(''),error=ref(''),now=ref(Date.now()/1000);
@@ -100,7 +90,6 @@ function marketCaption(value) {
   return !value?t('等待下一批','Waiting for next batch'):value.status==='void'?t('本批作废 · 已退款','Voided · Refunded'):value.status==='settled'?t('本批已结算','Batch settled'):value.status==='closed'||!seconds?t('已封盘','Entries closed'):`${t('截止','Closes in')} ${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;
 }
 const caption=computed(()=>marketCaption(market.value));
-const startedTime=value=>value == null ? '—' : new Date(value*1000).toLocaleString(props.lang==='zh'?'zh-CN':'en-GB',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const tokens=units=>(Number(units || 0)/1000).toLocaleString(undefined,{maximumFractionDigits:1});
 const name=id=>market.value?.options.find(p=>p.id===id)?.name || room.participants?.find(p=>p.id===id)?.name || id;
 const submitAmount=kind=>pending.value && (pending.value.kind || 'winner')===kind ? pending.value.amount : kind==='target65536' ? targetAmount.value : amount.value;
@@ -157,7 +146,7 @@ watch(()=>props.user?.id,()=>{generation++;version++;clearTimeout(slowConfirmTim
 watch(()=>props.connected,connected=>{if(connected && opened.value)refresh();});
 onMounted(()=>{loadPending();timer=setInterval(()=>{now.value=Date.now()/1000+offset;if(opened.value && !busy.value && props.connected && Date.now()-lastRefresh>5000)refresh();},500);});
 onUnmounted(()=>{generation++;clearInterval(timer);clearTimeout(slowConfirmTimer);});
-defineExpose({close});
+defineExpose({open,close});
 </script>
 <style scoped>
 .target-bet{margin-top:24px;padding-top:18px;border-top:1px solid var(--border-main)}.prediction-dialog h3{font-size:15px;margin:12px 0}.target-bet .note{margin:10px 0}
