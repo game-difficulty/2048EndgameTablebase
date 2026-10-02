@@ -2,6 +2,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parse, compileStyle } from '@vue/compiler-sfc';
+import { ALL_PROJECTS, PROJECT_BY_ID, PROJECT_BY_ORDER, PRACTICE_PROJECTS } from '../src/projects/catalog.js';
+
+test('all 20 project routes share the practice page, independent of menu visibility', () => {
+  const source = readFileSync(new URL('../src/projects/ProjectPlayground.vue', import.meta.url), 'utf8');
+  assert.match(source, /const project = computed\(\(\) => PROJECT_BY_ID\[props\.projectId\] \|\| null\)/);
+  assert.equal(ALL_PROJECTS.length, 20);
+  for (const project of ALL_PROJECTS) {
+    assert.equal(PROJECT_BY_ID[project.id], project);
+    assert.equal(PROJECT_BY_ORDER[project.order], project);
+    assert.equal(project.practicePath, `/practice/${project.order}`);
+  }
+  assert.equal(PRACTICE_PROJECTS.length, 12, 'preserve the current menu');
+});
 
 test('practice uses shared responsive typography and readable wrapping stats', () => {
   const source = readFileSync(new URL('../src/projects/ProjectPlayground.vue', import.meta.url), 'utf8');

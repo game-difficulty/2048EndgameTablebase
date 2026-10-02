@@ -1,5 +1,6 @@
 import { evilSpawn as wasmEvilSpawn } from './evilSpawn.js';
 import { nextRandom, randomStream, seed32, ticketFloat } from './randomStreams.js';
+import { orientSeal, unorientSeal } from './sealOrientation.js';
 
 export const WALL = -1;
 export const ISLAND = -3;
@@ -313,6 +314,11 @@ export class TournamentGame {
     if (increment) this.restartCount += 1;
     this.sealState = seed32(`${this.seed}:seal:${this.restartCount}`);
     this.board = this.emptyBoard();
+    // One per-side symmetry per run keeps successive shared patterns disjoint.
+    if (this.project.sealEveryMoves) {
+      this.sealOrientation = this.side === 'solo' || this.rows !== this.cols ? 0
+        : nextRandom(seed32(`${this.seed}:seal-orientation:${this.side}:${this.restartCount}`)) % 8;
+    }
     this.sealedCells = [];
     this.sealRound = 0;
     const openingSeals = this.project.sealEveryMoves ? this.rotateSeals() : null;
@@ -383,9 +389,10 @@ export class TournamentGame {
 
   rotateSeals() {
     const released = this.sealedCells.slice();
-    const previous = new Set(released);
+    const orientation = this.sealOrientation || 0;
+    const previous = new Set(released.map(index => unorientSeal(index, this.rows, orientation)));
     const candidates = this.board.map((_value, index) => index)
-      .filter(index => this.board[index] !== WALL && !previous.has(index));
+      .filter(index => this.board[orientSeal(index, this.rows, orientation)] !== WALL && !previous.has(index));
     const sealCount = Math.min(this.project.sealCount || 3, candidates.length);
     const draw = () => {
       const available = candidates.slice();
@@ -407,7 +414,7 @@ export class TournamentGame {
         && !cutsOffCorner([...sealed.slice(0, -1), index], this.rows, this.cols));
       if (replacement != null) sealed[sealed.length - 1] = replacement;
     }
-    this.sealedCells = sealed.sort((a, b) => a - b);
+    this.sealedCells = sealed.map(index => orientSeal(index, this.rows, orientation)).sort((a, b) => a - b);
     this.sealRound += 1;
     return { released, sealed: this.sealedCells.slice() };
   }

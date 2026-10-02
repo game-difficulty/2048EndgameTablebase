@@ -73,11 +73,12 @@ export function hasCargoMove(board, cargo) {
 }
 
 export class CargoGame {
-  constructor(project, { seed = `${Date.now()}-${Math.random()}` } = {}) {
+  constructor(project, { seed = `${Date.now()}-${Math.random()}`, side = 'solo' } = {}) {
     this.project = project;
     this.seed = String(seed);
     this.randomState = seed32(`${this.seed}:spawn`);
     this.shapeState = seed32(`${this.seed}:cargo-shape`);
+    this.cargoVariantState = side === 'solo' ? null : seed32(`${this.seed}:cargo-variant:${side}`);
     this.revision = 0;
     this.nextCargoId = 0;
     this.reset(false);
@@ -106,7 +107,10 @@ export class CargoGame {
     // Always take two draws from the shape stream, even for single-variant
     // families. Neither numeric spawns nor player move counts affect it.
     this.shapeState = nextRandom(this.shapeState);
-    const shape = group[Math.floor(this.shapeState / 0x100000000 * group.length)];
+    // Keep both shared draws so the family sequence remains unchanged.
+    if (this.cargoVariantState != null) this.cargoVariantState = nextRandom(this.cargoVariantState);
+    const variant = this.cargoVariantState ?? this.shapeState;
+    const shape = group[Math.floor(variant / 0x100000000 * group.length)];
     return { id: `cargo-${this.nextCargoId++}`, shape, row: -2, col: 1 };
   }
 

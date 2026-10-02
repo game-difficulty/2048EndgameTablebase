@@ -105,7 +105,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import LanguageSwitch from '../LanguageSwitch.vue';
 import { syncAccountLanguage } from '../i18n.js';
-import { PRACTICE_PROJECTS } from './catalog.js';
+import { PRACTICE_PROJECTS, PROJECT_BY_ID } from './catalog.js';
 import { formatElapsed, TournamentGame } from './engine.js';
 import { PolyominoGame } from './polyominoEngine.js';
 import { PracticeSpecialGame } from './practiceSpecialEngine.js';
@@ -150,7 +150,8 @@ const practiceSession = getPracticeSession({
 const cachedSession = practiceSession.peek();
 const projects = PRACTICE_PROJECTS;
 function practiceTitle(project) { return project.title.replace(/（\d+×\d+）$/, ''); }
-const project = computed(() => projects.find(item => item.id === props.projectId) || null);
+// Saved project links use the same layout even when omitted from the current menu.
+const project = computed(() => PROJECT_BY_ID[props.projectId] || null);
 const game = shallowRef(null);
 const snapshot = ref({ board: [], score: 0, moves: 0, elapsedMs: 0 });
 const now = ref(performance.now());

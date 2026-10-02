@@ -7,7 +7,7 @@ import { AftershockGame, LookBackGame } from './geometryVariants.js';
 import { PROJECT_BY_ID } from './catalog.js';
 
 const STATE_KEYS = ['board', 'tiles', 'cargo', 'score', 'moves', 'revision', 'randomState',
-  'shapeState', 'chemicalColorState', 'sealState', 'nextCargoId', 'nextTileId', 'restartCount', 'rows', 'cols',
+  'shapeState', 'cargoVariantState', 'chemicalColorState', 'sealState', 'sealOrientation', 'nextCargoId', 'nextTileId', 'restartCount', 'rows', 'cols',
   'dice', 'wallIndex', 'sealedCells', 'sealRound', 'finished', 'outcome',
   'fissionSequence', 'fissionRandomState', 'originRow', 'originCol', 'quakeState', 'lookBackState'];
 const clone = value => JSON.parse(JSON.stringify(value));
@@ -87,6 +87,9 @@ export class MatchRuntime {
   }
   restore(checkpoint) {
     if (checkpoint?.version !== 1 || !checkpoint.state) throw new Error('对局恢复数据版本不兼容，请刷新客户端。');
+    // Already-started games keep their legacy random behavior when resumed.
+    if (this.project.cargoTransport && checkpoint.state.cargoVariantState === undefined) this.game.cargoVariantState = null;
+    if (this.project.sealEveryMoves && checkpoint.state.sealOrientation === undefined) this.game.sealOrientation = 0;
     this.metricHistory = clone(checkpoint.metric_history || []);
     for (const key of STATE_KEYS) if (checkpoint.state[key] !== undefined) this.game[key] = clone(checkpoint.state[key]);
     if (this.game.fissionTimers instanceof Map) this.game.fissionTimers = new Map(checkpoint.state.fissionTimers || []);
