@@ -40,7 +40,8 @@ header span{display:grid;gap:3px;min-width:0}header .time-metric{text-align:righ
 header .rule-metric{text-align:center}header .rule-metric small{font-size:11px;white-space:nowrap}header .rule-metric strong{font-size:24px;line-height:1}header .rule-metric.warning strong{color:var(--match-accent,#d8bd69)}
 .stream-board-area{width:100%;height:100%;min-width:0;min-height:0;container-type:size;display:flex;align-items:center;justify-content:center}
 .stream-board-area>:deep(.tournament-board),.stream-board-area>:deep(.poly-board){width:min(100%,330px,100cqh);margin:auto;background:var(--match-tint,#25334b)}
-.stream-board-area>:deep(.cargo-stage){width:min(100%,330px,90cqh);max-height:100%}
+/* Cargo includes two entrance rows and one exit row: fit the entire 4:7 stage without clamping its height. */
+.stream-board-area>:deep(.cargo-stage){width:min(100%,330px,calc(100cqh * 4 / 7));flex-shrink:0}
 .stream-project :deep(.cargo-number-board){background:var(--match-tint,#25334b)}.stream-project :deep(.board-cell),.stream-project :deep(.poly-cell){background:var(--match-cell,#3b4960)}
 .stream-project>small{text-align:center}
 </style>
