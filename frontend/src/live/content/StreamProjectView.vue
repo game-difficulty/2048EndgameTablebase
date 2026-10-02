@@ -44,4 +44,5 @@ header .rule-metric{text-align:center}header .rule-metric small{font-size:11px;w
 .stream-board-area>:deep(.cargo-stage){width:min(100%,330px,calc(100cqh * 4 / 7));flex-shrink:0}
 .stream-project :deep(.cargo-number-board){background:var(--match-tint,#25334b)}.stream-project :deep(.board-cell),.stream-project :deep(.poly-cell){background:var(--match-cell,#3b4960)}
 .stream-project>small{text-align:center}
+.stream-board-area.adaptive-board-fit>:deep(*){width:var(--stream-board-width)!important;max-height:none;flex-shrink:0}
 </style>

@@ -1,5 +1,5 @@
 <template>
-  <section :class="['competition-content', {'showing-settlement':stage==='result'}]">
+  <section ref="layoutRoot" :class="['competition-content', {'showing-settlement':stage==='result'}]">
     <header v-if="stage!=='result'" class="scorebar">
       <div class="team yellow"><span>{{ team('yellow').name || t('黄方','Yellow') }}</span><b>{{ score.yellow || 0 }}</b><time>{{ clock('yellow') }}</time></div>
       <div class="match-title"><small>{{ t('团队赛','TEAM MATCH') }} · {{ gameLabel }}</small><strong>{{ match?.name || t('比赛直播','Competition') }}</strong><em>{{ phaseLabel }}</em></div>
@@ -71,6 +71,7 @@
 </template>
 <script setup>
 import { shouldRefreshLiveClock } from '../displayClock.js';
+import { observeAdaptiveBoards } from './adaptiveBoardLayout.js';
 import MatchSettlement from '../../../../competition/shared/MatchSettlement.vue';
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue';
 import { projectViewRenderer } from './projectViewRegistry.js';
@@ -83,6 +84,9 @@ import './competitionTheme.css';
 import { useLiveTheme } from '../useLiveTheme.js';
 const darkTheme = useLiveTheme();
 const props=defineProps({lang:String,streamState:String});
+const layoutRoot=ref(null);let stopAdaptiveLayout;
+onMounted(()=>{stopAdaptiveLayout=observeAdaptiveBoards(layoutRoot.value)});
+onUnmounted(()=>stopAdaptiveLayout?.());
 const hudCollapsed=ref({yellow:false,white:false});
 const playbackPending=ref({yellow:false,white:false}),finishPlaybackUntil=ref(0);
 function setPlaybackPending(side,pending){const wasPending=playbackPending.value[side];playbackPending.value[side]=pending;if(wasPending&&!pending&&match.value?.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=Math.max(finishPlaybackUntil.value,Date.now()+300)}
