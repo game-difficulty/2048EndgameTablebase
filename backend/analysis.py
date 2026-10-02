@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 import numpy as np
+from Config import logger
 
 from .analysis_core import Analyzer
 
@@ -102,6 +103,7 @@ def run_batch_analysis(
             try:
                 result = future.result()
             except Exception as exc:
+                logger.exception("Replay analysis failed for %s (%s)", source_path, full_pattern)
                 result = {
                     "path": source_path,
                     "status": "failed",

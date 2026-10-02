@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import os
 import re
 from collections import defaultdict
@@ -41,6 +42,14 @@ from engine_core.performance_evaluation import (
 logger = Config.logger
 is_zh = SingletonConfig().config.get("language") == "zh"
 ANALYSIS_PERFECT_LABEL = markdown_label(PERFORMANCE_PERFECT_LABEL)
+REPLAY_TEXT_ENCODINGS = (
+    "utf-8", "gb18030", "big5", "shift_jis", "euc-kr",
+    "utf-16", "utf-16le", "utf-16be",
+)
+# Python 3.9 zipimport can expose partially initialized codecs to parallel readers.
+for _encoding in (*REPLAY_TEXT_ENCODINGS, "utf-8-sig", "latin-1"):
+    codecs.lookup(_encoding)
+
 direction_map = defaultdict(lambda: "?")
 direction_map.update(
     {
@@ -116,17 +125,6 @@ class ReplayDecoder:
                 # 如果中间任何环节报错（比如数据过短），回退到文本处理
                 pass
 
-        common_encodings = [
-            "utf-8",
-            "gb18030",
-            "big5",
-            "shift_jis",
-            "euc-kr",
-            "utf-16",
-            "utf-16le",
-            "utf-16be",
-        ]
-
         if raw_data.startswith(b"\xff\xfe"):
             return raw_data.decode("utf-16le")
         if raw_data.startswith(b"\xfe\xff"):
@@ -134,7 +132,7 @@ class ReplayDecoder:
         if raw_data.startswith(b"\xef\xbb\xbf"):
             return raw_data.decode("utf-8-sig")
 
-        for encoding in common_encodings:
+        for encoding in REPLAY_TEXT_ENCODINGS:
             try:
                 return raw_data.decode(encoding)
             except UnicodeDecodeError:
@@ -309,8 +307,10 @@ class ReplayDecoder:
             board, total_space, mover = np.uint64(0), 15, self.bm
             self.variant = "4x4"
         else:
-            logger.warning("Invalid variant %s", variant_str)
-            return
+            raise ValueError(f"Unsupported replay variant: {variant_str}")
+
+        if len(moves_str) < 6 or len(moves_str) % 3:
+            raise ValueError("Incomplete replay move data")
 
         num_moves = len(moves_str) // 3
         self.record_list = np.empty(
@@ -321,18 +321,16 @@ class ReplayDecoder:
 
         for index in range(0, len(moves_str), 3):
             chunk = moves_str[index : index + 3]
-            if len(chunk) < 3:
-                break
-
             try:
                 binary = (
                     (NEW_CHAR_MAP[chunk[0]] << 14)
                     + (NEW_CHAR_MAP[chunk[1]] << 7)
                     + NEW_CHAR_MAP[chunk[2]]
                 )
-            except KeyError:
-                logger.warning("Invalid character in new format replay chunk: %s", chunk)
-                return
+            except KeyError as exc:
+                raise ValueError(
+                    f"Invalid replay character {exc.args[0]!r} in chunk {index // 3}"
+                ) from exc
 
             move_val = binary & 0b11
             spawn_val_bit = (binary >> 2) & 0b11
@@ -393,6 +391,8 @@ class ReplayDecoder:
             self.variant = "4x4"
 
         replay_text = replay_text[header:]
+        if len(replay_text) < 2:
+            raise ValueError("Incomplete replay initial tiles")
         self.record_list = np.empty(
             len(replay_text) - 2, dtype="uint64,uint32,uint8,uint8,uint8"
         )
@@ -400,12 +400,13 @@ class ReplayDecoder:
         moves_made = 0
         current_score = 0
 
-        for char in replay_text:
+        for index, char in enumerate(replay_text):
             try:
                 index_i = PNG_MAP_DICT[char]
-            except KeyError:
-                logger.warning("Character %r not found in png_map_dict.", char)
-                return
+            except KeyError as exc:
+                raise ValueError(
+                    f"Invalid replay character {char!r} at offset {header + index}"
+                ) from exc
 
             replay_tile = ((index_i >> 4) & 1) + 1
             replay_move = move_map[index_i >> 5]
