@@ -42,7 +42,11 @@ const viewport = computed(() => ({ rows: props.rows, cols: props.cols, visibleIn
 watch(() => [props.board, props.rows, props.cols, props.transition], () => {
   frame.value = humanBoardFrame(++revision, props.board, props.rows, props.cols, props.transition);
 }, { immediate: true });
-const { activeTiles } = useBoardAnimation({ get frame() { return frame.value; }, isVariant: false, get animationDuration() { return props.animate ? 300 : 0; } }, viewport, computed(() => `${props.rows}:${props.cols}`), boardRef);
+// Match Verse: slide for 100ms, then reveal both merges and spawns for 200ms.
+const { activeTiles } = useBoardAnimation({ get frame() { return frame.value; }, isVariant: false,
+  get animationDuration() { return props.animate ? 300 : 0; },
+  get animationAppearDelay() { return props.animate ? 100 : 0; }
+}, viewport, computed(() => `${props.rows}:${props.cols}`), boardRef);
 function position(tile) {
   return { left: `calc(var(--board-gap) + ${tile.col} * ((100% - (var(--cols) + 1) * var(--board-gap)) / var(--cols) + var(--board-gap)))`, top: `calc(var(--board-gap) + ${tile.row} * ((100% - (var(--rows) + 1) * var(--board-gap)) / var(--rows) + var(--board-gap)))` };
 }

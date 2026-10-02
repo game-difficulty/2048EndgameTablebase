@@ -167,7 +167,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .moving-tile-inner { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 3px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .moving-tile-inner .tile-label { min-width: 0; max-width: 100%; text-align: center; }
 .moving-tile-inner .tile-label, .palette-label { font-family: inherit; font-weight: 700; line-height: 1; }
-.moving-tile-inner.anim-new { animation: human-appear 175ms ease backwards; }
+.moving-tile-inner.anim-new { animation: human-appear 200ms ease backwards; }
 .moving-tile-inner.anim-merged { animation: human-pop 200ms ease backwards; }
 @keyframes human-appear { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes human-pop { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }

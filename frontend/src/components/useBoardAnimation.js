@@ -230,7 +230,7 @@ export function useBoardAnimation(props, boardViewport, viewportSignature, anima
           if (epoch !== animationEpoch) return;
           revealAppearingTiles();
           revealAppearTimeout = null;
-      }, props.animationDuration * 5 / 12);
+      }, props.animationAppearDelay ?? props.animationDuration * 5 / 12);
 
       animTimeout = setTimeout(() => {
           if (epoch !== animationEpoch) return;
