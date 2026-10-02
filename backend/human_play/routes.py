@@ -356,14 +356,17 @@ def save_player_settings(payload: PlayerSettings, request: Request):
 @router.get('/users/{username}/history')
 def player_history(username: str, request: Request, response: Response,
                    variant: str = 'all', sort: str = 'newest', page: int = Query(1, ge=1),
-                   page_size: int = Query(20, ge=10, le=50)):
+                   page_size: int = Query(20, ge=10, le=50), min_score: int | None = Query(None, ge=0, le=9007199254740991),
+                   source: str = 'all', time_field: str = 'ended',
+                   time_from: float | None = None, time_to: float | None = None):
     if page_size not in {10, 20, 50}:
         raise HTTPException(400, 'invalid_page_size')
     response.headers['Cache-Control'] = 'private, no-store'
     viewer = current_user_from_request(request)
     user_id = call(service.player_id_for_name, username, viewer['id'] if viewer else None)
     return call(service.history, user_id, viewer['id'] if viewer else None,
-                variant=variant, sort=sort, limit=page_size, page=page)
+                variant=variant, sort=sort, limit=page_size, page=page, min_score=min_score,
+                source=source, time_field=time_field, time_from=time_from, time_to=time_to)
 
 
 @router.delete('/runs/{run_id}/history')

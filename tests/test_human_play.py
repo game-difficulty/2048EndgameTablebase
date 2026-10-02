@@ -391,6 +391,26 @@ class HumanPlayTests(unittest.TestCase):
         admin.review(run2['run_id'], approved=False, operator='site-owner', note='Approval revoked')
         self.assertIsNone(service.best_ten(uid, 2, '2x4')['rating'])
 
+    def test_history_score_source_and_distinct_time_filters(self):
+        a = self.new('3x3')
+        self.send(a, b'', reason='restarted')
+        b = self.new('2x4')
+        self.send(b, b'', reason='restarted')
+        with database() as db:
+            db.execute("UPDATE human_runs SET visible=1,ended=200,first_move_at=100,source='manual',state=json_set(state,'$.score',4000) WHERE id=?", (a['run_id'],))
+            db.execute("UPDATE human_runs SET visible=1,ended=300,first_move_at=NULL,source='verse',state=json_set(state,'$.score',5000) WHERE id=?", (b['run_id'],))
+        result = service.history(1, 1, min_score=4000, source='manual', time_from=200, time_to=300, page=9, limit=1)
+        self.assertEqual((result['total'], result['page']), (1, 1))
+        self.assertEqual(result['entries'][0]['started_at'], 100)
+        self.assertEqual(result['entries'][0]['ended_at'], 200)
+        self.assertEqual(service.history(1, 1, min_score=4001, source='manual')['total'], 0)
+        self.assertEqual(service.history(1, 1, time_field='started', time_from=100, time_to=200)['total'], 1)
+        self.assertEqual(service.history(1, 1, time_field='started', time_from=200)['total'], 0)
+        self.assertIsNone(service.history(1, 1, source='verse')['entries'][0]['started_at'])
+        for filters in ({'source': 'bad'}, {'time_field': 'created'}, {'min_score': -1}, {'time_from': float('nan')}, {'time_from': 300, 'time_to': 200}):
+            with self.assertRaises(service.RunError):
+                service.history(1, 1, **filters)
+
     def test_named_profile_prefers_exact_legacy_case_conflict(self):
         with auth_db() as db:
             db.execute("UPDATE users SET display_name='xlb',display_name_key='xlb' WHERE id=1")

@@ -6,6 +6,21 @@ import { ensureStoredLanguage } from '../services/preferences/languagePreference
 const preferences = createLocalStorageStore({ key: 'user-preferences', version: 1, defaultValue: {} });
 export const language = ref('zh');
 const en = {
+  '开始时间': 'Start time', '结束时间': 'End time',
+  "更多筛选": "More filters",
+  "最低分（含）": "Minimum score (inclusive)",
+  "全部来源": "All sources",
+  "本站对局": "On-site games",
+  "Verse 继承": "Verse imports",
+  "筛选时间": "Date field",
+  "起始日期": "From date",
+  "截止日期（含当天）": "Through date (inclusive)",
+  "应用筛选": "Apply filters",
+  "清除筛选": "Clear filters",
+  "日期按本地时区；未知开始时间的记录不参与开始日期筛选。": "Dates use your local time zone. Games with unknown start times are excluded from start-date filtering.",
+  "请检查分数和日期范围。": "Please check the score and date range.",
+  "未知": "Unknown",
+
   '直播当前对局':'Stream current game',
   '开启后会创建公开直播间。关闭或离开直播不会影响本局操作。':'Creates a public live room. Stopping or leaving the stream never interrupts your game.',
   '正在连接直播':'Connecting stream', '正在恢复直播':'Reconnecting stream', '直播中':'Live',

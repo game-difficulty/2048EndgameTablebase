@@ -33,12 +33,24 @@
         <label>{{ t('排序') }} <select v-model="sort"><option value="newest">{{ t('时间：最新优先') }}</option><option value="oldest">{{ t('时间：最早优先') }}</option><option value="score_desc">{{ t('分数：从高到低') }}</option><option value="score_asc">{{ t('分数：从低到高') }}</option></select></label>
         <label>{{ t('每页') }} <select v-model.number="pageSize"><option :value="10">10</option><option :value="20">20</option><option :value="50">50</option></select> {{ t('局') }}</label>
       </div>
+      <details class="history-advanced"><summary>{{ t('更多筛选') }}</summary>
+        <form class="history-filters" @submit.prevent="applyFilters">
+          <label>{{ t('最低分（含）') }}<input v-model="filterDraft.minScore" type="number" min="0" step="1" inputmode="numeric" placeholder="0"></label>
+          <label>{{ t('来源') }}<select v-model="filterDraft.source"><option value="all">{{ t('全部来源') }}</option><option value="native">{{ t('本站对局') }}</option><option value="verse">{{ t('Verse 继承') }}</option><option value="manual">{{ t('补录') }}</option></select></label>
+          <label>{{ t('筛选时间') }}<select v-model="filterDraft.timeField"><option value="ended">{{ t('结束时间') }}</option><option value="started">{{ t('开始时间') }}</option></select></label>
+          <label>{{ t('起始日期') }}<input v-model="filterDraft.from" type="date"></label>
+          <label>{{ t('截止日期（含当天）') }}<input v-model="filterDraft.to" type="date"></label>
+          <button type="submit">{{ t('应用筛选') }}</button><button type="button" @click="resetFilters">{{ t('清除筛选') }}</button>
+          <small class="history-filter-note">{{ t('日期按本地时区；未知开始时间的记录不参与开始日期筛选。') }}</small>
+          <p v-if="filterError" class="error-text">{{ t(filterError) }}</p>
+        </form>
+      </details>
       <div v-if="loading" class="large-empty">{{ t('正在读取记录…') }}</div>
       <div v-else-if="!entries.length" class="large-empty">{{ t('暂无可展示记录') }}</div>
       <div v-for="item in entries" :key="item.id" class="profile-history-row">
         <span class="variant-tag">{{ item.variant.replace('x',' × ') }}</span>
         <div class="profile-history-main">
-          <div><strong>{{ number(item.score) }}</strong><small>{{ date(item.ended_at) }} <span v-if="item.source === 'verse'">· 2048Verse</span><span v-else-if="item.source === 'manual'">· {{ t('补录') }}</span></small></div>
+          <div><strong>{{ number(item.score) }}</strong><small>{{ t('结束时间') }}：{{ date(item.ended_at) }} <span v-if="item.source === 'verse'">· 2048Verse</span><span v-else-if="item.source === 'manual'">· {{ t('补录') }}</span></small><small>{{ t('开始时间') }}：{{ item.started_at ? date(item.started_at) : t('未知') }}</small></div>
           <button type="button" class="history-preview-button" :aria-expanded="preview?.id === item.id" aria-controls="history-board-preview" @click="togglePreview(item,$event)">{{ t('终盘预览') }}</button>
         </div>
         <div class="profile-history-actions">
@@ -89,6 +101,7 @@
 </template>
 
 <script setup>
+import { historyFilterParams, emptyHistoryFilters } from './historyFilters.js';
 import { computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Trash2 } from '@lucide/vue';
 import { json, request } from './client.js';
@@ -107,6 +120,13 @@ const profile = ref(null), entries = ref([]), bestTen = ref([]), bestMeta = ref(
 const loading = ref(false), bestLoading = ref(false), tab = ref('profile');
 const filterVariant = ref('4x4'), sort = ref('newest'), bestVariant = ref('4x4');
 const currentPage = ref(1), pageSize = ref(20);
+const filterDraft = ref(emptyHistoryFilters()), appliedFilters = ref({}), filterError = ref('');
+function applyFilters() {
+  try { appliedFilters.value = historyFilterParams(filterDraft.value); }
+  catch { filterError.value = '请检查分数和日期范围。'; return; }
+  filterError.value = ''; currentPage.value = 1; loadHistory();
+}
+function resetFilters() { filterDraft.value = emptyHistoryFilters(); applyFilters(); }
 const posterCanvas = ref(null), posterDark = ref(document.documentElement.dataset.theme === 'dark');
 const posterThemeVersion = ref(0);
 const preview = ref(null), previewElement = ref(null), previewPosition = ref({});
@@ -263,7 +283,7 @@ async function loadHistory(force = false) {
   const serial = ++historySerial;
   closePreview();
   const params = new URLSearchParams({variant:filterVariant.value,sort:sort.value,
-    page:String(currentPage.value),page_size:String(pageSize.value)});
+    page:String(currentPage.value),page_size:String(pageSize.value),...appliedFilters.value});
   const key = `${props.viewer?.id ?? 'guest'}:${props.username}?${params}`;
   if (!force && historyCache.has(key)) { applyHistory(historyCache.get(key)); loading.value = false; return; }
   loading.value = true; error.value = '';

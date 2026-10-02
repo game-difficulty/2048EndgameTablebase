@@ -16,7 +16,7 @@ from .store import database, hash_bytes
 PERMIT_SECONDS = 12
 RUN_COLUMNS = "id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,created,ended,writer,epoch,permit_until,monitored,state,display_threshold,visible,source,first_move_at"
 SUMMARY_COLUMNS = "id,user_id,variant,state,ended,reason,eligibility,has_replay,source"
-HISTORY_COLUMNS = "id,variant,ended,reason,has_replay,source,json_extract(state,'$.score') AS score,json_extract(state,'$.board') AS board"
+HISTORY_COLUMNS = "id,variant,first_move_at,ended,reason,has_replay,source,json_extract(state,'$.score') AS score,json_extract(state,'$.board') AS board"
 DEFAULT_TIMER_SPLITS = {variant: [str(value) for value in engine.NODES[variant]] for variant in engine.VARIANTS}
 def rankable_sql(alias: str = "") -> str:
     """Return the shared public/rankable predicate, optionally table-qualified."""
@@ -412,12 +412,18 @@ def summary(run):
 
 
 def history(user_id, viewer_id, before=None, limit=30, variant="all", sort="newest", offset=0,
-            page=None):
+            page=None, min_score=None, source="all", time_field="ended", time_from=None, time_to=None):
     if variant != "all" and variant not in engine.VARIANTS:
         raise RunError("invalid_variant", 400)
     if (sort not in {"newest", "oldest", "score_desc", "score_asc"}
             or not 0 <= offset <= 1000000 or not 1 <= limit <= 100
             or (page is not None and page < 1)):
+        raise RunError("invalid_history_query", 400)
+    import math
+    if (source not in {"all", "native", "verse", "manual"} or time_field not in {"started", "ended"}
+            or (min_score is not None and (not isinstance(min_score, int) or not 0 <= min_score <= 9007199254740991))
+            or any(value is not None and (not math.isfinite(value) or value < 0) for value in (time_from, time_to))
+            or (time_from is not None and time_to is not None and time_from >= time_to)):
         raise RunError("invalid_history_query", 400)
     with database() as db:
         public = "" if user_id == viewer_id else " AND eligibility='eligible'"
@@ -429,6 +435,17 @@ def history(user_id, viewer_id, before=None, limit=30, variant="all", sort="newe
         if before:
             where += " AND ended<?"
             args.append(before)
+        if min_score is not None:
+            where += " AND json_extract(state,'$.score')>=?"
+            args.append(min_score)
+        if source != "all":
+            where += " AND source=?"
+            args.append(source)
+        time_column = "first_move_at" if time_field == "started" else "ended"
+        for operator, value in ((">=", time_from), ("<", time_to)):
+            if value is not None:
+                where += f" AND {time_column}{operator}?"
+                args.append(value)
         total = db.execute(f"SELECT count(*) FROM human_runs WHERE {where}", args).fetchone()[0]
         page_count = max(1, (total + limit - 1) // limit)
         if page is not None:
@@ -454,7 +471,7 @@ def history(user_id, viewer_id, before=None, limit=30, variant="all", sort="newe
             "is_owner": viewer_id is not None and user_id == viewer_id, "stats": dict(aggregate),
             "bests": {r["variant"]: r["score"] for r in bests},
             "entries": [{"id": r["id"], "variant": r["variant"], "score": r["score"],
-                         "ended_at": r["ended"], "reason": r["reason"],
+                         "started_at": r["first_move_at"], "ended_at": r["ended"], "reason": r["reason"],
                          "source": r["source"], "has_replay": bool(r["has_replay"]),
                          "board": json.loads(r["board"])} for r in rows[:limit]],
             "next_offset": offset + limit if len(rows) > limit else None,

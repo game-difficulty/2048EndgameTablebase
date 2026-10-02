@@ -772,3 +772,10 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 @media (prefers-reduced-motion: reduce) {
   .board-overlay.victory-overlay { animation-duration: 1ms; }
 }
+
+.history-advanced { margin: 0 12px 16px; border-top: 1px solid var(--line); }
+.history-advanced summary { cursor: pointer; padding: 10px 0; font-weight: 700; }
+.history-advanced .history-filters { padding: 4px 0; align-items: flex-end; }
+.history-advanced label { flex-direction: column; align-items: flex-start; }
+.history-advanced input { width: 170px; max-width: 100%; min-height: 34px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
+.history-filter-note { flex-basis: 100%; color: var(--muted); }
