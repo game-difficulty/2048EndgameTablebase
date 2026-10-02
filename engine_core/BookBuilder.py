@@ -190,7 +190,7 @@ def _selected_algorithm_mode(config: dict) -> str:
 
 
 def _bc_expected_generated_layers(steps: int) -> int:
-    return max(0, int(steps) - 1)
+    return max(0, int(steps))
 
 
 def _bc_family_modulus(config: dict) -> int:

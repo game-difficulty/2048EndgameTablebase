@@ -3809,7 +3809,11 @@ int run_bc_chain(const Args &args) {
     const uint32_t forward_steps = ex_forward_steps(args);
     const uint32_t final_sum = seed_sum + forward_steps * 2U;
     const bool ex_terminal_mode = args.target_extra_override == 0U && final_sum >= seed_sum + 4U;
-    const uint32_t final_primary_sum = ex_terminal_mode ? final_sum - 2U : final_sum;
+    // EX finalizes BOTH outputs of the last expansion: spawn-2 and spawn-4.
+    // Previously the latter was omitted and the solver supplied a virtual
+    // empty layer at that same sum, losing genuine terminal wins.
+    const uint32_t final_primary_sum = final_sum;
+    const uint32_t terminal_start_sum = ex_terminal_mode ? final_sum - 2U : final_sum;
     const uint32_t docheck_step = ex_docheck_step_for_target_rank(args.target_rank);
     const uint32_t default_success_check_min_source_layer_sum =
         seed_sum + 2U * (docheck_step + 1U);
@@ -4012,7 +4016,7 @@ int run_bc_chain(const Args &args) {
          layer_sum += 2U) {
         g_current_generation_layer_sum.store(layer_sum, std::memory_order_relaxed);
         const uint32_t current_step = layer_ordinal_for_sum(seed_sum, layer_sum) - 1U;
-        const bool terminal = ex_terminal_mode && layer_sum == final_primary_sum;
+        const bool terminal = ex_terminal_mode && layer_sum >= terminal_start_sum;
         const auto source2_it = layers.find(layer_sum - 2U);
         if (source2_it == layers.end()) {
             throw std::runtime_error("FamilyChain lost required +2 source layer");
@@ -4121,7 +4125,7 @@ int run_bc_chain(const Args &args) {
             single_carry.reset();
             single_carry_layer_sum = 0U;
             const bool secondary_terminal =
-                ex_terminal_mode && layer_sum + 2U == final_primary_sum;
+                ex_terminal_mode && layer_sum + 2U >= terminal_start_sum;
             const BCPositionCellLayout primary_layout =
                 make_resident_layout(layer_sum, possible_8tile_sums, route_decision.target_modulus);
             const BCPositionCellLayout current_layout =
@@ -4218,7 +4222,7 @@ int run_bc_chain(const Args &args) {
             resident_carry.reset();
             resident_carry_layer_sum = 0U;
             const bool secondary_terminal =
-                ex_terminal_mode && layer_sum + 2U == final_primary_sum;
+                ex_terminal_mode && layer_sum + 2U >= terminal_start_sum;
             const BCPositionCellLayout primary_layout =
                 make_resident_layout(layer_sum, possible_8tile_sums, route_decision.target_modulus);
             const BCPositionCellLayout current_layout =
