@@ -1190,7 +1190,7 @@ class ExadLutPointReader {
 public:
     explicit ExadLutPointReader(const std::string& path)
         : index_(cached_exad_lut_point_index(path)),
-          in_(path, std::ios::binary) {
+          in_(NativePath::from_utf8(path), std::ios::binary) {
         if (!in_) {
             throw std::runtime_error("failed to open EXAD LUT: " + path);
         }

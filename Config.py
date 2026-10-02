@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import glob
 import logging
 import locale
 import os
@@ -884,28 +883,24 @@ class SingletonConfig:
         if not os.path.isdir(folder_path):
             return "uint32"
 
-        # 查找 config 文件
-        config_files = glob.glob(os.path.join(folder_path, f"{pattern}_config.txt"))
-        if not config_files:
+        config_file = os.path.join(folder_path, f"{pattern}_config.txt")
+        if not os.path.isfile(config_file):
             return "uint32"
 
-        for config_file in config_files:
-            try:
-                with open(config_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.startswith("success_rate_dtype:"):
-                            return line.split(":", 1)[1].strip()
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("success_rate_dtype:"):
+                        return line.split(":", 1)[1].strip()
 
-                # 如果代码运行到这里，说明文件存在但没找到字段，写入默认值
-                with open(config_file, "a", encoding="utf-8") as f:
-                    f.write("\nsuccess_rate_dtype: uint32")
+            # 如果代码运行到这里，说明文件存在但没找到字段，写入默认值
+            with open(config_file, "a", encoding="utf-8") as f:
+                f.write("\nsuccess_rate_dtype: uint32")
 
-                return "uint32"
-
-            except Exception as e:
-                logger.error(
-                    f"Unexpected error processing {config_file}: {e}", exc_info=True
-                )
+        except Exception as e:
+            logger.error(
+                f"Unexpected error processing {config_file}: {e}", exc_info=True
+            )
 
         return "uint32"
 
@@ -915,23 +910,21 @@ class SingletonConfig:
         if not os.path.isdir(folder_path):
             return None
 
-        config_files = glob.glob(os.path.join(folder_path, f"{pattern}_config.txt"))
-        if not config_files:
+        config_file = os.path.join(folder_path, f"{pattern}_config.txt")
+        if not os.path.isfile(config_file):
             return None
 
-        for config_file in config_files:
-            try:
-                with open(config_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.startswith("4_spawn_rate:"):
-                            spawn_rate = line.split(":", 1)[1].strip()
-                            return float(spawn_rate)
-                return None
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("4_spawn_rate:"):
+                        spawn_rate = line.split(":", 1)[1].strip()
+                        return float(spawn_rate)
 
-            except Exception as e:
-                logger.error(
-                    f"Unexpected error processing {config_file}: {e}", exc_info=True
-                )
+        except Exception as e:
+            logger.error(
+                f"Unexpected error processing {config_file}: {e}", exc_info=True
+            )
 
         return None
 

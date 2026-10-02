@@ -901,7 +901,7 @@ class Prefix36LutPointReader {
 public:
     explicit Prefix36LutPointReader(const std::string &path)
         : index_(cached_prefix36_lut_point_index(path)),
-          in_(path, std::ios::binary),
+          in_(NativePath::from_utf8(path), std::ios::binary),
           path_(path) {
         if (!in_) {
             throw std::runtime_error("failed to open prefix36 LUT: " + path);
