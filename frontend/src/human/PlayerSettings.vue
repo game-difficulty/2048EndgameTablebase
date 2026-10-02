@@ -38,10 +38,18 @@
       <button type="button" :disabled="verseBusy" @click="loadVerseClaim">{{ t('刷新状态') }}</button>
       <small v-if="verseError" role="alert">{{ t(verseError) }}</small>
     </section>
-    <section v-if="section === 'game'" class="settings-rows archive-application-settings">
-      <h3>{{ t('补录申请') }}</h3>
-      <p>{{ t('上传回放后，服务器会核对变体和最终得分；验证通过后交由站长审批。批准的补录局不参加近 168 小时榜及每周 Token 结算。') }}</p>
-      <button type="button" @click="openArchiveApplication">{{ t('提交补录申请') }}</button>
+    <section v-if="section === 'game'" class="settings-rows archive-application-settings" aria-labelledby="archive-application-heading">
+      <div class="archive-entry-header">
+        <span class="archive-entry-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 17v-5m-3 3 3-3 3 3"/></svg></span>
+        <div class="archive-entry-title"><h3 id="archive-application-heading">{{ t('补录申请') }}</h3><p>{{ t('把保存的历史回放录入本站') }}</p></div>
+        <button class="archive-entry-button" type="button" @click="openArchiveApplication">{{ t('提交补录申请') }}<span aria-hidden="true">↗</span></button>
+      </div>
+      <ol class="archive-entry-steps" :aria-label="t('补录流程')">
+        <li><span aria-hidden="true">1</span>{{ t('上传回放') }}</li>
+        <li><span aria-hidden="true">2</span>{{ t('核对变体与得分') }}</li>
+        <li><span aria-hidden="true">3</span>{{ t('站长审批后归档') }}</li>
+      </ol>
+      <p class="archive-entry-note">{{ t('批准的补录局不参加近 168 小时榜及每周 Token 结算。') }}</p>
       <div v-if="archiveApplications.length" class="archive-application-list">
         <div v-for="item in archiveApplications" :key="item.id">
           <strong>{{ item.variant.replace('x',' × ') }} · {{ formatNumber(item.score) }}</strong>
@@ -214,6 +222,21 @@ onUnmounted(()=>{
 </script>
 
 <style scoped>
+.archive-application-settings{margin-top:24px;padding:22px;gap:18px;border:1px solid color-mix(in srgb,var(--accent) 55%,var(--line));border-radius:12px;background:linear-gradient(115deg,color-mix(in srgb,var(--accent) 9%,var(--bg-card)),var(--bg-card));box-shadow:inset 4px 0 var(--accent)}
+.archive-entry-header{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.archive-entry-icon{display:grid;place-items:center;flex:0 0 46px;width:46px;height:46px;border-radius:10px;background:color-mix(in srgb,var(--accent) 16%,var(--bg-card));color:var(--accent-ink)}
+.archive-entry-icon svg{width:26px;height:26px}
+.archive-entry-title{flex:1;min-width:160px}
+.player-settings .archive-entry-title h3{margin:0 0 5px;font-size:calc(18px * var(--ui-scale,1));color:var(--text)}
+.archive-entry-title p{margin:0;color:var(--muted);font-size:calc(13px * var(--ui-scale,1));line-height:1.5}
+.archive-entry-button{display:inline-flex;align-items:center;justify-content:center;gap:12px;min-height:44px;padding:11px 16px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#342a1d;font-size:calc(14px * var(--ui-scale,1))}
+.archive-entry-button:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 86%,#fff);color:#342a1d}
+.archive-entry-button span{font-size:20px;line-height:1}
+.archive-entry-steps{display:flex;flex-wrap:wrap;gap:10px 20px;margin:0;padding:0;list-style:none;font-size:calc(12px * var(--ui-scale,1));color:var(--text)}
+.archive-entry-steps li{display:flex;align-items:center;gap:7px;line-height:1.5}
+.archive-entry-steps li>span{display:grid;place-items:center;width:22px;height:22px;flex:0 0 22px;border:1px solid var(--line);border-radius:50%;color:var(--accent-ink);font-weight:700;font-variant-numeric:tabular-nums}
+.archive-entry-note{margin:0;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:calc(12px * var(--ui-scale,1));line-height:1.7}
+@media(max-width:560px){.archive-application-settings{padding:18px;gap:16px}.archive-entry-button{width:100%}.archive-entry-steps{gap:10px 14px}}
 .archive-application-list{display:grid;gap:8px;margin-top:8px}.archive-application-list>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;border-top:1px solid var(--line);padding:10px 0}.archive-application-list small,.archive-application-list p{grid-column:1/-1;margin:0;color:var(--muted)}.archive-application-dialog select{display:block;width:100%;margin-top:6px}.archive-application-dialog input[type="datetime-local"]{color-scheme:dark}.archive-application-dialog .notice{margin:12px 0 0}
 :global(:root:not([data-theme="dark"])) .archive-application-dialog input[type="datetime-local"]{color-scheme:light}
 </style>
