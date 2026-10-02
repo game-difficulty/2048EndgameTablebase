@@ -89,6 +89,7 @@ class LiveHub:
         self.activities = RoomActivities(self)
         self.activity_lock = self.activities.lock
         self.activity_task = None
+        self.start_task = None
 
     @property
     def store(self):
@@ -178,6 +179,11 @@ class LiveHub:
         self.audience.tick()
 
     async def stop(self):
+        if self.start_task and not self.start_task.done():
+            self.start_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.start_task
+        self.start_task = None
         if self.activity_task:
             self.activity_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -448,6 +454,18 @@ def _dynamic_hub_from_definition(definition):
     for event in runtime.gift_history:
         runtime.append_gift_chat(event)
     dynamic_hubs[room_id] = runtime
+    # Dynamic rooms are created lazily by the HTTP/WebSocket resolver. Unlike
+    # built-in rooms, they are not visited by ``start_rooms``; without an
+    # explicit startup here a competition room keeps the projection captured
+    # in the content adapter's constructor and never starts its live relay.
+    # Schedule startup on the current request loop so the first snapshot can
+    # be followed by pushed updates.
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        runtime.start_task = loop.create_task(runtime.start())
     return runtime
 
 
