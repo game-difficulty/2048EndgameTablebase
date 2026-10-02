@@ -79,6 +79,7 @@ import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from
 import { projectViewRenderer } from './projectViewRegistry.js';
 import { projectIconUrl } from '../../../../competition/shared/projectIcons.js';
 import { projectionIsOlder, receivedProjectView } from '../../../../competition/shared/projectStateOrder.mjs';
+import { ServerClock } from '../../../../competition/shared/serverClock.mjs';
 import { competitionPhaseLabel, competitionProjectLabel, competitionProjectDescription } from '../../../../competition/shared/projectLabels.mjs';
 import { projectResultValue } from '../../../../competition/shared/projectMetrics.mjs';
 import CompetitionRosterHud from './CompetitionRosterHud.vue';
@@ -91,8 +92,9 @@ onMounted(()=>{stopAdaptiveLayout=observeAdaptiveBoards(layoutRoot.value)});
 onUnmounted(()=>stopAdaptiveLayout?.());
 const hudCollapsed=ref({yellow:false,white:false});
 const playbackPending=ref({yellow:false,white:false}),finishPlaybackUntil=ref(0);
-function setPlaybackPending(side,pending){const wasPending=playbackPending.value[side];playbackPending.value[side]=pending;if(wasPending&&!pending&&match.value?.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=Math.max(finishPlaybackUntil.value,Date.now()+300)}
-const match=ref(null),now=ref(Date.now()),receivedAt=ref(Date.now()),serverAnchor=ref(Date.now());let timer;
+function setPlaybackPending(side,pending){const wasPending=playbackPending.value[side];playbackPending.value[side]=pending;if(wasPending&&!pending&&match.value?.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=Math.max(finishPlaybackUntil.value,serverClock.now()+300)}
+let serverClock=new ServerClock();
+const match=ref(null),now=ref(serverClock.now());let timer;
 const t=(zh,en)=>props.lang==='zh'?zh:en;
 const score=computed(()=>match.value?.score||{}),draft=computed(()=>match.value?.public_draft||{}),views=computed(()=>match.value?.project_public_views||{});
 const current=computed(()=>match.value?.games?.find(item=>item.game_key===match.value.current_game));
@@ -105,7 +107,7 @@ const stage=computed(()=>{const value=match.value?.phase||'';if(['DRAW','DRAFT_S
 const phaseLabels={DRAW:['抽签','DRAW'],FIRST_PICK_BAN:['先手选禁','FIRST PICK / BAN'],SECOND_PICK_BAN:['后手选禁','SECOND PICK / BAN'],BLIND_PICK:['双方盲选','BLIND PICK'],C_DRAW:['项目 C 抽签','PROJECT C DRAW'],LINEUP:['秘密布阵','SECRET LINEUP'],FINISHED:['全场结束','FINAL']};
 const phaseLabel=computed(()=>{const value=match.value?.phase||'';if(value==='C_DRAW'&&draft.value?.workflow)return t('BP 已完成','DRAFT COMPLETE');const label=phaseLabels[value];if(label)return props.lang==='zh'?label[0]:label[1];const gamePhase=/^GAME_([A-O])_(READY|PLAYING|RESULT)$/.exec(value);if(gamePhase)return`${t('项目','GAME')} ${gamePhase[1]} · ${{READY:t('开局检查','READY CHECK'),PLAYING:t('对局进行中','LIVE'),RESULT:t('单局结果','RESULT')}[gamePhase[2]]}`;return competitionPhaseLabel(value,props.lang)});
 const phaseActor=computed(()=>{const side=match.value?.phase_timing?.active_side;if(!side)return'';const name=team(side).name||(side==='yellow'?t('黄方','Yellow'):t('白方','White'));return`${name} · ${t('操作中','ON TURN')}`});
-const currentServerNow=()=>serverAnchor.value+(now.value-receivedAt.value);
+const currentServerNow=()=>now.value;
 const phaseCountdown=computed(()=>{const deadline=Date.parse(match.value?.phase_timing?.deadline_at||'');if(!Number.isFinite(deadline))return'';const seconds=Math.max(0,Math.ceil((deadline-currentServerNow())/1000));return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`});
 const gameLabel=computed(()=>match.value?.current_game?`GAME ${match.value.current_game}`:phaseLabel.value);
 const team=side=>{const value=match.value?.teams?.[side]||{};return {...value,name:!value.name||['黄方','白方'].includes(value.name)?sideLabel(side):value.name};};
@@ -140,12 +142,18 @@ const winnerLabel=computed(()=>match.value?.public_result?.winner_side==='yellow
 function receive(data){
   if(data.type!=='snapshot'||!data.match||projectionIsOlder(match.value,data.match))return;
   const incoming={...data.match,project_public_views:{...data.match.project_public_views}};
-  if(match.value?.phase?.endsWith('_PLAYING')&&incoming.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=Date.now()+500;
+  const sameMatch=match.value?.match_public_key===incoming.match_public_key&&match.value?.generation===incoming.generation;
+  if(!sameMatch){serverClock=new ServerClock();finishPlaybackUntil.value=0;playbackPending.value={yellow:false,white:false};}
+  // competition_server_time extrapolates the source clock across cached snapshots;
+  // the unrelated outer server_time is the live host's wall clock and is not used.
+  serverClock.observe(incoming.server_time);
+  const sourceNow=data.competition_server_time;
+  if(typeof sourceNow==='number'&&Number.isFinite(sourceNow)&&Math.abs(sourceNow*1000)<=8.64e15)serverClock.observe(new Date(sourceNow*1000).toISOString());
+  now.value=serverClock.now();
+  if(sameMatch&&match.value?.phase?.endsWith('_PLAYING')&&incoming.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=serverClock.now()+500;
   const sameGame=match.value?.match_public_key===incoming.match_public_key&&match.value?.generation===incoming.generation&&match.value?.current_game===incoming.current_game;
   for(const side of sides){const next=incoming.project_public_views[side];if(next)incoming.project_public_views[side]=receivedProjectView(sameGame?match.value?.project_public_views?.[side]:null,next)}
-  match.value=incoming;receivedAt.value=Date.now();now.value=receivedAt.value;
-  const liveServerTime=Number(data.server_time)*1000,competitionServerTime=Date.parse(incoming.server_time||'');
-  serverAnchor.value=Number.isFinite(liveServerTime)?liveServerTime:Number.isFinite(competitionServerTime)?competitionServerTime:receivedAt.value;
+  match.value=incoming;
 }
 let resyncPending=false,lastResync=0;
 async function requestProjectResync(){
@@ -156,9 +164,9 @@ async function requestProjectResync(){
   try{const response=await fetch(`/api/live/rooms/competition-${encodeURIComponent(key)}/state`,{signal:controller.signal});if(response.ok){const data=await response.json();if(match.value?.match_public_key===key)receive({...data,type:'snapshot'})}}
   catch{/* Playback has its own bounded snapshot fallback. */}finally{clearTimeout(timeout);resyncPending=false}
 }
-function resume(){const resumedAt=Date.now();serverAnchor.value+=resumedAt-receivedAt.value;receivedAt.value=resumedAt;now.value=resumedAt}
+function resume(){now.value=serverClock.now()}
 function getPipFrame(){const currentMatch=match.value,lang=props.lang;return{key:`${currentMatch?.generation}:${currentMatch?.content_sequence}:${lang}`,width:960,height:540,draw(ctx){ctx.fillStyle='#111c30';ctx.fillRect(0,0,960,540);ctx.fillStyle='#f8fafc';ctx.textAlign='center';ctx.font='700 30px sans-serif';ctx.fillText(currentMatch?.name||(lang==='zh'?'2048 赛事':'2048 Competition'),480,105);ctx.font='800 86px sans-serif';ctx.fillText(`${currentMatch?.score?.yellow||0}  :  ${currentMatch?.score?.white||0}`,480,270);ctx.font='600 24px sans-serif';ctx.fillStyle='#aebbd0';ctx.fillText(competitionPhaseLabel(currentMatch?.phase,lang),480,345)}}}
-onMounted(()=>timer=setInterval(()=>{if(shouldRefreshLiveClock())now.value=Date.now()},250));onUnmounted(()=>clearInterval(timer));defineExpose({receive,resume,getPipFrame});
+onMounted(()=>timer=setInterval(()=>{if(shouldRefreshLiveClock())now.value=serverClock.now()},250));onUnmounted(()=>clearInterval(timer));defineExpose({receive,resume,getPipFrame});
 const PlayerAvatar=defineComponent({props:['player'],setup(p){const failed=ref(false);watch(()=>p.player?.avatar_url,()=>{failed.value=false});return()=>h('span',{class:'live-player-avatar','aria-hidden':'true'},p.player?.avatar_url&&!failed.value?h('img',{src:p.player.avatar_url,alt:'',onError:()=>{failed.value=true}}):h('span',String(p.player?.display_name||'?').trim().slice(0,2).toUpperCase()))}});
 const TeamRoster=defineComponent({props:['side','team','lang'],setup(p){return()=>h('aside',{class:['roster',p.side]},[h('small',p.side==='yellow'?(p.lang==='zh'?'黄方阵容':'YELLOW TEAM'):(p.lang==='zh'?'白方阵容':'WHITE TEAM')),...(p.team?.roster||[]).map(player=>h('div',{class:{captain:player.is_captain}},[h(PlayerAvatar,{player}),h('span',player.display_name),player.is_captain?h('em',p.lang==='zh'?'队长':'CPT'):null]))])}});
 const PlayerLine=defineComponent({props:['side','player','sealed','lang'],setup(p){return()=>h('section',{class:p.side},p.player?[h(PlayerAvatar,{player:p.player}),h('span',p.player.display_name)]:[h('b','—'),h('span',p.sealed?(p.lang==='zh'?'已密封':'Sealed'):(p.lang==='zh'?'布阵中':'Selecting'))])}});

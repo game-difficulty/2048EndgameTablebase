@@ -20,6 +20,9 @@ export function receivedProjectView(previous, next) {
 export function projectionIsOlder(previous, next) {
   if (!previous || (previous.match_public_key ?? previous.public_key) !== (next.match_public_key ?? next.public_key)) return false;
   const generation = Number(next.generation || 0), oldGeneration = Number(previous.generation || 0);
-  return generation < oldGeneration || (generation === oldGeneration
-    && Number(next.content_sequence) < Number(previous.content_sequence));
+  if (generation !== oldGeneration) return generation < oldGeneration;
+  const sequence = Number(next.content_sequence), oldSequence = Number(previous.content_sequence);
+  if (sequence !== oldSequence) return sequence < oldSequence;
+  const time = Date.parse(next.server_time), oldTime = Date.parse(previous.server_time);
+  return Number.isFinite(oldTime) && (!Number.isFinite(time) || time < oldTime);
 }

@@ -152,6 +152,57 @@ def test_competition_content_retains_last_frame_and_never_rewinds() -> None:
     assert content.snapshot()['match']['content_sequence'] == 8
 
 
+def test_same_revision_older_time_cannot_poison_cached_live_projection():
+    room = CompetitionMatchRoomProvider()._definition(directory_item())
+    initial = {**projection(), 'server_time': '2026-10-03T00:00:10+00:00'}
+    with patch('backend.live.competition_content.competition_provider.projection', return_value=initial):
+        content = CompetitionMatchContent(room)
+    for timestamp in ('2026-10-03T00:00:05+00:00', None, 'invalid'):
+        assert not content.accept_projection({**initial, 'server_time': timestamp, 'phase': 'LINEUP'})
+        assert content.projection == initial
+        assert content.incremental_projection == initial
+    # Same revision with a newer source sample may refresh the cached time.
+    fresh = {**initial, 'server_time': '2026-10-03T00:00:15Z'}
+    assert not content.accept_projection(fresh)
+    assert content.projection == fresh
+    # A new revision is authoritative, including corrections and extra time.
+    correction = {**initial, 'content_sequence': 8, 'team_clocks': {'yellow': {'remaining_ms': 90000}}}
+    assert content.accept_projection(correction)
+    assert content.projection == correction
+
+
+def test_identical_revision_and_timestamp_can_restore_missing_frames():
+    room = CompetitionMatchRoomProvider()._definition(directory_item())
+    def state(frames):
+        return {**projection(), 'server_time': '2026-10-03T00:00:10+00:00', 'current_game': 'A',
+                'project_public_views': {'yellow': {'sequence': 7, 'frames': [{'sequence': n} for n in frames]}}}
+    with patch('backend.live.competition_content.competition_provider.projection', return_value=state([7])):
+        content = CompetitionMatchContent(room)
+    content.accept_projection(state([5, 6, 7]))
+    assert [frame['sequence'] for frame in content.projection['project_public_views']['yellow']['frames']] == [5, 6, 7]
+
+
+def test_relayed_source_clock_advances_across_cached_snapshots_and_late_samples():
+    room = CompetitionMatchRoomProvider()._definition(directory_item())
+    initial = {**projection(), 'server_time': '1970-01-01T00:03:20+00:00',
+               'team_clocks': {'yellow': {'state': 'running', 'remaining_ms': 60000}}}
+    with patch('backend.live.competition_content.time.monotonic', return_value=0) as mono, \
+         patch('backend.live.competition_content.competition_provider.projection', return_value=initial):
+        content = CompetitionMatchContent(room)
+        assert content.snapshot()['competition_server_time'] == 200
+        mono.return_value = 12
+        # No source changes: a new viewer still sees 48s rather than restarting at 60s.
+        assert content.snapshot()['competition_server_time'] == 212
+        assert content.snapshot()['match']['team_clocks']['yellow']['remaining_ms'] == 60000
+        content.accept_projection({**initial, 'server_time': '1970-01-01T00:03:25+00:00'})
+        assert content.snapshot()['competition_server_time'] == 212
+        mono.return_value = 13
+        content.accept_projection(initial)
+        assert content.snapshot()['competition_server_time'] == 213
+        content.accept_projection({**initial, 'content_sequence': 8, 'server_time': '1970-01-01T00:03:35+00:00'})
+        assert content.snapshot()['competition_server_time'] == 215
+
+
 def test_competition_gifts_red_envelopes_predictions_enabled_but_not_lucky_bags() -> None:
     room = CompetitionMatchRoomProvider()._definition(directory_item())
     runtime = SimpleNamespace(room=room)

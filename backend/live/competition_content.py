@@ -6,10 +6,20 @@ import contextlib
 import json
 import logging
 import os
+import time
 from copy import deepcopy
+from datetime import datetime
 
 from .dynamic_rooms import competition_provider
 from .human_content import HumanLiveStore
+
+
+def _source_time(projection):
+    try:
+        value = datetime.fromisoformat(projection.get('server_time', ''))
+        return value.timestamp() if value.tzinfo is not None else None
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 class CompetitionMatchContent:
@@ -23,6 +33,10 @@ class CompetitionMatchContent:
         )
         if not self._is_valid(self.projection):
             self.projection = None
+        self._clock_anchor = None
+        self._clock_sample = None
+        self._clock_at = time.monotonic()
+        self._observe_clock(self.projection)
         self.online = self.projection is not None
         self.incremental_projection = self.projection
         self.stream_task = None
@@ -92,7 +106,26 @@ class CompetitionMatchContent:
         return self.room.metadata.get('public_key')
 
     def snapshot(self):
-        return {'match': self.projection}
+        result = {'match': self.projection}
+        if self._clock_anchor is not None:
+            # Cached projections retain their original time/remaining-ms pair. Give
+            # new viewers a current source-domain clock, never the live host's wall clock.
+            result['competition_server_time'] = self._clock_now()
+        return result
+
+    def _clock_now(self):
+        if self._clock_anchor is None:
+            return None
+        return self._clock_anchor + max(0, time.monotonic() - self._clock_at)
+
+    def _observe_clock(self, projection):
+        sample = _source_time(projection or {})
+        if sample is None or (self._clock_sample is not None and sample <= self._clock_sample):
+            return
+        current = self._clock_now()
+        self._clock_anchor = sample if current is None else max(current, sample)
+        self._clock_sample = sample
+        self._clock_at = time.monotonic()
 
     def reached_milestones(self):
         return set()
@@ -116,14 +149,20 @@ class CompetitionMatchContent:
             return was_online
         self.online = True
         if previous is None:
+            self._observe_clock(fresh)
             self.projection = fresh
             self.incremental_projection = fresh
             return True
         previous_sequence = int(previous.get('content_sequence', 0))
         fresh_sequence = int(fresh.get('content_sequence', 0))
-        if fresh_sequence < previous_sequence:
+        previous_time, fresh_time = _source_time(previous), _source_time(fresh)
+        if fresh_sequence < previous_sequence or (
+            fresh_sequence == previous_sequence and previous_time is not None
+            and (fresh_time is None or fresh_time < previous_time)
+        ):
             # Polls can complete out of order; a late response must not rewind a match.
             return was_online != self.online
+        self._observe_clock(fresh)
         self.incremental_projection = fresh
         retained = deepcopy(fresh)
         same_game = previous.get('current_game') == fresh.get('current_game')
