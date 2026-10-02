@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, provide, ref } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "./api";
 import { refreshTilePalette } from "./tilePalette";
+import { useNotifications } from "./notifications";
 const router = useRouter();
 const session = ref(null),
   boards = ref([]),
@@ -10,8 +11,17 @@ const session = ref(null),
   loading = ref(true),
   theme = ref("system");
 const user = computed(() => session.value?.user);
+const { status: notifications, connected: notificationsConnected } =
+  useNotifications(user);
 let sessionRequest = 0;
-provide("forum", { session, boards, user, refresh });
+provide("forum", {
+  session,
+  boards,
+  user,
+  refresh,
+  notifications,
+  notificationsConnected,
+});
 async function refresh() {
   const ticket = ++sessionRequest;
   error.value = "";
@@ -100,7 +110,9 @@ onUnmounted(() => {
       ><template v-if="user"
         ><p class="eyebrow">我的社区</p>
         <RouterLink to="/bookmarks">我的收藏</RouterLink
-        ><RouterLink to="/notifications">回复通知</RouterLink
+        ><RouterLink to="/notifications"
+          >通知 {{ notifications.unread || "" }}</RouterLink
+        ><RouterLink to="/community">我的社区</RouterLink
         ><RouterLink to="/compose">草稿与创作</RouterLink
         ><RouterLink v-if="session.can_moderate" to="/moderation"
           >审核队列</RouterLink
@@ -121,7 +133,9 @@ onUnmounted(() => {
           <option v-for="b in boards" :value="b.slug" :key="b.id">
             {{ b.name }}
           </option></select
-        ><RouterLink v-if="user" to="/notifications">通知</RouterLink
+        ><RouterLink v-if="user" to="/notifications"
+          >通知 {{ notifications.unread || "" }}</RouterLink
+        ><RouterLink v-if="user" to="/community">我的</RouterLink
         ><RouterLink v-if="user" to="/bookmarks">收藏</RouterLink
         ><RouterLink v-if="session?.can_moderate" to="/moderation"
           >审核</RouterLink

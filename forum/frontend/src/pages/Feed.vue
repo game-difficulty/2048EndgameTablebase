@@ -2,6 +2,7 @@
 import { computed, inject, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { api } from "../api";
+import SubscribeButton from "../components/SubscribeButton.vue";
 const route = useRoute(),
   { boards, user } = inject("forum");
 const items = ref([]),
@@ -56,11 +57,9 @@ function when(value) {
     minute: "2-digit",
   });
 }
-watch(
-  () => [route.path, user.value?.id],
-  () => load(),
-  { immediate: true },
-);
+watch([() => route.path, () => user.value?.id], () => load(), {
+  immediate: true,
+});
 </script>
 <template>
   <div class="heading">
@@ -78,6 +77,7 @@ watch(
       >＋ 发布主题</RouterLink
     >
   </div>
+  <SubscribeButton v-if="current" kind="board" :id="current.id" />
   <form class="search" @submit.prevent="load()">
     <label class="sr-only" for="topic-search">搜索主题与正文</label
     ><input
@@ -98,6 +98,7 @@ watch(
   </div>
   <article v-for="topic in items" :key="topic.id" class="topic-row">
     <div>
+      <span v-if="topic.pinned" class="badge">置顶</span>
       <RouterLink :to="'/t/' + topic.id" class="topic-title">{{
         topic.title
       }}</RouterLink>

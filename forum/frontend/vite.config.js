@@ -11,6 +11,9 @@ export default defineConfig({
         fileURLToPath(new URL("../../font", import.meta.url)),
         fileURLToPath(new URL("../../frontend/src/utils", import.meta.url)),
         fileURLToPath(
+          new URL("../../frontend/src/human/engine.js", import.meta.url),
+        ),
+        fileURLToPath(
           new URL("../../docs_and_configs/themes.json", import.meta.url),
         ),
       ],

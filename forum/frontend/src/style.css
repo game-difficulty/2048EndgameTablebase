@@ -342,6 +342,84 @@ footer {
   margin: 22px 0;
   max-width: 760px;
 }
+.rich-content {
+  overflow-wrap: anywhere;
+  line-height: 1.85;
+}
+.rich-content p {
+  white-space: normal;
+}
+.rich-content blockquote {
+  border-left: 3px solid var(--gold);
+  margin: 16px 0;
+  padding: 2px 16px;
+  background: var(--side);
+}
+.rich-content pre,
+.panel pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 14px;
+  border-radius: 6px;
+  background: var(--side);
+  font-size: 13px;
+}
+.rich-content code {
+  background: var(--side);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.rich-content pre code {
+  padding: 0;
+}
+.rich-content table {
+  display: block;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.rich-content th,
+.rich-content td {
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+}
+.attachment-image {
+  display: inline-block;
+  max-width: 100%;
+}
+.attachment-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 720px;
+  height: auto;
+  border-radius: 8px;
+}
+.rich-tools {
+  padding: 0 0 12px;
+}
+.rich-tools details {
+  padding: 12px 0;
+}
+.rich-tools summary {
+  cursor: pointer;
+  color: var(--gold);
+}
+.rich-tools .actions button {
+  font-size: 13px;
+}
+.replay-player {
+  max-width: 760px;
+  overflow-wrap: anywhere;
+}
+.replay-player input[type="range"] {
+  width: 100%;
+  padding: 0;
+}
+.moderation-form {
+  border: 2px solid var(--gold);
+}
+.panel p {
+  overflow-wrap: anywhere;
+}
 .prose {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -637,4 +715,37 @@ footer {
   * {
     scroll-behavior: auto !important;
   }
+}
+.mention {
+  color: var(--gold);
+  background: var(--soft, #eee4da);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-weight: 600;
+}
+.mention-picker {
+  margin-top: 12px;
+}
+.mention-picker .actions {
+  margin: 12px 0;
+}
+.profile-heading h1 {
+  margin: 12px 0 4px;
+}
+.read-marker {
+  display: block;
+  height: 1px;
+}
+.resume-reading {
+  display: block;
+  margin: 16px 0;
+}
+.editor-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.appeals-section {
+  margin-top: 36px;
 }

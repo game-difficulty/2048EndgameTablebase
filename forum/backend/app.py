@@ -39,7 +39,8 @@ class RequestBoundary:
                     return
                 data = message.get("body", b"")
                 size += len(data)
-                if size > 131072:
+                limit = 5 * 1024 * 1024 if scope["path"] == "/api/forum/v1/media" and scope["method"] == "POST" else 131072
+                if size > limit:
                     return await JSONResponse({"detail": {"code": "BODY_TOO_LARGE", "message": "提交内容过大。"}}, status_code=413)(scope, receive, send)
                 chunks.append(data)
                 if not message.get("more_body"):
@@ -86,7 +87,7 @@ def create_app(settings=None):
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "private, no-store"
         else:
-            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         return response
 
     @app.exception_handler(ForumError)

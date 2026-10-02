@@ -7,3 +7,6 @@ SQLAlchemy==2.0.54
 alembic==1.20.0
 psycopg==3.3.6
 psycopg-binary==3.3.6
+Pillow==12.1.0
+httpx==0.28.1
+markdown-it-py==4.2.0

@@ -54,7 +54,14 @@ function label(value) {
     <figcaption>
       <span class="badge"
         >{{ board.rows }}×{{ board.cols }} ·
-        {{ board.source ? "编码局面" : "手绘局面" }} · 非正式成绩</span
+        {{
+          board.source === "replay"
+            ? "录像局面"
+            : board.source
+              ? "编码局面"
+              : "手绘局面"
+        }}
+        · 非正式成绩</span
       >
       <p v-if="board.caption">{{ board.caption }}</p>
       <div v-if="syntax" class="board-source">

@@ -89,14 +89,15 @@ export function parseBoardText(text, budget = MAX_SYNTAX_BOARDS) {
   };
   while (pos < text.length) {
     // Keep inline and fenced code literal, including an unfinished code span.
-    if (text[pos] === "`") {
+    if (text[pos] === "`" || text.slice(pos, pos + 3) === "~~~") {
       let endRun = pos;
-      while (text[endRun] === "`") endRun++;
+      while (text[endRun] === text[pos]) endRun++;
       const marker = text.slice(pos, endRun);
       let close = text.indexOf(marker, endRun);
       while (
         close !== -1 &&
-        (text[close - 1] === "`" || text[close + marker.length] === "`")
+        (text[close - 1] === marker[0] ||
+          text[close + marker.length] === marker[0])
       )
         close = text.indexOf(marker, close + marker.length);
       const end = close === -1 ? text.length : close + marker.length;
@@ -106,7 +107,7 @@ export function parseBoardText(text, budget = MAX_SYNTAX_BOARDS) {
     }
     if (
       text[pos] === "\\" &&
-      text.slice(pos + 1, pos + 9).toLowerCase() === "[[board:"
+      /^\[\[(?:board|replay):/i.test(text.slice(pos + 1, pos + 10))
     ) {
       const close = text.indexOf("]]", pos + 9);
       const end = close === -1 ? text.length : close + 2;
@@ -114,7 +115,7 @@ export function parseBoardText(text, budget = MAX_SYNTAX_BOARDS) {
       pos = end;
       continue;
     }
-    if (text.slice(pos, pos + 8).toLowerCase() !== "[[board:") {
+    if (!/^\[\[(?:board|replay):/i.test(text.slice(pos, pos + 9))) {
       pending += text[pos++];
       continue;
     }
@@ -139,7 +140,16 @@ export function parseBoardText(text, budget = MAX_SYNTAX_BOARDS) {
       pos += 8 + nested;
       continue;
     }
-    const result = decodeBoardSyntax(raw);
+    const replay = /^\[\[replay:([0-9a-f-]{36})(?:@(\d{1,6}))?\]\]$/i.exec(raw);
+    const result = replay
+      ? {
+          board: {
+            type: "replay",
+            id: replay[1].toLowerCase(),
+            step: Math.min(200000, Number(replay[2] || 0)),
+          },
+        }
+      : decodeBoardSyntax(raw);
     if (result.error || boards >= budget) {
       diagnostics.push({
         offset: pos,

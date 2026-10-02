@@ -22,8 +22,12 @@ class BoardBlock(StrictModel):
     def valid_board(self):
         if (self.rows, self.cols) not in {(4, 4), (3, 4), (3, 3), (2, 4)}:
             raise ValueError("Unsupported board dimensions")
-        if len(self.cells) != self.rows * self.cols or any(v == 1 or (v and v & (v - 1)) for v in self.cells):
-            raise ValueError("Cells must be zero or powers of two and match the dimensions")
+        if len(self.cells) != self.rows * self.cols or any(
+            v == 1 or (v and v & (v - 1)) for v in self.cells
+        ):
+            raise ValueError(
+                "Cells must be zero or powers of two and match the dimensions"
+            )
         return self
 
 
@@ -78,5 +82,55 @@ class ReportInput(StrictModel):
 
 
 class ModerationInput(StrictModel):
-    action: Literal["hide", "restore", "lock", "unlock"]
+    action: Literal["hide", "restore", "lock", "unlock", "pin", "unpin"]
     reason: str = Field(min_length=3, max_length=1000)
+
+
+class ReasonInput(StrictModel):
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class PreferenceInput(StrictModel):
+    enabled: bool
+
+
+class TopicInput(StrictModel):
+    title: str = Field(min_length=3, max_length=120)
+    tags: list[str] = Field(default_factory=list, max_length=5)
+    revision: int = Field(ge=1)
+
+    @field_validator("tags")
+    @classmethod
+    def valid_tags(cls, tags):
+        return NewTopic.clean_tags(tags)
+
+
+class AdminUserInput(ReasonInput):
+    action: Literal["grant", "revoke", "mute", "unmute"]
+    board_id: int | None = Field(default=None, ge=1, le=9007199254740991)
+    hours: int = Field(default=24, ge=1, le=8760)
+
+
+class BoardInput(ReasonInput):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field(max_length=1000)
+    position: int = Field(ge=0, le=10000)
+    staff_only: bool
+
+
+class ReplyDraftInput(StrictModel):
+    text: str = Field(default="", max_length=20000)
+    reply_to: int | None = Field(default=None, ge=1, le=9007199254740991)
+    revision: int = Field(ge=0, le=2147483646)
+
+
+class ReadingInput(StrictModel):
+    post_id: int = Field(ge=1, le=9007199254740991)
+
+
+class AppealInput(ReasonInput):
+    action_id: int = Field(ge=1, le=9007199254740991)
+
+
+class AppealDecision(ReasonInput):
+    decision: Literal["accepted", "rejected"]

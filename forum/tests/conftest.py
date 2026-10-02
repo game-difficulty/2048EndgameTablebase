@@ -55,7 +55,9 @@ def app(settings):
         execute(conn, """TRUNCATE forum_profiles,forum_roles,forum_sanctions,forum_topics,
             forum_posts,forum_post_revisions,forum_drafts,forum_reactions,forum_bookmarks,
             forum_notifications,forum_reports,forum_moderation_actions,forum_idempotency,
-            forum_outbox,forum_rate_windows CASCADE""")
+            forum_outbox,forum_rate_windows,forum_media,forum_post_media,forum_subscriptions,
+            forum_notification_preferences,forum_follows,forum_mentions,forum_reading,
+            forum_reply_drafts,forum_appeals CASCADE""")
     engine.dispose()
     yield create_app(settings)
 

@@ -7,6 +7,9 @@ import json
 
 from .db import all_rows, execute, one
 from .errors import ForumError
+from .community import CommunityFeatures
+from . import assets, mentions
+from .social import SocialFeatures
 
 
 def encoded(value):
@@ -18,22 +21,23 @@ def document_text(body):
 
 
 def cursor_encode(row):
-    raw = encoded([row["last_activity"].isoformat(), row["id"]])
+    raw = encoded([row["last_activity"].isoformat(), row["id"], row.get("pinned", False)])
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
 def cursor_decode(value):
     try:
-        stamp, ident = json.loads(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))
+        parsed = json.loads(base64.urlsafe_b64decode(value + "=" * (-len(value) % 4)))
+        stamp, ident, pinned = (*parsed, False) if len(parsed)==2 else parsed
         stamp = datetime.fromisoformat(stamp)
-        if not stamp.tzinfo or type(ident) is not int or not 0 < ident < 2**63:
+        if not stamp.tzinfo or type(ident) is not int or not 0 < ident < 2**63 or type(pinned) is not bool:
             raise ValueError()
-        return stamp, ident
+        return stamp, ident, pinned
     except (ValueError, TypeError, OverflowError) as exc:
         raise ForumError("INVALID_CURSOR", "分页游标无效。") from exc
 
 
-class ForumService:
+class ForumService(CommunityFeatures, SocialFeatures):
     def __init__(self, engine, settings):
         self.engine, self.settings = engine, settings
 
@@ -44,10 +48,10 @@ class ForumService:
         return self.is_admin(user) or bool(user and one(conn,
             "SELECT 1 FROM forum_roles WHERE user_id=:u AND board_id=:b", u=user.id, b=board_id))
 
-    def writer(self, conn, user):
+    def writer(self, conn, user, allow_muted=False):
         # Stable lock order: actor -> topic -> post. Works across API processes.
         execute(conn, "SELECT pg_advisory_xact_lock(:u)", u=user.id)
-        if one(conn, "SELECT 1 FROM forum_sanctions WHERE user_id=:u AND expires_at>now()", u=user.id):
+        if not allow_muted and one(conn, "SELECT 1 FROM forum_sanctions WHERE user_id=:u AND expires_at>now()", u=user.id):
             raise ForumError("MUTED", "当前账号暂时不能在社区发布内容。", 403)
         rate = one(conn, """INSERT INTO forum_rate_windows(user_id,count) VALUES (:u,1)
             ON CONFLICT(user_id) DO UPDATE SET
@@ -109,8 +113,8 @@ class ForumService:
             where.append("b.slug=:board")
             params["board"] = board
         if cursor:
-            params["stamp"], params["cursor_id"] = cursor_decode(cursor)
-            where.append("(t.last_activity,t.id)<(:stamp,:cursor_id)")
+            params["stamp"], params["cursor_id"], params["pinned"] = cursor_decode(cursor)
+            where.append("(t.pinned,t.last_activity,t.id)<(:pinned,:stamp,:cursor_id)")
         if query:
             params["query"] = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             where.append("""(t.title ILIKE :query OR EXISTS (SELECT 1 FROM forum_posts p
@@ -125,7 +129,7 @@ class ForumService:
                 (SELECT count(*) FROM forum_posts p WHERE p.topic_id=t.id AND p.status='published' AND p.post_number>1) AS replies
                 FROM forum_topics t JOIN forum_boards b ON b.id=t.board_id
                 JOIN forum_profiles u ON u.user_id=t.author_id WHERE """ + " AND ".join(where) +
-                " ORDER BY t.last_activity DESC,t.id DESC LIMIT :limit", **params)
+                " ORDER BY t.pinned DESC,t.last_activity DESC,t.id DESC LIMIT :limit", **params)
         return {"items": rows[:limit], "next_cursor": cursor_encode(rows[limit-1]) if len(rows) > limit else ""}
 
     def create_topic(self, user, key, payload):
@@ -143,6 +147,8 @@ class ForumService:
                     VALUES (:t,:u,1,CAST(:body AS jsonb),:txt) RETURNING id""", t=topic["id"], u=user.id,
                     body=encoded(payload["body"]), txt=document_text(payload["body"]))
                 self.event(conn, "topic.created", topic["id"], {"post_id": post["id"]})
+                assets.bind(conn, post["id"], payload["body"], user)
+                mentions.notify(conn, post["id"], payload["body"], user)
                 return {"topic_id": topic["id"], "post_id": post["id"]}
             return self.idempotent(conn, user, key, "topic.create", payload, action)
 
@@ -184,10 +190,13 @@ class ForumService:
                     VALUES (:t,:u,:n,:parent,CAST(:body AS jsonb),:txt) RETURNING id,post_number""",
                     t=topic_id, u=user.id, n=topic["next_post_number"], parent=payload["reply_to"],
                     body=encoded(payload["body"]), txt=document_text(payload["body"]))
+                assets.bind(conn, post["id"], payload["body"], user)
+                mentions.notify(conn, post["id"], payload["body"], user)
                 execute(conn, "UPDATE forum_topics SET next_post_number=next_post_number+1,last_activity=now() WHERE id=:id", id=topic_id)
                 for receiver in {recipient, topic["author_id"]} - {user.id}:
                     execute(conn, """INSERT INTO forum_notifications(recipient_id,actor_id,post_id)
-                        VALUES (:u,:actor,:p) ON CONFLICT DO NOTHING""", u=receiver, actor=user.id, p=post["id"])
+                        SELECT :u,:actor,:p WHERE NOT EXISTS(SELECT 1 FROM forum_notification_preferences WHERE user_id=:u AND NOT enabled)
+                        ON CONFLICT DO NOTHING""", u=receiver, actor=user.id, p=post["id"])
                 self.event(conn, "post.created", post["id"], {"topic_id": topic_id})
                 return {"topic_id": topic_id, "post_id": post["id"], "post_number": post["post_number"]}
             return self.idempotent(conn, user, key, f"topic.{topic_id}.reply", payload, action)
@@ -210,6 +219,8 @@ class ForumService:
             if delete:
                 execute(conn, "UPDATE forum_posts SET status='deleted',revision=revision+1,edited_at=now() WHERE id=:id", id=post_id)
             else:
+                assets.bind(conn, post_id, payload["body"], user)
+                mentions.notify(conn, post_id, payload["body"], user)
                 execute(conn, """UPDATE forum_posts SET body=CAST(:body AS jsonb),body_text=:txt,
                     revision=revision+1,edited_at=now() WHERE id=:id""", id=post_id,
                     body=encoded(payload["body"]), txt=document_text(payload["body"]))
@@ -261,15 +272,15 @@ class ForumService:
                 raise ForumError("REVISION_CONFLICT", "草稿已更新或不存在。", 409)
             return {"deleted": True}
 
-    def notifications(self, user):
+    def notifications(self, user, before=9223372036854775807):
         with self.engine.connect() as conn:
-            return all_rows(conn, """SELECT n.id,n.read_at,n.created_at,u.display_name AS actor_name,
+            return all_rows(conn, """SELECT n.id,n.kind,n.read_at,n.created_at,u.display_name AS actor_name,
                 t.id AS topic_id,p.post_number,p.id AS post_id,
                 CASE WHEN t.status='published' AND p.status='published' THEN t.title ELSE '内容已不可见' END AS title,
                 (t.status='published' AND p.status='published') AS available
                 FROM forum_notifications n JOIN forum_posts p ON p.id=n.post_id
                 JOIN forum_topics t ON t.id=p.topic_id JOIN forum_profiles u ON u.user_id=n.actor_id
-                WHERE n.recipient_id=:u ORDER BY n.id DESC LIMIT 100""", u=user.id)
+                WHERE n.recipient_id=:u AND n.id<:before ORDER BY n.id DESC LIMIT 100""", u=user.id,before=before)
 
     def read_notifications(self, user, through_id):
         with self.engine.begin() as conn:
@@ -301,11 +312,13 @@ class ForumService:
             if action in {"hide", "restore"}:
                 execute(conn, "UPDATE forum_topics SET status=:s,revision=revision+1 WHERE id=:id", id=topic_id,
                         s="hidden" if action == "hide" else "published")
+            elif action in {"pin", "unpin"}:
+                execute(conn, "UPDATE forum_topics SET pinned=:v,revision=revision+1 WHERE id=:id", id=topic_id, v=action=="pin")
             else:
                 execute(conn, "UPDATE forum_topics SET locked=:v,revision=revision+1 WHERE id=:id", id=topic_id, v=action == "lock")
             execute(conn, """INSERT INTO forum_moderation_actions(operator_id,topic_id,action,reason,previous)
                 VALUES (:u,:t,:a,:r,CAST(:prev AS jsonb))""", u=user.id, t=topic_id, a=action,
-                r=payload["reason"], prev=encoded({"status": topic["status"], "locked": topic["locked"]}))
+                r=payload["reason"], prev=encoded({"status": topic["status"], "locked": topic["locked"], "pinned":topic["pinned"]}))
             execute(conn, """UPDATE forum_reports SET status='resolved' WHERE post_id IN
                 (SELECT id FROM forum_posts WHERE topic_id=:t)""", t=topic_id)
             self.event(conn, "topic.moderated", topic_id, payload)

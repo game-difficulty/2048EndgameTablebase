@@ -3,6 +3,36 @@ const devUser = import.meta.env.DEV
   ? String(import.meta.env.VITE_FORUM_DEV_USER || "")
   : "";
 
+export function sessionHeaders() {
+  return devUser ? { "X-Forum-Dev-User": devUser } : {};
+}
+
+export async function uploadAsset(file, kind) {
+  const response = await fetch(prefix + "/media?kind=" + kind, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      ...sessionHeaders(),
+      "Content-Type": "application/octet-stream",
+    },
+    body: file,
+  });
+  const data = await response.json();
+  if (!response.ok)
+    throw new Error(data.detail?.message || "上传失败，请重试。");
+  return data;
+}
+
+export async function mediaBlob(id, signal) {
+  const response = await fetch(prefix + "/media/" + id, {
+    credentials: "include",
+    headers: sessionHeaders(),
+    signal,
+  });
+  if (!response.ok) throw new Error("图片已移除或不可见。");
+  return response.blob();
+}
+
 export async function api(path, { method = "GET", body, key, signal } = {}) {
   const headers = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";

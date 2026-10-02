@@ -4,3 +4,6 @@ pydantic>=2.9,<3
 SQLAlchemy>=2.0.36,<2.1
 alembic>=1.14,<2
 psycopg[binary]>=3.2,<4
+Pillow>=12.1,<13
+httpx>=0.28,<1
+markdown-it-py>=4,<5

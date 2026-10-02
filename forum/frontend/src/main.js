@@ -6,6 +6,8 @@ import Topic from "./pages/Topic.vue";
 import Compose from "./pages/Compose.vue";
 import Inbox from "./pages/Inbox.vue";
 import Moderation from "./pages/Moderation.vue";
+import MyCommunity from "./pages/MyCommunity.vue";
+import Profile from "./pages/Profile.vue";
 import "./style.css";
 import { refreshTilePalette } from "./tilePalette";
 
@@ -19,6 +21,8 @@ const router = createRouter({
     { path: "/compose", component: Compose },
     { path: "/notifications", component: Inbox },
     { path: "/moderation", component: Moderation },
+    { path: "/community", component: MyCommunity },
+    { path: "/u/:id", component: Profile },
     {
       path: "/:pathMatch(.*)*",
       component: {

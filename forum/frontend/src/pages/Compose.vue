@@ -8,6 +8,7 @@ import BoardSyntaxHelp from "../components/BoardSyntaxHelp.vue";
 import BoardSyntaxPreview from "../components/BoardSyntaxPreview.vue";
 import { insertAtCursor } from "../editorInsertion";
 import { refreshTilePalette } from "../tilePalette";
+import RichTools from "../components/RichTools.vue";
 const bodyInput = ref(null);
 function insertSyntax(snippet) {
   insertAtCursor(text, bodyInput.value, snippet);
@@ -386,6 +387,7 @@ onBeforeUnmount(() => {
           />
         </label>
         <BoardSyntaxHelp @insert="insertSyntax" />
+        <RichTools @insert="insertSyntax" />
         <BoardSyntaxPreview :text="text" />
         <div class="actions">
           <button type="button" @click="board ? (board = null) : addBoard()">

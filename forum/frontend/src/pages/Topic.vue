@@ -1,11 +1,20 @@
 <script setup>
 import { inject, nextTick, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import {
+  useRoute,
+  useRouter,
+  onBeforeRouteLeave,
+  onBeforeRouteUpdate,
+} from "vue-router";
 import { api, submission } from "../api";
 import Document from "../components/Document.vue";
 import BoardSyntaxHelp from "../components/BoardSyntaxHelp.vue";
 import BoardSyntaxPreview from "../components/BoardSyntaxPreview.vue";
 import { insertAtCursor } from "../editorInsertion";
+import RichTools from "../components/RichTools.vue";
+import SubscribeButton from "../components/SubscribeButton.vue";
+import { useReplyDraft } from "../replyDraft";
+import { useReadingPosition } from "../readingPosition";
 const replyInput = ref(null);
 function insertSyntax(snippet, editing = false) {
   insertAtCursor(
@@ -33,6 +42,49 @@ const reportPost = ref(null),
   modReason = ref(""),
   status = ref("");
 const key = submission();
+const draft = useReplyDraft(
+  () => route.params.id,
+  () => user.value?.id,
+  reply,
+  replyTo,
+);
+const reading = useReadingPosition(
+  () => route.params.id,
+  () => user.value?.id,
+  data,
+);
+async function leave() {
+  await Promise.all([draft.save(), reading.flush()]);
+}
+onBeforeRouteLeave(leave);
+onBeforeRouteUpdate(async (to, from) => {
+  if (to.params.id !== from.params.id) await leave();
+});
+const metadataOpen = ref(false),
+  topicTitle = ref(""),
+  topicTags = ref("");
+function openMetadata() {
+  topicTitle.value = data.value.topic.title;
+  topicTags.value = data.value.topic.tags.join("、");
+  metadataOpen.value = true;
+}
+async function saveMetadata() {
+  await action(async () => {
+    await api("/topics/" + data.value.topic.id, {
+      method: "PATCH",
+      body: {
+        title: topicTitle.value,
+        tags: topicTags.value
+          .split(/[、,，]/)
+          .map((t) => t.trim())
+          .filter(Boolean),
+        revision: data.value.topic.revision,
+      },
+    });
+    metadataOpen.value = false;
+    await load();
+  });
+}
 let generation = 0;
 async function load(more = false, fromStart = false) {
   const ticket = ++generation;
@@ -84,8 +136,7 @@ async function send() {
       key: key(body),
     });
     key.reset();
-    reply.value = "";
-    replyTo.value = null;
+    await draft.published();
     status.value = "回复已发布。";
     const hash = `#p-${result.post_id}`;
     if (route.hash === hash) await load();
@@ -161,16 +212,19 @@ async function moderate() {
   });
 }
 watch(
-  () => [route.params.id, route.hash, user.value?.id],
+  [() => route.params.id, () => user.value?.id],
   () => {
     data.value = null;
-    reply.value = "";
-    replyTo.value = null;
     editId.value = null;
     reportPost.value = null;
+    metadataOpen.value = false;
     load();
   },
   { immediate: true },
+);
+watch(
+  () => route.hash,
+  () => load(),
 );
 </script>
 <template>
@@ -197,7 +251,42 @@ watch(
       <button v-if="user" :disabled="busy" @click="bookmark">
         {{ data.topic.bookmarked ? "已收藏" : "收藏主题" }}
       </button>
+      <SubscribeButton kind="topic" :id="data.topic.id" />
+      <button
+        v-if="
+          user &&
+          (user.id === data.topic.author_id || data.topic.can_moderate) &&
+          !data.topic.locked &&
+          data.topic.status === 'published'
+        "
+        @click="openMetadata"
+      >
+        编辑标题与标签
+      </button>
     </div>
+    <div class="actions">
+      <span v-if="data.topic.pinned" class="badge">置顶</span
+      ><span v-for="tag in data.topic.tags" :key="tag" class="badge">{{
+        tag
+      }}</span>
+    </div>
+    <form v-if="metadataOpen" class="panel" @submit.prevent="saveMetadata">
+      <label class="field"
+        >主题标题<input
+          v-model="topicTitle"
+          minlength="3"
+          maxlength="120"
+          required /></label
+      ><label class="field"
+        >标签（最多 5 个，用逗号分隔）<input
+          v-model="topicTags"
+          maxlength="124"
+      /></label>
+      <div class="actions">
+        <button :disabled="busy">保存主题信息</button
+        ><button type="button" @click="metadataOpen = false">取消</button>
+      </div>
+    </form>
     <div v-if="data.topic.can_moderate" class="moderation-tools">
       <label
         >管理主题
@@ -207,6 +296,8 @@ watch(
           <option value="restore">恢复公开</option>
           <option value="lock">锁定</option>
           <option value="unlock">解除锁定</option>
+          <option value="pin">置顶</option>
+          <option value="unpin">取消置顶</option>
         </select></label
       ><template v-if="modAction"
         ><input
@@ -225,6 +316,12 @@ watch(
     <button v-if="data.start_after" @click="load(false, true)">
       从首楼阅读
     </button>
+    <RouterLink
+      v-if="reading.position.value && !route.hash"
+      class="notice resume-reading"
+      :to="{ hash: '#p-' + reading.position.value.post_id }"
+      >继续阅读：上次到 #{{ reading.position.value.post_number }}</RouterLink
+    >
     <article
       v-for="post in data.posts"
       :id="'p-' + post.id"
@@ -233,7 +330,8 @@ watch(
     >
       <header class="post-header">
         <span class="avatar">{{ post.display_name.slice(0, 1) }}</span
-        ><strong>{{ post.display_name }}</strong
+        ><RouterLink :to="'/u/' + post.author_id"
+          ><strong>{{ post.display_name }}</strong></RouterLink
         ><span v-if="post.author_id === data.topic.author_id" class="badge"
           >楼主</span
         ><a :href="'#p-' + post.id" class="muted">#{{ post.post_number }}</a
@@ -256,6 +354,13 @@ watch(
             />
           </label>
           <BoardSyntaxHelp @insert="insertSyntax($event, true)" />
+          <RichTools @insert="insertSyntax($event, true)" />
+          <details>
+            <summary>预览修改</summary>
+            <Document
+              :body="{ blocks: [{ type: 'paragraph', text: editText }] }"
+            />
+          </details>
           <BoardSyntaxPreview :text="editText" />
           <div class="actions">
             <button :disabled="busy" @click="save(post)">保存修改</button
@@ -309,6 +414,12 @@ watch(
           </button>
         </div></template
       >
+      <span
+        class="read-marker"
+        :data-post="post.id"
+        :data-number="post.post_number"
+        aria-hidden="true"
+      ></span>
     </article>
     <button v-if="data.next_after" :disabled="loading" @click="load(true)">
       加载后续回复
@@ -334,24 +445,49 @@ watch(
       class="reply-form"
       @submit.prevent="send"
     >
-      <h2>{{ replyTo ? "回复 #" + replyTo.post_number : "参与讨论" }}</h2>
-      <button v-if="replyTo" type="button" @click="replyTo = null">
-        取消指定回复</button
-      ><label class="field"
-        ><span class="sr-only">回复正文</span
-        ><textarea
-          ref="replyInput"
-          v-model="reply"
-          rows="5"
-          maxlength="20000"
-          placeholder="说说你的思路…支持 [[board:4x4:盘面编码]]"
-          required
-        />
-      </label>
-      <BoardSyntaxHelp @insert="insertSyntax($event)" />
-      <BoardSyntaxPreview :text="reply" />
-      <button class="primary" :disabled="busy || !reply.trim()">
-        {{ busy ? "正在提交…" : "发布回复" }}
+      <fieldset :disabled="busy || !draft.ready.value" class="editor-fieldset">
+        <h2>{{ replyTo ? "回复 #" + replyTo.post_number : "参与讨论" }}</h2>
+        <button v-if="replyTo" type="button" @click="replyTo = null">
+          取消指定回复</button
+        ><label class="field"
+          ><span class="sr-only">回复正文</span
+          ><textarea
+            ref="replyInput"
+            v-model="reply"
+            rows="5"
+            maxlength="20000"
+            placeholder="说说你的思路…支持 [[board:4x4:盘面编码]]"
+            required
+          />
+        </label>
+        <BoardSyntaxHelp @insert="insertSyntax($event)" />
+        <RichTools @insert="insertSyntax($event)" />
+        <details>
+          <summary>回复预览</summary>
+          <Document :body="{ blocks: [{ type: 'paragraph', text: reply }] }" />
+        </details>
+        <BoardSyntaxPreview :text="reply" />
+        <button class="primary" :disabled="busy || !reply.trim()">
+          {{ busy ? "正在提交…" : "发布回复" }}
+        </button>
+      </fieldset>
+      <p class="muted" role="status">{{ draft.status.value }}</p>
+      <details v-if="draft.conflict.value" class="notice" open>
+        <summary>云端草稿发生变化</summary>
+        <pre>{{ draft.conflict.value.text || "（空草稿）" }}</pre>
+        <div class="actions">
+          <button type="button" @click="draft.resolve(true)">
+            采用云端草稿</button
+          ><button type="button" @click="draft.resolve(false)">
+            用本地文本覆盖此版本
+          </button>
+        </div>
+      </details>
+      <button type="button" :disabled="busy" @click="draft.save()">
+        保存回复草稿
+      </button>
+      <button type="button" :disabled="busy" @click="draft.restore()">
+        重新同步草稿
       </button>
     </form>
     <p v-else class="notice">

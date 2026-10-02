@@ -10,6 +10,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4175"
   },
   "dependencies": {
+    "markdown-it": "15.0.2",
     "vue": "3.5.30",
     "vue-router": "4.5.1"
   },
