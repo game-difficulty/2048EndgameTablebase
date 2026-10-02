@@ -1846,7 +1846,10 @@ public:
                 if ((in_physical % value_size) != 0U) {
                     throw std::logic_error("BC success streaming direct value pointer is not value-aligned");
                 }
-                auto buffer = std::make_shared<detail::BCAlignedBuffer>(physical_bytes, alignment);
+                // Buffered IO can request byte alignment; the allocator and typed values cannot.
+                const uint32_t memory_alignment = std::max<uint32_t>(
+                    alignment, std::max<uint32_t>(sizeof(void *), alignof(uint64_t)));
+                auto buffer = std::make_shared<detail::BCAlignedBuffer>(physical_bytes, memory_alignment);
                 cell.external_value_bytes = std::move(buffer);
                 cell.external_value_data =
                     cell.external_value_bytes->data() + static_cast<size_t>(in_physical);

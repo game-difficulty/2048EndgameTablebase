@@ -8,6 +8,8 @@ import pickle
 import sys
 import json
 import threading
+import tempfile
+import time
 from collections.abc import Iterator, Mapping
 from typing import Callable, Optional, Any
 import ctypes
@@ -127,6 +129,7 @@ RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH = os.path.join(
     "docs_and_configs",
     "runtime_deletion_threshold.txt",
 )
+_runtime_deletion_threshold_write_lock = threading.Lock()
 
 
 def normalize_deletion_threshold(value):
@@ -211,13 +214,33 @@ def write_runtime_deletion_threshold_signal(value, relative_value=0.0, mode=None
             mode,
         )
     path = RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH
-    tmp_path = path + ".tmp"
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(tmp_path, "w", encoding="ascii") as file:
-        file.write(f"{absolute_threshold:.12g} {relative_threshold:.12g}\n")
-        file.flush()
-        os.fsync(file.fileno())
-    os.replace(tmp_path, path)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="ascii", dir=os.path.dirname(path),
+            prefix=os.path.basename(path) + ".", suffix=".tmp", delete=False,
+        ) as file:
+            tmp_path = file.name
+            file.write(f"{absolute_threshold:.12g} {relative_threshold:.12g}\n")
+            file.flush()
+            os.fsync(file.fileno())
+        with _runtime_deletion_threshold_write_lock:
+            for attempt in range(5):
+                try:
+                    os.replace(tmp_path, path)
+                    break
+                except OSError as exc:
+                    # Windows may report access denied while a replaced file is delete-pending.
+                    if getattr(exc, "winerror", None) not in (5, 32, 33) or attempt == 4:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
     return threshold
 
 

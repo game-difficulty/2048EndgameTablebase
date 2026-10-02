@@ -11,6 +11,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <limits>
 #include <mutex>
 #include <system_error>
@@ -19,6 +20,13 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 enum class SymmMode { Identity, Full, Diagonal, Horizontal, Min33, Min24, Min34, Min34Top };
 
@@ -446,27 +454,6 @@ inline DeletionThresholdState clamp_deletion_thresholds(DeletionThresholdState s
     return state;
 }
 
-inline DeletionThresholdState current_deletion_thresholds(const RunOptions &options) {
-    DeletionThresholdState state{
-        options.deletion_threshold,
-        options.relative_deletion_threshold
-    };
-    if (!options.deletion_threshold_signal_path.empty()) {
-        std::ifstream in(NativePath::from_utf8(options.deletion_threshold_signal_path));
-        double signaled_absolute = 0.0;
-        if (in >> signaled_absolute) {
-            state.absolute = signaled_absolute;
-            double signaled_relative = 0.0;
-            if (in >> signaled_relative) {
-                state.relative = signaled_relative;
-            } else {
-                state.relative = 0.0;
-            }
-        }
-    }
-    return clamp_deletion_thresholds(state);
-}
-
 inline DeletionThresholdState refresh_deletion_thresholds(
     const RunOptions &options,
     DeletionThresholdState current_state
@@ -474,7 +461,26 @@ inline DeletionThresholdState refresh_deletion_thresholds(
     if (options.deletion_threshold_signal_path.empty()) {
         return clamp_deletion_thresholds(current_state);
     }
+#ifdef _WIN32
+    // Atomic signal replacement must remain possible while a solver reads it.
+    const HANDLE file = CreateFileW(
+        NativePath::from_utf8(options.deletion_threshold_signal_path).c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return clamp_deletion_thresholds(current_state);
+    }
+    char buffer[128];
+    DWORD bytes = 0;
+    const BOOL read_ok = ReadFile(file, buffer, sizeof(buffer), &bytes, nullptr);
+    CloseHandle(file);
+    if (!read_ok || bytes == sizeof(buffer)) {
+        return clamp_deletion_thresholds(current_state);
+    }
+    std::istringstream in(std::string(buffer, bytes));
+#else
     std::ifstream in(NativePath::from_utf8(options.deletion_threshold_signal_path));
+#endif
     double signaled_absolute = 0.0;
     if (in >> signaled_absolute) {
         current_state.absolute = signaled_absolute;
@@ -486,6 +492,13 @@ inline DeletionThresholdState refresh_deletion_thresholds(
         }
     }
     return clamp_deletion_thresholds(current_state);
+}
+
+inline DeletionThresholdState current_deletion_thresholds(const RunOptions &options) {
+    return refresh_deletion_thresholds(options, {
+        options.deletion_threshold,
+        options.relative_deletion_threshold
+    });
 }
 
 inline double current_deletion_threshold(const RunOptions &options) {
