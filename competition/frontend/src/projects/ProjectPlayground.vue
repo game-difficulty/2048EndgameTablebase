@@ -453,4 +453,35 @@ onBeforeUnmount(() => { disposed = true; window.clearInterval(timer); window.cle
   .project-heading .heading-art{width:58px;height:58px}
   .practice-account{max-width:95px}
 }
+/* Shared typography for both languages: longer labels wrap, not larger panels. */
+.project-heading h1{font-size:clamp(24px,2.3vw,30px);line-height:1.2;overflow-wrap:anywhere}
+.project-heading p,.index-intro p,.rules-panel>p{letter-spacing:.08em}
+.project-heading{grid-template-columns:96px minmax(0,1fr) auto}
+.practice-tag{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;font-size:14px;line-height:1.4}
+.practice-tag br{display:none}
+.practice-tag small{font-size:12px}
+.project-lab .game-hud{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,124px),1fr));overflow:visible}
+.game-hud>div{min-width:0;width:auto;min-height:62px;padding:9px 10px}
+.game-hud small{line-height:1.35;overflow-wrap:anywhere}
+.game-hud strong{font-size:18px;line-height:1.35;white-space:nowrap;font-variant-numeric:tabular-nums}
+.game-actions{flex-wrap:wrap}
+.game-actions button,.finish-panel button{font-size:14px;line-height:1.4}
+.game-actions span{min-width:0;line-height:1.5}
+.rules-panel h2{font-size:18px;line-height:1.35;overflow-wrap:anywhere}
+.rules-panel dl{grid-template-columns:minmax(65px,auto) minmax(0,1fr);column-gap:10px}
+.rules-panel dd{overflow-wrap:anywhere}
+.index-intro h1{font-size:clamp(28px,3vw,36px);line-height:1.2}
+.project-entry h2{font-size:20px;line-height:1.3;overflow-wrap:anywhere}
+.project-entry>small{font-size:12px}
+.finish-panel h2{max-width:100%;padding:0 16px;font-size:clamp(22px,3vw,28px);line-height:1.25;overflow-wrap:anywhere}
+@media(max-width:820px){
+  .project-heading{grid-template-columns:72px minmax(0,1fr);row-gap:10px}
+  .project-heading .practice-tag{grid-column:2;grid-row:2;padding:5px 9px}
+  .project-heading .heading-art{grid-row:1 / span 2;align-self:center}
+}
+@media(max-width:600px){
+  .project-heading{grid-template-columns:58px minmax(0,1fr);column-gap:12px}
+  .project-entry{grid-template-rows:auto minmax(84px,auto) auto auto}
+  .project-entry h2{font-size:18px}
+}
 </style>
