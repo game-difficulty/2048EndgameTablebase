@@ -7,7 +7,7 @@
         <button class="modal-close" :aria-label="label('关闭', 'Close')" @click="$emit('close')">×</button>
         <div class="analysis-poster-heading">
           <div><h2>{{ label('分析展示图', 'Analysis result card') }}</h2>
-            <p class="small muted">{{ currentEntry?.pattern }}-{{ currentEntry?.target }} · {{ currentIndex + 1 }} / {{ entries.length }}</p></div>
+            <p class="small muted">{{ currentEntry?.pattern }} · {{ goalTargetLabel(currentEntry?.target, language) }} · {{ currentIndex + 1 }} / {{ entries.length }}</p></div>
           <div class="analysis-poster-controls">
             <button :disabled="currentIndex <= 0" :aria-label="label('上一张', 'Previous card')" @click="go(-1)">‹</button>
             <button :disabled="currentIndex >= entries.length - 1" :aria-label="label('下一张', 'Next card')" @click="go(1)">›</button>
@@ -33,6 +33,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { drawAnalysisPoster } from './analysisPoster.js';
 import { json } from './client.js';
 import { language } from './i18n.js';
+import { goalTargetLabel } from '../utils/goalTarget.js';
 
 const props = defineProps({
   runId: { type: String, required: true },

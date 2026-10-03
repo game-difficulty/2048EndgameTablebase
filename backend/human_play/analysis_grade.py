@@ -1,10 +1,59 @@
-"""Private grading rules for eligible 4x4 analysis result cards."""
+"""Private, variant-specific grading rules for analysis result cards."""
 from __future__ import annotations
 
 import math
 
 
-GRADE_VERSION = 2
+GRADE_VERSION = 3
+THREE_BY_THREE_PROFILE = "3x3-v1"
+COMBO_3X3 = (13, 17, 27, 90, 158, 186, 203, 225, 290)
+PERFECT_3X3 = (.63, .67, .73, .85, .88, .895, .91, .92, .93)
+ACCURACY_3X3 = (.9940000, .9979000, .9992000, .9999300, .9999840,
+                .9999925, .9999957, .9999976, .9999990)
+GRADES_3X3 = ((17, "SSS"), (15, "SS"), (12, "S"), (9, "A"),
+              (7, "B"), (5, "C"), (3, "D"), (1, "E"))
+
+
+def points_3x3(value: float, thresholds: tuple) -> float:
+    if value < thresholds[0]:
+        return 0.0
+    return _interpolate(value, tuple((threshold, index + 1)
+                                    for index, threshold in enumerate(thresholds)))
+
+
+def time_bonus_3x3(board_sum: int, elapsed_ms: float | None) -> float:
+    if board_sum >= 1536:
+        return 3
+    if elapsed_ms is None or not math.isfinite(elapsed_ms) or elapsed_ms <= 0:
+        return 0
+    limits = (270, 195, 120) if board_sum < 1024 else (660, 480, 300)
+    if elapsed_ms > limits[0] * 1000:
+        return 0.0
+    return _interpolate(elapsed_ms, tuple((seconds * 1000, points)
+                                        for points, seconds in reversed(list(enumerate(limits, 1)))))
+
+
+def _grade_3x3(aggregate: dict) -> tuple[float, str] | None:
+    if aggregate.get("grading_profile") != THREE_BY_THREE_PROFILE:
+        return None
+    try:
+        accuracy = float(aggregate["mean_single_step_accuracy"])
+        perfect = float(aggregate["perfect_rate"])
+        combo = int(aggregate["max_combo"])
+        board_sum = int(aggregate["run_board_sum"])
+        moves = int(aggregate["evaluated_moves"])
+        elapsed = aggregate.get("run_elapsed_ms")
+        elapsed = float(elapsed) if elapsed is not None else None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    if not (0 <= accuracy <= 1 and 0 <= perfect <= 1 and 0 <= combo <= moves
+            and moves > 0 and board_sum > 0):
+        return None
+    points = (points_3x3(combo, COMBO_3X3)
+              + points_3x3(perfect, PERFECT_3X3)
+              + points_3x3(accuracy, ACCURACY_3X3)
+              + time_bonus_3x3(board_sum, elapsed))
+    return points, next((grade for threshold, grade in GRADES_3X3 if points >= threshold), "F")
 
 # Anchor points are ordered by the observed metric, not by the awarded score.
 FIT_ANCHORS = {
@@ -35,6 +84,8 @@ def _interpolate(value: float, anchors: tuple[tuple[float, int], ...]) -> float:
 def grade_result(*, variant: str, goal_tile: int | None, score: int,
                  aggregate: dict) -> tuple[float, str] | None:
     """Return the private weighted score and its public letter grade."""
+    if variant == "3x3":
+        return _grade_3x3(aggregate)
     if variant != "4x4" or goal_tile not in FIT_ANCHORS or not aggregate.get("stage_count"):
         return None
     try:

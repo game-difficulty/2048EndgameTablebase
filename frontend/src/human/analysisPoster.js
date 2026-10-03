@@ -1,4 +1,5 @@
 // Single-game analysis poster. The same canvas is used for preview and PNG export.
+import { goalTargetLabel } from '../utils/goalTarget.js';
 export const ANALYSIS_POSTER_WIDTH = 2360;
 export const ANALYSIS_POSTER_HEIGHT = 1640;
 const W = 1180, H = 820;
@@ -19,12 +20,14 @@ const TILE_COLORS = {
 };
 const COPY = {
   zh: { analysis: '对局分析', finalBoard: '终局盘面', score: '终局分数',
-    fit: '平均吻合度', combo: 'MAX COMBO', eval: '评价统计', best: 'NEW BEST',
+    accuracy: '平均单步准确率', perfect: 'PERFECT', elapsed: '对局用时', sum: '终局总和',
+    ratedMoves: '评价步数', fit: '平均吻合度', combo: 'MAX COMBO', eval: '评价统计', best: 'NEW BEST',
     previous: '前 PB', personal: '个人', endgame: '残局',
     stages: '残局数', moves: '残局总步数', played: '对局日期',
     pending: '待评级', site: '来本站对局、分析并生成你的展示图', sample: '样式示例 · 非真实成绩' },
   en: { analysis: 'GAME ANALYSIS', finalBoard: 'FINAL BOARD', score: 'FINAL SCORE',
-    fit: 'AVERAGE FIT', combo: 'MAX COMBO', eval: 'EVALUATION', best: 'NEW BEST',
+    accuracy: 'GEOMETRIC ACCURACY', perfect: 'PERFECT', elapsed: 'GAME TIME', sum: 'FINAL BOARD SUM',
+    ratedMoves: 'EVALUATED MOVES', fit: 'AVERAGE FIT', combo: 'MAX COMBO', eval: 'EVALUATION', best: 'NEW BEST',
     previous: 'PREVIOUS PB', personal: 'PERSONAL', endgame: 'ENDGAME',
     stages: 'ENDGAMES', moves: 'ENDGAME MOVES', played: 'PLAYED',
     pending: 'UNRATED', site: 'Play, analyze and make your own result card', sample: 'STYLE PREVIEW · SAMPLE DATA' },
@@ -134,7 +137,7 @@ function centeredTileText(ctx, value, x, y, cell, color, scale) {
 }
 function boardGeometry(variant, frame) {
   const [rows, cols] = BOARD_SHAPES[variant] || BOARD_SHAPES['4x4'];
-  const gap = 8;
+  const gap = variant === '3x3' ? Math.min(frame.width, frame.height) * .038 : 8;
   const cell = Math.min((frame.width - gap * (cols + 1)) / cols,
     (frame.height - gap * (rows + 1)) / rows);
   const width = cols * cell + (cols + 1) * gap;
@@ -152,7 +155,8 @@ function drawBoard(ctx, values, variant, frame, palette, fontScale) {
     const [background, foreground] = value ? tilePaint(value, palette) : ['#b5a69b', ''];
     fillRound(ctx, x, y, b.cell, b.cell, 3, background);
     if (value) {
-      centeredTileText(ctx, value, x, y, b.cell, foreground, fontScale);
+      centeredTileText(ctx, value, x, y, b.cell, foreground,
+        fontScale * (variant === '3x3' ? b.cell / 96.25 : 1));
     }
   }
 }
@@ -209,7 +213,14 @@ function formatDate(seconds) {
   return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}`;
 }
 const number = value => Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-US').format(Number(value)) : '—';
-const percent = value => Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(2)}%` : '—';
+export const analysisPercent = (value, digits = 2) => value != null && Number.isFinite(Number(value))
+  ? `${(Number(value) * 100).toFixed(digits)}%` : '—';
+const percent = analysisPercent;
+export function analysisDuration(ms) {
+  if (ms == null || !Number.isFinite(Number(ms)) || Number(ms) <= 0) return '—';
+  const seconds = Math.floor(Number(ms) / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
 
 const GRADE_STYLES = {
   SSS: { light: '#fff3c9', mid: '#eac77e', dark: '#b17937', glow: '#f0c073' },
@@ -271,6 +282,7 @@ export async function drawAnalysisPoster({ canvas = document.createElement('canv
   const copy = COPY[language] || COPY.zh;
   const run = data.run || {}, aggregate = data.aggregate || {};
   const name = data.name || 'Player', variant = run.variant || '4x4';
+  const is3x3 = variant === '3x3';
   const configuredScale = Number.parseFloat(getComputedStyle(document.documentElement)
     .getPropertyValue('--tile-font-scale'));
   const fontScale = Number.isFinite(Number(tileFontScale)) && Number(tileFontScale) > 0
@@ -286,7 +298,9 @@ export async function drawAnalysisPoster({ canvas = document.createElement('canv
   text(ctx, '2048', 69, 66, 30, '#fff', { weight: 800 });
   text(ctx, `PLAY  /  ${copy.analysis}`, 69, 99, 12, '#d7cdda', { weight: 500 });
   text(ctx, name, 1024, 70, 28, '#fff', { align: 'right', maxWidth: 420 });
-  text(ctx, `${variant.replace('x', '×')}  ·  ${data.pattern || '—'}-${data.target || '—'}`,
+  const formation = is3x3 ? goalTargetLabel(data.target, language)
+    : `${data.pattern || '—'}-${goalTargetLabel(data.target, language) || '—'}`;
+  text(ctx, `${variant.replace('x', '×')}  ·  ${formation}`,
     1024, 104, 15, '#e1cfec', { align: 'right', weight: 500 });
   avatar(ctx, name, avatarImage);
   line(ctx, 52, 147, 1128, 147, '#d5b6dc66');
@@ -316,14 +330,25 @@ export async function drawAnalysisPoster({ canvas = document.createElement('canv
   }
 
   cutPanel(ctx, 596, 438, 527, 110, '#141219df', 15);
-  line(ctx, 854, 457, 854, 530, '#b8a9bb70');
-  metricText(ctx, number(aggregate.max_combo), 625, 477, 39, 200);
-  text(ctx, copy.combo, 626, 521, 14, '#d0c4d4', { weight: 500 });
-  metricText(ctx, percent(aggregate.mean_goodness_of_fit), 882, 477, 39, 215);
-  const tier = ENDGAME_TIERS[Number(data.goalTile)];
-  const tierLabel = tier ? (language === 'zh' ? `${tier}${copy.endgame}` : `${tier} ${copy.endgame}`) : '';
-  const fitLabel = tierLabel ? `${tierLabel} · ${copy.fit}` : copy.fit;
-  text(ctx, fitLabel, 883, 521, 12.5, '#d0c4d4', { weight: 500, maxWidth: 215 });
+  if (is3x3) {
+    line(ctx, 786, 457, 786, 530, '#b8a9bb70');
+    line(ctx, 949, 457, 949, 530, '#b8a9bb70');
+    metricText(ctx, percent(aggregate.mean_single_step_accuracy, 5), 623, 477, 27, 155);
+    text(ctx, copy.accuracy, 624, 521, 11, '#d0c4d4', { weight: 500, maxWidth: 156 });
+    metricText(ctx, percent(aggregate.perfect_rate), 803, 477, 31, 134);
+    text(ctx, copy.perfect, 804, 521, 12, '#d0c4d4', { weight: 500 });
+    metricText(ctx, number(aggregate.max_combo), 966, 477, 36, 131);
+    text(ctx, copy.combo, 967, 521, 12, '#d0c4d4', { weight: 500 });
+  } else {
+    line(ctx, 854, 457, 854, 530, '#b8a9bb70');
+    metricText(ctx, number(aggregate.max_combo), 625, 477, 39, 200);
+    text(ctx, copy.combo, 626, 521, 14, '#d0c4d4', { weight: 500 });
+    metricText(ctx, percent(aggregate.mean_goodness_of_fit), 882, 477, 39, 215);
+    const tier = ENDGAME_TIERS[Number(data.goalTile)];
+    const tierLabel = tier ? (language === 'zh' ? `${tier}${copy.endgame}` : `${tier} ${copy.endgame}`) : '';
+    const fitLabel = tierLabel ? `${tierLabel} · ${copy.fit}` : copy.fit;
+    text(ctx, fitLabel, 883, 521, 12.5, '#d0c4d4', { weight: 500, maxWidth: 215 });
+  }
 
   cutPanel(ctx, 601, 565, 518, 118, '#141219df', 15);
   text(ctx, copy.eval, 624, 587, 12, '#c6b7cc', { weight: 500 });
@@ -339,8 +364,15 @@ export async function drawAnalysisPoster({ canvas = document.createElement('canv
 
   // A restrained footer keeps the image attributable after it is shared.
   line(ctx, 55, 713, 1124, 713, '#d5b6dc66');
-  text(ctx, `${copy.stages}  ${number(aggregate.stage_count ?? 0)}   /   ${copy.moves}  ${number(aggregate.total_moves ?? 0)}`,
-    60, 743, 15, '#efe7f0', { weight: 500 });
+  if (is3x3) {
+    text(ctx, `${copy.ratedMoves}  ${number(aggregate.evaluated_moves)}   /   ${copy.stages}  ${number(aggregate.stage_count)}`,
+      60, 734, 13, '#efe7f0', { weight: 500 });
+    text(ctx, `${copy.elapsed}  ${analysisDuration(aggregate.run_elapsed_ms)}   /   ${copy.sum}  ${number(aggregate.run_board_sum)}`,
+      60, 758, 13, '#efe7f0', { weight: 500 });
+  } else {
+    text(ctx, `${copy.stages}  ${number(aggregate.stage_count ?? 0)}   /   ${copy.moves}  ${number(aggregate.total_moves ?? 0)}`,
+      60, 743, 15, '#efe7f0', { weight: 500 });
+  }
   text(ctx, `${copy.played}  ${formatDate(run.ended_at)}`, 60, 782, 14, '#cdbed0', { weight: 500 });
   text(ctx, 'play.2048tables.online', 790, 743, 20, '#fff', { align: 'right' });
   text(ctx, copy.site, 790, 779, 12.5, '#d8cbdc', { align: 'right', weight: 500, maxWidth: 650 });

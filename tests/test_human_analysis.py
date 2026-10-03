@@ -338,7 +338,8 @@ def test_result_grade_is_persisted_and_prior_summary_can_be_graded_without_reana
             upgraded = json.loads(db.execute(
                 "SELECT summary_json FROM human_analysis_summaries WHERE id=?",
                 (summary_id,)).fetchone()["summary_json"])
-        assert upgraded["grade_version"] == 2
+        from backend.human_play.analysis_grade import GRADE_VERSION
+        assert upgraded["grade_version"] == GRADE_VERSION
         assert upgraded["aggregate"]["speed_grade_eligible"] is True
 
 

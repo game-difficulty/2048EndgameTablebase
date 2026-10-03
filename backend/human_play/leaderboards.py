@@ -82,7 +82,7 @@ def init_schema(db) -> None:
 
 def _analysis_values(db, summary_id: int, summary: dict) -> dict | None:
     from .analysis_grade import GRADE_VERSION, grade_result
-    from .analysis_summary import poster_goal_tile
+    from .analysis_summary import poster_goal_tile, prepare_poster_summary
     from .service import RANKABLE_SQL
 
     row = db.execute(f"""SELECT s.run_id,s.user_id,s.pattern,s.target,s.metric_version,s.created,
@@ -94,6 +94,8 @@ def _analysis_values(db, summary_id: int, summary: dict) -> dict | None:
         return None
     run = summary.get("run") or {}
     state = json.loads(row["state"])
+    summary = prepare_poster_summary(summary, pattern=row["pattern"], target=row["target"],
+                                     variant=row["variant"], run_state=state)
     aggregate = summary.get("aggregate") or {}
     goal = summary.get("goal_tile")
     if goal is None:
@@ -105,7 +107,10 @@ def _analysis_values(db, summary_id: int, summary: dict) -> dict | None:
         return None
     weighted, grade = result
     fit = float(aggregate["mean_goodness_of_fit"])
-    mean_ms = float(aggregate["mean_ms_per_timed_move"])
+    mean_ms = aggregate.get("mean_ms_per_timed_move")
+    if mean_ms is None:
+        return None
+    mean_ms = float(mean_ms)
     if not all(math.isfinite(value) for value in (weighted, fit, mean_ms)):
         return None
     return {

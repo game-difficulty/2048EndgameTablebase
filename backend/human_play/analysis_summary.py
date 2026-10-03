@@ -21,6 +21,67 @@ POSTER_GOALS = frozenset((16384, 32768, 65536))
 MAX_COUNTED_MOVE_MS = 20 * 60 * 1000
 
 
+def supports_3x3_poster(pattern: str, target: str, variant: str) -> bool:
+    return variant == "3x3" and pattern == "3x3" and str(target) in ("1024", "sum-1790")
+
+
+def prepare_poster_summary(summary: dict, *, pattern: str, target: str,
+                           variant: str, run_state: dict | None = None) -> dict:
+    """Upgrade small durable summaries without rereading or charging for a replay."""
+    from .analysis_grade import THREE_BY_THREE_PROFILE
+    summary = {**summary, "aggregate": dict(summary.get("aggregate") or {})}
+    aggregate = summary["aggregate"]
+    if not supports_3x3_poster(pattern, target, variant):
+        return summary
+    segments = []
+    for saved in summary.get("segments", []):
+        item = dict(saved)
+        fit = item.get("goodness_of_fit")
+        counts = item.get("performance_counts") or {}
+        count = sum(counts.values())
+        # Tile-goal analyses skip certain moves and the first four evaluated moves.
+        # Only categorized moves contributed to the stored product.
+        item["included"] = (count > 0 and fit is not None and math.isfinite(fit)
+                            and 0 <= fit <= 1)
+        item["exclusion_reason"] = None if item["included"] else "no_valid_evaluations"
+        segments.append(item)
+    summary["segments"] = segments
+    included = [item for item in segments if item["included"]]
+    counts = {}
+    for item in included:
+        for label, count in item["performance_counts"].items():
+            counts[label] = counts.get(label, 0) + count
+    count = sum(counts.values())
+    fits = [item["goodness_of_fit"] for item in included]
+    accuracy = (0.0 if any(fit == 0 for fit in fits) else
+                math.exp(math.fsum(math.log(fit) for fit in fits) / count)) if count else None
+    timed_moves = sum(item.get("timed_moves", 0) for item in included)
+    valid_ms = sum(item.get("valid_timing_ms", 0) for item in included)
+    state = run_state or summary.get("run") or {}
+    board = state.get("board")
+    board_sum = sum(board) if isinstance(board, list) and len(board) == 9 else None
+    timing = summary.get("run_timing") or {}
+    elapsed = timing.get("elapsed_ms") if timing.get("complete") else None
+    if not timing and summary.get("source") == "native":
+        # Native archives record every move; legacy Verse records can omit timing.
+        elapsed = state.get("elapsed")
+    aggregate.update({
+        "grading_profile": THREE_BY_THREE_PROFILE,
+        "poster_eligible": bool(count), "stage_count": len(included),
+        "total_moves": sum(item["total_moves"] for item in included),
+        "evaluated_moves": count, "performance_counts": counts,
+        "max_combo": max((item["max_combo"] for item in included), default=0),
+        "mean_goodness_of_fit": sum(fits) / len(fits) if fits else None,
+        "mean_single_step_accuracy": accuracy,
+        "perfect_rate": counts.get(PERFORMANCE_PERFECT_LABEL, 0) / count if count else None,
+        "timed_moves": timed_moves, "valid_timing_ms": valid_ms,
+        "excluded_timing_moves": sum(item.get("excluded_timing_moves", 0) for item in included),
+        "mean_ms_per_timed_move": valid_ms / timed_moves if timed_moves else None,
+        "run_board_sum": board_sum, "run_elapsed_ms": elapsed,
+    })
+    return summary
+
+
 def _personal_rank(db, user_id: int, variant: str, run_id: str) -> int | None:
     """Return this archived game position in the owner's current score order."""
     from .service import RANKABLE_SQL
@@ -124,6 +185,10 @@ def build_summary(segments: list[dict], intervals: list[int | None], *,
     }
     return {"metric_version": METRIC_VERSION, "source": source,
             "timing_lossy": timing_lossy, "segments": result_segments,
+            "run_timing": {
+                "complete": bool(intervals) and all(value is not None and value >= 0 for value in intervals),
+                "elapsed_ms": sum(value for value in intervals if value is not None and value >= 0),
+            },
             "aggregate": aggregate}
 
 
@@ -189,6 +254,8 @@ def save_summary(*, run_id: str, user_id: int, pattern: str, target: str,
                    "previous_best": previous_best,
                    "delta": score - previous_best if rankable and score > previous_best else 0},
         }}
+        summary = prepare_poster_summary(summary, pattern=pattern, target=target,
+                                         variant=row["variant"], run_state=run_state)
         summary["grade_version"] = GRADE_VERSION
         summary["grade"] = grade_for_summary(
             variant=row["variant"], goal_tile=summary.get("goal_tile"),
@@ -226,14 +293,19 @@ def list_summaries(run_id: str, _viewer_id: int | None = None) -> list[dict]:
         owner_view = bool(source and _viewer_id is not None
                           and int(source["user_id"]) == int(_viewer_id))
         access = "r.visible=1" if owner_view else rankable_sql('r')
-        rows = db.execute(f"""SELECT s.id,s.pattern,s.target,s.metric_version,s.aggregate_json,s.created
+        rows = db.execute(f"""SELECT s.id,s.pattern,s.target,s.metric_version,s.aggregate_json,s.created,
+                s.summary_json,r.variant,r.state
             FROM human_analysis_summaries s JOIN human_runs r ON r.id=s.run_id
             WHERE s.run_id=? AND s.listed=1 AND s.admitted=1 AND r.status='sealed'
                 AND r.archive IS NOT NULL AND r.has_replay=1 AND {access}
             ORDER BY s.created DESC,s.id DESC""", (run_id,)).fetchall()
     return [{"id": row["id"], "pattern": row["pattern"], "target": row["target"],
              "metric_version": row["metric_version"], "created": row["created"],
-             "aggregate": json.loads(row["aggregate_json"])} for row in rows]
+             "aggregate": (prepare_poster_summary(json.loads(row["summary_json"]),
+                pattern=row["pattern"], target=row["target"], variant=row["variant"],
+                run_state=json.loads(row["state"]))["aggregate"]
+                if supports_3x3_poster(row["pattern"], row["target"], row["variant"])
+                else json.loads(row["aggregate_json"]))} for row in rows]
 
 
 def _viewer_has_live_job(job_id: str, viewer_id: int | None) -> bool:
@@ -261,7 +333,8 @@ def get_summary(summary_id: int, _viewer_id: int | None = None) -> dict | None:
                           and int(source["user_id"]) == int(_viewer_id))
         live_job_view = bool(source and _viewer_has_live_job(source["job_id"], _viewer_id))
         access = "r.visible=1" if owner_view else rankable_sql('r')
-        row = db.execute(f"""SELECT s.id,s.run_id,s.user_id,s.pattern,s.target,s.created,s.summary_json
+        row = db.execute(f"""SELECT s.id,s.run_id,s.user_id,s.pattern,s.target,s.created,s.summary_json,
+                r.state,r.variant
             FROM human_analysis_summaries s JOIN human_runs r ON r.id=s.run_id
             WHERE s.id=? AND (? OR (s.listed=1 AND s.admitted=1)) AND r.status='sealed'
                 AND r.archive IS NOT NULL AND r.has_replay=1 AND {access}""",
@@ -276,6 +349,8 @@ def get_summary(summary_id: int, _viewer_id: int | None = None) -> dict | None:
     if summary.get("grade_version") != GRADE_VERSION:
         # Older paid analyses can be graded from their durable small summary;
         # the full replay and tablebase do not need to be read again.
+        summary = prepare_poster_summary(summary, pattern=row["pattern"], target=row["target"],
+                                         variant=row["variant"], run_state=json.loads(row["state"]))
         goal = summary.get("goal_tile")
         if goal is None:
             goal = poster_goal_tile(row["pattern"], row["target"], run.get("variant", ""))

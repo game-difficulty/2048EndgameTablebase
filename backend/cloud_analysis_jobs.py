@@ -354,6 +354,7 @@ def _run_one_file(job: AnalysisJob, item: AnalysisWorkItem, index: int) -> tuple
     if item.source_run_id and hasattr(analyzer, "segment_summaries"):
         from .human_play.analysis_summary import (
             POSTER_GOALS, build_summary, intervals_from_analysis_input, poster_goal_tile,
+            prepare_poster_summary,
         )
         summary = build_summary(published,
                                 intervals_from_analysis_input(item.path),
@@ -361,6 +362,8 @@ def _run_one_file(job: AnalysisJob, item: AnalysisWorkItem, index: int) -> tuple
         summary["goal_tile"] = poster_goal_tile(item.pattern, target_tile, still_visible["variant"])
         summary["aggregate"]["poster_eligible"] = (
             summary["aggregate"]["stage_count"] > 0 and summary["goal_tile"] in POSTER_GOALS)
+        summary = prepare_poster_summary(summary, pattern=item.pattern, target=target_tile,
+                                         variant=still_visible["variant"])
     artifacts = [{"artifact_id": segment.get("artifact_id"), "segment_index": stage_index,
                   "source_start_index": int(segment["start_index"]),
                   "source_end_index": int(segment["end_index"])}
