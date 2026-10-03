@@ -232,7 +232,9 @@ function closingCard(ctx, palette, copy) {
 }
 
 export function bestTenPreviewSize(cssWidth, pixelRatio = 1) {
-  const width = Math.min(2400, Math.max(1, Math.ceil(cssWidth * Math.max(1, pixelRatio))));
+  // Small labels at fractional design coordinates lose detail at one sample
+  // per CSS pixel. Supersample low-DPI previews without raising the memory cap.
+  const width = Math.min(2400, Math.max(1, Math.ceil(cssWidth * Math.max(2, pixelRatio))));
   return { width, height: Math.round(width * 2700 / 1600) };
 }
 

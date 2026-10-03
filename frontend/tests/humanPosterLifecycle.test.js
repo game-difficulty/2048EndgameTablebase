@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { drawBestTenPoster, bestTenPreviewSize } from '../src/human/bestTenPoster.js';
 
-test('preview covers CSS width and device pixels without exceeding its memory cap', () => {
-  assert.deepEqual(bestTenPreviewSize(984, 1), { width: 984, height: 1661 });
+test('preview supersamples low-DPI text and covers device pixels within its memory cap', () => {
+  assert.deepEqual(bestTenPreviewSize(984, 1), { width: 1968, height: 3321 });
+  assert.deepEqual(bestTenPreviewSize(390, 1), { width: 780, height: 1316 });
+  assert.deepEqual(bestTenPreviewSize(984, 1.25), { width: 1968, height: 3321 });
   assert.deepEqual(bestTenPreviewSize(984, 2), { width: 1968, height: 3321 });
   assert.deepEqual(bestTenPreviewSize(390, 3), { width: 1170, height: 1974 });
   assert.equal(bestTenPreviewSize(984, 4).width, 2400);

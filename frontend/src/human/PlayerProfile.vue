@@ -186,6 +186,7 @@ function resizePosterIfNeeded() {
 function observePosterSize() {
   posterResizeObserver?.disconnect();
   if (!resourcesActive || !posterCanvas.value) return;
+  if (typeof ResizeObserver === 'undefined') return; // window resize remains available.
   posterResizeObserver = new ResizeObserver(resizePosterIfNeeded);
   posterResizeObserver.observe(posterCanvas.value.parentElement);
 }
