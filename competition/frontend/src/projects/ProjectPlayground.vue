@@ -67,7 +67,7 @@
           </div>
 
           <section class="game-actions">
-            <button v-if="project.allowUndo" type="button" :disabled="!snapshot.canUndo || locked" @click="undo">{{ $t("撤销一步") }}</button>
+            <button v-if="project.allowUndo" v-touch-click type="button" :disabled="!snapshot.canUndo || locked" @click="undo">{{ $t("撤销一步") }}</button>
             <button type="button" :disabled="locked" @click="restart">{{ $t("重新开始（R）") }}</button>
             <span>{{ $t("方向键 / WASD / 滑动操作") }}</span>
           </section>
@@ -103,6 +103,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import LanguageSwitch from '../LanguageSwitch.vue';
+import { vTouchClick } from '../touchClick.js';
 import { syncAccountLanguage } from '../i18n.js';
 import { PRACTICE_PROJECTS, PROJECT_BY_ID } from './catalog.js';
 import { formatElapsed, TournamentGame } from './engine.js';
