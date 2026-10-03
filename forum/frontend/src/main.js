@@ -11,6 +11,7 @@ import Profile from "./pages/Profile.vue";
 import Settings from "./pages/Settings.vue";
 import Operations from "./pages/Operations.vue";
 import "./style.css";
+import "./layout.css";
 import { refreshTilePalette } from "./tilePalette";
 
 const router = createRouter({

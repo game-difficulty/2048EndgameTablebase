@@ -373,51 +373,10 @@ onBeforeUnmount(() => {
   </div>
   <template v-else>
     <fieldset class="composer-fields" :disabled="publishing">
-      <div class="panel">
-        <label class="field"
-          >主题类型<select v-model="kind">
-            <option value="discussion">讨论 / 作品</option>
-            <option value="question">提问与反馈</option>
-            <option value="poll">投票</option>
-          </select></label
-        >
-        <label class="field"
-          >标签（逗号分隔，最多 5 个）<input v-model="tags" maxlength="124"
-        /></label>
-        <template v-if="kind === 'poll'"
-          ><label class="field"
-            >投票选项（每行一项，2—10 项）<textarea
-              v-model="pollOptions"
-              maxlength="1300"
-              rows="4"
-            /></label
-          ><label class="field"
-            >投票截止时间<input
-              v-model="pollDeadline"
-              type="datetime-local"
-              required /></label
-          ><label class="field"
-            >每人最多选择<input
-              v-model="pollMax"
-              type="number"
-              min="1"
-              max="10" /></label
-          ><label class="field"
-            >结果显示<select v-model="pollResults">
-              <option value="always">始终显示</option>
-              <option value="voted">投票后显示</option>
-              <option value="closed">截止后显示</option>
-            </select></label
-          >
-          <p class="muted">
-            发布后选项固定；截止前可以修改自己的选择。
-          </p></template
-        >
-      </div>
       <div class="heading">
         <div>
-          <p class="eyebrow">CREATE & DISCUSS</p>
-          <h1>把你的思路写下来</h1>
+          <p class="eyebrow">创作台</p>
+          <h1>创作一篇新讨论</h1>
           <p class="muted">从一个问题、一段经历或一个棋盘开始。</p>
         </div>
         <button @click="preview = !preview">
@@ -434,7 +393,7 @@ onBeforeUnmount(() => {
           $event.target.open && listDrafts().catch((e) => (error = e.message))
         "
       >
-        <summary>我的草稿（{{ drafts.length }}）</summary>
+        <summary>继续编辑云端草稿</summary>
         <div v-if="!drafts.length" class="muted">暂时没有云端草稿。</div>
         <div v-for="d in drafts" :key="d.id" class="actions">
           <button @click="openDraft(d)">
@@ -448,97 +407,150 @@ onBeforeUnmount(() => {
         <h2>{{ title || "未命名主题" }}</h2>
         <Document :body="body" />
       </div>
-      <form v-else @submit.prevent="publish">
-        <label class="field"
-          >标题<input
-            v-model="title"
-            minlength="3"
-            maxlength="120"
-            required
-            placeholder="一个清楚的标题，让讨论更容易开始" /></label
-        ><label class="field"
-          >发布板块<select v-model="boardSlug">
-            <option v-for="b in allowed" :key="b.id" :value="b.slug">
-              {{ b.name }}
-            </option>
-          </select></label
-        ><label class="field"
-          >正文<textarea
-            ref="bodyInput"
-            v-model="text"
-            @paste="paste"
-            rows="9"
-            maxlength="20000"
-            placeholder="描述你的发现、问题和想法…也可输入 [[board:4x4:盘面编码]] 插入棋盘"
-          />
-        </label>
-        <BoardSyntaxHelp @insert="insertSyntax" />
-        <RichTools @insert="insertSyntax" />
-        <p role="status">{{ pasteImage.status.value }}</p>
-        <BoardSyntaxPreview :text="text" />
-        <div class="actions">
-          <button type="button" @click="board ? (board = null) : addBoard()">
-            {{ board ? "移除棋盘" : "＋ 绘制局面" }}
-          </button>
-        </div>
-        <div v-if="board" class="board-editor panel">
-          <div class="heading">
-            <h2>局面编辑器</h2>
-            <label
-              >棋盘
-              <select v-model="size" @change="resize">
-                <option>4x4</option>
-                <option>3x4</option>
-                <option>3x3</option>
-                <option>2x4</option>
-              </select></label
-            >
-          </div>
-          <Board :board="board" editable @cell="paint" />
-          <p class="muted">选择画笔数值，再点格子。高位方块用 K 简写。</p>
-          <div class="palette">
-            <button
-              v-for="n in [
-                0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
-                16384, 32768, 65536,
-              ]"
-              :key="n"
-              type="button"
-              :aria-pressed="pen === n"
-              @click="pen = n"
-            >
-              {{ n || "擦除" }}
+      <form v-else class="composer-layout" @submit.prevent="publish">
+        <section class="composer-writing panel">
+          <p class="eyebrow">写下你的分享</p>
+          <label class="field"
+            >标题<input
+              v-model="title"
+              minlength="3"
+              maxlength="120"
+              required
+              placeholder="一个清楚的标题，让讨论更容易开始" /></label
+          ><label class="field"
+            >正文<textarea
+              ref="bodyInput"
+              v-model="text"
+              @paste="paste"
+              rows="9"
+              maxlength="20000"
+              placeholder="描述你的发现、问题和想法…也可输入 [[board:4x4:盘面编码]] 插入棋盘"
+            />
+          </label>
+          <BoardSyntaxHelp @insert="insertSyntax" />
+          <RichTools @insert="insertSyntax" />
+          <p role="status">{{ pasteImage.status.value }}</p>
+          <BoardSyntaxPreview :text="text" />
+          <div class="actions">
+            <button type="button" @click="board ? (board = null) : addBoard()">
+              {{ board ? "移除棋盘" : "＋ 绘制局面" }}
             </button>
           </div>
-          <div class="actions">
-            <button type="button" :disabled="!history.length" @click="undo">
-              撤销</button
-            ><button type="button" @click="exportPng">导出 PNG</button>
+          <div v-if="board" class="board-editor panel">
+            <div class="heading">
+              <h2>局面编辑器</h2>
+              <label
+                >棋盘
+                <select v-model="size" @change="resize">
+                  <option>4x4</option>
+                  <option>3x4</option>
+                  <option>3x3</option>
+                  <option>2x4</option>
+                </select></label
+              >
+            </div>
+            <Board :board="board" editable @cell="paint" />
+            <p class="muted">选择画笔数值，再点格子。高位方块用 K 简写。</p>
+            <div class="palette">
+              <button
+                v-for="n in [
+                  0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
+                  16384, 32768, 65536,
+                ]"
+                :key="n"
+                type="button"
+                :aria-pressed="pen === n"
+                @click="pen = n"
+              >
+                {{ n || "擦除" }}
+              </button>
+            </div>
+            <div class="actions">
+              <button type="button" :disabled="!history.length" @click="undo">
+                撤销</button
+              ><button type="button" @click="exportPng">导出 PNG</button>
+            </div>
+            <label class="field"
+              >棋盘说明<input
+                v-model="board.caption"
+                maxlength="500"
+                placeholder="说明关键位置或想比较的走法"
+            /></label>
           </div>
-          <label class="field"
-            >棋盘说明<input
-              v-model="board.caption"
-              maxlength="500"
-              placeholder="说明关键位置或想比较的走法"
-          /></label>
-        </div>
-        <div class="actions publish-actions">
-          <button
-            class="primary"
-            :disabled="
-              publishing ||
-              title.trim().length < 3 ||
-              !body.blocks.length ||
-              !allowed.some((b) => b.slug === boardSlug)
-            "
-          >
-            {{ publishing ? "正在发布…" : "发布主题" }}</button
-          ><button type="button" :disabled="saving" @click="save">
-            保存草稿</button
-          ><span class="muted" role="status">{{
-            saving ? "正在保存…" : dirty ? "有未同步的修改" : status
-          }}</span>
-        </div>
+        </section>
+        <aside class="composer-side">
+          <section class="panel composer-options">
+            <p class="eyebrow">发布设置</p>
+            <h2>让合适的人看到</h2>
+            <label class="field"
+              >发布板块<select v-model="boardSlug">
+                <option v-for="b in allowed" :key="b.id" :value="b.slug">
+                  {{ b.name }}
+                </option>
+              </select></label
+            >
+            <label class="field"
+              >主题类型<select v-model="kind">
+                <option value="discussion">讨论 / 作品</option>
+                <option value="question">提问与反馈</option>
+                <option value="poll">投票</option>
+              </select></label
+            >
+            <label class="field"
+              >标签（逗号分隔，最多 5 个）<input v-model="tags" maxlength="124"
+            /></label>
+            <template v-if="kind === 'poll'"
+              ><label class="field"
+                >投票选项（每行一项，2—10 项）<textarea
+                  v-model="pollOptions"
+                  maxlength="1300"
+                  rows="4"
+                /></label
+              ><label class="field"
+                >投票截止时间<input
+                  v-model="pollDeadline"
+                  type="datetime-local"
+                  required /></label
+              ><label class="field"
+                >每人最多选择<input
+                  v-model="pollMax"
+                  type="number"
+                  min="1"
+                  max="10" /></label
+              ><label class="field"
+                >结果显示<select v-model="pollResults">
+                  <option value="always">始终显示</option>
+                  <option value="voted">投票后显示</option>
+                  <option value="closed">截止后显示</option>
+                </select></label
+              >
+              <p class="muted">
+                发布后选项固定；截止前可以修改自己的选择。
+              </p></template
+            >
+          </section>
+          <div class="panel composer-publish">
+            <h2>准备好了就发布</h2>
+            <p class="muted">请说明局面或录像的来源。你的草稿会自动保存。</p>
+            <div class="actions publish-actions">
+              <button
+                class="primary"
+                :disabled="
+                  publishing ||
+                  title.trim().length < 3 ||
+                  !body.blocks.length ||
+                  !allowed.some((b) => b.slug === boardSlug)
+                "
+              >
+                {{ publishing ? "正在发布…" : "发布主题" }}</button
+              ><button type="button" :disabled="saving" @click="save">
+                保存草稿</button
+              ><span class="muted" role="status">{{
+                saving ? "正在保存…" : dirty ? "有未同步的修改" : status
+              }}</span>
+            </div>
+          </div>
+        </aside>
       </form>
     </fieldset>
   </template>

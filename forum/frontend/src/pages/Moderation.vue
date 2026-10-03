@@ -156,7 +156,7 @@ watch(
 <template>
   <div class="heading">
     <div>
-      <p class="eyebrow">COMMUNITY ADMINISTRATION</p>
+      <p class="eyebrow">管理工作台 / 内容治理</p>
       <h1>社区管理</h1>
       <RouterLink v-if="session?.is_admin" to="/operations" class="button"
         >公告、来源动态与隐私请求</RouterLink
@@ -166,7 +166,7 @@ watch(
   </div>
   <p v-if="!session?.can_moderate" class="empty">需要相应板块的管理权限。</p>
   <template v-else>
-    <nav class="actions" aria-label="管理功能">
+    <nav class="view-tabs" aria-label="管理功能">
       <button
         v-for="[key, label] in sections"
         :key="key"

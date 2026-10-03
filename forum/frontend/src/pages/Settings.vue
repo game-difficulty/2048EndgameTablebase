@@ -74,14 +74,21 @@ async function exportData() {
 watch(() => user.value?.id, load, { immediate: true });
 </script>
 <template>
-  <h1>社区设置</h1>
+  <header class="heading">
+    <div>
+      <p class="eyebrow">个人空间 / 社区设置</p>
+      <h1>偏好与隐私</h1>
+      <p class="muted">选择想接收的消息，管理你的社区数据。</p>
+    </div>
+    <RouterLink class="button" to="/community">返回我的社区</RouterLink>
+  </header>
   <p v-if="!user" class="empty">请先登录。</p>
   <template v-else>
     <p v-if="error" class="notice error" role="alert">{{ error }}</p>
     <p role="status">{{ status }}</p>
     <p v-if="!ready && !error" role="status">正在读取社区设置…</p>
     <button v-if="!ready && error" @click="load">重新读取设置</button>
-    <fieldset class="editor-fieldset" :disabled="busy || !ready">
+    <fieldset class="editor-fieldset settings-grid" :disabled="busy || !ready">
       <section class="panel">
         <h2>通知偏好</h2>
         <label class="poll-option"

@@ -262,6 +262,7 @@ watch(authorOnly, () => load());
         }}</RouterLink>
         <h1>{{ data.topic.title }}</h1>
         <div class="meta">
+          <span v-if="data.topic.pinned" class="badge badge-gold">置顶</span>
           <span v-for="tag in data.topic.tags" :key="tag">#{{ tag }}</span
           ><span v-if="data.topic.locked">已锁定</span
           ><span v-if="data.topic.status !== 'published'"
@@ -285,12 +286,6 @@ watch(authorOnly, () => load());
         编辑标题与标签
       </button>
     </div>
-    <div class="actions">
-      <span v-if="data.topic.pinned" class="badge">置顶</span
-      ><span v-for="tag in data.topic.tags" :key="tag" class="badge">{{
-        tag
-      }}</span>
-    </div>
     <form v-if="metadataOpen" class="panel" @submit.prevent="saveMetadata">
       <label class="field"
         >主题标题<input
@@ -308,39 +303,48 @@ watch(authorOnly, () => load());
         ><button type="button" @click="metadataOpen = false">取消</button>
       </div>
     </form>
-    <div v-if="data.topic.can_moderate" class="moderation-tools">
-      <label
-        >管理主题
-        <select v-model="modAction">
-          <option value="">选择操作</option>
-          <option value="hide">隐藏</option>
-          <option value="restore">恢复公开</option>
-          <option value="lock">锁定</option>
-          <option value="unlock">解除锁定</option>
-          <option value="pin">置顶</option>
-          <option value="unpin">取消置顶</option>
-        </select></label
-      ><template v-if="modAction"
-        ><input
-          v-model="modReason"
-          aria-label="管理原因"
-          placeholder="填写原因（至少 3 字）"
-          maxlength="1000"
-        /><button
-          :disabled="busy || modReason.trim().length < 3"
-          @click="moderate"
+    <details v-if="data.topic.can_moderate" class="topic-management">
+      <summary>主题管理</summary>
+      <div class="moderation-tools">
+        <label
+          >管理主题
+          <select v-model="modAction">
+            <option value="">选择操作</option>
+            <option value="hide">隐藏</option>
+            <option value="restore">恢复公开</option>
+            <option value="lock">锁定</option>
+            <option value="unlock">解除锁定</option>
+            <option value="pin">置顶</option>
+            <option value="unpin">取消置顶</option>
+          </select></label
+        ><template v-if="modAction"
+          ><input
+            v-model="modReason"
+            aria-label="管理原因"
+            placeholder="填写原因（至少 3 字）"
+            maxlength="1000"
+          /><button
+            :disabled="busy || modReason.trim().length < 3"
+            @click="moderate"
+          >
+            执行
+          </button></template
         >
-          执行
-        </button></template
-      >
-    </div>
+      </div>
+    </details>
     <button v-if="data.start_after" @click="load(false, true)">
       从首楼阅读
     </button>
-    <TopicExtensions :data="data" @updated="load()" />
-    <label class="actions"
-      ><input type="checkbox" v-model="authorOnly" />只看楼主</label
-    >
+
+    <div class="reader-toolbar">
+      <span>讨论内容</span
+      ><label><input type="checkbox" v-model="authorOnly" /> 只看楼主</label
+      ><a
+        v-if="user && !data.topic.locked && data.topic.status === 'published'"
+        href="#reply-editor"
+        >参与讨论 ↓</a
+      >
+    </div>
     <section v-if="revisions" class="panel">
       <h2>正文修订历史</h2>
       <button @click="revisions = null">关闭历史</button>
@@ -409,7 +413,13 @@ watch(authorOnly, () => load());
             ><button @click="editId = null">取消</button>
           </div></template
         ><Document v-else :body="post.body" />
-        <div class="actions" v-if="user">
+        <TopicExtensions
+          v-if="post.post_number === 1"
+          :data="data"
+          @updated="load()"
+        />
+
+        <div class="actions post-actions" v-if="user">
           <button
             v-if="post.author_id === user.id || data.topic.can_moderate"
             @click="history(post)"
@@ -469,6 +479,11 @@ watch(authorOnly, () => load());
         aria-hidden="true"
       ></span>
     </article>
+    <TopicExtensions
+      v-if="!data.posts.some((p) => p.post_number === 1)"
+      :data="data"
+      @updated="load()"
+    />
     <button v-if="data.next_after" :disabled="loading" @click="load(true)">
       加载后续回复
     </button>
@@ -490,7 +505,8 @@ watch(authorOnly, () => load());
     </form>
     <form
       v-if="user && !data.topic.locked && data.topic.status === 'published'"
-      class="reply-form"
+      id="reply-editor"
+      class="reply-form panel"
       @submit.prevent="send"
     >
       <fieldset :disabled="busy || !draft.ready.value" class="editor-fieldset">

@@ -64,7 +64,11 @@ watch(kind, () => load());
 </script>
 <template>
   <div class="heading">
-    <h1>社区通知</h1>
+    <div>
+      <p class="eyebrow">个人空间 / 消息</p>
+      <h1>社区通知</h1>
+      <p class="muted">回复、提及，还有你关心的讨论。</p>
+    </div>
     <button v-if="items.length" @click="read">全部标为已读</button>
   </div>
   <div v-if="user" class="actions">
@@ -95,7 +99,12 @@ watch(kind, () => load());
   <p v-else-if="!items.length" class="empty">
     还没有新通知，收到回复后会显示在这里。
   </p>
-  <article v-for="item in groups" :key="item.id" class="topic-row">
+  <article
+    v-for="item in groups"
+    :key="item.id"
+    class="topic-row inbox-row"
+    :class="{ unread: !item.read_at }"
+  >
     <div>
       <span v-if="!item.read_at" class="badge">未读</span>
       <p>
