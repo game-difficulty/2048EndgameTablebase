@@ -26,6 +26,7 @@
       {{ loadError }}
     </div>
 
+    <p v-if="variantNotice" class="mb-3 w-full max-w-6xl text-text-secondary" role="status">{{ variantNotice }}</p>
     <div class="tool-page-layout grid w-full max-w-6xl grid-cols-[clamp(280px,60vh,480px)_minmax(0,1fr)] items-start gap-6">
       <section class="tool-page-board-column flex min-w-0 flex-col">
         <ReplayMarkSlider
@@ -220,6 +221,7 @@ const {
   demoActive,
   loadingReplay,
   loadError,
+  variantNotice,
   dirLabels,
   fileDisplay,
   goodnessDisplay,

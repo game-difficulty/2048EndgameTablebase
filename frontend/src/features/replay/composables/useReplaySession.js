@@ -1,4 +1,3 @@
-import { replayPatternFromFilename } from '../../../utils/goalTarget.js';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -8,6 +7,7 @@ import { createBoardFrame, createSnapshotBoardFrame } from '../../../components/
 import { useAuthState } from '../../../services/auth/authState';
 import { pickSingleBrowserFile, readFileAsArrayBuffer } from '../../../services/files/browserFiles';
 import { isVariantPattern } from '../../../utils/patternCategories';
+import { patternFromReplayFilename, resolveReplayVariant } from '../../../utils/replayVariant.js';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import { resultValueFontSize } from '../../../utils/successRate';
 import { PERFORMANCE_LABELS } from '../engine/replayAnalysis';
@@ -83,6 +83,10 @@ export function useReplaySession(activeRef, emit) {
   const demoActive = ref(false);
   const loadingReplay = ref(false);
   const loadError = ref('');
+  const variantConflict = ref(false);
+  const variantNotice = computed(() => !variantConflict.value ? '' : isZh()
+    ? '回放的棋盘类型标记与定式不一致，已按定式修正。'
+    : 'The replay board-type flag conflicts with its formation and has been corrected.');
 
   let controller = null;
   let boardFrameRevision = 0;
@@ -321,6 +325,7 @@ export function useReplaySession(activeRef, emit) {
     loaded.value = !!state.loaded;
     replayStatus.value = state.status || '';
     replayPattern.value = state.pattern || '';
+    replayUseVariant.value = !!state.use_variant;
     replaySource.value = state.source || '';
     currentStep.value = Number(state.current_step || 0);
     totalSteps.value = Number(state.total_steps || 0);
@@ -335,14 +340,17 @@ export function useReplaySession(activeRef, emit) {
 
   const installReplay = async (buffer, replayMetadata, { step = 0, persist = true } = {}) => {
     const parsed = await parseReplayAsync(buffer, sliderThreshold.value, replayMetadata.maxBytes);
+    const resolved = resolveReplayVariant(replayMetadata, appCategories.value);
+    const normalizedMetadata = { ...replayMetadata, pattern: resolved.pattern, useVariant: resolved.useVariant };
     controller = new ReplayController({
       replay: parsed.replay,
       analysis: parsed.analysis,
-      pattern: replayMetadata.pattern,
+      pattern: resolved.pattern,
       source: replayMetadata.source || replayMetadata.filename,
-      useVariant: replayMetadata.useVariant,
+      useVariant: resolved.useVariant,
+      categories: appCategories.value,
     });
-    replayUseVariant.value = !!replayMetadata.useVariant;
+    variantConflict.value = resolved.conflict;
     replayTitle.value = replayMetadata.title || '';
     losses.value = Array.from(parsed.analysis.losses);
     summary.value = parsed.analysis.summary;
@@ -350,7 +358,9 @@ export function useReplaySession(activeRef, emit) {
     applyState(controller.setStep(step));
     if (persist) {
       saveReplayPosition(currentStep.value);
-      persistReplaySourceLater(parsed.rawBuffer, replayMetadata);
+    }
+    if (persist || resolved.conflict) {
+      persistReplaySourceLater(parsed.rawBuffer, normalizedMetadata);
     }
     return parsed.rawBuffer;
   };
@@ -391,7 +401,7 @@ export function useReplaySession(activeRef, emit) {
 
   const guessPatternFromFilename = (filename) => {
     const name = String(filename || '').split(/[\\/]/u).pop() || '';
-    return replayPatternFromFilename(name);
+    return patternFromReplayFilename(name);
   };
   const shouldRelaxFileAccept = () => {
     if (typeof navigator === 'undefined') return false;
@@ -527,7 +537,7 @@ export function useReplaySession(activeRef, emit) {
   };
 
   const guessFullPattern = () => replayPattern.value || guessPatternFromFilename(replaySource.value);
-  const isVariant = computed(() => replayUseVariant.value || isVariantPattern(guessFullPattern(), appCategories.value));
+  const isVariant = computed(() => replayUseVariant.value);
   const jumpToPractice = () => {
     if (!loaded.value || !currentHex.value) return;
     emit('navigate-tab', 'TrainerView', { fullPattern: guessFullPattern(), hex: currentHex.value });
@@ -588,7 +598,7 @@ export function useReplaySession(activeRef, emit) {
       const rawBuffer = await installReplay(replay.buffer, replay, { step: 0, persist: false });
       saveReplayPosition(0);
       // Remove the credential only after the exact artifact is durable in this tab.
-      if (saveReplaySource(rawBuffer, replay)) fragment.delete('token');
+      if (saveReplaySource(rawBuffer, { ...replay, pattern: controller.pattern, useVariant: controller.useVariant })) fragment.delete('token');
       const clean = new URL(window.location.href);
       clean.hash = fragment.toString();
       window.history.replaceState(window.history.state, '', clean);
@@ -653,6 +663,7 @@ export function useReplaySession(activeRef, emit) {
     demoActive,
     loadingReplay,
     loadError,
+    variantNotice,
     dirLabels,
     fileDisplay,
     goodnessDisplay,

@@ -2,6 +2,7 @@ import {
   PERFORMANCE_LABELS,
   evaluationOfPerformance,
 } from './replayAnalysis.js';
+import { resolveReplayVariant } from '../../../utils/replayVariant.js';
 import {
   REPLAY_DIRECTIONS,
   boardForReplayStep,
@@ -13,12 +14,13 @@ import {
 } from './replayTransition.js';
 
 export class ReplayController {
-  constructor({ replay, analysis, pattern = '', source = '', useVariant = false }) {
+  constructor({ replay, analysis, pattern = '', source = '', useVariant, categories = {} }) {
     this.replay = replay;
     this.analysis = analysis;
-    this.pattern = String(pattern || '');
+    const resolved = resolveReplayVariant({ pattern, source, useVariant }, categories);
+    this.pattern = resolved.pattern;
     this.source = String(source || '');
-    this.useVariant = !!useVariant;
+    this.useVariant = resolved.useVariant;
     this.currentStep = 0;
   }
 
@@ -82,6 +84,7 @@ export class ReplayController {
       loaded: true,
       status: this.source ? `Loaded ${this.source}` : '',
       pattern: this.pattern,
+      use_variant: this.useVariant,
       source: this.source,
       current_step: step,
       total_steps: total,

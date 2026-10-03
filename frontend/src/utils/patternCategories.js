@@ -18,8 +18,8 @@ export const getPatternCategory = (patternLike) => {
 export const normalizePatternName = (patternLike) => {
   const raw = String(patternLike || '').trim();
   if (!raw) return '';
-  if (/_\d+$/u.test(raw)) {
-    return raw.replace(/_\d+$/u, '');
+  if (/_(?:sum-)?\d+$/u.test(raw)) {
+    return raw.replace(/_(?:sum-)?\d+$/u, '');
   }
   return raw;
 };

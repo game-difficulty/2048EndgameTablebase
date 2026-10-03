@@ -7,6 +7,9 @@ import {
   analyzeReplay,
 } from '../src/features/replay/engine/replayAnalysis.js';
 import { replayMarkerIndices } from '../src/features/replay/engine/replayMarkers.js';
+import { createBoardViewport } from '../src/utils/boardViewport.js';
+import { resolveReplayVariant } from '../src/utils/replayVariant.js';
+import { saveReplaySource, restoreReplaySession } from '../src/features/replay/services/replaySessionStore.js';
 import { ReplayController } from '../src/features/replay/engine/replayController.js';
 import {
   ReplayFormatError,
@@ -22,6 +25,38 @@ import {
 } from '../src/features/replay/engine/replayTransition.js';
 
 const SENTINEL_RATES = [666666666, 233333333, 314159265, 987654321];
+
+test('variant RPL imports keep geometry, slide metadata, terminal frames and restored state consistent', () => {
+  const values = new Map();
+  globalThis.window = { sessionStorage: {
+    setItem: (key, value) => values.set(key, value), getItem: key => values.get(key) ?? null,
+  } };
+  try {
+    for (const [pattern, first, last, spawn, rows, cols] of [
+      ['3x3_sum-1800', 0x011f000f000fffffn, 0x210f000f000fffffn, 1, 3, 3],
+      ['2x4_sum-900', 0xffff01100000ffffn, 0xffff21000000ffffn, 5, 2, 4],
+      ['3x4_1024', 0x011000000000ffffn, 0x210000000000ffffn, 1, 3, 4],
+    ]) {
+      const buffer = buildReplayBuffer([{ board: first, change: change(0, spawn, 1) }]);
+      const metadata = resolveReplayVariant({ filename: pattern + '_42.rpl', useVariant: false });
+      const replay = parseRplArrayBuffer(buffer);
+      const controller = new ReplayController({ replay, analysis: analyzeReplay(replay), ...metadata });
+      const initial = controller.state();
+      const viewport = createBoardViewport(initial.board, initial.use_variant);
+      assert.deepEqual([viewport.rows, viewport.cols], [rows, cols]);
+      const final = controller.step(1);
+      assert.equal(encodeBoard(final.board), last);
+      assert.ok(final.animation.slide_distances.some(value => value > 0));
+      assert.equal(final.animation.appear_tile.index, spawn);
+      assert.equal(controller.setStep(0).hex_str, first.toString(16).padStart(16, '0'));
+      assert.equal(controller.setStep(1).hex_str, last.toString(16).padStart(16, '0'));
+      saveReplaySource(buffer, metadata);
+      const restored = restoreReplaySession();
+      assert.equal(restored.useVariant, true);
+      assert.equal(restored.pattern, pattern);
+    }
+  } finally { delete globalThis.window; }
+});
 
 function writeUint64(view, offset, value) {
   const normalized = BigInt(value);
