@@ -777,3 +777,5 @@ html[lang=en] .game-actions{flex-wrap:wrap}
 .game-hud-progress{flex-wrap:wrap;max-width:150px;justify-content:center}
 .game-roster-edge{max-height:calc(100dvh - 180px);overflow-y:auto;scrollbar-width:thin}
 @media(max-width:1100px){.game-roster-edge{overflow-x:auto;max-height:none}.game-roster-edge .roster-edge-player{flex:none}}
+.public-site-nav{display:flex;gap:6px}.public-site-nav button[aria-current=page]{border-color:#b18b42;background:#b18b4212;color:var(--competition-text)}
+@media(max-width:600px){.site-header .site-navigation{grid-column:1/-1;grid-row:3;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}.site-header .brand{grid-column:1/-1}.public-site-nav{gap:4px}.public-site-nav button{padding:7px 9px;min-height:36px;font-size:12px}}

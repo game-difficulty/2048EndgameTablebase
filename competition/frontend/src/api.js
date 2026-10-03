@@ -75,9 +75,9 @@ export const api = {
   submitPracticeResult: (projectId, result) => request(`/api/practice/${encodeURIComponent(projectId)}/results`, {
     method: 'POST', body: result,
   }),
-  list: () => request('/api/competitions'),
+  list: (options) => request('/api/competitions', options),
   duelProjects: () => request('/api/duel-projects'),
-  createDuel: (body) => request('/api/duel-rooms', { method: 'POST', body }),
+  createDuel: (body) => request('/api/duel-rooms', { method: 'POST', body, timeoutMs:10000 }),
   createTimeAttack: (body) => request('/api/time-attack-rooms', { method: 'POST', body, timeoutMs: 10000 }),
   timeAttackCommand: (code, body) => request(`/api/competitions/${encodeURIComponent(code)}/time-attack/attempt`, { method: 'POST', body, timeoutMs: 5000 }),
   timeAttackBest: (code, side) => request(`/api/competitions/${encodeURIComponent(code)}/time-attack/best/${side}`, {timeoutMs:5000}),

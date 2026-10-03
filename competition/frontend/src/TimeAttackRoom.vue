@@ -113,7 +113,7 @@ onBeforeUnmount(()=>{alive=false;clearInterval(timer);clearInterval(poller);wind
     <div class="panel time-summary"><strong>{{config.variant.replace('x',' × ')}} · {{config.target_kind==='tile'?(en?'Target tile ≥':'目标数字 ≥'):(en?'Exact board sum =':'精确盘面和 =')}} {{config.target_value}}</strong>
       <p>{{en?'Unlimited restarts · No undo · Best verified run wins':'无限重开 · 不可悔棋 · 比较最快有效单局'}}</p>
       <details :open="waiting"><summary>{{en?'Timing and network rules':'计时与网络规则'}}</summary><p class="muted">{{en?'Runs start when the server creates the board. PB includes network latency; moves must arrive before the deadline. Disconnection does not pause time.':'单局从服务端生成棋盘时计时。PB 包含网络耗时，操作须在截止前送达。断线不暂停计时。'}}</p></details></div>
-    <DuelWaiting v-if="waiting" :room="room" :busy="busy" :time-attack="true" :project-name="()=>config.variant.replace('x',' × ')" @claim="(...args)=>emit('claim',...args)" @leave="emit('leave')" @ready="emit('ready')" />
+    <DuelWaiting v-if="waiting" :room="room" :busy="busy" :project-name="()=>config.variant.replace('x',' × ')" @claim="(...args)=>emit('claim',...args)" @leave="emit('leave')" @ready="emit('ready')" />
     <template v-else>
       <div class="time-clock panel"><span>{{en?'Match remaining':'比赛剩余时间'}}</span><strong>{{format(remaining)}}</strong>
         <h2 v-if="room.status==='FINISHED'">{{data.winner_side==='draw'?(en?'Draw':'平局'):`${room.seats.find(s=>s.side===data.winner_side)?.display_name || data.winner_side} ${en?'wins':'获胜'}`}}</h2></div>
