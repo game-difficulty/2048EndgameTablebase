@@ -89,6 +89,12 @@ def init_auth_db() -> None:
         ).fetchone() is not None
         db.executescript(
             """
+            CREATE TABLE IF NOT EXISTS account_first_visit (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                flow TEXT NOT NULL, version INTEGER NOT NULL, status TEXT NOT NULL,
+                completed_at REAL NOT NULL,
+                PRIMARY KEY(user_id, flow, version)
+            );
             CREATE TABLE IF NOT EXISTS users (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               email TEXT NOT NULL UNIQUE,

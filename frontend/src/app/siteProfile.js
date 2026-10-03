@@ -6,7 +6,7 @@ export const TABLE_TABS = Object.freeze({
 });
 export const TAB_ROUTES = Object.freeze({ ...TABLE_TABS, settings: TAB_IDS.SETTINGS,
   gamer: TAB_IDS.GAMER, minigames: TAB_IDS.MINIGAMES, help: TAB_IDS.HELP,
-  admin: TAB_IDS.ADMIN, leaderboards: TAB_IDS.LEADERBOARDS });
+  contact: TAB_IDS.CONTACT, admin: TAB_IDS.ADMIN, leaderboards: TAB_IDS.LEADERBOARDS });
 export const isTableTab = tab => Object.values(TABLE_TABS).includes(tab);
 export function siteProfile(location, entry = '') {
   return entry === 'tables' || location.hostname === 'tables.2048tables.online'

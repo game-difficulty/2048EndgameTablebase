@@ -6,6 +6,11 @@ import { ensureStoredLanguage } from '../services/preferences/languagePreference
 const preferences = createLocalStorageStore({ key: 'user-preferences', version: 1, defaultValue: {} });
 export const language = ref('zh');
 const en = {
+  '我已阅读并知悉': 'I have read and understood', '正在保存…': 'Saving…',
+  '确认未能保存，请联网后重试。': 'Could not save your confirmation. Please reconnect and try again.',
+  '对局结束时会上传归档。上传失败会提醒保存回放。': 'The game is archived when it ends. If uploading fails, you will be reminded to save the replay.',
+  '联系站长': 'Contact the site owner', '处理。': ' for assistance.',
+
   '开始时间': 'Start time', '结束时间': 'End time',
   "更多筛选": "More filters",
   "最低分（含）": "Minimum score (inclusive)",

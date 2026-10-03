@@ -165,10 +165,11 @@ test('archive receipt updates do not postpone or hide the terminal overlay', () 
 
 test('terminal restart bypasses confirmation while active games retain it', async () => {
   const body=humanAppSource.slice(humanAppSource.indexOf('async function requestRestart()'),humanAppSource.indexOf('async function confirmRestart()'));
-  const gate={value:'ended'},modal={value:''};let restarts=0;
+  const gate={value:'ended'},modal={value:''},requiredFlow={value:null};let restarts=0;
   const session={waitForMove:async()=>{},restart:async()=>{restarts++;}};
-  const restart=new Function('practice','session','busy','gate','modal','alwaysConfirmRestart','run','activePolicy','high','resetPractice',body+';return requestRestart;')(
-    {value:null},session,{value:false},gate,modal,{value:true},{value:{score:900000}},{value:{restart_threshold:360000}},{value:true},()=>{});
-  await restart();assert.equal(restarts,1);assert.equal(modal.value,'');
+  const restart=new Function('practice','session','busy','gate','modal','alwaysConfirmRestart','run','activePolicy','high','resetPractice','requiredFlow',body+';return requestRestart;')(
+    {value:null},session,{value:false},gate,modal,{value:true},{value:{score:900000}},{value:{restart_threshold:360000}},{value:true},()=>{},requiredFlow);
+  requiredFlow.value={id:'play_rules'};await restart();assert.equal(restarts,0);
+  requiredFlow.value=null;await restart();assert.equal(restarts,1);assert.equal(modal.value,'');
   gate.value='ready';await restart();assert.equal(restarts,1);assert.equal(modal.value,'restart');
 });

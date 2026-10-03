@@ -411,6 +411,22 @@ class HumanPlayTests(unittest.TestCase):
             with self.assertRaises(service.RunError):
                 service.history(1, 1, **filters)
 
+    def test_first_visit_is_account_scoped_versioned_and_idempotent(self):
+        from backend.profile.first_visit import read_flows, complete_flow
+        self.assertIsNone(read_flows(1)[0]['status'])
+        path = '/api/human/me/first-visit/play_rules'
+        payload = {'version': 1, 'status': 'acknowledged'}
+        self.assertEqual(TestClient(self.client.app).post(path, json=payload).status_code, 401)
+        self.assertEqual(self.client.post(path, json={'version': 1, 'status': 'skipped'}).status_code, 422)
+        self.assertIsNone(self.client.get('/api/human/me/settings').json()['first_visit'][0]['status'])
+        first = complete_flow(1, 'play_rules', 1, 'acknowledged')
+        self.assertEqual(first, complete_flow(1, 'play_rules', 1, 'acknowledged'))
+        self.assertEqual(read_flows(1)[0]['status'], 'acknowledged')
+        self.assertEqual(self.client.post(path, json=payload).json()['first_visit'], first)
+        self.assertIsNone(read_flows(2)[0]['status'])
+        for args in [('play_rules', 2, 'acknowledged'), ('play_rules', 1, 'skipped'), ('unknown', 1, 'acknowledged')]:
+            with self.assertRaises(ValueError): complete_flow(1, *args)
+
     def test_named_profile_prefers_exact_legacy_case_conflict(self):
         with auth_db() as db:
             db.execute("UPDATE users SET display_name='xlb',display_name_key='xlb' WHERE id=1")

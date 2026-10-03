@@ -779,3 +779,5 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .history-advanced label { flex-direction: column; align-items: flex-start; }
 .history-advanced input { width: 170px; max-width: 100%; min-height: 34px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
 .history-filter-note { flex-basis: 100%; color: var(--muted); }
+
+.rules-contact { text-decoration: underline; text-underline-offset: 3px; }

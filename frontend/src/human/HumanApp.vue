@@ -91,7 +91,7 @@
 
     </main>
 
-    <div v-if="modal" class="modal-backdrop" @click.self="closeModal"><section class="modal" role="dialog" aria-modal="true" :aria-label="t(modalTitle)" @keydown.esc="closeModal"><button class="modal-close" @click="closeModal" :aria-label="t(&quot;关闭&quot;)">×</button>
+    <div v-if="modal" class="modal-backdrop" @click.self="closeModal"><section class="modal" role="dialog" aria-modal="true" :aria-label="t(modalTitle)" @keydown.esc="closeModal"><button v-if="!(modal === 'rules' && requiredFlow)" class="modal-close" @click="closeModal" :aria-label="t(&quot;关闭&quot;)">×</button>
       <template v-if="['replay-export', 'archive-failure'].includes(modal)"><h2>{{ t(modal === 'archive-failure' ? '回放上传失败，请保存回放' : '回放') }}</h2>
         <template v-if="modal === 'archive-failure'"><p role="alert">{{ t('本局回放尚未确认上传成功。请立即下载或复制回放并妥善保存，后续可交由站长审核并手动录入。请勿清除浏览器数据。') }}</p><p v-if="currentFailure" class="small">{{ t('对局编号') }}：{{ currentFailure.run.id }}</p></template>
         <p v-if="currentExport" class="replay-export-summary">{{ currentExport.variant.replace('x', ' × ') }} · {{ number(currentExport.score) }} {{ t("分") }} · {{ t("截至第") }} {{ number(currentExport.moves) }} {{ t("步") }}</p>
@@ -100,7 +100,7 @@
         <label v-if="exportCopyFallback" class="replay-copy-fallback">{{ t("回放代码") }}<textarea readonly :value="currentExport?.text" @focus="$event.target.select()" @click="$event.target.select()"></textarea></label>
       </template>
       <template v-else-if="modal === 'restart'"><h2>{{ t("确定结束这局，重新开始？") }}</h2><p>{{ t("本局 ") }}{{ number(run?.score || 0) }}{{ t(" 分，最大棋块 ") }}{{ number(Math.max(...(run?.board || [0]))) }}{{ t("，用时 ") }}{{ duration(elapsed) }}。</p><p>{{ t("旧局会保留为重开记录。当前棋盘不会从服务器恢复。") }}</p><div class="modal-actions"><button @click="closeModal">{{ t("继续本局") }}</button><button ref="safeButton" class="primary" @click="confirmRestart">{{ t("保存记录并重开") }}</button></div></template>
-      <template v-else-if="modal === 'rules'"><h2>{{ t("对局规则") }}</h2><ul class="rules-list"><li>{{ t("四种棋盘各自保存。同账号、同浏览器、同变体只有一局；") }}<strong>{{ t("不同设备不共享") }}</strong>{{ t("进行中存档。") }}</li><li>{{ t("标准出数：90% 出 2，10% 出 4。正式局") }}<strong>{{ t("禁止悔棋、AI、查表与他人喂招。") }}</strong></li><li>{{ t("随时可去练习板摆盘、手动出数。练习不影响参与排位。") }}</li><li><strong>{{ t("得分超过阈值后必须联网") }}</strong>{{ t("，断线暂停操作。服务器会间隔存档。") }}</li><li>{{ t("服务器会对已上传对局进行保存和验证，但不可恢复本地对局。") }}<strong>{{ t("不要清除浏览器存储") }}</strong>{{ t("，并请为 C 盘预留一些空间。") }}</li><li>{{ t("对局结束时会上传归档。上传失败会提醒保存回放。请联系站长处理。") }}</li></ul></template>
+      <template v-else-if="modal === 'rules'"><h2>{{ t("对局规则") }}</h2><ul class="rules-list"><li>{{ t("四种棋盘各自保存。同账号、同浏览器、同变体只有一局；") }}<strong>{{ t("不同设备不共享") }}</strong>{{ t("进行中存档。") }}</li><li>{{ t("标准出数：90% 出 2，10% 出 4。正式局") }}<strong>{{ t("禁止悔棋、AI、查表与他人喂招。") }}</strong></li><li>{{ t("随时可去练习板摆盘、手动出数。练习不影响参与排位。") }}</li><li><strong>{{ t("得分超过阈值后必须联网") }}</strong>{{ t("，断线暂停操作。服务器会间隔存档。") }}</li><li>{{ t("服务器会对已上传对局进行保存和验证，但不可恢复本地对局。") }}<strong>{{ t("不要清除浏览器存储") }}</strong>{{ t("，并请为 C 盘预留一些空间。") }}</li><li>{{ t("对局结束时会上传归档。上传失败会提醒保存回放。") }} <a class="rules-contact" href="https://2048tables.online/?tab=contact" target="_blank" rel="noopener">{{ t("联系站长") }}</a>{{ t("处理。") }}</li></ul><div v-if="requiredFlow" class="modal-actions"><p v-if="rulesError" role="alert">{{ t(rulesError) }}</p><button ref="safeButton" class="primary" :disabled="confirmingRules" @click="firstVisit.confirm()">{{ t(confirmingRules ? '正在保存…' : '我已阅读并知悉') }}</button></div></template>
       <template v-else-if="modal === 'settings'"><h2>{{ t("设置") }}</h2><p v-if="preferenceSyncStatus === 'error'" role="alert">{{ preferenceSyncMessage(language) }} <button @click="retryAccountPreferences">{{ language === 'zh' ? '重试' : 'Retry' }}</button></p>
         <section class="live-setting"><div><strong>{{ t('直播当前对局') }}</strong><p>{{ t('开启后会创建公开直播间。关闭或离开直播不会影响本局操作。') }}</p></div><label class="setting-toggle"><input type="checkbox" :checked="live.enabled.value" :disabled="!user || !run || !!run?.reason || live.state.value === 'connecting'" @change="toggleLive($event.target.checked)"></label></section>
         <div v-if="live.enabled.value" class="live-setting-status"><span :class="['live-dot',{on:live.state.value==='live'}]"></span><span>{{ t(liveStateLabel) }}<small v-if="run">{{ run.variant.replace('x',' × ') }} · {{ number(run.score) }} {{ t('分') }}</small></span><button v-if="live.room.value" @click="live.share(language)">{{ t('分享直播间') }}</button><a v-if="live.room.value" :href="live.room.value.url" target="_blank" rel="noopener">{{ t('打开直播间') }} ↗</a></div><p v-if="live.notice.value" class="setting-help">{{ t(live.notice.value) }}</p><p class="setting-help">{{ t('直播会公开昵称、头像、棋盘、分数、节点用时和操作') }}</p><p class="setting-help">{{ t('礼物实际消耗的常驻 Token 部分，将有 50% 计入主播的常驻 Token。') }}</p>
@@ -138,6 +138,7 @@ import { SPEED_REFRESH_MS, addSpeedSample, countSpeedSamples } from './speedMetr
 import { createLiveBroadcast } from './liveBroadcast.js';
 import { activeBestScore } from './bestScore.js';
 import { captureLiveAppearance } from './liveAppearance.js';
+import { createFirstVisit } from './firstVisit.js';
 import { createTerminalOverlay } from './terminalOverlay.js';
 
 const AuthPage = defineAsyncComponent(() => import('../features/auth/AuthPage.vue'));
@@ -189,6 +190,8 @@ function displayJson(path, { force = false } = {}) {
 const period = ref('all'), leaders = ref([]), ownLeader = ref(null), boardLoading = ref(false), boardError = ref(''), bests = ref({});
 const currentBest = computed(() => activeBestScore(bests.value, run.value, variant.value));
 const leaderRows = computed(() => Array.from({ length: 10 }, (_, index) => leaders.value[index] || null));
+const firstVisit = createFirstVisit(json);
+const { pending: requiredFlow, busy: confirmingRules, error: rulesError } = firstVisit;
 const authBusy = ref(false), authDialogOpen = ref(false), authDialogMode = ref('login');
 const profileName = ref(initialProfileName());
 const analysisRunId = ref('');
@@ -274,7 +277,7 @@ async function boot() {
     policies.value = nextPolicies; user.value = identity.user || null;
     void activateAccountPreferences(user.value?.id);
     if (user.value) {
-      try { saveTimerSplits((await json('/api/human/me/settings')).timer_splits); } catch { /* cached/default splits remain usable */ }
+      /* Account settings and first-visit state are loaded by the identity watcher. */
     }
     localPreview.value = !!preview.local_preview;
     if (location.pathname.startsWith('/user/') || location.pathname.startsWith('/leaderboard') || location.pathname.startsWith('/analysis')) {
@@ -296,7 +299,7 @@ function openAuthDialog(mode = 'login') { authDialogMode.value = mode; authDialo
 function closeAuthDialog() { authDialogOpen.value = false; }
 async function handleAuthenticated(nextUser) {
   user.value = nextUser; closeAuthDialog(); void activateAccountPreferences(nextUser?.id); practice.value = null;
-  try { saveTimerSplits((await json('/api/human/me/settings')).timer_splits); } catch { /* retain local settings */ }
+
   displayCache.clear();
   if (!location.pathname.startsWith('/user/') && !location.pathname.startsWith('/leaderboard') && !location.pathname.startsWith('/analysis')) { await session.activate(); await Promise.all([loadBests(), loadBoard()]); }
 }
@@ -345,6 +348,7 @@ async function openAnalysisLibrary() {
 }
 
 async function requestRestart() {
+  if (requiredFlow.value) return;
   if (practice.value) { resetPractice(); return; }
   await session.waitForMove();
   if (busy.value) return;
@@ -354,6 +358,7 @@ async function requestRestart() {
 }
 async function confirmRestart() { closeModal(); await session.restart(); }
 function closeModal() {
+  if (modal.value === 'rules' && requiredFlow.value) return;
   if (modal.value === 'archive-failure' && currentFailure.value) session.dismissArchiveFailure(currentFailure.value.run.id);
   modal.value = '';
 }
@@ -392,7 +397,7 @@ function practiceCell(index, button = 0) {
   practice.value = { ...practice.value, board, pending: false };
 }
 function onMove(direction) {
-  if (modal.value || view.value !== 'game') return;
+  if (requiredFlow.value || modal.value || view.value !== 'game') return;
   if (!practice.value) {
     const time = session.now(); inputTimes.value = addSpeedSample(inputTimes.value, time); speedClock.value = time;
     session.play(direction); return;
@@ -409,7 +414,7 @@ function keydown(e) {
   if (e.target.closest?.('.side-body')) return;
   if (e.isComposing || e.ctrlKey || e.metaKey || e.altKey || e.target.isContentEditable || ['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
   if (e.key === 'Escape') { closeModal(); return; }
-  if (modal.value || view.value !== 'game') return;
+  if (requiredFlow.value || modal.value || view.value !== 'game') return;
   if (practice.value && ['Enter','NumpadEnter'].includes(e.code)) {
     e.preventDefault(); e.stopPropagation(); if (!e.repeat) practiceRedo(); return;
   }
@@ -507,6 +512,24 @@ async function goGame() {
   if (location.pathname !== '/' || location.hash !== '#game') history.pushState(null, '', '/#game');
   await showGame();
 }
+const firstVisitLoaded = ref(false);
+let firstVisitLoad = 0;
+watch(() => user.value?.id, async id => {
+  const serial = ++firstVisitLoad;
+  firstVisitLoaded.value = false; firstVisit.reset(id);
+  if (!id) { if (modal.value === 'rules') modal.value = ''; return; }
+  try {
+    const settings = await json('/api/human/me/settings');
+    if (serial !== firstVisitLoad) return;
+    saveTimerSplits(settings.timer_splits); if (Array.isArray(settings.first_visit)) firstVisit.apply(settings.first_visit);
+  } catch { /* Keep required confirmation pending; its POST can recover independently. */ }
+  finally { if (serial === firstVisitLoad) firstVisitLoaded.value = true; }
+});
+watch([requiredFlow, modal, authDialogOpen, firstVisitLoaded], ([flow, current, authOpen, loaded]) => {
+  if (loaded && flow && !current && !authOpen) { modal.value = 'rules'; nextTick(() => safeButton.value?.focus()); }
+
+});
+watch(requiredFlow, (flow, previous) => { if (!flow && previous && modal.value === 'rules') modal.value = ''; });
 watch([variant, period], () => { if (!booting.value) loadBoard(); });
 watch(() => run.value?.seq, () => live.publishTail());
 watch(() => [run.value?.variant, run.value?.score], ([key, score]) => {

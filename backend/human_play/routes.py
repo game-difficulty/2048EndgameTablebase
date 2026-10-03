@@ -300,7 +300,9 @@ def personal_bests(request: Request, response: Response):
 @router.get('/me/settings')
 def player_settings(request: Request, response: Response):
     response.headers['Cache-Control'] = 'private, no-store'
-    return call(service.player_settings, require_user(request)['id'])
+    from backend.profile.first_visit import read_flows
+    user_id = require_user(request)['id']
+    return {**call(service.player_settings, user_id), "first_visit": read_flows(user_id)}
 
 
 @router.get('/me/verse-claim')
@@ -432,3 +434,16 @@ async def attach_verse_replay(run_id: str, request: Request):
         raise HTTPException(408, "upload_timeout") from exc
     finally:
         await release_slot(token)
+
+
+@router.post('/me/first-visit/{flow}')
+def complete_first_visit(flow: str, request: Request, response: Response, payload: dict):
+    from backend.profile.first_visit import complete_flow
+    response.headers['Cache-Control'] = 'private, no-store'
+    user_id = require_user(request)['id']
+    if set(payload) != {'version', 'status'} or not isinstance(payload.get('status'), str):
+        raise HTTPException(422, 'invalid_first_visit_flow')
+    try:
+        return {"first_visit": complete_flow(user_id, flow, payload['version'], payload['status'])}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
