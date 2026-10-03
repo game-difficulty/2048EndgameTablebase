@@ -10,6 +10,31 @@
     "title": "Announcements",
     "history": "Past Announcements",
     "dismiss": "Dismiss this announcement",
+    "octoberUpdate": {
+      "title": "October update: a dedicated Tables site, public duels and better analysis",
+      "summary": "October update: the dedicated Tables site, tournaments and public duels, board-sum tablebases, 3×3 result cards, and improvements to replays, livestreams and touch controls. Read the announcement.",
+      "intro": "Since Play opened on September 29, we have continued improving practice, games, analysis and spectating. Here is a roundup of the main updates now available and where to find them.",
+      "features": {
+        "tables": "A dedicated Tables site: Trainer, Tester, Battles, Replay, Analysis and Settings now live at tables.2048tables.online, with Analysis in its own tab. The main homepage keeps six core entries, while Live and Tournaments stay on the right of the top bar. Accounts and core preferences, including theme, language, tile colors, font size and animations, are shared. Playback speed and 4-spawn probability remain local to each domain.",
+        "competition": "Tournaments and project practice: the event center brings together enrollment, schedules, matchups and statistics. Match rooms support BO3, BO5, BO7 and custom pick/ban workflows. Project practice adds more special tiles and rules, with clearer bilingual descriptions, touch controls and board layouts so you can practice before competing.",
+        "duels": "Two public duel modes: signed-in players can choose an ordered set of projects in Free duels and start once both players are ready, without a draft or referee. Time attack supports four board sizes, tile targets or exact board-sum targets, and repeated attempts within a shared time limit; the fastest valid single-game PB wins. PB time is confirmed by the server and includes network latency. Disconnecting does not pause the clock.",
+        "sumGoals": "New board-sum tablebases: 3×3 with a target sum of 1790 and 2×4 with a target sum of 894 are available for training, testing and replay analysis. Both are unpruned and use their formation's 1× rate. Board sum means the sum of tile values, not the game score. These two tables are not yet available in tablebase Battles. The quota guide also lists queryable layer ranges.",
+        "analysis": "Analysis and result cards: analysis history is paginated, with original move numbers, agreement and replay links for each stage instead of internal file IDs. We also fixed cases where completed jobs remained marked as running. Play can now generate cards for 3×3-1024 and 3×3 board-sum-1790 analyses. Grades combine geometric mean move accuracy, Perfect rate, max combo and time, with linear interpolation between thresholds. Existing analyses work without another paid analysis. The 4×4 grading rules are unchanged.",
+        "play": "Game history and controls: filter history by score, date and source; restarted archives are hidden by default, and final-board previews show the board sum. Touch response, spawn animation and 3×3 tile proportions have improved, along with end-of-game restart controls and the first-2048 celebration. Long games, background pages and statistics views also use fewer resources.",
+        "replay": "Replay player: the player follows the main sites' light/dark appearance and tile palette. Board-size detection, 3×3 text sizing and spacing have been improved for more consistent playback when opening analyzed stages.",
+        "live": "Livestreams and spectating: the live lobby brings together AI, player and tournament streams. Tournament viewers can follow rules, drafts, clocks and results; supported event rooms also offer predictions and personal settlement summaries. We improved layout across board shapes and fixed several game-switch, frozen-stream and clock-jump issues. Chat messages can be longer too. Public Free duels and Time attack do not count as official tournament results or offer tournament predictions.",
+        "accounts": "Accounts and maintenance: fixes address settings stuck as unsynced and brief theme or language changes when returning to a page. Moderators can now help with applications, account activation and profile reviews. As compensation for this maintenance, every account's weekly free allowance has been refilled once to its own maximum, without changing its scheduled weekly refresh time."
+      },
+      "notice": "Use the main site's new entries to reach Tables and the lobbies. Accounts and core appearance preferences can sync, but an ongoing game still depends on its current browser's local save and cannot be resumed on another device. If a record, replay or analysis fails, save the replay first and report the problem through Contact us.",
+      "links": {
+        "tables": "Tables",
+        "play": "Play",
+        "events": "Tournaments",
+        "duels": "Free duels",
+        "timeAttack": "Time attack",
+        "live": "Live lobby"
+      }
+    },
     "playBeta": {
       "title": "Play is open: verified games, complete archives and progress analysis",
       "summary": "Play is now open with four board variants, complete replay archives, player profiles, shareable statistics, replay analysis and 2048Verse history migration. Read the announcement.",

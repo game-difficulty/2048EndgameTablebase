@@ -17,7 +17,12 @@
           <li v-for="key in selected.featureKeys" :key="key">{{ $t(key) }}</li>
         </ul>
         <p v-if="selected.noticeKey" class="announcement-notice">{{ $t(selected.noticeKey) }}</p>
-        <a v-if="siteUrl" :href="siteUrl" target="_blank" rel="noopener noreferrer" class="live-link">
+        <div v-if="selected.links?.length" class="announcement-links">
+          <a v-for="link in selected.links" :key="link.url" :href="link.url" target="_blank" rel="noopener noreferrer" class="live-link">
+            {{ $t(link.labelKey) }}<ExternalLink :size="16" />
+          </a>
+        </div>
+        <a v-else-if="siteUrl" :href="siteUrl" target="_blank" rel="noopener noreferrer" class="live-link">
           <Radio :size="19" />{{ siteUrl }}<ExternalLink :size="16" />
         </a>
         <TokenSources v-if="selected.rewardCopyKey" :copy-key="selected.rewardCopyKey" />
@@ -59,6 +64,8 @@ article p { line-height: 1.75; font-size: var(--font-ui-sm); color: var(--text-s
 .announcement-notice { padding: 0.85rem 1rem; border-left: 3px solid var(--accent); background: var(--bg-card); }
 .live-link { display: inline-flex; align-items: center; gap: 0.5rem; margin: 0.8rem 0 1.5rem; color: var(--accent); font-weight: 750; }
 .live-link:hover { text-decoration: underline; }
+.announcement-links { display: flex; flex-wrap: wrap; gap: 0.8rem 1.5rem; margin: 1rem 0; }
+.announcement-links .live-link { margin: 0; font-size: var(--font-ui-sm); }
 article > button { width: fit-content; display: inline-flex; align-items: center; gap: 0.4rem; }
 .token-sources { border-top: 1px solid var(--border-main); padding-top: 1.2rem; margin-bottom: 1.4rem; }
 </style>

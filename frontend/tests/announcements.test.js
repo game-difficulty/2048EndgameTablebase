@@ -15,8 +15,21 @@ test('catalog has unique stable IDs and all bilingual content', () => {
       for (const key of contentKeys) assert.equal(typeof value(key), 'string');
       if (item.rewardCopyKey) for (const part of ['title','note','recharge','lucky','envelope','weekly','trophy']) assert.equal(typeof value(`${item.rewardCopyKey}.${part}`), 'string');
       assert.equal(new URL(item.siteUrl || item.liveUrl).protocol, 'https:');
+      for (const link of item.links || []) {
+        assert.equal(typeof value(link.labelKey), 'string');
+        assert.equal(new URL(link.url).protocol, 'https:');
+      }
     }
   }
+});
+test('October update is newest, preserves both earlier notices and resurfaces after an older dismissal', () => {
+  assert.equal(latestAnnouncement.id, '2026-10-03-tables-competition-analysis');
+  assert.equal(ANNOUNCEMENTS.length, 3);
+  assert.equal(findAnnouncement('2026-09-29-play-beta').date, '2026-09-29');
+  assert.equal(findAnnouncement('2026-09-16-live-rewards').date, '2026-09-16');
+  const storage = { getItem: () => '2026-09-29-play-beta' };
+  assert.equal(wasDismissed(storage, latestAnnouncement.id), false);
+  assert.equal(latestAnnouncement.links.length, 6);
 });
 test('dismiss only current notice; blocked storage does not break navigation', () => {
   const values = new Map();

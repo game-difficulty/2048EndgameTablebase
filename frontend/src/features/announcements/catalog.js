@@ -3,6 +3,35 @@ import { TAB_IDS, TAB_REGISTRY } from '../../app/tabRegistry.js';
 // Keep published IDs and copy revisions stable so archived notices remain readable.
 export const ANNOUNCEMENTS = Object.freeze([
   Object.freeze({
+    id: '2026-10-03-tables-competition-analysis',
+    date: '2026-10-03',
+    titleKey: 'announcements.octoberUpdate.title',
+    summaryKey: 'announcements.octoberUpdate.summary',
+    bodyKeys: Object.freeze(['announcements.octoberUpdate.intro']),
+    featureKeys: Object.freeze([
+      'announcements.octoberUpdate.features.tables',
+      'announcements.octoberUpdate.features.competition',
+      'announcements.octoberUpdate.features.duels',
+      'announcements.octoberUpdate.features.sumGoals',
+      'announcements.octoberUpdate.features.analysis',
+      'announcements.octoberUpdate.features.play',
+      'announcements.octoberUpdate.features.replay',
+      'announcements.octoberUpdate.features.live',
+      'announcements.octoberUpdate.features.accounts',
+    ]),
+    noticeKey: 'announcements.octoberUpdate.notice',
+    siteUrl: 'https://tables.2048tables.online/',
+    links: Object.freeze([
+      Object.freeze({ labelKey: 'announcements.octoberUpdate.links.tables', url: 'https://tables.2048tables.online/' }),
+      Object.freeze({ labelKey: 'announcements.octoberUpdate.links.play', url: 'https://play.2048tables.online/' }),
+      Object.freeze({ labelKey: 'announcements.octoberUpdate.links.events', url: 'https://tournament.2048tables.online/events' }),
+      Object.freeze({ labelKey: 'announcements.octoberUpdate.links.duels', url: 'https://tournament.2048tables.online/duels' }),
+      Object.freeze({ labelKey: 'announcements.octoberUpdate.links.timeAttack', url: 'https://tournament.2048tables.online/time-attacks' }),
+      Object.freeze({ labelKey: 'announcements.octoberUpdate.links.live', url: 'https://live.2048tables.online/lobby' }),
+    ]),
+    target: Object.freeze({ type: 'announcement', id: '2026-10-03-tables-competition-analysis' }),
+  }),
+  Object.freeze({
     id: '2026-09-29-play-beta',
     date: '2026-09-29',
     titleKey: 'announcements.playBeta.title',
