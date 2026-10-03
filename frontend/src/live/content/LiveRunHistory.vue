@@ -1,6 +1,6 @@
 <template>
   <aside class="run-history" :class="{ 'run-history-horizontal': horizontal }">
-    <header><h2>{{ t('最近对局', 'Recent runs') }}</h2><button @click="collapsed = !collapsed" :aria-expanded="!collapsed" :aria-label="collapsed ? t('展开最近对局', 'Expand recent runs') : t('收起最近对局', 'Collapse recent runs')">{{ collapsed ? '+' : '−' }}</button></header>
+    <header><h2>{{ t('最近对局', 'Recent runs') }}</h2><div class="history-actions"><button :disabled="loading" @click="load(page)">{{ t('刷新', 'Refresh') }}</button><button @click="collapsed = !collapsed" :aria-expanded="!collapsed" :aria-label="collapsed ? t('展开最近对局', 'Expand recent runs') : t('收起最近对局', 'Collapse recent runs')">{{ collapsed ? '+' : '−' }}</button></div></header>
     <div v-show="!collapsed" class="history-body">
       <div class="history-list">
       <p v-if="!history.length">{{ t('等待第一局完成', 'Waiting for the first completed run') }}</p>
@@ -9,7 +9,7 @@
         <time>{{ new Date(game.ended * 1000).toLocaleString([], { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }}</time>
       </a>
       </div>
-      <nav :aria-label="t('最近对局分页', 'Recent runs pagination')"><button :disabled="page <= 1 || loading" :aria-label="t('上一页最近对局', 'Previous page of recent runs')" @click="load(page - 1)">‹</button><span>{{ page }} / {{ pages }}</span><button :disabled="page >= pages || loading" :aria-label="t('下一页最近对局', 'Next page of recent runs')" @click="load(page + 1)">›</button><button :disabled="loading" @click="load(page)">{{ t('刷新', 'Refresh') }}</button></nav>
+      <nav :aria-label="t('最近对局分页', 'Recent runs pagination')"><button :disabled="page <= 1 || loading" :aria-label="t('向前十页最近对局', 'Back ten pages of recent runs')" @click="load(page - 10)">−10</button><button :disabled="page <= 1 || loading" :aria-label="t('上一页最近对局', 'Previous page of recent runs')" @click="load(page - 1)">‹</button><span>{{ page }} / {{ pages }}</span><button :disabled="page >= pages || loading" :aria-label="t('下一页最近对局', 'Next page of recent runs')" @click="load(page + 1)">›</button><button :disabled="page >= pages || loading" :aria-label="t('向后十页最近对局', 'Forward ten pages of recent runs')" @click="load(page + 10)">+10</button></nav>
     </div>
   </aside>
 </template>
@@ -33,7 +33,7 @@ function receive(data) {
 async function load(nextPage) {
   const id = ++request; loading.value = true;
   try {
-    const data = await api(`/history?page=${nextPage}`);
+    const data = await api(`/history?page=${Math.max(1, Math.min(pages.value, nextPage))}`);
     if (id !== request) return;
     history.value = data.history; page.value = data.page; total.value = data.total;
   } catch { if (id === request) emit('notice', t('历史加载失败，请重试', 'Could not load history')); }
@@ -47,11 +47,12 @@ onUnmounted(() => { request++; });
 header { display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px; }h2 { font-size:16px;margin:0; }
 a { display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--border-main);text-decoration:none;color:inherit; }
 a span { display:flex;flex-direction:column;gap:4px; }b { font-size:13px; }small,time,p { font-size:11px;color:var(--text-secondary); }time { text-align:right; }
-nav { display:flex;gap:8px;align-items:center;justify-content:center;margin-top:14px;font-size:12px; }button { padding:4px 9px; }button:disabled { opacity:.35; }
+nav { display:flex;gap:4px;align-items:center;justify-content:center;margin-top:14px;font-size:12px;white-space:nowrap; }button { padding:4px 6px; }button:disabled { opacity:.35; }
+.history-actions { display:flex;align-items:center;gap:6px;flex:none; }header h2 { white-space:nowrap; } .history-actions button { font-size:11px;white-space:nowrap; }
 .run-history-horizontal { position:relative;display:flex;flex-direction:column;padding:10px 12px; }
 .run-history-horizontal header { flex-shrink:0;height:28px;margin-bottom:8px; }
 .run-history-horizontal h2 { font-size:14px; }
-.run-history-horizontal header > button { min-width:28px;min-height:28px;height:28px;padding:0; }
+.run-history-horizontal .history-actions button { min-width:28px;min-height:28px;height:28px;padding:0 6px; }
 .run-history-horizontal .history-body { flex:1;min-height:0; }
 .run-history-horizontal .history-list { display:grid;grid-template-columns:repeat(5,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:6px 8px;height:100%; }
 .run-history-horizontal .history-list > p { grid-column:1 / -1;grid-row:1 / -1;align-self:center;text-align:center;margin:0; }
@@ -61,6 +62,6 @@ nav { display:flex;gap:8px;align-items:center;justify-content:center;margin-top:
 .run-history-horizontal b { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:14px; }
 .run-history-horizontal small,.run-history-horizontal time { font-size:10px;line-height:12px; }
 .run-history-horizontal time { position:absolute;right:8px;bottom:5px;white-space:nowrap; }
-.run-history-horizontal nav { position:absolute;right:48px;top:10px;height:28px;margin:0;gap:6px;font-size:11px; }
+.run-history-horizontal nav { position:absolute;right:140px;top:10px;height:28px;margin:0;gap:6px;font-size:11px; }
 .run-history-horizontal nav button { min-width:24px;min-height:26px;padding:3px 6px; }
 </style>
