@@ -20,4 +20,5 @@ class ResultPolicy:
             if yt and wt:
                 winner = 'yellow' if yellow.elapsed_ms < white.elapsed_ms else 'white' if white.elapsed_ms < yellow.elapsed_ms else 'draw'
                 return y, w, winner, 'race_elapsed'
+            return y, w, 'draw', 'race_unfinished'
         return y, w, 'yellow' if y > w else 'white' if w > y else 'draw', self.metric

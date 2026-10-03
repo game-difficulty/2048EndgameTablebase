@@ -9,7 +9,7 @@ export function settlementMetric(result, side, project = {}, lang = 'zh') {
   if (!result || reason === 'late_forfeit') return { label, value: '—', note: zh ? '未开赛' : 'NOT PLAYED' };
   const outcome = result[`${side}_outcome`];
   const conceded = reason === `${side}_surrendered` || outcome === 'surrendered';
-  const expired = reason === `${side}_clock_expired` || reason === 'both_clocks_expired';
+  const expired = outcome === 'time_limit' || reason === `${side}_clock_expired` || reason === 'both_clocks_expired';
   const note = result.corrected ? (zh ? '裁判修正' : 'ADJUDICATED') : conceded ? (zh ? '认输' : 'CONCEDED') : expired ? (zh ? '包干时间耗尽' : 'TEAM TIME EXPIRED') : '';
   if (race && !result.corrected) {
     if (outcome !== 'target_reached') return { label, value: 'DNF', note: note || (zh ? '未完成' : 'NOT FINISHED') };

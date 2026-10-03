@@ -43,15 +43,17 @@ def test_higher_refund_is_only_credited_after_normal_completion(tmp_path):
 def test_higher_lead_cannot_rescue_exhausted_team_budget(tmp_path):
     service,players=setup_game(tmp_path,'tournament-cargo-transport-4x4')
     service.sync_client_game('MATCH5',players[3],**packet(service,players[3],finished=True,value=2,elapsed=1000))
-    final=packet(service,players[0],finished=True,value=3,elapsed=70000)
+    service.sync_client_game('MATCH5',players[0],**packet(service,players[0],value=3,elapsed=2000))
+    final=packet(service,players[0],sequence=2,finished=True,value=4,elapsed=70000)
     final['checkpoint']['metric_history']=[[0,0],[1500,3]]
     set_yellow_budget(service,70)
     response=service.sync_client_game('MATCH5',players[0],**final)
     result=response['competition']
     assert response['stopped']
-    assert result['status']=='FINISHED'
-    assert result['match']['finish_reason']=='yellow_clock_expired'
-    assert result['match']['series_score']['white']==3
+    assert result['status']=='GAME_A_RESULT'
+    assert result['match']['current_result']['winner_side']=='yellow'
+    assert result['match']['current_result']['yellow_score']==3  # Late score 4 was rejected.
+    assert result['match']['series_score']['yellow']==1
     assert result['match']['clocks']['yellow']['remaining_ms']==0
     with service.database.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM competition_time_refunds").fetchone()[0]==0

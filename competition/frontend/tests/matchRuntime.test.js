@@ -9,6 +9,24 @@ const bootstrap = project => ({ instance_id: 'game:yellow', project_ref: project
 const options = { now: () => 0, evilSpawn: async board => ({ index: board.indexOf(0), value: 2 }) };
 const project = order => TOURNAMENT_PROJECTS.find(item => item.order === order);
 
+test('team budget emits one final checkpoint with the frozen score for every project', () => {
+  for (const item of TOURNAMENT_PROJECTS) {
+    let time=0;
+    const runtime=new MatchRuntime({...bootstrap(item),team_remaining_at_start_ms:1000},{now:()=>time});
+    runtime.accept();
+    const before=runtime.packet();
+    time=1000;
+    const end=runtime.tick();
+    assert.equal(end.outcome,'time_limit',item.id);
+    assert.equal(end.finished,true);
+    assert.equal(end.elapsed_ms,1000);
+    assert.equal(end.result_value,before.result_value);
+    assert.deepEqual(end.payload.board,before.payload.board);
+    assert.equal(runtime.tick(),null);
+    assert.equal(runtime.move('left'),null);
+  }
+});
+
 test('Higher time is never extended in play; checkpoint timelines remain immutable', () => {
   let time=0;
   const runtime=new MatchRuntime({...bootstrap(project(1)),team_remaining_at_start_ms:60000},{now:()=>time});
@@ -44,6 +62,22 @@ test('surrender freezes time and preserves the current score and board', () => {
   assert.equal(runtime.elapsed(), 1234);
   assert.equal(runtime.move('left'), null);
   assert.equal(runtime.action('restart'), null);
+});
+
+test('EvilGen finishing after the budget does not add a late move', async () => {
+  let time=0, resolveSpawn;
+  const runtime=new MatchRuntime({...bootstrap(TOURNAMENT_PROJECTS.find(p=>p.evilSpawn)),team_remaining_at_start_ms:1000},
+    {now:()=>time,evilSpawn:()=>new Promise(resolve=>resolveSpawn=resolve)});
+  runtime.game.board=[2,2,...Array(14).fill(0)];
+  const board=[...runtime.game.board], score=runtime.game.score;
+  const pending=runtime.move('left');
+  assert.ok(resolveSpawn);
+  time=1000;
+  resolveSpawn({index:1,value:2});
+  const end=await pending;
+  assert.equal(end.outcome,'time_limit');
+  assert.deepEqual(runtime.game.board,board);
+  assert.equal(runtime.game.score,score);
 });
 
 for (const item of TOURNAMENT_PROJECTS) test(`${item.order}: local deterministic execution and checkpoint continuation`, async () => {

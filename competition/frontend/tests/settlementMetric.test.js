@@ -15,3 +15,11 @@ test('DNF, missing times, forfeits and corrections do not look like zero-second 
   assert.equal(settlementMetric({reason:'yellow_surrendered',yellow_score:28},'yellow').value,'28');
   assert.equal(settlementMetric({corrected:true,yellow_score:100},'yellow',project).label,'裁定成绩');
 });
+
+test('exhausted teams show frozen Higher metrics or Faster DNF on both sites',()=>{
+  const result={yellow_outcome:'time_limit',yellow_score:1234};
+  assert.deepEqual(settlementMetric(result,'yellow'),{label:'得分',value:'1,234',note:'包干时间耗尽'});
+  const race=settlementMetric({...result,reason:'race_unfinished'},'yellow',{},'en');
+  assert.equal(race.value,'DNF');
+  assert.equal(race.note,'TEAM TIME EXPIRED');
+});

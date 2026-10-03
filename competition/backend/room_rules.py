@@ -63,7 +63,7 @@ def normalize_rules(raw=None, *, pool_size=32, team_clock_ms=1800000, draft_seco
                 game_keys=[chr(65+i) for i in range(count)], steps=steps, minimum_pool_size=minimum,
                 series_mode=mode, wins_required=count//2+1 if mode=='best_of' else None,
                 lineup_policy=lineup, final_selection=selection,
-                team_clock_seconds=integer('team_clock_seconds', team_clock_ms//1000, 30, 86400),
+                team_clock_seconds=integer('team_clock_seconds', {'bo5': 3600, 'bo7': 4800}.get(preset, team_clock_ms//1000), 30, 86400),
                 draft_seconds=integer('draft_seconds', draft_seconds, 5, 3600),
                 lineup_seconds=integer('lineup_seconds', lineup_seconds, 5, 3600))
 

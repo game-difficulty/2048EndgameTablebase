@@ -91,7 +91,10 @@ def test_every_formal_project_exposes_seed_and_accepts_states_without_rule_compu
     upload(service, players[0], sequence=4, finished=True, value=500)
     result = upload(service, players[3], sequence=3, finished=True, value=200)['competition']
     assert result['status'] == 'GAME_A_RESULT'
-    assert result['match']['current_result']['winner_side'] == 'yellow'
+    with service.database.transaction() as db:
+        row=db.execute("SELECT * FROM competition_game_sessions WHERE side='yellow'").fetchone()
+        race=service._adapter_for_session_row(row).descriptor.result_policy.race
+    assert result['match']['current_result']['winner_side'] == ('draw' if race else 'yellow')
 
 
 def test_old_duplicate_and_unauthorized_uploads_never_replace_latest_state(tmp_path):

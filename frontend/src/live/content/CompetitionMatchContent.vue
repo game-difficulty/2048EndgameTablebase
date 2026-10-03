@@ -139,7 +139,7 @@ const resultReason=result=>{
   if(!result)return'';
   if(result.reason==='yellow_surrendered')return t('黄方认输，保留认输时成绩','Yellow conceded; score at concession retained');
   if(result.reason==='white_surrendered')return t('白方认输，保留认输时成绩','White conceded; score at concession retained');
-  const labels={score:['按得分结算','Decided by score'],board_sum:['按盘面和结算','Decided by board sum'],race_target:['率先达成目标','First to target'],race_elapsed:['双方达标，按完成用时结算','Both finished; decided by elapsed time'],delivered_cargo:['按送出数量结算','Decided by cargo delivered'],yellow_clock_expired:['黄方包干时间耗尽','Yellow team clock expired'],white_clock_expired:['白方包干时间耗尽','White team clock expired'],both_clocks_expired:['双方包干时间耗尽','Both team clocks expired']};
+  const labels={score:['按得分结算','Decided by score'],board_sum:['按盘面和结算','Decided by board sum'],race_target:['率先达成目标','First to target'],race_elapsed:['双方达标，按完成用时结算','Both finished; decided by elapsed time'],race_unfinished:['双方均未完成，平局','Neither player finished; draw'],delivered_cargo:['按送出数量结算','Decided by cargo delivered'],yellow_clock_expired:['黄方包干时间耗尽','Yellow team clock expired'],white_clock_expired:['白方包干时间耗尽','White team clock expired'],both_clocks_expired:['双方包干时间耗尽','Both team clocks expired']};
   const label=labels[result.reason];return label?(props.lang==='zh'?label[0]:label[1]):'';
 };
 const winnerLabel=computed(()=>match.value?.public_result?.winner_side==='yellow'?t('黄方获胜','YELLOW WINS'):match.value?.public_result?.winner_side==='white'?t('白方获胜','WHITE WINS'):t('比赛完赛','MATCH COMPLETE'));

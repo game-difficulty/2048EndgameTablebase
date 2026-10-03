@@ -1009,6 +1009,8 @@ class CompetitionService:
             if targets:
                 stop_ms=min(targets)
                 for side,state in [('yellow',yellow_state),('white',white_state)]:
+                    if state.outcome == 'time_limit':
+                        continue  # A later target cannot restore an exhausted team clock.
                     db.execute('UPDATE competition_team_clocks SET remaining_ms_base=MAX(0,?),running_since=NULL,state=\'stopped\',revision=revision+1 WHERE competition_id=? AND side=?',
                                (int(state.extra['project_clock_start_ms'])-stop_ms,competition_id,side))
                     if state.outcome!='target_reached':
@@ -1070,135 +1072,37 @@ class CompetitionService:
         return self._change_draft_status(db, room, GAME_RESULT_STATUS[game_key])
 
     def _finish_by_clock_expiry(
-        self,
-        db: sqlite3.Connection,
-        room: sqlite3.Row,
-        *,
-        expired_sides: set[str],
-        now: datetime,
+        self, db: sqlite3.Connection, room: sqlite3.Row, *,
+        expired_sides: set[str], now: datetime,
     ) -> sqlite3.Row:
-        competition_id = str(room["id"])
-        control = self._match_control_row(db, competition_id)
-        current_game = str(control["current_game_key"])
-        for side in (TeamSide.YELLOW.value, TeamSide.WHITE.value):
-            self._stop_clock(
-                db,
-                competition_id,
-                side,
-                now=now,
-                state="expired" if side in expired_sides else "stopped",
-            )
-        current_index = self._game_keys(db, competition_id).index(current_game)
-        session_scores = {
-            str(row["side"]): int(row["score"])
-            for row in db.execute(
-                """
-                SELECT side, score FROM competition_game_sessions
-                WHERE competition_id = ? AND game_key = ?
-                """,
-                (competition_id, current_game),
-            ).fetchall()
-        }
-        if len(expired_sides) == 1:
-            expired_side = next(iter(expired_sides))
-            default_winner = (
-                TeamSide.WHITE.value
-                if expired_side == TeamSide.YELLOW.value
-                else TeamSide.YELLOW.value
-            )
-            finish_reason = f"{expired_side}_clock_expired"
-        else:
-            default_winner = "draw"
-            finish_reason = "both_clocks_expired"
-        for game_key in self._game_keys(db, competition_id)[current_index:]:
-            if db.execute(
-                """
-                SELECT 1 FROM competition_game_results
-                WHERE competition_id = ? AND game_key = ?
-                """,
-                (competition_id, game_key),
-            ).fetchone():
+        """Freeze only exhausted players; the project policy decides the result."""
+        cid = str(room["id"])
+        game = str(self._match_control_row(db, cid)["current_game_key"])
+        for side in expired_sides:
+            session = db.execute(
+                "SELECT * FROM competition_game_sessions WHERE competition_id=? AND game_key=? AND side=?",
+                (cid, game, side)).fetchone()
+            if session is None or session["state"] != "playing":
                 continue
-            db.execute(
-                """
-                INSERT INTO competition_game_results
-                  (competition_id, game_key, yellow_score, white_score,
-                   winner_side, reason, result_revision, published_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-                """,
-                (
-                    competition_id,
-                    game_key,
-                    session_scores.get(TeamSide.YELLOW.value, 0)
-                    if game_key == current_game
-                    else 0,
-                    session_scores.get(TeamSide.WHITE.value, 0)
-                    if game_key == current_game
-                    else 0,
-                    default_winner,
-                    finish_reason,
-                    now.isoformat(),
-                ),
-            )
-        db.execute(
-            """
-            UPDATE competition_game_sessions
-            SET state = 'completed', outcome_reason = ?, completed_at = ?, updated_at = ?
-            WHERE competition_id = ? AND game_key = ? AND state = 'playing'
-            """,
-            (finish_reason, now.isoformat(), now.isoformat(), competition_id, current_game),
-        )
-        result_rows = db.execute(
-            """
-            SELECT winner_side FROM competition_game_results
-            WHERE competition_id = ?
-            """,
-            (competition_id,),
-        ).fetchall()
-        yellow_wins = sum(
-            1 for row in result_rows if str(row["winner_side"]) == TeamSide.YELLOW.value
-        )
-        white_wins = sum(
-            1 for row in result_rows if str(row["winner_side"]) == TeamSide.WHITE.value
-        )
-        draws = sum(1 for row in result_rows if str(row["winner_side"]) == "draw")
-        winner_side = (
-            TeamSide.YELLOW.value
-            if yellow_wins > white_wins
-            else TeamSide.WHITE.value
-            if white_wins > yellow_wins
-            else "draw"
-        )
-        db.execute(
-            """
-            UPDATE competition_match_control
-            SET yellow_wins = ?, white_wins = ?, draws = ?, winner_side = ?,
-                finish_reason = ?, phase_token = ?, updated_at = ?
-            WHERE competition_id = ?
-            """,
-            (
-                yellow_wins,
-                white_wins,
-                draws,
-                winner_side,
-                finish_reason,
-                self._new_phase_token(),
-                now.isoformat(),
-                competition_id,
-            ),
-        )
-        self._append_event(
-            db,
-            competition_id,
-            "match.finished",
-            None,
-            {
-                "reason": finish_reason,
-                "winner_side": winner_side,
-                "expired_sides": sorted(expired_sides),
-            },
-        )
-        return self._change_draft_status(db, room, CompetitionStatus.FINISHED.value)
+            extra = json.loads(session["adapter_state_json"])
+            extra.update(client_completed=True, client_elapsed_ms=int(extra["project_clock_start_ms"]))
+            if not extra["project_clock_start_ms"]:
+                extra["result_value"] = 0  # No playing time in a later game.
+            db.execute("""UPDATE competition_game_sessions SET state='completed',
+                outcome_reason='time_limit', adapter_state_json=?, completed_at=?, updated_at=?
+                WHERE competition_id=? AND game_key=? AND side=?""",
+                (json.dumps(extra), now.isoformat(), now.isoformat(), cid, game, side))
+            self._stop_clock(db, cid, side, now=now, state="expired")
+            self._append_event(db, cid, "project.completed", None,
+                {"game_key": game, "side": side, "outcome": "time_limit",
+                 "score": int(extra.get("result_value", session["score"]))})
+        completed = db.execute(
+            "SELECT COUNT(*) FROM competition_game_sessions WHERE competition_id=? AND game_key=? AND state='completed'",
+            (cid, game)).fetchone()[0]
+        if completed == 2:
+            return self._publish_game_result(db, room, game_key=game, now=now)
+        self._touch(db, cid)
+        return self._room_row(db, room["room_code"])
 
     def _settle_game_clocks(
         self,
@@ -3233,6 +3137,9 @@ class CompetitionService:
             },
         )
         room = self._change_draft_status(db, room, GAME_PLAYING_STATUS[game_key])
+        exhausted = {side for side, budget in project_clock_starts.items() if budget <= 0}
+        if exhausted:
+            room = self._finish_by_clock_expiry(db, room, expired_sides=exhausted, now=now)
         return room
 
     def sync_client_game(self, room_code, principal, *, instance_id, sequence, phase_token,
@@ -3298,9 +3205,13 @@ class CompetitionService:
                 raise CompetitionError("STALE_PHASE", "Refresh the current match phase.", 409)
             room, settled = self._settle_game_clocks(db, room, now=now)
             if settled:
-                return {"instance_id": instance_id, "accepted_sequence": accepted,
-                        "stopped": True, "competition": self._snapshot(db, room, principal)}
-            if elapsed_ms >= int(extra['project_clock_start_ms']):
+                session = db.execute('SELECT * FROM competition_game_sessions WHERE competition_id=? AND instance_id=?',
+                                     (competition_id, instance_id)).fetchone()
+                if session['state'] != 'playing' or room['status'] != GAME_PLAYING_STATUS[game_key]:
+                    return {"instance_id": instance_id, "accepted_sequence": accepted,
+                            "stopped": True, "competition": self._snapshot(db, room, principal)}
+            budget = int(extra['project_clock_start_ms'])
+            if elapsed_ms > budget or (elapsed_ms == budget and not (finished and outcome == 'time_limit')):
                 raise CompetitionError('TEAM_CLOCK_EXPIRED', 'The team time budget has expired.', 409)
             if outcome == 'surrendered':
                 opponent = db.execute("SELECT state,outcome_reason FROM competition_game_sessions WHERE competition_id=? AND game_key=? AND side!=?", (competition_id, game_key, session['side'])).fetchone()

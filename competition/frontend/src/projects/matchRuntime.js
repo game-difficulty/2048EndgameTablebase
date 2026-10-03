@@ -120,7 +120,13 @@ export class MatchRuntime {
     const result = this.game.move(direction);
     const finish = value => value.changed || this.game.revision !== revision ? this.accept() : null;
     if (!result?.then) return finish(result);
-    return result.then(finish, error => { this.restore(before); throw error; });
+    return result.then(value => {
+      if (this.elapsed() >= this.budget()) {
+        this.restore(before);
+        return this.tick();
+      }
+      return finish(value);
+    }, error => { this.restore(before); throw error; });
   }
   action(action) {
     if (!this.playable()) return null;
@@ -138,6 +144,11 @@ export class MatchRuntime {
     return null;
   }
   tick() {
+    if (this.running && !this.completed() && this.elapsed() >= this.budget()) {
+      this.game.finished = true;
+      this.game.outcome = 'time_limit';
+      return this.accept();
+    }
     return null;
   }
   stopRace() {

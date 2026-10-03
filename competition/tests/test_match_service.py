@@ -245,7 +245,7 @@ def test_three_games_progress_to_finished(service: CompetitionService) -> None:
     assert len(final["match"]["results"]) == 3
 
 
-def test_team_clock_expiry_forfeits_all_remaining_games(
+def test_team_clock_expiry_stops_only_exhausted_player(
     service: CompetitionService,
 ) -> None:
     players = prepare_game_a(service)
@@ -264,11 +264,9 @@ def test_team_clock_expiry_forfeits_all_remaining_games(
         )
     assert service.settle_deadline("MATCH5") is True
     finished = service.snapshot("MATCH5", players[0])
-    assert finished["status"] == CompetitionStatus.FINISHED.value
-    assert finished["match"]["winner_side"] == "white"
-    assert finished["match"]["finish_reason"] == "yellow_clock_expired"
-    assert [result["winner_side"] for result in finished["match"]["results"]] == [
-        "white",
-        "white",
-        "white",
-    ]
+    assert finished["status"] == 'GAME_A_PLAYING'
+    assert finished['match']['sessions']['yellow']['finished']
+    assert not finished['match']['sessions']['white']['finished']
+    assert finished['match']['clocks']['yellow']['remaining_ms'] == 0
+    assert finished['match']['clocks']['white']['remaining_ms'] > 0
+    assert finished['match']['results'] == []
