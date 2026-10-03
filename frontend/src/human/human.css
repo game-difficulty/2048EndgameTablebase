@@ -781,3 +781,16 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .history-filter-note { flex-basis: 100%; color: var(--muted); }
 
 .rules-contact { text-decoration: underline; text-underline-offset: 3px; }
+
+/* Match the explicit native date-picker scheme used by the archive form. */
+.history-advanced input[type="date"] { color-scheme: dark; }
+:root:not([data-theme="dark"]) .history-advanced input[type="date"] { color-scheme: light; }
+.history-page-direction { display: flex; gap: 5px; }
+.history-page-jump { grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+.history-page-jump input { width: 72px; min-width: 0; text-align: center; }
+.history-page-jump span { color: var(--muted); }
+@media (max-width: 560px) {
+  .history-pagination { column-gap: 5px; }
+  .history-page-direction { gap: 3px; }
+  .history-page-direction .history-page-nav { min-width: 30px; padding: 6px; }
+}

@@ -6,6 +6,7 @@ import { ensureStoredLanguage } from '../services/preferences/languagePreference
 const preferences = createLocalStorageStore({ key: 'user-preferences', version: 1, defaultValue: {} });
 export const language = ref('zh');
 const en = {
+  '向前 10 页': 'Back 10 pages', '向后 10 页': 'Forward 10 pages', '跳转页码': 'Page number', '跳转': 'Go', '总页数': 'Total pages',
   '我已阅读并知悉': 'I have read and understood', '正在保存…': 'Saving…',
   '确认未能保存，请联网后重试。': 'Could not save your confirmation. Please reconnect and try again.',
   '对局结束时会上传归档。上传失败会提醒保存回放。': 'The game is archived when it ends. If uploading fails, you will be reminded to save the replay.',

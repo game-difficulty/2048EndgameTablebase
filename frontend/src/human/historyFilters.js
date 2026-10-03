@@ -16,3 +16,13 @@ export function historyFilterParams(f) {
   if (result.time_from && result.time_to && Number(result.time_from) >= Number(result.time_to)) throw new Error('invalid');
   return result;
 }
+
+export function completeHistoryDates(filters, changed) {
+  const other = changed === 'from' ? 'to' : 'from';
+  if (filters[changed] && !filters[other]) filters[other] = filters[changed];
+}
+export function historyPageTarget(value, count) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || String(value).trim() === '') return null;
+  return Math.max(1, Math.min(number, count));
+}

@@ -38,8 +38,8 @@
           <label>{{ t('最低分（含）') }}<input v-model="filterDraft.minScore" type="number" min="0" step="1" inputmode="numeric" placeholder="0"></label>
           <label>{{ t('来源') }}<select v-model="filterDraft.source"><option value="all">{{ t('全部来源') }}</option><option value="native">{{ t('本站对局') }}</option><option value="verse">{{ t('Verse 继承') }}</option><option value="manual">{{ t('补录') }}</option></select></label>
           <label>{{ t('筛选时间') }}<select v-model="filterDraft.timeField"><option value="ended">{{ t('结束时间') }}</option><option value="started">{{ t('开始时间') }}</option></select></label>
-          <label>{{ t('起始日期') }}<input v-model="filterDraft.from" type="date"></label>
-          <label>{{ t('截止日期（含当天）') }}<input v-model="filterDraft.to" type="date"></label>
+          <label>{{ t('起始日期') }}<input v-model="filterDraft.from" type="date" @change="completeHistoryDates(filterDraft, 'from')"></label>
+          <label>{{ t('截止日期（含当天）') }}<input v-model="filterDraft.to" type="date" @change="completeHistoryDates(filterDraft, 'to')"></label>
           <button type="submit">{{ t('应用筛选') }}</button><button type="button" @click="resetFilters">{{ t('清除筛选') }}</button>
           <small class="history-filter-note">{{ t('日期按本地时区；未知开始时间的记录不参与开始日期筛选。') }}</small>
           <p v-if="filterError" class="error-text">{{ t(filterError) }}</p>
@@ -61,7 +61,8 @@
         </div>
       </div>
       <nav v-if="historyTotal" class="history-pagination" :aria-label="t('历史记录分页')" :aria-busy="loading">
-        <button type="button" class="history-page-nav" :disabled="currentPage <= 1 || loading" :aria-label="t('上一页')" @click="goToPage(currentPage - 1)">‹</button>
+        <div class="history-page-direction"><button type="button" class="history-page-nav" :disabled="currentPage <= 1 || loading" :aria-label="t('向前 10 页')" :title="t('向前 10 页')" @click="goToPage(currentPage - 10)">‹‹</button>
+        <button type="button" class="history-page-nav" :disabled="currentPage <= 1 || loading" :aria-label="t('上一页')" @click="goToPage(currentPage - 1)">‹</button></div>
         <div class="history-pagination-center">
           <span class="history-page-summary">{{ t(`第 ${historyStart}–${historyEnd} 条，共 ${historyTotal} 条`) }}</span>
           <div class="history-page-numbers">
@@ -71,7 +72,9 @@
             </template>
           </div>
         </div>
-        <button type="button" class="history-page-nav" :disabled="currentPage >= historyPageCount || loading" :aria-label="t('下一页')" @click="goToPage(currentPage + 1)">›</button>
+        <div class="history-page-direction"><button type="button" class="history-page-nav" :disabled="currentPage >= historyPageCount || loading" :aria-label="t('下一页')" @click="goToPage(currentPage + 1)">›</button>
+        <button type="button" class="history-page-nav" :disabled="currentPage >= historyPageCount || loading" :aria-label="t('向后 10 页')" :title="t('向后 10 页')" @click="goToPage(currentPage + 10)">››</button></div>
+        <form class="history-page-jump" @submit.prevent="jumpToPage"><label>{{ t('跳转页码') }} <input v-model="pageInput" type="number" inputmode="numeric" step="1" :placeholder="String(currentPage)" :disabled="loading" :aria-label="t('跳转页码')"></label><button type="submit" :disabled="loading || !String(pageInput).trim()">{{ t('跳转') }}</button><span>{{ t('总页数') }} {{ historyPageCount }}</span></form>
       </nav>
     </div>
 
@@ -101,7 +104,7 @@
 </template>
 
 <script setup>
-import { historyFilterParams, emptyHistoryFilters } from './historyFilters.js';
+import { historyFilterParams, emptyHistoryFilters, completeHistoryDates, historyPageTarget } from './historyFilters.js';
 import { computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Trash2 } from '@lucide/vue';
 import { json, request } from './client.js';
@@ -119,9 +122,15 @@ const variants = ['4x4','3x4','2x4','3x3'];
 const profile = ref(null), entries = ref([]), bestTen = ref([]), bestMeta = ref(null), error = ref('');
 const loading = ref(false), bestLoading = ref(false), tab = ref('profile');
 const filterVariant = ref('4x4'), sort = ref('newest'), bestVariant = ref('4x4');
-const currentPage = ref(1), pageSize = ref(20);
+const currentPage = ref(1), pageSize = ref(20), pageInput = ref('');
+function jumpToPage() {
+  const target = historyPageTarget(pageInput.value, historyPageCount.value);
+  if (target === null || loading.value) return;
+  goToPage(target); pageInput.value = '';
+}
 const filterDraft = ref(emptyHistoryFilters()), appliedFilters = ref({}), filterError = ref('');
 function applyFilters() {
+  completeHistoryDates(filterDraft.value, filterDraft.value.from ? 'from' : 'to');
   try { appliedFilters.value = historyFilterParams(filterDraft.value); }
   catch { filterError.value = '请检查分数和日期范围。'; return; }
   filterError.value = ''; currentPage.value = 1; loadHistory();
@@ -295,7 +304,8 @@ async function loadHistory(force = false) {
   finally { if (serial === historySerial) loading.value = false; }
 }
 function goToPage(page) {
-  const next = Math.max(1, Math.min(Number(page) || 1, historyPageCount.value));
+  const next = historyPageTarget(page, historyPageCount.value);
+  if (next === null) return;
   if (next === currentPage.value || loading.value) return;
   currentPage.value = next;
   loadHistory();
