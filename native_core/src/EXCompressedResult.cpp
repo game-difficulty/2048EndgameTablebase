@@ -369,48 +369,6 @@ uint32_t prefix36_value_size(Prefix36DTypeMode mode) {
     }
 }
 
-uint32_t prefix36_fixed_from_unit(double value) {
-    if (value <= 0.0) {
-        return 0U;
-    }
-    if (value >= 1.0) {
-        return 4000000000U;
-    }
-    return static_cast<uint32_t>(value * kPrefix36FixedScale);
-}
-
-uint32_t prefix36_fixed_from_raw_bits(uint64_t raw, Prefix36DTypeMode mode) {
-    switch (mode) {
-        case Prefix36DTypeMode::UInt64:
-            return prefix36_fixed_from_unit(static_cast<double>(raw) / kPrefix36UInt64Scale);
-        case Prefix36DTypeMode::Float32: {
-            const uint32_t bits = static_cast<uint32_t>(raw);
-            float value = 0.0f;
-            std::memcpy(&value, &bits, sizeof(value));
-            return prefix36_fixed_from_unit(static_cast<double>(value));
-        }
-        case Prefix36DTypeMode::Float64: {
-            double value = 0.0;
-            std::memcpy(&value, &raw, sizeof(value));
-            return prefix36_fixed_from_unit(value);
-        }
-        case Prefix36DTypeMode::OneMinusFloat32: {
-            const uint32_t bits = static_cast<uint32_t>(raw);
-            float value = -1.0f;
-            std::memcpy(&value, &bits, sizeof(value));
-            return prefix36_fixed_from_unit(static_cast<double>(value) + 1.0);
-        }
-        case Prefix36DTypeMode::OneMinusFloat64: {
-            double value = -1.0;
-            std::memcpy(&value, &raw, sizeof(value));
-            return prefix36_fixed_from_unit(value + 1.0);
-        }
-        case Prefix36DTypeMode::UInt32:
-        default:
-            return static_cast<uint32_t>(raw);
-    }
-}
-
 uint64_t prefix36_raw_bits_from_fixed(uint32_t fixed, Prefix36DTypeMode mode) {
     const double unit = static_cast<double>(fixed) / kPrefix36FixedScale;
     switch (mode) {
@@ -446,18 +404,26 @@ uint64_t prefix36_raw_bits_from_fixed(uint32_t fixed, Prefix36DTypeMode mode) {
     }
 }
 
-double prefix36_numeric_from_fixed(uint32_t fixed, Prefix36DTypeMode mode) {
-    const double unit = static_cast<double>(fixed) / kPrefix36FixedScale;
+double prefix36_numeric_from_raw_bits(uint64_t raw, Prefix36DTypeMode mode) {
     switch (mode) {
-        case Prefix36DTypeMode::OneMinusFloat32:
-        case Prefix36DTypeMode::OneMinusFloat64:
-            return unit - 1.0;
-        case Prefix36DTypeMode::UInt32:
         case Prefix36DTypeMode::UInt64:
+            return static_cast<double>(raw) / kPrefix36UInt64Scale;
         case Prefix36DTypeMode::Float32:
+        case Prefix36DTypeMode::OneMinusFloat32: {
+            const uint32_t bits = static_cast<uint32_t>(raw);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            return static_cast<double>(value);
+        }
         case Prefix36DTypeMode::Float64:
+        case Prefix36DTypeMode::OneMinusFloat64: {
+            double value = 0.0;
+            std::memcpy(&value, &raw, sizeof(value));
+            return value;
+        }
+        case Prefix36DTypeMode::UInt32:
         default:
-            return unit;
+            return static_cast<double>(static_cast<uint32_t>(raw)) / kPrefix36FixedScale;
     }
 }
 
@@ -1930,12 +1896,11 @@ ColdLookupResult lookup_prefix36_compressed_cold(
     } else {
         raw_value = load_unaligned<uint64_t>(success_raw.data() + value_offset);
     }
-    const uint32_t fixed_value = prefix36_fixed_from_raw_bits(raw_value, mode);
     ColdLookupResult result;
     result.found = true;
     result.global_dense_index = success_index;
-    result.raw_value_bits = prefix36_raw_bits_from_fixed(fixed_value, mode);
-    result.numeric_value = prefix36_numeric_from_fixed(fixed_value, mode);
+    result.raw_value_bits = raw_value;
+    result.numeric_value = prefix36_numeric_from_raw_bits(raw_value, mode);
     result.success_kind = storage_kind_for_prefix36_mode(mode);
     result.bucket_block_raw_bytes = bucket_entry->raw_size;
     result.bucket_block_compressed_bytes = bucket_entry->compressed_size;
@@ -1977,9 +1942,7 @@ bool load_prefix36_compressed_success_value(
     raw_value_bits = index.header.value_size == sizeof(uint32_t)
         ? load_unaligned<uint32_t>(raw.data() + value_offset)
         : load_unaligned<uint64_t>(raw.data() + value_offset);
-    const uint32_t fixed_value = prefix36_fixed_from_raw_bits(raw_value_bits, mode);
-    raw_value_bits = prefix36_raw_bits_from_fixed(fixed_value, mode);
-    numeric_value = prefix36_numeric_from_fixed(fixed_value, mode);
+    numeric_value = prefix36_numeric_from_raw_bits(raw_value_bits, mode);
     return true;
 }
 

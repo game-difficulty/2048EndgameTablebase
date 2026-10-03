@@ -388,19 +388,27 @@ uint64_t raw_bits_from_fixed(uint32_t fixed, DTypeMode mode) {
     }
 }
 
-double numeric_from_fixed(uint32_t fixed, DTypeMode mode) {
-    const double unit = static_cast<double>(fixed) / kFixedScale;
+double numeric_from_raw_bits(uint64_t raw, DTypeMode mode) {
     switch (mode) {
         case DTypeMode::UInt64:
+            return static_cast<double>(raw) / kUInt64Scale;
         case DTypeMode::Float32:
+        case DTypeMode::OneMinusFloat32: {
+            const uint32_t bits = static_cast<uint32_t>(raw);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            return static_cast<double>(value);
+        }
         case DTypeMode::Float64:
+        case DTypeMode::OneMinusFloat64: {
+            double value = 0.0;
+            std::memcpy(&value, &raw, sizeof(value));
+            return value;
+        }
         case DTypeMode::UInt32:
-            return unit;
-        case DTypeMode::OneMinusFloat32:
-        case DTypeMode::OneMinusFloat64:
-            return unit - 1.0;
+        default:
+            return static_cast<double>(static_cast<uint32_t>(raw)) / kFixedScale;
     }
-    return unit;
 }
 
 uint32_t fixed_from_raw_bits(uint64_t raw, DTypeMode mode) {
@@ -4686,11 +4694,10 @@ EXCompressedResult::ColdLookupResult lookup_zbook_cold(
         success_index,
         header.value_size
     );
-    const uint32_t fixed = fixed_from_raw_bits(raw_value, mode);
     result.found = true;
     result.global_dense_index = success_index;
-    result.raw_value_bits = raw_bits_from_fixed(fixed, mode);
-    result.numeric_value = numeric_from_fixed(fixed, mode);
+    result.raw_value_bits = raw_value;
+    result.numeric_value = numeric_from_raw_bits(raw_value, mode);
     result.success_block_raw_bytes = header.value_size;
     return result;
 }
@@ -4870,10 +4877,9 @@ bool sample_zbook_state(
             target_success_index,
             header.value_size
         );
-        const uint32_t fixed = fixed_from_raw_bits(raw, mode);
         board = (prefix36 << kSuffixBits) | suffix28;
-        raw_value_bits = raw_bits_from_fixed(fixed, mode);
-        numeric_value = numeric_from_fixed(fixed, mode);
+        raw_value_bits = raw;
+        numeric_value = numeric_from_raw_bits(raw, mode);
         return true;
     }
     return false;
