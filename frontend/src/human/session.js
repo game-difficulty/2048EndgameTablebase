@@ -6,6 +6,7 @@ import { needsReplayUpload } from './archivePolicy.js';
 import { timerSplitsFor } from './timerSplits.js';
 import { EventBuffer } from './eventBuffer.js';
 import { reachedVictory } from './victory.js';
+import { recordMoveTime } from './wallTimeline.js';
 
 export const messages = {
   rollback_detected: '检测到本地进度落后于服务器记录，本局已判定回档，不能继续排位。',
@@ -20,7 +21,7 @@ export const messages = {
   local_storage_failed: '本地保存失败，已暂停操作。请检查浏览器存储空间。',
 };
 const fatalCodes = new Set(['rollback_detected', 'prefix_conflict', 'run_disqualified', 'spawn_mismatch', 'invalid_move', 'monitoring_required']);
-const now = (() => { const wall = Date.now(); const start = performance.now(); return () => Math.round(wall + performance.now() - start); })();
+const now = () => Date.now();
 
 export function useHumanSession(user, policies) {
   const run = shallowRef(null); const variant = ref('4x4'); const gate = ref('loading');
@@ -252,6 +253,7 @@ export function useHumanSession(user, policies) {
       id: descriptor.run_id, variant: variant.value, userId: account(), browser, seed: descriptor.seed,
       initialHash: hash, hash, threshold: descriptor.threshold, epoch: descriptor.epoch, writer: pending.writer,
       guest: !user.value, monitored: false, serverSeq: 0, firstMoveAt: null, lastActionAt: null, nodesVersion: 1,
+      wallTimeline: { version: 1, anchors: [], started_at_ms: Date.now(), truncated_at_seq: null },
       timerSplits: timerSplitsFor(variant.value), splitTimes: {},
       fourCount: initial.board.filter(value => value === 4).length, spawnCount: 2 };
     events = new EventBuffer(); victory.value = 0; await save(value); await storage.meta(`slot:${slot()}`, value.id); await storage.meta(key, null);
@@ -323,11 +325,13 @@ export function useHumanSession(user, policies) {
         if (!sameSession(context) || gate.value !== 'ready') return;
         // RPL1 reserves 0xffffffff for an unknown timing, so the largest exact
         // interval is one millisecond smaller.
-        const stamp = now(); const delta = run.value.seq ? Math.max(0, Math.min(0xfffffffe, stamp - run.value.lastActionAt)) : 0;
+        const stamp = Date.now();
+        const { delta, timeline } = recordMoveTime(run.value, stamp);
         const next = engine.nextMove(run.value, direction, delta);
         if (!next) return;
         next.event.push(await engine.eventHash(run.value.hash, next.event));
         next.state.hash = next.event[2]; next.state.lastActionAt = stamp;
+        next.state.wallTimeline = timeline;
         next.state.fourCount = (run.value.fourCount || 0) + ((next.event[0] & 64) ? 1 : 0);
         next.state.spawnCount = (run.value.spawnCount || 2) + 1;
         next.state.firstMoveAt ||= stamp;

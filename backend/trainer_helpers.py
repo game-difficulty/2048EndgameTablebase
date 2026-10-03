@@ -14,72 +14,7 @@ from .quota.service import finalize_reservation, get_token_balance, has_numeric_
 from .remote_workers.registry import remote_worker_registry
 
 
-def replace_largest_tiles(board_encoded, n, target: str):
-    if n == 0:
-        return np.uint64(board_encoded)
-
-    be = np.uint64(board_encoded)
-    tiles = []
-    for i in range(16):
-        tile_value = int((be >> np.uint64(4 * i)) & np.uint64(0xF))
-        tiles.append(tile_value)
-
-    sorted_tiles = sorted(tiles, reverse=True)
-    threshold = sorted_tiles[n - 1]
-    if 2**threshold < int(target):
-        return be
-
-    count = 0
-    for i in range(len(tiles)):
-        if count < n and tiles[i] >= threshold:
-            tiles[i] = 0xF
-            count += 1
-
-    result = np.uint64(0)
-    for i in range(15, -1, -1):
-        result = np.uint64(result << np.uint64(4))
-        result = np.uint64(result | np.uint64(tiles[i]))
-
-    return result
-
-
-def replace_variant_large_tiles(board_encoded, pattern: str, target: str):
-    meta = pattern_catalog.get(pattern, {})
-    seed_boards = meta.get("seed_boards", ())
-    if len(seed_boards) == 0:
-        return np.uint64(board_encoded)
-
-    try:
-        target_exp = int(int(target).bit_length() - 1)
-    except Exception:
-        return np.uint64(board_encoded)
-
-    be = np.uint64(board_encoded)
-    wall_board = np.uint64(seed_boards[0])
-    result = np.uint64(0)
-    for i in range(15, -1, -1):
-        shift = np.uint64(4 * i)
-        tile = int((be >> shift) & np.uint64(0xF))
-        wall_tile = int((wall_board >> shift) & np.uint64(0xF))
-        if wall_tile == 0xF:
-            tile = 0xF
-        elif tile >= target_exp:
-            tile = 0xE
-        result = np.uint64(result << np.uint64(4))
-        result = np.uint64(result | np.uint64(tile))
-    return result
-
-
-def replace_board_for_lookup(
-    board_encoded,
-    pattern: str,
-    n: int,
-    target: str,
-    use_variant: bool,
-):
-    if use_variant:
-        return replace_variant_large_tiles(board_encoded, pattern, target)
-    return replace_largest_tiles(board_encoded, n, target)
+from .lookup_mask import replace_largest_tiles, replace_variant_large_tiles, replace_board_for_lookup
 
 
 def _compute_spawns(session, new_board):

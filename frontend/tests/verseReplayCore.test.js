@@ -9,7 +9,7 @@ const { decodeReplayBytes, decodeReplayText, moveBoard, snapshotToHex } = global
 
 const humanSeed = '00000001000000020000000300000004';
 
-function humanReplayBytes(variant, version) {
+function humanReplayBytes(variant, version, wallTimeline = undefined) {
   let run = { ...initialState('viewer-test', variant, humanSeed), id: 'viewer-test', variant };
   const events = [];
   for (let index = 0; index < 40; index += 1) {
@@ -27,6 +27,7 @@ function humanReplayBytes(variant, version) {
     reason: 'game_over',
     started_at: 0,
     timing: 'continuous-client-ms',
+    wall_timeline: wallTimeline,
   }));
   const body = new Uint8Array(events.length * 5);
   const bodyView = new DataView(body.buffer);
@@ -210,6 +211,15 @@ test('byte decoder keeps supporting textual Verse replay files', () => {
 });
 
 for (const version of [1, 2]) {
+  test(`HPR${version} absolute move instants agree in both replay decoders`, async () => {
+    const { parseReplay } = await import('../src/human/engine.js');
+    const timeline = { version: 1, anchors: [[1, 1791000000000], [3, 1791000001234]], started_at_ms: 1790999999000 };
+    const { bytes } = humanReplayBytes('2x4', version, timeline);
+    const decoded = parseReplay(bytes.buffer);
+    const replay = decodeReplayBytes(bytes);
+    assert.deepEqual(replay.steps.map(step => step.movedAtMs), decoded.moveInstants);
+    assert.deepEqual(decoded.moveInstants.slice(0, 3), [1791000000000, 1791000000137, 1791000001234]);
+  });
   test(`unified viewer decodes native HPR${version} 2x4 archives`, () => {
     const { bytes, run, events } = humanReplayBytes('2x4', version);
     const replay = decodeReplayBytes(bytes);

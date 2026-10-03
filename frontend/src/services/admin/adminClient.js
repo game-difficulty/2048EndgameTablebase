@@ -27,6 +27,8 @@ async function requestJson(path, { method = 'GET', body } = {}) {
 }
 
 export const adminClient = {
+  decideAssistanceReview: (id, approved, note) => requestJson(
+    `/api/admin/assistance-reviews/${id}/decision`, { method: 'POST', body: { approved, note } }),
   profileReviews: ({ page = 1, status = 'all', changeType = 'all', query = '' } = {}) => {
     const params = new URLSearchParams({ page, status, change_type: changeType, q: query });
     return requestJson(`/api/admin/profile-reviews?${params}`);

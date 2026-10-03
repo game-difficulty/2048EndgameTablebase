@@ -260,6 +260,19 @@ def archive_application_decision(application_id: int, payload: ArchiveDecision, 
         raise HTTPException(exc.status, exc.code) from exc
 
 
+@router.post('/assistance-reviews/{review_id}/decision')
+def assistance_review_decision(review_id: int, payload: ArchiveDecision, request: Request):
+    from backend.human_play.routes import same_origin
+    from backend.human_play.assistance_review import decide
+    from backend.human_play.service import RunError
+    user = _require_admin(request)
+    same_origin(request)
+    try:
+        return decide(review_id, user['id'], payload.approved, payload.note)
+    except RunError as exc:
+        raise HTTPException(exc.status, exc.code) from exc
+
+
 @router.post('/archive-applications/{application_id}/revoke')
 def archive_application_revoke(application_id: int, payload: VerseAction, request: Request):
     from backend.human_play.routes import same_origin

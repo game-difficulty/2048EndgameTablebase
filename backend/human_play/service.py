@@ -14,7 +14,7 @@ from . import engine, permits
 from .store import database, hash_bytes
 
 PERMIT_SECONDS = 12
-RUN_COLUMNS = "id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,created,ended,writer,epoch,permit_until,monitored,state,display_threshold,visible,source,first_move_at"
+RUN_COLUMNS = "id,user_id,browser,variant,request_id,seed,threshold,status,eligibility,reason,created,ended,writer,epoch,permit_until,monitored,state,display_threshold,visible,source,first_move_at,wall_timeline"
 SUMMARY_COLUMNS = "id,user_id,variant,state,ended,reason,eligibility,has_replay,source"
 HISTORY_COLUMNS = "id,variant,first_move_at,ended,reason,has_replay,source,json_extract(state,'$.score') AS score,json_extract(state,'$.board') AS board"
 DEFAULT_TIMER_SPLITS = {variant: [str(value) for value in engine.NODES[variant]] for variant in engine.VARIANTS}
@@ -202,7 +202,7 @@ def reject_snapshot(run, code, local_seq):
         reject(db, run, code, local_seq)
 
 
-def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_hash, local_seq, data, reason="", permit="", first_move_at=None):
+def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_hash, local_seq, data, reason="", permit="", first_move_at=None, wall_timeline=None):
     if action not in {"monitor", "append", "reentry", "seal", "live"}:
         raise RunError("invalid_action", 400)
     if len(data) % 5 or len(data) > engine.MAX_BYTES or not 0 <= local_seq <= engine.MAX_MOVES:
@@ -267,6 +267,20 @@ def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_has
         raise RunError("incomplete_tail", 400)
     if action == "append" and (not run["monitored"] or (run["permit_until"] < now and not permits.valid(run, permit, now))):
         raise RunError("reentry_required")
+    from .wall_timeline import validate as validate_timeline
+    try:
+        timeline = validate_timeline(wall_timeline, local_seq) if wall_timeline else None
+        old_timeline = validate_timeline(run['wall_timeline'], state['seq']) if run['wall_timeline'] else None
+        if old_timeline:
+            if timeline is None:
+                # An old client may continue a run but cannot silently claim new timing coverage.
+                timeline = {**old_timeline, 'truncated_at_seq': old_timeline.get('truncated_at_seq') or state['seq'] + 1}
+            elif ([pair for pair in timeline['anchors'] if pair[0] <= state['seq']] != old_timeline['anchors']
+                  or timeline['started_at_ms'] != old_timeline['started_at_ms']
+                  or (old_timeline.get('truncated_at_seq') and timeline.get('truncated_at_seq') != old_timeline['truncated_at_seq'])):
+                raise ValueError('wall_timeline_conflict')
+    except (ValueError, TypeError) as exc:
+        raise RunError('invalid_wall_timeline', 400) from exc
     try:
         next_state = engine.advance(state, run["variant"], data, run["threshold"])
     except ValueError as exc:
@@ -291,14 +305,25 @@ def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_has
         raise RunError("game_not_over", 400)
     archive = None
     statistics_rate = None
+    assistance_matcher = None
     if action == "seal":
         from . import statistics
         raw = bytes(retained) + data
         rate_tracker = statistics.Rate32kTracker(run['variant'])
         initial = engine.initial(run_id, run['variant'], run['seed'])
         rate_tracker.observe(initial)
+        from .assistance_review import Matcher, logger as assistance_logger
+        try:
+            assistance_matcher = Matcher(run, raw, timeline)
+            assistance_matcher.observe(initial)
+        except Exception:
+            assistance_logger.exception('Assistance evidence unavailable for run %s', run_id)
+        def observe_archive(current):
+            rate_tracker.observe(current)
+            if assistance_matcher is not None:
+                assistance_matcher.observe(current)
         full = engine.advance(initial, run['variant'], raw,
-                              run['threshold'], observer=rate_tracker.observe)
+                              run['threshold'], observer=observe_archive)
         statistics_rate = rate_tracker.result()
         if 'spawnCount' not in next_state:
             # Runs created before spawn counters remain verifiable without a migration.
@@ -306,11 +331,13 @@ def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_has
             full.pop('fourCount', None)
         if full != next_state:
             raise RuntimeError("archive_validation_mismatch")
-        archive = gzip.compress(engine.replay_bytes({**run, 'reason': reason}, raw, version=2), compresslevel=6, mtime=0)
+        archive = gzip.compress(engine.replay_bytes({**run, 'reason': reason, 'wall_timeline': timeline}, raw, version=2), compresslevel=6, mtime=0)
     # Replay and compression have finished; only the compare-and-commit holds a write lock.
     with database() as db:
         db.execute("BEGIN IMMEDIATE")
         assert_snapshot(db, run)
+        if timeline:
+            db.execute('UPDATE human_runs SET wall_timeline=? WHERE id=?', (json.dumps(timeline), run_id))
         if first_move_at is not None:
             db.execute("UPDATE human_runs SET first_move_at=COALESCE(first_move_at,?) WHERE id=?", (first_move_at, run_id))
         if archive is not None and reason == 'game_over':
@@ -326,6 +353,8 @@ def submit(user_id, browser, run_id, *, action, writer, epoch, start, prefix_has
                    (json.dumps(next_state), int(monitored), writer, next_epoch, expiry, run_id))
         if archive is not None:
             from . import rating, statistics
+            if assistance_matcher is not None:
+                assistance_matcher.persist(db)
             db.execute("UPDATE human_runs SET status='sealed',reason=?,ended=?,archive=?,permit_until=0,visible=?,has_replay=1,single_rating=?,single_rating_version=? WHERE id=?",
                        (reason, now, archive, int(reason != 'restarted' and next_state['score'] >= run['display_threshold']),
                         rating.single_rating(run['variant'], next_state['board']), rating.RATING_VERSION, run_id))

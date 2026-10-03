@@ -260,7 +260,8 @@ async def upload(run_id: str, action: str, request: Request):
             action=action, writer=request.headers.get("x-human-writer", ""), epoch=epoch,
             start=start, prefix_hash=request.headers.get("x-human-prefix", ""), local_seq=local_seq,
             data=canonical, reason=request.headers.get("x-human-reason", ""), permit=request.headers.get('x-human-permit', ''),
-            first_move_at=request.headers.get('x-human-first-move-at'))
+            first_move_at=request.headers.get('x-human-first-move-at'),
+            wall_timeline=request.headers.get('x-human-wall-timeline'))
         return wire_receipt(request, result)
     finally:
         await release_slot(token)

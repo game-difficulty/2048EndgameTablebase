@@ -110,10 +110,15 @@ def advance(state, variant, data, threshold=None, observer=None):
 def replay_bytes(run, events, version=1):
     if version not in (1, 2):
         raise ValueError('unsupported_replay')
-    header = json.dumps({"version": version, "rules_version": 1, "run_id": run["id"],
+    metadata = {"version": version, "rules_version": 1, "run_id": run["id"],
                          "variant": run["variant"], "seed": run["seed"],
                          "reason": run["reason"], "started_at": run["created"],
-                         "timing": "continuous-client-ms"}, separators=(",", ":")).encode()
+                         "timing": "continuous-client-ms"}
+    timeline = dict(run).get('wall_timeline')
+    if timeline:
+        from .wall_timeline import validate
+        metadata['wall_timeline'] = validate(timeline, len(events) // EVENT.size)
+    header = json.dumps(metadata, separators=(",", ":")).encode()
     return (b'HPR2' if version == 2 else b'HPR1') + struct.pack("<I", len(header)) + header + (to_planes(events) if version == 2 else events)
 
 
@@ -130,4 +135,7 @@ def parse_replay(binary):
     raw = binary[8 + size:]
     if len(raw) % 5 or len(raw) > MAX_BYTES:
         raise ValueError('invalid_binary_length')
+    if 'wall_timeline' in header:
+        from .wall_timeline import validate
+        header['wall_timeline'] = validate(header['wall_timeline'], len(raw) // 5)
     return header, from_planes(raw) if version == 2 else raw

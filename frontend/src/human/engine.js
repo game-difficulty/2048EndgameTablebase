@@ -1,4 +1,5 @@
 import { Xoshiro128StarStar } from '../utils/xoshiro128.js';
+import { moveInstants } from './wallTimeline.js';
 
 export const VARIANTS = { '4x4': [4, 4], '3x4': [3, 4], '2x4': [2, 4], '3x3': [3, 3] };
 // event.code mapping matches the main site's useTrainerSession.handleKeydown.
@@ -126,7 +127,7 @@ export function parseReplay(buffer) {
     for (let i = 0; i < count; i++) events.push([bytes[start + i], bytes[start + count + i]
       + bytes[start + count * 2 + i] * 256 + bytes[start + count * 3 + i] * 65536 + bytes[start + count * 4 + i] * 16777216]);
   }
-  return { header, events };
+  return { header, events, moveInstants: moveInstants(header.wall_timeline, events) };
 }
 
 export function buildReplay(replay) {
@@ -139,7 +140,7 @@ export function buildReplay(replay) {
     return next.state;
   };
   events.forEach((e, i) => { state = step(state, e); if ((i + 1) % 256 === 0) snapshots.set(i + 1, clone(state)); });
-  return { ...replay, total: events.length, final: state, seek(raw) {
+  return { ...replay, moveInstants: moveInstants(header.wall_timeline, events), total: events.length, final: state, seek(raw) {
     const index = Math.max(0, Math.min(events.length, Math.trunc(raw)));
     const start = Math.floor(index / 256) * 256; let result = clone(snapshots.get(start));
     for (let i = start; i < index; i++) result = step(result, events[i]);

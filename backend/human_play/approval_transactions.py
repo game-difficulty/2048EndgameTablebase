@@ -8,11 +8,13 @@ from typing import Any, Iterable
 from .store import database
 
 
-KINDS = {"all", "verse", "archive"}
+KINDS = {"all", "verse", "archive", "assistance"}
 STAGES = {"all", "pending", "processing", "approved", "rejected", "revoked"}
 
 
 def _actions(kind: str, status: str, updated_at: float) -> list[str]:
+    if kind == 'assistance':
+        return ['confirm', 'dismiss'] if status == 'pending' else []
     if kind == "archive":
         if status == "pending":
             return ["approve", "reject"]
@@ -88,6 +90,14 @@ def list_transactions(
              is_game_over AS game_over, warning_flags_json AS detail_json,
              '' AS error, review_note, approved_by AS operator_id
       FROM human_archive_applications
+      UNION ALL
+      SELECT 'assistance' AS kind, a.id AS transaction_id, a.user_id, a.status AS raw_status,
+             CASE a.status WHEN 'pending' THEN 'pending' WHEN 'confirmed' THEN 'approved' ELSE 'rejected' END AS stage,
+             a.requested_at, a.updated_at, a.run_id AS subject,
+             r.variant, json_extract(r.state,'$.score') AS score, json_extract(r.state,'$.seq') AS moves,
+             r.ended AS ended_at, r.first_move_at AS started_at, NULL AS game_over,
+             a.details AS detail_json, '' AS error, a.review_note, a.operator_id
+      FROM human_assistance_reviews a JOIN human_runs r ON r.id=a.run_id
     """
     where, params = _where(resolved_kind, resolved_stage, query, identity_user_ids)
     with database() as db:

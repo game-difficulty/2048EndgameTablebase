@@ -214,10 +214,12 @@ async def _token_reward_loop() -> None:
 
 
 async def _analysis_storage_loop() -> None:
+    from backend.assistance_evidence import cleanup_expired as cleanup_evidence
     while True:
         try:
             await asyncio.to_thread(cleanup_expired_jobs)
             await asyncio.to_thread(cleanup_artifacts)
+            await asyncio.to_thread(cleanup_evidence)
         except Exception:
             logger.exception("Analysis storage maintenance failed")
         await asyncio.sleep(300)
@@ -314,6 +316,8 @@ app.include_router(minigame_rankings_router)
 app.include_router(profile_router)
 app.include_router(gamer_ranked_router)
 app.include_router(human_play_router)
+from backend.assistance_routes import router as assistance_router
+app.include_router(assistance_router)
 app.include_router(analysis_history_router)
 app.include_router(internal_tablebase_router)
 app.include_router(battle_router)

@@ -99,6 +99,8 @@ def init_db():
         columns = {row["name"] for row in db.execute("PRAGMA table_info(human_runs)")}
         if "first_move_at" not in columns:
             db.execute("ALTER TABLE human_runs ADD COLUMN first_move_at REAL")
+        if "wall_timeline" not in columns:
+            db.execute("ALTER TABLE human_runs ADD COLUMN wall_timeline TEXT")
         if "display_threshold" not in columns:
             db.execute("ALTER TABLE human_runs ADD COLUMN display_threshold INTEGER NOT NULL DEFAULT 0")
         if "visible" not in columns:
@@ -155,6 +157,10 @@ def init_db():
         init_statistics_schema(db)
         from .leaderboards import init_schema as init_full_leaderboards_schema
         init_full_leaderboards_schema(db)
+        from .assistance_review import init_schema as init_assistance_schema
+        init_assistance_schema(db)
+    from backend.assistance_evidence import init_db as init_evidence_db
+    init_evidence_db()
     from .traffic import initialize
     initialize()
 

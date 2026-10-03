@@ -642,6 +642,8 @@ async def _finish_query(
     prefetch_rng: _PrefetchRngContext | None = None,
     client_local_board: bool = False,
     allow_prefetch: bool = True,
+    evidence_source: str = '',
+    evidence_started_ms: int = 0,
 ) -> None:
     guest_reservation = isinstance(reservation, GuestQueryReservation)
 
@@ -832,6 +834,14 @@ async def _finish_query(
             token_balance=token_balance,
             extra_data=extra_data,
         )
+        if page == 'trainer' and session.user_id and evidence_source in ('setboard', 'palette'):
+            from backend.assistance_evidence import record_table
+            try:
+                await asyncio.to_thread(record_table, session.user_id, query_id, evidence_source,
+                    spec.board_encoded, spec.full_pattern, evidence_started_ms, result.results)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception('Failed to record trainer assistance evidence')
     except Exception:
         return
 
@@ -845,6 +855,8 @@ async def handle_tablebase_query_action(
     if action != Action.TABLEBASE_QUERY:
         return False
     page = str(payload.get("page") or "").strip().lower()
+    import time
+    evidence_started_ms = round(time.time() * 1000)
     is_guest = session.user_id is None and bool(getattr(session, "guest_id", None))
     if is_guest and page != "trainer":
         await websocket.send_json(
@@ -1023,6 +1035,8 @@ async def handle_tablebase_query_action(
                 websocket,
                 page=page,
                 query_id=query_id,
+                evidence_source=str(payload.get('evidence_source') or ''),
+                evidence_started_ms=evidence_started_ms,
                 stream_key=stream_key,
                 catalog_version=catalog_version,
                 spec=spec,

@@ -189,6 +189,9 @@
     const count = (bytes.length - bodyOffset) / 5;
     if (count > 200000) throw new ReplayFormatError('回放不能超过 200000 步。');
     const records = new Array(count);
+    const timeline = header.wall_timeline;
+    const anchors = new Map(timeline?.version === 1 ? timeline.anchors : []);
+    let movedAt = null;
     for (let index = 0; index < count; index += 1) {
       const codeOffset = version === 1 ? bodyOffset + index * 5 : bodyOffset + index;
       const code = bytes[codeOffset];
@@ -199,6 +202,7 @@
           + bytes[bodyOffset + count * 3 + index] * 65536
           + bytes[bodyOffset + count * 4 + index] * 16777216;
       const spawnIndex = (code >>> 2) & 15;
+      movedAt = anchors.has(index + 1) ? anchors.get(index + 1) : movedAt === null ? null : movedAt + delta;
       if (code >= 128 || spawnIndex >= width * height) {
         throw new ReplayFormatError(`第 ${index + 1} 步的本站回放记录无效。`);
       }
@@ -207,6 +211,7 @@
         spawnIndex,
         spawnExponent: code & 64 ? 2 : 1,
         deltaMs: delta,
+        movedAtMs: timeline?.truncated_at_seq && index + 1 >= timeline.truncated_at_seq ? null : movedAt,
       };
     }
     return reconstructReplay({
@@ -495,6 +500,7 @@
         spawnY: Math.floor(spawnIndex / width),
         special32k: moved.transition.merges.some((merge) => merge.exponent === 16),
         source: record.source ?? null,
+        movedAtMs: record.movedAtMs ?? null,
       };
 
       for (const milestone of milestones) {

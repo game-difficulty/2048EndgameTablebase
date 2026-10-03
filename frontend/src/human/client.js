@@ -23,9 +23,12 @@ export async function upload(run, events, browser, writer, action, status, keepa
   const start = status.seq;
   const tail = eventUploadSlice(events, start);
   const packed = await uploadBody(tail.bytes);
+  const timeline = run.wallTimeline ? { ...run.wallTimeline,
+    anchors: run.wallTimeline.anchors.filter(([seq]) => seq <= run.seq),
+    truncated_at_seq: run.wallTimeline.truncated_at_seq <= run.seq ? run.wallTimeline.truncated_at_seq : null } : null;
   return json(`/api/human/runs/${run.id}/${action}`, {
     method: 'POST', body: packed.body, binary: true, keepalive,
-    headers: { ...packed.headers, ...(Number.isFinite(run.firstMoveAt) && run.firstMoveAt > 0 ? { 'X-Human-First-Move-At': String(run.firstMoveAt / 1000) } : {}), 'X-Human-Browser': browser, 'X-Human-Writer': writer, 'X-Human-Epoch': String(status.epoch),
+    headers: { ...packed.headers, ...(timeline?.anchors.length ? { 'X-Human-Wall-Timeline': JSON.stringify(timeline) } : {}), ...(Number.isFinite(run.firstMoveAt) && run.firstMoveAt > 0 ? { 'X-Human-First-Move-At': String(run.firstMoveAt / 1000) } : {}), 'X-Human-Browser': browser, 'X-Human-Writer': writer, 'X-Human-Epoch': String(status.epoch),
       'X-Human-Start': String(start), 'X-Human-Count': String(run.seq),
       'X-Human-Prefix': start === 0 ? run.initialHash : tail.prefix || 'missing',
       'X-Human-Reason': run.reason || '', 'X-Human-Permit': run.permit || '' },

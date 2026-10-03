@@ -7,6 +7,7 @@ import {
   createSnapshotBoardFrame,
 } from '../../../components/boardFrame.js';
 import { useAuthState } from '../../../services/auth/authState';
+import { reportAiSetboard } from '../../../services/assistanceEvidence.js';
 import { createLocalStorageStore } from '../../../services/storage/localStorageStore';
 import { createSessionStorageStore } from '../../../services/storage/sessionStorageStore';
 import { getEvilCore } from '../../../services/wasm/aiCoreClient';
@@ -1056,6 +1057,7 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     return true;
   };
 
+  let pendingSetboardEvidence = null;
   const setBoardFromHex = (hex) => {
     const normalized = normalizeHex(hex);
     if (!normalized) {
@@ -1092,10 +1094,17 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
     let shouldContinue = false;
     const generation = decisionGeneration;
     const boardRevision = boardFrameRevision;
+    const evidence = pendingSetboardEvidence;
+    pendingSetboardEvidence = null;
+    const queriedAt = Date.now();
     const isCurrent = () => generation === decisionGeneration && boardRevision === boardFrameRevision
       && Boolean(activeRef?.value);
     try {
       const direction = await chooseAiMove(isCurrent);
+      if (direction && evidence && evidence.revision === boardRevision && authUser.value?.id === evidence.userId) {
+        reportAiSetboard({ event_id: evidence.id, board_codes: evidence.codes,
+          queried_at_ms: queriedAt, direction });
+      }
       if (!isCurrent()) return false;
       if (!direction) {
         stopAI();
@@ -1157,7 +1166,10 @@ export function useGamerSession(activeRef, inputBlocked = ref(false)) {
   const setBoard = () => {
     const value = hexInput.value.trim();
     if (!value) return;
-    setBoardFromHex(value);
+    if (setBoardFromHex(value) && authUser.value?.id) {
+      pendingSetboardEvidence = { id: crypto.randomUUID(), userId: authUser.value.id,
+        revision: boardFrameRevision, codes: exactBoardCodes(board.value) };
+    }
   };
 
   const writeCurrentBoardToHex = () => {

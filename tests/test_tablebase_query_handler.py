@@ -40,6 +40,37 @@ class ConstantReader:
 
 
 class TablebaseQueryHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_only_manual_trainer_main_queries_record_assistance(self):
+        scheduler = TablebaseQueryScheduler(worker_count=1)
+        session = GameSession('trainer_evidence_test')
+        session.user_id = 1
+        session.current_pattern = 'L3_256'
+        session.pattern_settings = ['L3', '256']
+        session.book_reader = ConstantReader()
+        websocket = RecordingWebSocket()
+        try:
+            with (
+                patch.object(query_handler, 'tablebase_query_scheduler', scheduler),
+                patch.object(query_handler, 'get_catalog_version', return_value='test'),
+                patch.object(query_handler, 'reserve_operation_tokens', return_value=None),
+                patch.object(query_handler, 'get_token_balance', return_value={}),
+                patch.object(query_handler, '_run_prefetch'),
+                patch('backend.assistance_evidence.record_table') as record,
+            ):
+                for index, source in enumerate(('', 'setboard', 'palette', 'practice-jump', 'prefetch')):
+                    await query_handler.handle_tablebase_query_action(Action.TABLEBASE_QUERY, {
+                        'page': 'trainer', 'client_local_board': True,
+                        'full_pattern': 'L3_256', 'board_hex': '0000000000000011',
+                        'query_id': f'evidence-{index}', 'evidence_source': source,
+                    }, session, websocket)
+                    while query_handler._TABLEBASE_QUERY_TASKS:
+                        await asyncio.gather(*list(query_handler._TABLEBASE_QUERY_TASKS))
+                self.assertEqual(record.call_count, 2)
+                self.assertEqual([call.args[2] for call in record.call_args_list], ['setboard', 'palette'])
+                self.assertTrue(all(call.args[3] == 0x11 for call in record.call_args_list))
+        finally:
+            await scheduler.close()
+
     async def test_default_lookup_free_once_and_never_prefetches(self):
         from backend.trainer_default_lookup import default_lookup_for
         scheduler = TablebaseQueryScheduler(worker_count=1)

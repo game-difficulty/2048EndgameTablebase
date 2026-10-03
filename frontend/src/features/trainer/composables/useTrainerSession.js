@@ -142,6 +142,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   let resultsPlaceholderTimer = null;
   let tablebaseRetryTimer = null;
   let paletteEditDirty = false;
+  let pendingManualEvidence = null;
   let trainerPrefetchState = createTrainerPrefetchState();
   let localPracticeSession = createPracticeSession();
   let nextTablebaseRequestId = 0;
@@ -231,6 +232,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     boardValue,
     { animate = false, useVariant = isVariant.value } = {},
   ) => {
+    pendingManualEvidence = null;
     localPracticeSession = createPracticeSession({
       boardHex: normalizeTrainerBoardHex(boardValue) || '0000000000000000',
       useVariant: Boolean(useVariant),
@@ -1085,6 +1087,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const queryResults = (reason = 'manual', lookupActor = null, defaultQueryTicket = '') => {
+    if (reason === 'practice-jump') pendingManualEvidence = null;
     if (isEmptyPattern.value) return null;
     const boardHex = currentBoardHex.value || hexInput.value;
     const fullPattern = loadedTablebaseFullPattern.value || currentPatternDisplay.value;
@@ -1099,7 +1102,10 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
     const prepared = prepareResultsRequest(boardHex, reason, lookupActor);
     if (!prepared) return null;
+    const evidenceSource = pendingManualEvidence?.boardHex === boardHex ? pendingManualEvidence.source
+      : reason === 'set-board' ? 'setboard' : reason === 'palette-exit' ? 'palette' : '';
     pendingResultsRequests.get(prepared.requestId).defaultQueryTicket = defaultQueryTicket;
+    pendingResultsRequests.get(prepared.requestId).evidenceSource = evidenceSource;
     sendTrainerAction('TABLEBASE_QUERY', {
       page: 'trainer',
       client_local_board: true,
@@ -1109,7 +1115,9 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       board_hex: boardHex,
       prefetch_rng: defaultQueryTicket ? null : prepared.prefetchRng,
       default_query_ticket: defaultQueryTicket,
+      evidence_source: evidenceSource,
     }, lookupActor);
+    pendingManualEvidence = null;
     return prepared.requestId;
   };
 
@@ -1503,6 +1511,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (data.action === 'TABLEBASE_BUSY' && data.data?.page === 'trainer') {
       const requestId = data.data?.query_id;
       const defaultQueryTicket = pendingResultsRequests.get(requestId)?.defaultQueryTicket || '';
+      const retryReason = pendingResultsRequests.get(requestId)?.reason || 'auto';
+      const retryEvidenceSource = pendingResultsRequests.get(requestId)?.evidenceSource || '';
       if (requestId) pendingResultsRequests.delete(requestId);
       const retryBoardHex = String(data.data?.board_hex || currentBoardHex.value || '');
       const retryAfterMs = Math.max(250, Number(data.data?.retry_after_ms) || 750);
@@ -1510,7 +1520,10 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
         if (tablebaseRetryTimer) window.clearTimeout(tablebaseRetryTimer);
         tablebaseRetryTimer = window.setTimeout(() => {
           tablebaseRetryTimer = null;
-          if (retryBoardHex === currentBoardHex.value) queryResults('auto', null, defaultQueryTicket);
+          if (retryBoardHex === currentBoardHex.value) {
+            if (retryEvidenceSource) pendingManualEvidence = { boardHex: retryBoardHex, source: retryEvidenceSource };
+            queryResults(retryReason, null, defaultQueryTicket);
+          }
         }, retryAfterMs);
       } else {
         finishResultsRefresh();
@@ -1587,6 +1600,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const applyLocalBoardSnapshot = (nextBoardHex, { clearOnCacheMiss = true } = {}) => {
+    pendingManualEvidence = null;
     const normalized = normalizeTrainerBoardHex(nextBoardHex);
     if (!normalized) return false;
     const reduced = reducePracticeSession(localPracticeSession, {
@@ -1627,6 +1641,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     paletteEditDirty = false;
     currentPaletteValue.value = null;
     applyLocalBoardSnapshot(normalized);
+    pendingManualEvidence = { boardHex: normalized, source: 'setboard' };
     if (isEmptyPattern.value) {
       paletteEditDirty = true;
       return;
@@ -1689,6 +1704,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     const edit = buildTrainerBoardEdit(board.value, row, col, nextVal);
     if (!edit) return;
     applyLocalBoardSnapshot(edit.boardHex);
+    pendingManualEvidence = { boardHex: edit.boardHex, source: 'palette' };
     paletteEditDirty = true;
     invalidateResults();
   };
