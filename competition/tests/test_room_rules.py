@@ -229,7 +229,7 @@ def test_custom_room_uses_opaque_projects_and_preserves_rematch_rules(service):
     assert rematch['rules']==room['rules']
 
 
-def test_best_of_ends_at_majority_and_disables_legacy_predictions(service):
+def test_best_of_ends_at_majority_and_supports_predictions(service):
     from datetime import datetime,timezone
     players=create(service,'bo5')
     room=finish_draft(service,players)
@@ -239,7 +239,7 @@ def test_best_of_ends_at_majority_and_disables_legacy_predictions(service):
         service.submit_lineup('RULE22',team[0],assignments=default_lineup(own['rules']),phase_token=own['lineup']['phase_token'],command_id=f'lineup-{side}')
     with service.database.transaction(immediate=True) as db:
         row=service._room_row(db,'RULE22')
-        assert service._prediction_window(db,row) is None
+        assert service._prediction_window(db,row)['open']
         db.execute("UPDATE competition_match_control SET yellow_wins=3,current_game_key='C' WHERE competition_id=?",(row['id'],))
         service._advance_after_result(db,row,game_key='C',now=datetime.now(timezone.utc),actor_user_id=None)
     assert service.snapshot('RULE22',ADMIN)['status']=='FINISHED'

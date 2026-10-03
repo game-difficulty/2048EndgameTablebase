@@ -1175,6 +1175,7 @@ onBeforeUnmount(() => {
       <section class="match-header">
         <div class="page-width match-header-inner">
           <div class="match-header-actions">
+            <a v-if="room.live_public_key" class="back-button" :href="`https://live.2048tables.online/rooms/competition-${room.live_public_key}`" target="_blank" rel="noopener">{{language==='zh'?'公开直播 / 观众下注':'Live / spectator predictions'}}</a>
             <button class="back-button" type="button" @click="navigate(isDuel ? publicRoomHome : room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ isDuel ? (language==='zh'?'自由对战':'Free play') : room.event?.name || $t('赛事中心') }}</button>
             <button v-if="room.me.can_close" class="close-room-link" type="button" :disabled="busy" @click="closeRoom(room)">{{ $t("关闭房间") }}</button>
             <button v-if="(room.me.can_manage || room.me.staff_roles?.includes('referee')) && ['SEATING','READY_CHECK','DRAW','DRAFT_STEP','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(room.status)" class="close-room-link" :disabled="busy" @click="rematchRoom">{{ $t("落位错误重赛") }}</button>

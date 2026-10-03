@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { language } from './i18n.js';
 import PlayerAvatar from './PlayerAvatar.vue';
+import PublicPredictionWindow from './PublicPredictionWindow.vue';
 import { publicRoomMode, modeText } from './publicRoomModes.js';
 const props = defineProps({room: Object, busy: Boolean, projectName: Function});
 const mode = computed(()=>publicRoomMode(props.room.room_kind));
@@ -13,7 +14,8 @@ async function copy() { try { await navigator.clipboard.writeText(window.locatio
 <template>
   <section class="panel duel-waiting">
     <div class="duel-wait-heading"><div><p class="eyebrow">{{modeText(mode?.title,language)}} · 1 VS 1</p><h2>{{ en ? 'Waiting for both players' : '等待双方准备' }}</h2></div><button class="secondary-button" @click="copy">{{ copied ? (en ? 'Copied' : '已复制') : (en ? 'Copy invite link' : '复制邀请链接') }}</button></div>
-    <p>{{ en ? 'The first game starts when both players are ready. There is no automatic ready-up.' : '双方准备后直接开始第一局，不会超时自动准备。' }}</p>
+    <PublicPredictionWindow :room="room" />
+    <p>{{ room.rules.predictions_enabled ? (en?'Both players must ready up, followed by a 60-second spectator betting window.':'双方主动准备后，先进入 60 秒观众下注窗口。') : (en ? 'The first game starts when both players are ready. There is no automatic ready-up.' : '双方准备后直接开始第一局，不会超时自动准备。') }}</p>
     <div class="duel-players"><article v-for="side in ['yellow','white']" :key="side" :class="side">
       <PlayerAvatar v-if="room.seats.find(s=>s.side===side)" :person="room.seats.find(s=>s.side===side)" />
       <h3>{{ room.seats.find(s=>s.side===side)?.display_name || (en ? 'Open seat' : '等待对手') }}</h3>

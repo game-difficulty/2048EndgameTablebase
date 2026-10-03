@@ -37,6 +37,7 @@ class CreateDuelRequest(BaseModel):
     projects: list[str] = Field(min_length=1, max_length=15)
     command_id: str = Field(min_length=8, max_length=160)
     clock_seconds: int = Field(default=1800, ge=30, le=86400, strict=True)
+    predictions_enabled: bool = Field(default=False, strict=True)
 
 
 class CreateTimeAttackRequest(BaseModel):
@@ -47,6 +48,7 @@ class CreateTimeAttackRequest(BaseModel):
     target_value: int = Field(strict=True)
     clock_seconds: int = Field(default=600, ge=30, le=86400, strict=True)
     command_id: str = Field(min_length=8, max_length=160)
+    predictions_enabled: bool = Field(default=False, strict=True)
 
 
 class TimeAttackCommand(BaseModel):

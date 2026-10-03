@@ -1,12 +1,14 @@
 <template>
-  <section ref="layoutRoot" :class="['competition-content', {'showing-settlement':stage==='result'}]">
-    <header v-if="stage!=='result'" class="scorebar">
+  <section ref="layoutRoot" :class="['competition-content', {'showing-settlement':stage==='result'||match?.room_kind==='time_attack'}]">
+    <header v-if="stage!=='result' && match?.room_kind!=='time_attack'" class="scorebar">
       <div class="team yellow"><span>{{ team('yellow').name || t('黄方','Yellow') }}</span><b>{{ score.yellow || 0 }}</b><time>{{ clock('yellow') }}</time></div>
       <div class="match-title"><small>{{ t('团队赛','TEAM MATCH') }} · {{ gameLabel }}</small><strong>{{ match?.name || t('比赛直播','Competition') }}</strong><em>{{ phaseLabel }}</em></div>
       <div class="team white"><time>{{ clock('white') }}</time><b>{{ score.white || 0 }}</b><span>{{ team('white').name || t('白方','White') }}</span></div>
     </header>
 
     <div v-if="!match" class="waiting">{{ t('正在读取比赛公开状态…','Loading public match state…') }}</div>
+    <TimeAttackMatchView v-else-if="match.time_attack" :match="match" :lang="lang" :now="now" />
+    <div v-else-if="match.phase==='READY_CHECK' && match.prediction_window" class="waiting"><h2>{{t('双方已准备 · 观众下注开放','Both players ready · Entries open')}}</h2><strong>{{predictionWait}}s</strong><p>{{t('下注结束后开赛，目前不扣比赛用时。','Play starts after entries close. Match clocks are stopped.')}}</p><p v-for="side in sides" :key="side">{{sideLabel(side)}} · {{team(side).roster?.map(p=>p.display_name).join(' / ')}}</p></div>
 
     <DraftWorkflow v-else-if="stage==='draft' && draft?.workflow && match.phase!=='DRAW'" class="live-workflow" :workflow="draft.workflow" :projects="match.projects" :phase="match.phase" :lang="lang" :name-of="projectName" :icon-of="key=>gameIcon({project_key:key})" />
     <div v-else-if="stage==='draft'" class="draft-layout">
@@ -43,7 +45,8 @@
       <div class="ready-sides"><article v-for="side in sides" :key="side" class="ready-side" :class="side"><h3>{{ team(side).name || sideLabel(side) }}</h3><div><span>{{ t('出战者就绪','Player ready') }}</span><b :class="{confirmed:readiness(side).player_ready}">{{ readiness(side).player_ready ? t('已就绪','READY') : t('等待中','WAITING') }}</b></div><div><span>{{ t('队长确认','Captain confirms') }}</span><b :class="{confirmed:readiness(side).captain_ready}">{{ readiness(side).captain_ready ? t('已确认','CONFIRMED') : t('等待中','WAITING') }}</b></div></article></div>
       <p v-if="predictionWait > 0" class="ready-note">{{ t(`最短下注窗口剩余 ${predictionWait} 秒；此等待不扣比赛用时。`,`Minimum betting window: ${predictionWait}s remaining. Team clocks are stopped.`) }}</p>
       <div class="public-matchups"><p v-for="game in match.games" :key="game.game_key">{{ game.players?.yellow?.display_name }} — {{ game.game_key }} · {{ projectName(game.project_key) }} — {{ game.players?.white?.display_name }}</p></div>
-      <p class="ready-note">{{ t('双方阵容已公开。队长和出战者在60秒内确认，超时自动确认后开局。','Lineups are public. Both teams confirm within 60 seconds; missing confirmations are automatic.') }} <span>{{ t('自动确认倒计时','Auto-confirm in') }} {{ readyWait }}s</span></p>
+      <p v-if="match.room_kind==='duel'" class="ready-note">{{t('等待双方主动确认，不设超时自动确认。','Waiting for both players to confirm. There is no automatic confirmation.')}}</p>
+      <p v-else class="ready-note">{{ t('双方阵容已公开。队长和出战者在60秒内确认，超时自动确认后开局。','Lineups are public. Both teams confirm within 60 seconds; missing confirmations are automatic.') }} <span>{{ t('自动确认倒计时','Auto-confirm in') }} {{ readyWait }}s</span></p>
     </div>
 
     <div v-else-if="stage==='game'" class="game-layout">
@@ -72,6 +75,7 @@
 </template>
 <script setup>
 import DraftWorkflow from '../../../../competition/shared/DraftWorkflow.vue';
+import TimeAttackMatchView from './TimeAttackMatchView.vue';
 import { shouldRefreshLiveClock } from '../displayClock.js';
 import { observeAdaptiveBoards } from './adaptiveBoardLayout.js';
 import MatchSettlement from '../../../../competition/shared/MatchSettlement.vue';

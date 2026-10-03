@@ -2,6 +2,7 @@ import copy
 import json
 import math
 import uuid
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -40,6 +41,100 @@ def order(kind='winner', option='yellow', amount=1000, uid=1):
 def balance(uid=1):
     with auth_db() as db:
         return tuple(db.execute('SELECT paid_balance_units,bonus_balance_units FROM token_accounts WHERE user_id=?', (uid,)).fetchone())
+
+
+@pytest.mark.parametrize('count,weights', [(5,[2,3,3,3,3,2]),(7,[2,4,5,5,5,5,4,2])])
+def test_extended_score_market_priors(market,count,weights):
+    facts={**market,'generation':2,'rules':{'game_count':count,'series_mode':'all'}}
+    p.reconcile(ROOM,facts)
+    item=next(m for m in p.listing(ROOM)['markets'] if m['kind'].startswith('clinch_'))
+    assert [1/o['marginal_odds'] for o in item['options']]==pytest.approx([w/sum(weights) for w in weights])
+    assert item['pricing']=='amm'
+    assert max(p._initial_reserves(item['kind']).values()) <= p.INITIAL
+    stakes=1000*p.UNIT
+    for option in item['options']:
+        assert option['quotes']['1000'] < stakes*option['marginal_odds']
+
+
+@pytest.mark.parametrize('wins', [3,4])
+def test_all_clinching_scores_and_later_games(market,wins):
+    from backend.room_activities.match_prediction_rules import OPTIONS
+    for score in OPTIONS[f'clinch_{wins}']:
+        y,w=map(int,score.split(':'))
+        side='yellow' if y==wins else 'white'
+        other='white' if side=='yellow' else 'yellow'
+        sequence=[other]*min(y,w)+[side]*wins
+        # Later games must not change the clinching score in play-all mode.
+        sequence += [other]*(2*wins-1-len(sequence))
+        facts={**market,'phase':'FINISHED','public_result':{'winner_side':side,'games':[
+            {'game_key':chr(65+i),'winner_side':s} for i,s in enumerate(sequence)]}}
+        assert p._outcome(facts,f'clinch_{wins}')==(score,'clinching_score')
+        facts['public_result']['games'][0]['winner_side']='draw'
+        assert p._outcome(facts,f'clinch_{wins}')[0] is None
+
+
+def public_facts(market,kind='duel',count=2):
+    return {**market,'generation':2,'room_kind':kind,'participant_user_ids':[91,92],
+            'prediction_window':{**market['prediction_window'],'minimum_until':(datetime.now(timezone.utc)+timedelta(seconds=60)).isoformat()},
+            'rules':{'game_count':count},'phase':'READY_CHECK'}
+
+
+@pytest.mark.parametrize('kind,count,expected', [('duel',1,1),('duel',2,2),('time_attack',1,1)])
+def test_public_market_selection_has_no_virtual_inventory(market,kind,count,expected):
+    facts=public_facts(market,kind,count);p.reconcile(ROOM,facts)
+    markets=p.listing(ROOM)['markets']
+    assert len(markets)==expected
+    assert all(m['pricing']=='pool' and m['pool_units']==0 for m in markets)
+    assert all(o['marginal_odds'] is None for m in markets for o in m['options'])
+
+
+@pytest.mark.parametrize('winner,expected', [('yellow',(201000000,199000000)),('white',(199000000,201000000)),('draw',(200000000,200000000)),('cancelled',(200000000,200000000))])
+def test_public_pools_conserve_wallet_total_and_settle_once(market,winner,expected):
+    facts=public_facts(market);p.reconcile(ROOM,facts)
+    first=order();p.place(ROOM,1,first,lambda:facts)
+    p.place(ROOM,1,first,lambda:None)  # Retry is idempotent even during source outage.
+    p.place(ROOM,2,order(option='white',uid=2),lambda:facts)
+    listing=p.listing(ROOM,1)
+    item=next(m for m in listing['markets'] if m['kind']=='winner')
+    assert item['pool_units']==2000000 and item['mine']['estimated_payout']==2000000
+    assert 'mine' not in p.listing(ROOM)['markets'][0]
+    final={**facts,'phase':'CANCELLED' if winner=='cancelled' else 'FINISHED','content_sequence':2,'prediction_window':{**facts['prediction_window'],'open':False},
+           'public_result':{'winner_side':winner,'games':[]}}
+    p.reconcile(ROOM,final);p.reconcile(ROOM,final)
+    assert (balance(1)[0],balance(2)[0])==expected
+    assert sum(expected)==400000000
+    assert p.listing(ROOM,1)['recent'][0]['payout_units']==expected[0]-199000000
+
+
+def test_public_no_winning_stakes_refund_and_participants_rejected(market):
+    facts=public_facts(market);p.reconcile(ROOM,facts)
+    with pytest.raises(HTTPException) as exc:
+        p.place(ROOM,91,order(),lambda:facts)
+    assert exc.value.detail=='competition_prediction_participant'
+    absent={**facts};absent.pop('participant_user_ids')
+    with pytest.raises(HTTPException) as exc:p.place(ROOM,1,order(),lambda:absent)
+    assert exc.value.status_code==503
+    p.place(ROOM,1,order(),lambda:facts)
+    p.reconcile(ROOM,{**facts,'phase':'FINISHED','content_sequence':3,'public_result':{'winner_side':'white','games':[]}})
+    assert balance(1)[0]==200000000
+    assert p.listing(ROOM,1)['recent'][0]['status']=='void'
+
+
+def test_pool_remainder_is_conserved_and_deterministic():
+    from backend.room_activities.match_prediction_rules import pool_payouts
+    positions=[dict(user_id=i,stake=1,option_id='yellow' if i<4 else 'white') for i in range(1,5)]
+    result,refund=pool_payouts(positions,'yellow')
+    assert not refund and result=={1:2,2:1,3:1,4:0}
+    assert pool_payouts(list(reversed(positions)),'yellow')[0]==result
+
+
+def test_pool_deadline_rechecked_after_source_read(market):
+    facts=public_facts(market)
+    facts['prediction_window']['minimum_until']=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
+    p.reconcile(ROOM,facts)
+    with pytest.raises(HTTPException,match='competition_prediction_closed'):
+        p.place(ROOM,1,order(),lambda:facts)
+    assert balance(1)[0]==200000000
 
 
 def test_opening_first_two_probability_weights_are_one_two_one(market):

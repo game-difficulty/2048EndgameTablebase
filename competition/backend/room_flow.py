@@ -1,6 +1,7 @@
 """Small shared entry points for draft and fixed-sequence match plans."""
 import json
 import secrets
+from datetime import datetime, timedelta
 
 from .room_rules import MAX_GAMES
 from .errors import CompetitionError
@@ -45,8 +46,20 @@ class RoomFlow:
         return {key: draft[f'project_{key.lower()}'] for key in self.rooms._game_keys(db, cid)}, draft['random_seed_hex']
 
     def begin(self, db, room, now):
-        """Called exactly once, in the transaction accepting the second ready."""
+        """Accept the second ready, or resume after its optional betting window."""
         cid = room['id']
+        if self.rooms._rules(db, cid).get('predictions_enabled'):
+            window = db.execute('SELECT * FROM competition_prediction_windows WHERE competition_id=?', (cid,)).fetchone()
+            if window is None:
+                db.execute('INSERT INTO competition_prediction_windows(competition_id,opened_at,minimum_until) VALUES(?,?,?)',
+                           (cid, now.isoformat(), (now+timedelta(seconds=60)).isoformat()))
+                self.rooms._append_event(db, cid, 'predictions.opened', None, {})
+                self.rooms._touch(db, cid, status='READY_CHECK')
+                return self.rooms._room_row(db, room['room_code'])
+            if now < datetime.fromisoformat(window['minimum_until']):
+                return room
+            db.execute('UPDATE competition_prediction_windows SET closed_at=COALESCE(closed_at,?) WHERE competition_id=?',
+                       (now.isoformat(), cid))
         if self.kind(db, cid) == 'time_attack':
             return self.rooms.time_attacks.begin(db, room, now)
         if self.rooms._rules(db, cid).get('workflow') != 'fixed_sequence':
@@ -70,3 +83,11 @@ class RoomFlow:
         if self.rooms._rules(db, cid).get('auto_ready', True):
             self.rooms._set_hold(db, cid, f'GAME_{key}_READY', now, self.rooms.ready_preview_seconds)
             self.rooms._set_hold(db, cid, f'GAME_{key}_READY_TIMEOUT', now, self.rooms._flow(db, cid)['ready_seconds'])
+
+    def prediction_locked(self, db, cid):
+        return self.is_duel(db, cid) and bool(db.execute(
+            'SELECT 1 FROM competition_prediction_windows WHERE competition_id=?', (cid,)).fetchone())
+
+    def require_unlocked(self, db, cid):
+        if self.prediction_locked(db, cid):
+            raise CompetitionError('PREDICTION_ROSTER_LOCKED', '下注开放后不能更换参赛者或取消准备。', 409)

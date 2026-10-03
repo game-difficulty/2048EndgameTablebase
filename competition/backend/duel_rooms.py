@@ -19,7 +19,7 @@ class DuelRooms:
         # versions remain available to already-frozen rooms only.
         return [d.snapshot() for d in self.rooms.project_registry.current_descriptors()]
 
-    def create(self, principal, *, name, projects, command_id, clock_seconds=1800, _challenge=None):
+    def create(self, principal, *, name, projects, command_id, clock_seconds=1800, predictions_enabled=False, _challenge=None):
         r = self.rooms
         if principal.user_id <= 0:
             raise CompetitionError('LOGIN_REQUIRED', '请先登录。', 401)
@@ -30,6 +30,9 @@ class DuelRooms:
         if not isinstance(projects, list) or any(not isinstance(p, str) for p in projects) or len(set(projects)) != len(projects):
             raise CompetitionError('INVALID_PROJECT_POOL', '请选择不重复的已注册项目。')
         rules = fixed_rules(len(projects), clock_seconds)
+        if type(predictions_enabled) is not bool:
+            raise CompetitionError('INVALID_ROOM_RULES', 'Invalid prediction setting.')
+        rules['predictions_enabled'] = predictions_enabled
         catalog = {p['project_ref']: p for p in self.catalog()}
         if _challenge is None and any(p not in catalog for p in projects):
             raise CompetitionError('PROJECT_ADAPTER_UNAVAILABLE', '项目不在服务端可用目录中。', 409)

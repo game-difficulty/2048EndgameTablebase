@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 from backend.auth.db import auth_db
 from .predictions import _credit
+from .match_prediction_rules import AMM, POOL, OPTIONS, market_contract, initial_reserves, outcome, pool_payouts
 
 UNIT = 1000
 INITIAL = 10_000 * UNIT
@@ -24,8 +25,7 @@ RULES = 'competition-fpmm-v1'
 def _initial_reserves(kind):
     # FPMM marginal probabilities are proportional to inverse reserves.
     # Two independent fair games give scores 2:0 / 1:1 / 0:2 weights 1:2:1.
-    return {option: INITIAL // 2 if kind == 'first_two' and option == '1:1' else INITIAL
-            for option in KINDS[kind]}
+    return initial_reserves(kind, INITIAL)
 
 
 def init_schema():
@@ -75,17 +75,7 @@ def _identity(facts, room_id):
 
 
 def _outcome(facts, kind):
-    if facts['phase'] == 'CANCELLED':
-        return None, 'cancelled'
-    result = facts.get('public_result') or {}
-    if kind == 'winner':
-        winner = result.get('winner_side')
-        return (winner, 'match_winner') if winner in KINDS[kind] else (None, 'draw_or_unresolved')
-    games = {item['game_key']: item for item in result.get('games', [])}
-    winners = [games.get(game, {}).get('winner_side') for game in ('A', 'B')]
-    if any(winner not in ('yellow', 'white') for winner in winners):
-        return None, 'draw_or_unresolved'
-    return f"{winners.count('yellow')}:{winners.count('white')}", 'first_two_score'
+    return outcome(facts, kind)
 
 
 def reconcile(room_id, facts):
@@ -97,7 +87,9 @@ def reconcile(room_id, facts):
     terminal = facts['phase'] in ('FINISHED', 'CANCELLED')
     with auth_db() as db:
         db.execute('BEGIN IMMEDIATE')
-        for kind, ids in KINDS.items():
+        pricing, kinds = market_contract(facts)
+        for kind in kinds:
+            ids = OPTIONS[kind]
             market_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{facts['match_public_key']}:{facts['generation']}:{kind}"))
             options = []
             for option in ids:
@@ -106,13 +98,13 @@ def reconcile(room_id, facts):
             db.execute('''INSERT OR IGNORE INTO competition_prediction_markets
                 (id,room_id,public_key,generation,kind,rules,options,reserves,source_sequence,opened_at,minimum_until,status)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-                (market_id, room_id, facts['match_public_key'], facts['generation'], kind, RULES,
-                 json.dumps(options), json.dumps(_initial_reserves(kind)), facts['content_sequence'],
+                (market_id, room_id, facts['match_public_key'], facts['generation'], kind, pricing,
+                 json.dumps(options), json.dumps(dict.fromkeys(ids, 0) if pricing == POOL else _initial_reserves(kind)), facts['content_sequence'],
                  window['opened_at'], window['minimum_until'], 'open' if window['open'] else 'closed'))
             market = db.execute('SELECT * FROM competition_prediction_markets WHERE id=?', (market_id,)).fetchone()
             if market['settled_at'] is not None or facts['content_sequence'] < market['source_sequence']:
                 continue
-            if (kind == 'first_two' and not terminal and window['open']
+            if (market['rules'] == AMM and kind == 'first_two' and not terminal and window['open']
                     and market['status'] == 'open' and market['revision'] == 0
                     and json.loads(market['reserves']) == dict.fromkeys(ids, INITIAL)
                     and not db.execute('SELECT 1 FROM competition_prediction_positions WHERE market_id=?',
@@ -132,8 +124,11 @@ def reconcile(room_id, facts):
             winner, reason = _outcome(facts, kind)
             stamp = datetime.now(timezone.utc).isoformat()
             positions = db.execute('SELECT * FROM competition_prediction_positions WHERE market_id=?', (market_id,)).fetchall()
+            payouts, refund = pool_payouts(positions, winner) if market['rules'] == POOL else ({}, winner is None)
+            if refund and winner is not None:
+                winner, reason = None, 'no_winning_stakes'
             for position in positions:
-                payout = position['stake'] if winner is None else position['shares'] if position['option_id'] == winner else 0
+                payout = payouts[position['user_id']] if market['rules'] == POOL else position['stake'] if winner is None else position['shares'] if position['option_id'] == winner else 0
                 if payout:
                     _credit(db, position['user_id'], payout, 'competition_prediction_refund' if winner is None else 'competition_prediction_payout',
                             f"competition-prediction:{market_id}:{position['user_id']}:settle",
@@ -154,18 +149,29 @@ def listing(room_id, user_id=None):
                 continue
             reserves = json.loads(row['reserves'])
             options = json.loads(row['options'])
+            pooled = row['rules'] == POOL
+            total = sum(reserves.values())
             for option in options:
-                option['quotes'] = {str(amount): buy(reserves, option['id'], amount * UNIT)[0] for amount in AMOUNTS}
-                option['marginal_odds'] = sum(reserves[option['id']] / value for value in reserves.values())
+                option['quotes'] = {str(amount): ((total+amount*UNIT)*amount*UNIT//(reserves[option['id']]+amount*UNIT)
+                    if pooled else buy(reserves, option['id'], amount * UNIT)[0]) for amount in AMOUNTS}
+                option['marginal_odds'] = (total/reserves[option['id']] if reserves[option['id']] else None) if pooled else sum(reserves[option['id']] / value for value in reserves.values())
+                if pooled:
+                    option['pool_units'] = reserves[option['id']]
             market = {key: row[key] for key in ('id', 'kind', 'status', 'revision', 'opened_at', 'minimum_until', 'winner', 'reason')}
+            market.update(pricing='pool' if pooled else 'amm', pool_units=total if pooled else None)
+            if pooled:
+                market['deadline'] = datetime.fromisoformat(row['minimum_until']).timestamp()
             market['options'] = options
             if user_id:
                 position = db.execute('SELECT option_id,stake,shares,payout FROM competition_prediction_positions WHERE market_id=? AND user_id=?',
                                       (row['id'], user_id)).fetchone()
                 market['mine'] = dict(position) if position else None
+                if pooled and market['mine']:
+                    market['mine']['estimated_payout'] = total*position['stake']//reserves[position['option_id']]
             markets.append(market)
-        response = dict(protocol=RULES, markets=markets, amounts=list(AMOUNTS), limit_units=LIMIT,
-                        initial_reserve_units=INITIAL, server_time=time.time())
+        pooled_room = any(m['pricing'] == 'pool' for m in markets)
+        response = dict(protocol=POOL if pooled_room else RULES, markets=markets, amounts=list(AMOUNTS), limit_units=LIMIT,
+                        initial_reserve_units=0 if pooled_room else INITIAL, server_time=time.time())
         if user_id is not None:
             recent = db.execute('''SELECT m.id,m.kind,m.generation,m.opened_at AS started_at,
                 m.settled_at,m.status,m.winner,m.options,p.option_id,p.stake AS stake_units,
@@ -205,6 +211,12 @@ def place(room_id, user_id, body, source):
     facts = source()
     if not _identity(facts, room_id):
         raise HTTPException(503, 'competition_prediction_unavailable')
+    if market_contract(facts)[0] == POOL:
+        participants = facts.get('participant_user_ids')
+        if not isinstance(participants, list) or len(set(participants)) != 2:
+            raise HTTPException(503, 'competition_prediction_unavailable')
+        if user_id in participants:
+            raise HTTPException(403, 'competition_prediction_participant')
     reconcile(room_id, facts)
     with auth_db() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -213,8 +225,11 @@ def place(room_id, user_id, body, source):
             return _retry(db, previous, room_id, market_id, option, units)
         market = db.execute('SELECT * FROM competition_prediction_markets WHERE id=? AND room_id=?', (market_id, room_id)).fetchone()
         window = facts.get('prediction_window') or {}
-        if (not market or market['status'] != 'open' or not window.get('open') or facts.get('suspended')
+        if (not market or market['rules'] != market_contract(facts)[0] or market['status'] != 'open' or not window.get('open') or facts.get('suspended')
                 or facts['generation'] != market['generation'] or facts['content_sequence'] < market['source_sequence']):
+            raise HTTPException(409, 'competition_prediction_closed')
+        # A source read begun before the deadline can wait for the wallet lock.
+        if market['rules'] == POOL and time.time() >= datetime.fromisoformat(market['minimum_until']).timestamp():
             raise HTTPException(409, 'competition_prediction_closed')
         reserves = json.loads(market['reserves'])
         if option not in reserves:
@@ -226,10 +241,14 @@ def place(room_id, user_id, body, source):
             raise HTTPException(409, 'competition_prediction_limit')
         if revision != market['revision']:
             raise HTTPException(409, 'competition_prediction_price_changed')
-        shares, reserves = buy(reserves, option, units)
+        if market['rules'] == POOL:
+            shares = units  # Accounting only; pool orders never lock payout shares.
+            reserves[option] += units
+        else:
+            shares, reserves = buy(reserves, option, units)
         stamp = datetime.now(timezone.utc).isoformat()
         _credit(db, user_id, -units, 'competition_prediction_stake', f'competition-prediction:{user_id}:{request_id}',
-                dict(market_id=market_id, option_id=option, shares=shares, rules=RULES), stamp)
+                dict(market_id=market_id, option_id=option, shares=shares, rules=market['rules']), stamp)
         db.execute('''INSERT INTO competition_prediction_positions(market_id,user_id,option_id,stake,shares) VALUES(?,?,?,?,?)
             ON CONFLICT(market_id,user_id) DO UPDATE SET stake=stake+excluded.stake,shares=shares+excluded.shares''',
             (market_id, user_id, option, units, shares))

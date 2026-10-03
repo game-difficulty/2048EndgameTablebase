@@ -1287,6 +1287,11 @@ class CompetitionService:
     ) -> tuple[sqlite3.Row, bool]:
         status = str(room["status"])
         cid = str(room['id'])
+        if status == 'READY_CHECK' and self.room_flow.prediction_locked(db, cid):
+            window = self._prediction_window(db, room)
+            if window and now >= parse_time(window['minimum_until']):
+                return self.room_flow.begin(db, room, now), True
+            return room, False
         if self.room_flow.kind(db, cid) == 'time_attack':
             return self.time_attacks.settle(db, room, now)
         if self.room_flow.is_duel(db, cid):
@@ -1609,7 +1614,8 @@ class CompetitionService:
         next_status = status or (str(current["status"]) if current else "")
         # Only an actual draw starts a live feed. Attendance forfeits may go
         # straight from seating/readiness to FINISHED without ever starting.
-        live_status = next_status == CompetitionStatus.DRAW.value
+        live_status = next_status == CompetitionStatus.DRAW.value or (
+            next_status == 'READY_CHECK' and self.room_flow.prediction_locked(db, competition_id))
         ended = next_status in {
             CompetitionStatus.FINISHED.value,
             CompetitionStatus.CANCELLED.value,
@@ -1882,8 +1888,9 @@ class CompetitionService:
                 """
                 SELECT * FROM competitions
                 WHERE live_started_at IS NOT NULL
-                  AND EXISTS (SELECT 1 FROM competition_drafts
-                              WHERE competition_id = competitions.id)
+                  AND (EXISTS (SELECT 1 FROM competition_drafts WHERE competition_id = competitions.id)
+                       OR EXISTS (SELECT 1 FROM competition_duel_rooms d JOIN competition_prediction_windows w
+                                  ON w.competition_id=d.competition_id WHERE d.competition_id=competitions.id))
                   AND (live_ended_at IS NULL OR live_ended_at > ?)
                 ORDER BY live_started_at DESC
                 """,
@@ -1896,9 +1903,9 @@ class CompetitionService:
             "SELECT * FROM competitions WHERE public_key = ?",
             (str(public_key),),
         ).fetchone()
-        if room is None or not room["live_started_at"] or not db.execute(
+        if room is None or not room["live_started_at"] or not (db.execute(
             "SELECT 1 FROM competition_drafts WHERE competition_id = ?", (room["id"],)
-        ).fetchone():
+        ).fetchone() or self.room_flow.prediction_locked(db, room['id'])):
             raise CompetitionError("LIVE_ROOM_NOT_FOUND", "Live match not found.", 404)
         if room["live_ended_at"]:
             ended = parse_time(str(room["live_ended_at"]))
@@ -1930,17 +1937,22 @@ class CompetitionService:
             return projection
 
     def _prediction_window(self, db, room):
-        if self.room_flow.is_duel(db, room['id']):
-            return None
         rules = self._rules(db, room['id'])
-        if rules['game_count'] != 3 or rules['series_mode'] != 'all':
-            return None  # Existing prediction markets require all three games.
+        public = self.room_flow.is_duel(db, room['id'])
+        if public and not rules.get('predictions_enabled'):
+            return None
+        if not public and rules['game_count'] not in (3, 5, 7):
+            return None
         row = db.execute("SELECT * FROM competition_prediction_windows WHERE competition_id = ?", (str(room['id']),)).fetchone()
         if row is None:
             return None
+        if public:
+            return {"opened_at": row['opened_at'], "minimum_until": row['minimum_until'],
+                    "closed_at": row['closed_at'], "open": not row['closed_at'] and room['status'] == 'READY_CHECK'
+                    and datetime.now(timezone.utc) < parse_time(row['minimum_until'])}
         return {"opened_at": row['opened_at'], "minimum_until": row['minimum_until'],
                 "closed_at": row['closed_at'], "open": not row['closed_at'] and str(room['status']) in {
-                    'DRAFT_STEP', 'FIRST_PICK_BAN', 'SECOND_PICK_BAN', 'BLIND_PICK', 'C_DRAW', 'LINEUP', 'GAME_A_READY'}}
+                    'READY_CHECK', 'DRAFT_STEP', 'FIRST_PICK_BAN', 'SECOND_PICK_BAN', 'BLIND_PICK', 'C_DRAW', 'LINEUP', 'GAME_A_READY'}}
 
     def live_prediction_facts(self, public_key):
         """Authenticated settlement facts remain available after lobby retention."""
@@ -1949,9 +1961,13 @@ class CompetitionService:
             if room is None or not room['live_started_at']:
                 raise CompetitionError('LIVE_ROOM_NOT_FOUND', 'Live match not found.', 404)
             projection = self._public_match_projection(db, room)
-            return {key: projection[key] for key in (
+            facts = {key: projection[key] for key in (
                 'match_public_key', 'generation', 'content_sequence', 'phase', 'prediction_window',
-                'teams', 'public_result', 'suspended', 'server_time')}
+                'teams', 'public_result', 'suspended', 'server_time', 'rules', 'room_kind')}
+            # Internal authenticated facts only; IDs are not in the public projection.
+            facts['participant_user_ids'] = [row[0] for row in db.execute(
+                'SELECT user_id FROM competition_seats WHERE competition_id=?', (room['id'],))]
+            return facts
 
     def _live_directory_entry(
         self, db: sqlite3.Connection, room: sqlite3.Row
@@ -2270,11 +2286,12 @@ class CompetitionService:
                 # A public renderer failure cannot affect authoritative match state.
                 project_views[side] = None
         games = []
+        fixed_projects, _ = self.room_flow.plan(db, competition_id) if self.room_flow.is_duel(db, competition_id) else ({}, None)
         for game_key in self._game_keys(db, competition_id):
             project_key = (
                 str(draft[f"project_{game_key.lower()}"])
                 if draft is not None and draft[f"project_{game_key.lower()}"]
-                else None
+                else fixed_projects.get(game_key)
             )
             result = next((item for item in public_results if item["game_key"] == game_key), None)
             if game_key == 'C' and public_draft and public_draft.get('c_reveal_at'):
@@ -2290,7 +2307,10 @@ class CompetitionService:
                 "result": result,
             })
         schedule = self.schedule.view(db, competition_id) or {}
+        timed = self.time_attacks.view(db, room, None, now)
         return {
+            "room_kind": self.room_flow.kind(db, competition_id),
+            "time_attack": timed,
             "rules": self._rules(db, competition_id),
             "match_public_key": str(room["public_key"]),
             "generation": int(room["live_generation"]),
@@ -2321,7 +2341,7 @@ class CompetitionService:
             "session_status": session_status,
             "public_result": {
                 "games": public_results,
-                "winner_side": str(control["winner_side"]) if control and control["winner_side"] else None,
+                "winner_side": timed['winner_side'] if timed else str(control["winner_side"]) if control and control["winner_side"] else None,
                 "finish_reason": str(control["finish_reason"]) if control and control["finish_reason"] else None,
             },
             "project_public_views": project_views,
@@ -2426,6 +2446,7 @@ class CompetitionService:
         self.settle_deadline(room_code)
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)
+            self.room_flow.require_unlocked(db, room['id'])
             competition_id = str(room["id"])
             if self.room_flow.is_duel(db, competition_id):
                 expected_side = 'yellow' if int(room['created_by_user_id']) == principal.user_id else 'white'
@@ -2542,6 +2563,7 @@ class CompetitionService:
         self.settle_deadline(room_code)
         with self.database.transaction(immediate=True) as db:
             room = self._room_row(db, room_code)
+            self.room_flow.require_unlocked(db, room['id'])
             competition_id = str(room["id"])
             if self.room_flow.is_duel(db, competition_id) and int(room['created_by_user_id']) == principal.user_id:
                 raise CompetitionError('DUEL_OWNER_LEAVE', '房主不参加时，请关闭房间。', 409)
@@ -2608,6 +2630,7 @@ class CompetitionService:
                 db, competition_id, principal, normalized_command, action
             ):
                 return self._snapshot(db, room, principal)
+            self.room_flow.require_unlocked(db, competition_id)
             if room["status"] not in ('SEATING','READY_CHECK'):
                 raise CompetitionError(
                     "READY_CHECK_CLOSED",
@@ -4955,6 +4978,8 @@ class CompetitionService:
             "lineup": lineup_payload,
             "match": match_payload,
             "issues": issues,
+            "prediction_window": self._prediction_window(db, room),
+            "live_public_key": str(room['public_key']) if room['live_started_at'] else None,
             "me": {
                 "user_id": principal.user_id,
                 "display_name": principal.display_name,
@@ -4966,18 +4991,18 @@ class CompetitionService:
                 "can_close": status in CLOSABLE_ROOM_STATUSES and (int(room['created_by_user_id']) == principal.user_id if is_duel else can_manage),
                 "can_manage_members": not is_duel and (self._is_platform_organizer(principal) or int(room['created_by_user_id']) == principal.user_id),
                 "removed_members": [dict(row) for row in db.execute('SELECT user_id FROM competition_expulsions WHERE competition_id=?', (competition_id,))] if self._is_platform_organizer(principal) or int(room['created_by_user_id']) == principal.user_id else [],
-                "can_claim_seat": status in {
+                "can_claim_seat": not self.room_flow.prediction_locked(db, competition_id) and status in {
                     CompetitionStatus.SEATING.value,
                     CompetitionStatus.READY_CHECK.value,
                 }
                 ,
-                "can_leave_seat": my_seat is not None and not (is_duel and int(room['created_by_user_id']) == principal.user_id)
+                "can_leave_seat": not self.room_flow.prediction_locked(db, competition_id) and my_seat is not None and not (is_duel and int(room['created_by_user_id']) == principal.user_id)
                 and status in {
                     CompetitionStatus.SEATING.value,
                     CompetitionStatus.READY_CHECK.value,
                 }
                 ,
-                "can_ready": is_captain and sum(s['side']==my_seat['side'] for s in seats)==self._rules(db, competition_id)['team_size']
+                "can_ready": not self.room_flow.prediction_locked(db, competition_id) and is_captain and sum(s['side']==my_seat['side'] for s in seats)==self._rules(db, competition_id)['team_size']
                 and status in ('SEATING','READY_CHECK'),
                 "can_submit_pick_ban": can_submit_pick_ban,
                 "can_submit_blind": can_submit_blind,

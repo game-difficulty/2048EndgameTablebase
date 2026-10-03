@@ -743,7 +743,9 @@ async def prediction_state(request: Request, response: Response, market_id: str 
         facts = await asyncio.to_thread(competition_provider.settlement, hub.room.metadata['public_key'])
         await asyncio.to_thread(competition_predictions.reconcile, hub.room.id, facts)
         state = await asyncio.to_thread(competition_predictions.listing, hub.room.id, user['id'] if user else None)
-        return dict(state, available=bool(facts and not facts.get('suspended') and (facts.get('prediction_window') or {}).get('open')))
+        return dict(state, room_kind=(facts or {}).get('room_kind', 'competition'),
+                    participant=bool(user and user['id'] in (facts or {}).get('participant_user_ids', []) and (facts or {}).get('room_kind') in ('duel', 'time_attack')),
+                    available=bool(facts and not facts.get('suspended') and (facts.get('prediction_window') or {}).get('open')))
     state = await asyncio.to_thread(predictions.listing, hub.room.id, user['id'] if user else None, market_id)
     return dict(state, available=hub.control_status()['online'])
 

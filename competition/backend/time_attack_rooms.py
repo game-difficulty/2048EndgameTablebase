@@ -13,10 +13,10 @@ class TimeAttackRooms:
     def __init__(self, rooms):
         self.rooms = rooms
 
-    def create(self, principal, *, name, variant, target_kind, target_value, clock_seconds, command_id):
+    def create(self, principal, *, name, variant, target_kind, target_value, clock_seconds, command_id, predictions_enabled=False):
         config = configuration(variant, target_kind, target_value)
         return self.rooms.duels.create(principal, name=name, projects=[PROJECT_REF],
-                                      clock_seconds=clock_seconds, command_id=command_id, _challenge=config)
+                                      clock_seconds=clock_seconds, command_id=command_id, predictions_enabled=predictions_enabled, _challenge=config)
 
     def _meta(self, db, cid):
         meta = db.execute('SELECT * FROM competition_time_attack WHERE competition_id=?', (cid,)).fetchone()
@@ -148,7 +148,7 @@ class TimeAttackRooms:
                 state = json.loads(row['state_json'])
                 attempt = dict(id=row['id'], number=row['number'], status=row['status'], started_at=row['started_at'],
                                board=state['board'], sequence=state['seq'], score=state['score'], pb_ms=row['pb_ms'])
-                if seat and seat['user_id'] == principal.user_id:
+                if principal and seat and seat['user_id'] == principal.user_id:
                     attempt['state'] = state
                     attempt['seed'] = row['seed']
             players[side] = dict(attempt=attempt, best=dict(best) if best else None, completed=completed)
