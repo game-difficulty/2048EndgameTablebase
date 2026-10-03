@@ -319,8 +319,8 @@ h2 {
 }
 
 .board.board-three-by-three {
-  padding: 3.6%;
-  gap: 3.88%;
+  padding: var(--replay-board-gap, 12px);
+  gap: var(--replay-board-gap, 12px);
 }
 
 .board-three-by-three .tile span {

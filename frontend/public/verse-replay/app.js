@@ -127,6 +127,17 @@
     for (const tile of state.tileElements) tile.classList.remove('is-animation-hidden');
   }
 
+  // Use the same outer-board width ratio as Play, without percentage gap
+  // resolving against a different (content-box) width.
+  function updateBoardGeometry() {
+    if (!elements.board.classList.contains('board-three-by-three')) return;
+    const width = elements.board.clientWidth;
+    if (width > 0) elements.board.style.setProperty('--replay-board-gap', `${width * 0.036}px`);
+  }
+  const boardResizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(updateBoardGeometry) : null;
+  boardResizeObserver?.observe(elements.board);
+  window.addEventListener('resize', updateBoardGeometry);
+
   function createBoard() {
     const replay = state.replay;
     elements.board.innerHTML = '';
@@ -154,6 +165,7 @@
     elements.board.append(state.motionLayer);
     elements.board.hidden = false;
     elements.boardPlaceholder.hidden = true;
+    updateBoardGeometry();
   }
 
   function createTimeline() {
