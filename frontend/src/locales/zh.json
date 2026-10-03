@@ -42,7 +42,8 @@
     "notebook": "错题本",
     "settings": "设置",
     "help": "帮助",
-    "admin": "站长"
+    "admin": "站长",
+    "analysis": "分析"
   },
   "auth": {
     "title": {
@@ -846,11 +847,18 @@
       "battle": "多人同场选择走法，比较吻合度",
       "leaderboards": "查看社区高分、Token 消耗与赞助榜单",
       "settings": "定式计算与外观设置",
-      "help": "学习 2048 技巧、定式思路和进阶打法"
+      "help": "学习 2048 技巧、定式思路和进阶打法",
+      "tables": "训练、测试、对战与定式回放分析。",
+      "tableReplay": "查看定式回放，复盘每一步走法。",
+      "analysis": "批量分析回放，查看阶段吻合度。"
     },
     "githubNote": "欢迎在 GitHub 上点个 Star 支持本项目",
     "sponsorNotePrefix": "本项目由",
-    "sponsorNoteSuffix": "赞助"
+    "sponsorNoteSuffix": "赞助",
+    "tables": "定式",
+    "tablesSite": "2048 定式",
+    "tournament": "赛事大厅",
+    "mainSite": "返回主站"
   },
   "battle": {
     "title": "对战",

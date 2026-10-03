@@ -5,15 +5,16 @@ import { TAB_IDS, TAB_REGISTRY } from '../src/app/tabRegistry.js';
 import { useTabManager } from '../src/app/useTabManager.js';
 
 test('external entries stay outside the internal tab lifecycle', () => {
-  assert.equal(AUXILIARY_ENTRIES.live.href, 'https://live.2048tables.online/');
-  assert.equal(AUXILIARY_ENTRIES.replay.href, '/verse-replay/');
+  assert.equal(AUXILIARY_ENTRIES.live.href, 'https://live.2048tables.online/lobby');
+  assert.equal(AUXILIARY_ENTRIES.tournament.href, 'https://tournament.2048tables.online/');
+  assert.equal(AUXILIARY_ENTRIES.replay.href, 'https://2048tables.online/verse-replay/');
   assert.equal(AUXILIARY_ENTRIES.live.tab, undefined);
   assert.equal(AUXILIARY_ENTRIES.replay.tab, undefined);
 });
 test('homepage and directory share the same entry definitions', () => {
   assert.deepEqual(HOME_AUXILIARY_ENTRIES.map(e => e.id), ['announcements', 'replay', 'leaderboards', 'more', 'contact', 'github']);
   assert.equal(AUXILIARY_ENTRIES.leaderboards.tab, TAB_IDS.LEADERBOARDS);
-  assert.deepEqual(AUXILIARY_GROUPS.flatMap(g => g.entries.map(e => e.id)), ['live', 'replay', 'announcements', 'quota', 'help']);
+  assert.deepEqual(AUXILIARY_GROUPS.flatMap(g => g.entries.map(e => e.id)), ['live', 'tournament', 'replay', 'announcements', 'quota', 'help']);
   for (const entry of Object.values(AUXILIARY_ENTRIES)) {
     assert.equal([entry.href, entry.tab, entry.dialog].filter(Boolean).length, 1);
     if (entry.tab) assert.ok(TAB_REGISTRY[entry.tab]);

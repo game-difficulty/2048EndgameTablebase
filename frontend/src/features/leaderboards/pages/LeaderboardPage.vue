@@ -223,7 +223,7 @@ const formatScore = (value, unit) => {
     : `${formatted} Token`;
 };
 const openReplay = (replayId) => {
-  window.open(`/verse-replay/?ranked=${encodeURIComponent(replayId)}`, '_blank', 'noopener');
+  window.open(`https://2048tables.online/verse-replay/?ranked=${encodeURIComponent(replayId)}`, '_blank', 'noopener');
 };
 const leaderboardUser = (entry) => ({
   display_name: entry?.display_name || '',

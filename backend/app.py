@@ -829,8 +829,9 @@ def _usage_for_ws_action(action: str | None) -> tuple[str, str] | None:
 
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
-async def serve_index():
-    path = os.path.join(frontend_dist_path, "index.html")
+async def serve_index(request: Request):
+    entry = "tables/index.html" if request.url.hostname == "tables.2048tables.online" else "index.html"
+    path = os.path.join(frontend_dist_path, entry)
     if os.path.exists(path):
         return FileResponse(path)
 
@@ -840,6 +841,15 @@ async def serve_index():
         "CWD": os.getcwd(),
         "SYS_MEIPASS": getattr(os.sys, "_MEIPASS", "NOT_BUNDLE"),
     }
+
+
+@app.get("/tables/", include_in_schema=False)
+@app.get("/tables/index.html", include_in_schema=False)
+async def serve_tables_index():
+    path = os.path.join(frontend_dist_path, "tables", "index.html")
+    if not os.path.exists(path):
+        raise HTTPException(404, "Tables frontend is not built.")
+    return FileResponse(path)
 
 
 @app.get("/favicon.ico", include_in_schema=False)

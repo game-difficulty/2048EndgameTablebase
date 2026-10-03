@@ -10,7 +10,7 @@ from backend.auth.db import auth_db, get_auth_db_path
 
 
 BEIJING = timezone(timedelta(hours=8))
-SITES = frozenset({'main', 'play', 'live', 'tournament'})
+SITES = frozenset({'main', 'play', 'live', 'tournament', 'tables'})
 _recorded = OrderedDict()
 _record_lock = Lock()
 _CACHE_LIMIT = 16384
@@ -28,6 +28,8 @@ def site_from_host(host: str) -> str:
         return 'live'
     if hostname == 'tournament.2048tables.online':
         return 'tournament'
+    if hostname == 'tables.2048tables.online':
+        return 'tables'
     return 'main'
 
 

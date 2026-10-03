@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-site="tables">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico?v=20260907-2" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>2048 Tables</title>
+    <script src="/compat/render-compat.js?v=2"></script>
+    <script>
+      (() => {
+        const currentUrl = new URL(window.location.href);
+        const startupTheme = currentUrl.searchParams.get('startup_theme');
+        const backendPort = currentUrl.searchParams.get('backend_port');
+        if (backendPort) {
+          currentUrl.port = backendPort;
+        }
+        window.__APP_BACKEND_ORIGIN__ = currentUrl.origin;
+        let savedPreferences = {};
+        try {
+          const stored = JSON.parse(window.localStorage.getItem('2048tables:user-preferences') || 'null');
+          if (stored?.version === 1 && stored.value && typeof stored.value === 'object') {
+            savedPreferences = stored.value;
+          }
+        } catch (_) {
+          // The app continues with its defaults when storage is unavailable.
+        }
+        if (savedPreferences.language !== 'zh' && savedPreferences.language !== 'en') {
+          const candidates = Array.isArray(window.navigator?.languages) && window.navigator.languages.length
+            ? window.navigator.languages : [window.navigator?.language];
+          const supported = candidates.map(value => String(value || '').toLowerCase())
+            .find(value => value.startsWith('zh') || value.startsWith('en'));
+          savedPreferences.language = supported?.startsWith('zh') ? 'zh' : 'en';
+          try {
+            window.localStorage.setItem('2048tables:user-preferences', JSON.stringify({
+              version: 1, value: savedPreferences, updatedAt: new Date().toISOString(),
+            }));
+          } catch (_) {
+            // Detection still applies for this page when storage is unavailable.
+          }
+        }
+        document.documentElement.lang = savedPreferences.language === 'zh' ? 'zh-CN' : 'en';
+        const darkMode = startupTheme === 'dark' ? true
+          : startupTheme === 'light' ? false : savedPreferences.dark_mode;
+        if (darkMode === true) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        } else if (darkMode === false) {
+          document.documentElement.removeAttribute('data-theme');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/tables/main.js"></script>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 export function createLiveStatusPoller({
   url, onChange, document: doc = document, fetch: request = fetch,
+  isOnline = data => data.online === true,
   setTimeout: later = setTimeout, clearTimeout: cancel = clearTimeout,
 }) {
   let stopped = false;
@@ -15,7 +16,7 @@ export function createLiveStatusPoller({
       const response = await request(url, { signal: current.signal, cache: 'no-store' });
       if (!response.ok) throw new Error('Live status unavailable');
       const data = await response.json();
-      if (!stopped && controller === current && !current.signal.aborted) onChange(data.online === true);
+      if (!stopped && controller === current && !current.signal.aborted) onChange(isOnline(data));
     } catch {
       if (!stopped && controller === current) onChange(false);
     } finally {

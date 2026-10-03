@@ -1,11 +1,11 @@
 <template>
-  <teleport to="body">
+  <teleport to="body" :disabled="embedded">
     <div
       v-if="open"
-      class="analysis-dialog-overlay"
-      @click.self="$emit('close')"
+      :class="embedded ? 'analysis-page' : 'analysis-dialog-overlay'"
+      @click.self="!embedded && $emit('close')"
     >
-      <div role="dialog" aria-modal="true" aria-labelledby="replay-analysis-title" :class="['analysis-dialog-shell', { 'analysis-dialog-shell--history': historyMode }]">
+      <div :role="embedded ? 'region' : 'dialog'" :aria-modal="embedded ? undefined : true" aria-labelledby="replay-analysis-title" :class="['analysis-dialog-shell', { 'analysis-dialog-shell--history': historyMode }]">
         <div class="analysis-dialog-header flex items-center justify-between border-b border-border-main/60 px-6 py-4">
           <div class="min-w-0">
             <div id="replay-analysis-title" class="analysis-dialog-title">{{ historyMode ? (String(locale).startsWith('zh') ? '分析历史' : 'Analysis history') : $t('analysis.title') }}</div>
@@ -22,6 +22,7 @@
             </button>
             <span v-else :class="[statusBadgeClass, 'badge-state-compact']" :title="statusBadgeText">{{ statusBadgeText }}</span>
             <button
+              v-if="!embedded"
               class="rounded-full border border-border-main bg-bg-main/80 px-3 py-1.5 ui-control font-black uppercase tracking-wider text-text-main transition-colors hover:border-accent/40 hover:text-accent"
               @click="$emit('close')"
             >
@@ -186,7 +187,7 @@
                   </div>
                 </div>
               </div>
-              <div v-else class="rounded-xl border border-dashed border-border-main/60 bg-bg-main/50 px-3 py-5 text-center ui-control font-black uppercase tracking-[0.18em] text-text-secondary">
+              <div v-else class="analysis-empty text-center ui-control font-black text-text-secondary">
                 {{ $t('analysis.progress.empty') }}
               </div>
             </div>
@@ -222,6 +223,7 @@ import {
 import { createWsClient } from '../../../services/ws/createWsClient';
 
 const props = defineProps({
+  embedded: { type: Boolean, default: false },
   open: { type: Boolean, default: false },
   context: {
     type: Object,
@@ -377,7 +379,10 @@ const markTargetSelection = () => {
   userSelectionTouched.value = true;
 };
 
+let acceptedContext = {};
 const applyContext = (context) => {
+  if (isRunning.value) return;
+  acceptedContext = context || {};
   if (context?.analysisFile instanceof File) {
     selectedFiles.value = [context.analysisFile];
     pathsInput.value = context.analysisFile.name;
@@ -433,7 +438,7 @@ const loadCatalog = async () => {
     if (patterns.length) {
       ensureValidSelection();
       if (!userSelectionTouched.value) {
-        applyContext(props.context);
+        applyContext(acceptedContext);
       }
     } else {
       selectedPattern.value = '';
@@ -756,7 +761,7 @@ const handleMessage = (message) => {
   if (message.type === 'ANALYSIS_BOOTSTRAP') {
     ensureValidSelection();
     if (!userSelectionTouched.value) {
-      applyContext(props.context);
+      applyContext(acceptedContext);
     }
     return;
   }
@@ -847,6 +852,12 @@ watch(patternGroups, (groups) => {
 watch(
   () => props.context,
   (nextContext) => {
+    if (isRunning.value && Object.keys(nextContext || {}).length) {
+      analysisError.value = String(locale.value).startsWith('zh')
+        ? '当前分析尚未完成，请完成后再载入新的分析内容。'
+        : 'An analysis is still running. Wait for it to finish before loading another.';
+      return;
+    }
     applyContext(nextContext);
   },
   { deep: true, immediate: true }
@@ -869,6 +880,9 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.analysis-page { height:100%; min-height:0; padding:16px; }
+.analysis-page .analysis-dialog-shell { width:100%; height:100%; max-width:none; max-height:none; box-shadow:none; border:0; border-radius:0; background:transparent; }
+.analysis-empty { width:100%; padding:24px 12px; align-self:flex-start; }
 .analysis-dialog-overlay { position: fixed; inset: 0; z-index: 220; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, 0.4); }
 .analysis-dialog-shell {
   display: flex;

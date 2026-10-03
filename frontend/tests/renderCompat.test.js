@@ -76,7 +76,7 @@ test('build keeps main and Play compatibility styles in separate bundles', () =>
   assert.throws(() => mainCssFiles({ 'index.html': { dynamicImports: ['missing'] } }), /Missing Vite manifest entry/);
 });
 test('both entry documents run the classic detector before the application', () => {
-  for (const path of ['../index.html', '../live/index.html', '../human/index.html']) {
+  for (const path of ['../index.html', '../tables/index.html', '../live/index.html', '../human/index.html']) {
     const html = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert.ok(html.indexOf('/compat/render-compat.js') < html.indexOf('type="module"'));
   }

@@ -124,6 +124,7 @@ export async function buildRenderCompat() {
   const entries = [
     { name: 'index.html', marker: '<script src="/compat/render-compat.js?v=2"></script>', files: mainCssFiles(manifest) },
     { name: 'human/index.html', marker: '<script src="/compat/render-compat.js?v=3"></script>', files: entryCssFiles(manifest, 'human/index.html') },
+    { name: 'tables/index.html', marker: '<script src="/compat/render-compat.js?v=2"></script>', files: entryCssFiles(manifest, 'tables/index.html') },
   ];
   if (!entries[0].files.length || !entries[0].files.some((file) => file.includes('/style-'))) {
     throw new Error('Main CSS was not found in the Vite manifest');

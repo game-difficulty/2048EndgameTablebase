@@ -42,7 +42,8 @@
     "notebook": "Notebook",
     "settings": "Settings",
     "help": "Help",
-    "admin": "Admin"
+    "admin": "Admin",
+    "analysis": "Analysis"
   },
   "auth": {
     "title": {
@@ -846,11 +847,18 @@
       "battle": "Choose moves together and compare goodness.",
       "leaderboards": "Explore community scores, Token usage, and supporter rankings.",
       "settings": "Tablebase Building & Appearance Settings.",
-      "help": "Documentation, Technique Guides, and Project Information."
+      "help": "Documentation, Technique Guides, and Project Information.",
+      "tables": "Practice, test and compete with endgame tablebases.",
+      "tableReplay": "Review endgame replays move by move.",
+      "analysis": "Analyze replays and review stage accuracy."
     },
     "githubNote": "Support this project by giving it a star on GitHub",
     "sponsorNotePrefix": "This project is sponsored by ",
-    "sponsorNoteSuffix": "."
+    "sponsorNoteSuffix": ".",
+    "tables": "Tablebases",
+    "tablesSite": "2048 Tablebases",
+    "tournament": "Tournaments",
+    "mainSite": "Main site"
   },
   "battle": {
     "title": "Battle",

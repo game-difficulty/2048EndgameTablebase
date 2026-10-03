@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createLiveStatusPoller } from '../src/services/live/liveStatus.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function setup(request, hidden = false) {
+function setup(request, hidden = false, isOnline) {
   const doc = new EventTarget();
   doc.hidden = hidden;
   const timers = new Map(), values = [];
@@ -11,6 +11,7 @@ function setup(request, hidden = false) {
   const stop = createLiveStatusPoller({
     url: '/api/live/status', fetch: request, document: doc,
     onChange: value => values.push(value),
+    ...(isOnline ? { isOnline } : {}),
     setTimeout: (fn, ms) => { timers.set(++id, { fn, ms }); return id; },
     clearTimeout: key => timers.delete(key),
   });
@@ -23,6 +24,14 @@ function setup(request, hidden = false) {
   return { doc, timers, values, stop, tick };
 }
 const response = online => ({ ok: true, json: async () => ({ online }) });
+
+test('lobby indicator includes human and competition rooms, not only the AI stream', async () => {
+  const state = setup(async () => ({ok:true,json:async()=>({rooms:[{content_kind:'human-play'}],online:false})}), false,
+    data => Array.isArray(data.rooms) && data.rooms.length > 0);
+  await flush();
+  assert.deepEqual(state.values, [true]);
+  state.stop();
+});
 
 test('polls lightweight status every 30 seconds; offline and failures clear animation', async () => {
   const results = [response(true), response(false), response('true'), { ok: false }];

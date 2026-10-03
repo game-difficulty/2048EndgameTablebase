@@ -25,5 +25,5 @@ export default defineConfig({
     apply: 'build',
     async closeBundle() { await buildRenderCompat(); await precompress(); },
   }],
-  build: { manifest: true, rollupOptions: { input: { main: 'index.html', live: 'live/index.html', human: 'human/index.html' } } },
+  build: { manifest: true, rollupOptions: { input: { main: 'index.html', tables: 'tables/index.html', live: 'live/index.html', human: 'human/index.html' } } },
 })

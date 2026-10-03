@@ -13,7 +13,8 @@ const online = ref(false);
 let stop;
 onMounted(() => {
   stop = createLiveStatusPoller({
-    url: getBackendUrl('/api/live/status'),
+    url: getBackendUrl('/api/live/lobby'),
+    isOnline: data => Array.isArray(data.rooms) && data.rooms.length > 0,
     onChange: value => { online.value = value; },
   });
 });

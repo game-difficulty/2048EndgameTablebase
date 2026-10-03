@@ -16,8 +16,10 @@
         @wheel.capture="handleWorkspaceWheel"
       >
     <AnnouncementBanner v-show="activeTab === TAB_IDS.MAIN_MENU" @navigate="handleAnnouncementNavigate" />
-    <div ref="appTopBar" class="flex items-center gap-2 overflow-x-auto overflow-y-hidden bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
-      <template v-for="tab in openTabDefinitions" :key="tab.id">
+    <div ref="appTopBar" class="workspace-topbar bg-bg-main/80 p-2 shadow-sm z-50 border-b border-border-main backdrop-blur-md transition-colors duration-300">
+      <button class="workspace-home action-btn-small" :title="$t('tabs.home')" :aria-label="$t('tabs.home')" :aria-pressed="activeTab === TAB_IDS.MAIN_MENU" @click="openTab(TAB_IDS.MAIN_MENU)"><House :size="19" /></button>
+      <div class="workspace-tabs">
+      <template v-for="tab in openTabDefinitions.filter(item => item.id !== TAB_IDS.MAIN_MENU)" :key="tab.id">
       <div
         :class="[
           'flex items-center rounded-lg border transition-all duration-300',
@@ -54,9 +56,13 @@
           ×
         </button>
       </div>
-      <LiveTabEntry v-if="tab.id === TAB_IDS.MAIN_MENU" />
       </template>
-      <div class="relative ml-auto flex items-center gap-2 whitespace-nowrap pl-3" data-account-menu>
+      </div>
+      <div class="workspace-fixed-links">
+        <a v-if="currentSite === 'tables'" :href="siteUrl('main').href" target="_blank" rel="noopener noreferrer" class="action-btn-small" :title="$t('menu.mainSite')" :aria-label="$t('menu.mainSite')"><ArrowUpRight :size="18" /></a>
+        <LiveTabEntry />
+        <AuxiliaryEntry :entry="AUXILIARY_ENTRIES.tournament" class="top-live-entry" />
+      <div class="relative flex items-center gap-2 whitespace-nowrap pl-2" data-account-menu>
         <template v-if="authUser">
           <button
             type="button"
@@ -76,6 +82,7 @@
             {{ $t('auth.actions.register') }}
           </button>
         </template>
+      </div>
       </div>
     </div>
 
@@ -201,6 +208,9 @@
         <div v-if="isTabOpen(TAB_IDS.CONTACT)" v-show="activeTab === TAB_IDS.CONTACT" class="absolute inset-0">
           <ContactView />
         </div>
+        <div v-if="isTabOpen(TAB_IDS.ANALYSIS)" v-show="activeTab === TAB_IDS.ANALYSIS" class="absolute inset-0">
+          <ReplayAnalysisDialog :open="true" embedded :context="analysisDialogContext" @close="closeTab(TAB_IDS.ANALYSIS)" />
+        </div>
       </div>
 
       <div
@@ -258,12 +268,6 @@
         </div>
       </div>
     </div>
-
-    <ReplayAnalysisDialog
-      :open="analysisDialogOpen"
-      :context="analysisDialogContext"
-      @close="closeAnalysisDialog"
-    />
 
     <AccountSecurityDialog
       :open="accountSecurityDialog.open"
@@ -396,6 +400,11 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { House, ArrowUpRight } from '@lucide/vue';
+import AuxiliaryEntry from './components/AuxiliaryEntry.vue';
+import { AUXILIARY_ENTRIES } from './app/auxiliaryEntries.js';
+import { currentSite, siteUrl, isTableTab, TAB_ROUTES } from './app/siteProfile.js';
+import { openSiteTab, receiveSiteContext } from './app/siteNavigation.js';
 import { userError } from './services/errors/userError.js';
 
 import {
@@ -469,8 +478,8 @@ const {
 watch([authReady, () => authUser.value?.id ?? null], ([ready, userId]) => {
   if (ready) void activateAccountPreferences(userId);
 }, { immediate: true });
-const analysisDialogOpen = ref(false);
 const analysisDialogContext = ref({});
+let stopSiteHandoff = () => {};
 const globalErrorDialog = ref({
   open: false,
   title: '',
@@ -522,9 +531,20 @@ const {
   closeTab,
   isTabOpen,
   moveTabRelative,
-  openTab,
+  openTab: openLocalTab,
   openTabInBackground,
 } = useTabManager();
+function openTab(tabId) {
+  if (currentSite === 'main' && isTableTab(tabId)) {
+    openSiteTab(tabId, null, 'tables');
+    return;
+  }
+  if (currentSite === 'tables' && [TAB_IDS.GAMER, TAB_IDS.MINIGAMES].includes(tabId)) {
+    openSiteTab(tabId, null, 'main');
+    return;
+  }
+  openLocalTab(tabId);
+}
 const draggedTabId = ref(null);
 const announcementRequestedId = ref('');
 function handleAnnouncementNavigate(target) {
@@ -648,6 +668,10 @@ const claimTrainerKeyboardForBoardJump = () => {
 };
 
 const handleNavigateTab = (tabId, detail = null) => {
+  if (currentSite === 'main' && isTableTab(tabId)) {
+    try { openSiteTab(tabId, detail, 'tables'); } catch (error) { window.alert(error.message); }
+    return;
+  }
   if (tabId === TAB_IDS.TRAINER && detail?.hex) {
     queueTrainerPracticeJump(detail);
     const requestedDockPlacement = resolveTrainerJumpDockPlacement({
@@ -726,13 +750,12 @@ const handleAuthVisibilityChange = () => {
 };
 
 const openAnalysisDialog = (context = {}) => {
+  if (currentSite === 'main') {
+    try { openSiteTab(TAB_IDS.ANALYSIS, context, 'tables'); } catch (error) { window.alert(error.message); }
+    return;
+  }
   analysisDialogContext.value = { ...(context || {}) };
-  analysisDialogOpen.value = true;
-};
-
-const closeAnalysisDialog = () => {
-  analysisDialogOpen.value = false;
-  analysisDialogContext.value = {};
+  openTab(TAB_IDS.ANALYSIS);
 };
 
 const globalErrorSummary = computed(() => {
@@ -916,6 +939,7 @@ const handleCloseTab = async (tabId, event) => {
     setKeyboardOwner(KEYBOARD_OWNERS.PRIMARY);
   }
   closeTab(tabId);
+  if (tabId === TAB_IDS.ANALYSIS) analysisDialogContext.value = {};
   if (trainerDockActive.value && activeTab.value === TAB_IDS.TRAINER) {
     activateTab(getTrainerCompanionTab());
   }
@@ -1214,29 +1238,12 @@ onMounted(async () => {
   if (initialParams.get('tab') === 'announcements') {
     handleAnnouncementNavigate({ type: 'announcement', id: findAnnouncement(initialParams.get('announcement')).id });
   }
-  if (initialParams.get('tab') === 'battle' || initialParams.has('room')) {
-    openTab(TAB_IDS.BATTLE);
-  }
-  const humanAnalysisToken = initialParams.get('humanAnalysis');
-  if (initialParams.get('tab') === 'replay' || humanAnalysisToken) openTab(TAB_IDS.REPLAY);
-  if (humanAnalysisToken && window.opener) {
-    const sender = window.opener;
-    const receiveHumanAnalysis = (event) => {
-      if (event.origin !== window.location.origin || event.source !== sender ||
-          event.data?.type !== 'human-analysis-data' || event.data?.token !== humanAnalysisToken) return;
-      const { text, filename } = event.data;
-      if (typeof text !== 'string' || text.length > 5000000 || typeof filename !== 'string') return;
-      window.removeEventListener('message', receiveHumanAnalysis);
-      openAnalysisDialog({ analysisFile: new File([text], filename, { type: 'text/plain' }) });
-      sender.postMessage({ type: 'human-analysis-loaded', token: humanAnalysisToken }, window.location.origin);
-      const cleanUrl = new URL(window.location.href);
-      cleanUrl.searchParams.delete('humanAnalysis');
-      window.history.replaceState(window.history.state, '', cleanUrl);
-    };
-    window.addEventListener('message', receiveHumanAnalysis);
-    sender.postMessage({ type: 'human-analysis-ready', token: humanAnalysisToken }, window.location.origin);
-    window.setTimeout(() => window.removeEventListener('message', receiveHumanAnalysis), 30000);
-  }
+  const initialTab = TAB_ROUTES[initialParams.get('tab')];
+  if (initialTab) openTab(initialTab);
+  stopSiteHandoff = receiveSiteContext((tab, detail) => {
+    if (tab === TAB_IDS.ANALYSIS) openAnalysisDialog(detail);
+    else handleNavigateTab(tab, detail);
+  });
   refreshAuth().then((nextUser) => {
     if (nextUser) {
       writeLastScheduledAuthRefresh();
@@ -1259,6 +1266,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  stopSiteHandoff();
   if (fixedViewportObserver) {
     fixedViewportObserver.disconnect();
     fixedViewportObserver = null;
@@ -1284,6 +1292,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.workspace-topbar { display:flex; align-items:center; gap:8px; min-width:0; }
+.workspace-home { flex-shrink:0; width:36px; height:36px; display:grid; place-items:center; }
+.workspace-home[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); }
+.workspace-tabs { flex:1; min-width:0; display:flex; align-items:center; gap:8px; overflow-x:auto; overflow-y:hidden; padding:3px; }
+.workspace-tabs > div { flex-shrink:0; white-space:nowrap; }
+.workspace-fixed-links { flex-shrink:0; display:flex; align-items:center; gap:8px; white-space:nowrap; }
 .fixed-layout-viewport {
   position: fixed;
   inset:

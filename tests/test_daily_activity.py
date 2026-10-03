@@ -49,6 +49,7 @@ class DailyActivityTests(unittest.TestCase):
         self.assertEqual(site_from_host('play.2048tables.online'), 'play')
         self.assertEqual(site_from_host('live.2048tables.online'), 'live')
         self.assertEqual(site_from_host('tournament.2048tables.online:443'), 'tournament')
+        self.assertEqual(site_from_host('tables.2048tables.online:443'), 'tables')
         record_daily_visit(1, 'main', now=now)
         record_daily_visit(1, 'play', now=now)
         record_daily_visit(1, 'live', now=now)
@@ -101,6 +102,7 @@ class DailyActivityTests(unittest.TestCase):
         with TestClient(app) as client:
             for host, path in [('2048tables.online', '/feature'),
                                ('live.2048tables.online', '/feature'),
+                               ('tables.2048tables.online', '/feature'),
                                ('play.2048tables.online', '/play-feature'),
                                ('tournament.2048tables.online', '/competition-feature')]:
                 for _ in range(2):
@@ -109,8 +111,8 @@ class DailyActivityTests(unittest.TestCase):
             self.assertEqual(client.get('/feature').status_code, 401)
         with auth_db() as db:
             rows = db.execute('SELECT site FROM daily_user_activity').fetchall()
-        self.assertEqual({row['site'] for row in rows}, {'main', 'play', 'live', 'tournament'})
-        self.assertEqual(len(rows), 4)
+        self.assertEqual({row['site'] for row in rows}, {'main', 'play', 'live', 'tournament', 'tables'})
+        self.assertEqual(len(rows), 5)
 
     def test_cached_visit_does_not_write_again_and_rolls_over(self):
         with patch('backend.auth.daily_activity.auth_db', wraps=auth_db) as connection:

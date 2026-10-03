@@ -61,7 +61,7 @@ const error = ref('');
 const opening = ref('');
 const text = (zh, en) => String(props.language).startsWith('en') ? en : zh;
 const formatTime = value => new Date(Number(value) * 1000).toLocaleString(String(props.language).startsWith('en') ? 'en-US' : 'zh-CN');
-const originLabel = value => value === 'human_archive' ? text('对局站归档', 'Play archive') : text('主站上传', 'Main-site upload');
+const originLabel = value => value === 'human_archive' ? text('对局站归档', 'Play archive') : text('回放上传', 'Replay upload');
 const statusLabel = value => ({ queued: text('等待', 'Queued'), running: text('分析中', 'Running'), finished: text('完成', 'Finished'), partial: text('部分完成', 'Partial'), failed: text('失败', 'Failed') })[value] || value;
 const modeLabel = variant => variant ? String(variant).replace('x', '×') : text('未知模式', 'Unknown mode');
 const itemLabel = item => analysisScoreLabel(item.score, props.language) || text('局分未记录', 'Score unavailable');
