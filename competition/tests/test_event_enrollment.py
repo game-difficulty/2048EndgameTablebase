@@ -120,6 +120,45 @@ def test_captain_can_confirm_after_registration_closes(enrollment):
         act(enrollment, 'unsubmit_team', uid=1, team_id=tid)
 
 
+def test_organizer_locks_imported_teams_without_captain_submission(enrollment):
+    open_registration(enrollment)
+    entries = [{'user_id': uid, 'team_name': f'Team {(uid-1)//3+1}',
+                'captain': (uid-1)%3 == 0, 'position': (uid-1)%3+1} for uid in range(1, 7)]
+    enrollment.import_roster(TEAM, ADMIN, entries=entries, revision=enrollment.snapshot(TEAM)['revision'], dry_run=False)
+    before = enrollment.snapshot(TEAM)
+    assert all(not team['submitted'] for team in before['teams'])
+    with pytest.raises(CompetitionError):
+        act(enrollment, 'lock_roster', uid=1)
+    assert not enrollment.snapshot(TEAM)['roster_locked']
+    locked = act(enrollment, 'lock_roster')
+    assert locked['roster_locked'] and locked['registration_locked']
+    assert not locked['registration_open']
+    assert len(json.loads(locked['audit'][0]['payload_json'])['entries']) == 6
+    with pytest.raises(CompetitionError):
+        act(enrollment, 'unsubmit_team', uid=1, team_id=before['teams'][0]['id'])
+
+
+@pytest.mark.parametrize('kind, message', [
+    ('incomplete', '每支队伍都必须达到规定人数'),
+    ('unassigned', '还有未分组选手'),
+    ('captain', '每队需指定一位队长'),
+    ('positions', '明确的 1、2、3 号位'),
+])
+def test_unsubmitted_roster_still_requires_complete_team_metadata(enrollment, kind, message):
+    open_registration(enrollment)
+    entries = [{'user_id': uid, 'team_name': 'Team A', 'captain': uid == 1, 'position': uid} for uid in (1,2,3)]
+    if kind == 'incomplete': entries.pop()
+    if kind == 'unassigned': entries[-1].update(team_name='', captain=False, position=None)
+    if kind in ('captain', 'positions'):
+        for entry in entries: entry['position'] = None
+    enrollment.import_roster(TEAM, ADMIN, entries=entries, revision=enrollment.snapshot(TEAM)['revision'], dry_run=False)
+    if kind == 'captain':
+        with enrollment.database.transaction(immediate=True) as db:
+            db.execute('UPDATE tournament_teams SET captain_user_id=NULL WHERE event_slug=?', (TEAM,))
+    with pytest.raises(CompetitionError, match=message): act(enrollment, 'lock_roster')
+    assert not enrollment.snapshot(TEAM)['roster_locked']
+
+
 def test_padding_zero_games_and_team_sum(enrollment):
     module = enrollment.catalog.statistics
     module.result_reader = lambda ids, *args: {i: {'completed_games':1,'games':[{'id':'one','score':2000,'board_sum':1022}]} for i in ids if i == 1}

@@ -217,8 +217,6 @@ class EventEnrollment:
                 members = [e for e in entries if e['team_id'] == team['id']]
                 if len(members) != config['team_size']:
                     fail('每支队伍都必须达到规定人数。')
-                if config['mode'] == 'self_team' and not team['submitted']:
-                    fail('所有队伍需由队长提交报名后才能锁定。')
                 if self.catalog._event(db, slug)['format_key'] == 'team-draft-v1' and not team['captain_user_id']:
                     fail('团队对战名单中的每队需指定一位队长。')
                 if self.catalog._event(db,slug)['format_key']=='team-draft-v1' and sorted(e.get('position') or 0 for e in members)!=list(range(1,config['team_size']+1)):

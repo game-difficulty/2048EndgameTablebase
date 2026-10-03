@@ -5,6 +5,59 @@ const entries=`
 输入用户 ID|Enter user ID
 已移出人员|Removed participants
 导入方式|Import mode
+名单格式|Roster format
+参赛阵容|Tournament roster
+人员已锁定|Participants locked
+参赛队伍|Teams
+我的报名|My registration
+登录后参与报名|Sign in to register
+尚未报名|Not registered
+查看与操作|View and manage
+邀请你加入队伍|Invites you to join
+等待接受邀请|Invitation pending
+队长确认可选，不影响举办方锁定名单。|Captain confirmation is optional and does not prevent the organizer from locking the roster.
+撤回队伍确认|Undo team confirmation
+确认队伍（可选）|Confirm team (optional)
+搜索队名、选手或 ID|Search teams, players or IDs
+等待队员加入|Waiting for members
+没有匹配的队伍或选手。|No matching teams or players.
+赛事名单管理|Roster management
+管理名单|Manage roster
+仅举办方与赛事管理员可见|Visible to organizers and event administrators
+展开管理|Manage
+导入名单|Import roster
+报名设置|Registration settings
+名单锁定|Lock roster
+操作记录|Activity log
+设置报名方式、人数上限与开放状态。|Set the registration mode, capacity and availability.
+名单已锁定，调整报名设置需先解锁。|Unlock the roster before changing registration settings.
+举办方可直接锁定完整名单，无需队长先提交报名。|Organizers can lock a complete roster without prior captain submission.
+停止新增报名与退出，仍可调整同一批选手的分组。|Close registration and withdrawals while allowing team assignments to change for the same players.
+确认分组、人数、队长及队内序号，冻结本届参赛阵容。|Check team assignments, sizes, captains and positions, then freeze the tournament roster.
+账号匹配失败则整批不导入；保存会替换现有名单并取消旧邀请。|Any unmatched account blocks the import. Saving replaces the roster and cancels old invitations.
+导入规则与注意事项|Import rules and notes
+每行：队名、队长、其余队员。支持 Excel 粘贴或逗号分隔，自动生成队内序号。|Each row: team name, captain, then members. Paste from Excel or separate with commas. Positions are assigned automatically.
+首位默认队长，队内序号按列顺序生成；外援默认关闭，均可在预览调整。|The first player is captain and positions follow column order. Guest status is off by default. Adjust these in the preview.
+用户名仅匹配当前有效账号。人员锁定后只能调整原有人员的分组。完整名单可由举办方直接锁定，无需队长再次提交。|Usernames match current active accounts only. Once participants are locked, only existing players' team assignments may change. Organizers can lock a complete roster without further captain submission.
+暂无操作记录。|No activity yet.
+报名、邀请与队伍管理请在报名页操作，以举办方公布的报名状态为准。|Register, manage invitations and organize your team on the registration page. Availability follows the organizer's registration settings.
+外援|Guest
+按队伍导入|Import by team
+高级导入（逐人）|Advanced import (one player per row)
+账号匹配方式|Account matching
+每行一队：队名、队长、其余队员。可直接从 Excel 复制粘贴，也支持逗号分隔和表头。按列顺序自动编号，第一位默认队长，外援默认关闭；预览中可调整。|One team per row: team name, captain, then other members. Paste directly from Excel, or use comma-separated rows. Headers are optional. Positions follow column order; the first player is captain and guest status is off by default. Adjust these in the preview.
+每行一人：用户名或 ID、队名（可空）、外援0或1、队长0或1、队内序号（可空）。也可仅填写用户名或 ID。|One player per row: username or ID, team name (optional), guest 0/1, captain 0/1, team position (optional). Usernames or IDs alone are also accepted.
+用户名仅匹配当前有效账号；任一选手匹配失败则整批不导入。保存将替换当前名单并取消旧邀请。人员锁定后只能调整原有人员的分组；自由组队导入后仍需队长提交。|Usernames match current active accounts only. Any unmatched player blocks the entire import. Saving replaces the roster and cancels old invitations. Once participants are locked, only existing players' team assignments may change. Self-organized teams still require captain submission after import.
+改选队长会将该选手调整为 1 号位，并交换原 1 号位的序号。确认保存前请核对队长与外援。|Changing captain moves that player to position 1 and swaps positions with the previous position 1 player. Check captains and guests before saving.
+请选择队长|Select a captain
+请选择有效的导入方式。|Select a valid import mode.
+本赛事的队伍人数无效。|The event's team size is invalid.
+引号后的内容无效。|Invalid content after a closing quote.
+引号未闭合。|A quoted field is not closed.
+请填写有效的当前用户名或用户 ID。|Enter a valid current username or user ID.
+请填写队名。|Enter a team name.
+队名重复，请将同一队的选手放在一行。|Duplicate team name. Put all members of the same team on one row.
+请检查队名、外援0或1、队长0或1和队内序号。|Check the team name, guest 0/1, captain 0/1, and team position.
 当前用户名|Current username
 用户 ID|User ID
 队名（可空）,外援0或1,队长0或1,队内序号（团队对战填1/2/3）。|team name (optional), guest 0/1, captain 0/1, team position (1/2/3 for team matches).

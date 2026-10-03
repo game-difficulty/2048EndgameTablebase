@@ -30,6 +30,9 @@ export function t(value){
 }
 // Parameterized display messages: identifiers and player/team names stay intact.
 const patterns=[
+ [/^每队 (\d+) 人。$/,'$1 players per team.'],
+ [/^每队须填写 (\d+) 位选手。$/,'Each team must have $1 players.'],
+ [/^第 (\d+) 行：(.*)$/s,(_,row,detail)=>`Row ${row}: ${t(detail)}`],
  [/^请求失败（(\d+)）$/,'Request failed ($1)'],
  [/^确定关闭「(.*)」？关闭后无法重新落座或开赛，房间记录仍会保留。$/s,'Close “$1”? Seating and play will be disabled. The room record will be retained.'],
  [/^本机 AI 计算失败，请重试：(.*)$/s,'Local AI calculation failed. Please retry: $1'],
