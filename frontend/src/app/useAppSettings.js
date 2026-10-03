@@ -8,6 +8,7 @@ import { applyTileColors, resolveTileColors } from '../utils/tileColors';
 import { writeSharedTilePalette } from '../utils/sharedTilePalette';
 import { ACCOUNT_GLOBAL_KEYS, saveAccountPreferences } from '../services/preferences/accountPreferences';
 import { applyActiveSavedTheme, clearSavedThemeStyles } from '../services/preferences/savedThemes';
+import { rememberRenderedAppearance } from '../services/preferences/renderedAppearance.js';
 
 const EMPTY_COLOR_SET = Array(36).fill('#000000');
 const INITIAL_DARK_MODE = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -207,6 +208,7 @@ const applyColorScheme = () => {
   } else {
     document.documentElement.removeAttribute('data-theme');
   }
+  rememberRenderedAppearance(config.value.dark_mode);
 };
 
 const applyGlobalConfig = () => {

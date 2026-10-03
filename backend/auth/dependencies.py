@@ -41,6 +41,7 @@ def shared_cookie_domain(request: Request | WebSocket) -> str | None:
     domain = os.getenv('AUTH_SHARED_COOKIE_DOMAIN', '2048tables.online').strip().lower().lstrip('.')
     host = (request.url.hostname or '').lower()
     allowed = {domain, f'www.{domain}', f'live.{domain}', f'play.{domain}'}
+    allowed.add(f'tables.{domain}')
     extra = os.getenv('AUTH_SHARED_COOKIE_HOSTS', '')
     allowed.update(name for item in extra.split(',')
                    if (name := item.strip().lower()) and name.endswith(f'.{domain}'))

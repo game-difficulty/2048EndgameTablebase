@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { rememberRenderedAppearance } from '../src/services/preferences/renderedAppearance.js';
 
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const startupScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0]?.[1];
 assert.ok(startupScript);
 
-function boot(value, search = '', storageError = false, languages = ['en-US']) {
+function boot(value, search = '', storageError = false, languages = ['en-US'], rendered = null, script = startupScript) {
   const attributes = { lang: 'en' };
   const document = { documentElement: {
     get lang() { return attributes.lang; },
@@ -17,15 +18,16 @@ function boot(value, search = '', storageError = false, languages = ['en-US']) {
   } };
   let storedValue = value == null ? null : JSON.stringify({ version: 1, value });
   const window = { location: { href: `https://2048tables.online/${search}` }, navigator: { languages },
-    localStorage: { getItem() {
+    localStorage: { getItem(key) {
       if (storageError) throw new Error('Storage blocked');
+      if (key === '2048tables:rendered-appearance') return rendered;
       return storedValue;
     }, setItem(_key, next) {
       if (storageError) throw new Error('Storage blocked');
       storedValue = next;
     } },
   };
-  runInNewContext(startupScript, { window, document, URL, JSON, Date });
+  runInNewContext(script, { window, document, URL, JSON, Date });
   return { attributes, backend: window.__APP_BACKEND_ORIGIN__, storedValue };
 }
 
@@ -34,6 +36,44 @@ test('saved appearance is applied before Vue renders', () => {
     { lang: 'zh-CN', 'data-theme': 'dark' });
   assert.deepEqual(boot({ dark_mode: false, language: 'en' }).attributes,
     { lang: 'en' });
+});
+
+test('main and tables restore the rendered server default before modules load', () => {
+  const tables = readFileSync(new URL('../tables/index.html', import.meta.url), 'utf8');
+  const tablesScript = [...tables.matchAll(/<script>([\s\S]*?)<\/script>/g)][0]?.[1];
+  assert.ok(tablesScript);
+  for (const script of [startupScript, tablesScript]) {
+    for (const dark of [true, false]) {
+      const cached = JSON.stringify({ version: 1, dark_mode: dark });
+      const result = boot({ language: 'zh' }, '', false, ['en-US'], cached, script);
+      assert.equal(result.attributes['data-theme'] === 'dark', dark);
+      assert.equal(JSON.parse(result.storedValue).value.dark_mode, undefined);
+      const explicit = boot({ language: 'zh', dark_mode: !dark }, '', false, ['en-US'], cached, script);
+      assert.equal(explicit.attributes['data-theme'] === 'dark', !dark);
+    }
+    const malformed = boot(null, '', false, ['en-US'], 'invalid', script);
+    assert.equal(malformed.attributes['data-theme'], undefined);
+    assert.equal(boot(null, '', true, ['en-US'], null, script).attributes['data-theme'], undefined);
+  }
+});
+
+test('rendered appearance uses an isolated cache and ignores storage failures', () => {
+  const original = globalThis.window;
+  const values = new Map();
+  let writes = 0;
+  try {
+    globalThis.window = { localStorage: {
+      getItem: key => values.get(key),
+      setItem: (key, value) => { writes += 1; values.set(key, value); },
+    } };
+    rememberRenderedAppearance(true);
+    rememberRenderedAppearance(true);
+    assert.equal(writes, 1);
+    assert.deepEqual([...values.keys()], ['2048tables:rendered-appearance']);
+    assert.equal(JSON.parse(values.get('2048tables:rendered-appearance')).dark_mode, true);
+    Object.defineProperty(globalThis.window, 'localStorage', { get() { throw new Error('blocked'); } });
+    assert.doesNotThrow(() => rememberRenderedAppearance(false));
+  } finally { globalThis.window = original; }
 });
 
 test('explicit startup theme wins without changing saved language', () => {

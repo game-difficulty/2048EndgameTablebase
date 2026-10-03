@@ -16,6 +16,13 @@
         }
         window.__APP_BACKEND_ORIGIN__ = currentUrl.origin;
         let savedPreferences = {};
+        let renderedDarkMode;
+        try {
+          const rendered = JSON.parse(window.localStorage.getItem('2048tables:rendered-appearance') || 'null');
+          if (rendered && rendered.version === 1 && typeof rendered.dark_mode === 'boolean') {
+            renderedDarkMode = rendered.dark_mode;
+          }
+        } catch (_) {}
         try {
           const stored = JSON.parse(window.localStorage.getItem('2048tables:user-preferences') || 'null');
           if (stored?.version === 1 && stored.value && typeof stored.value === 'object') {
@@ -40,7 +47,8 @@
         }
         document.documentElement.lang = savedPreferences.language === 'zh' ? 'zh-CN' : 'en';
         const darkMode = startupTheme === 'dark' ? true
-          : startupTheme === 'light' ? false : savedPreferences.dark_mode;
+          : startupTheme === 'light' ? false
+          : typeof savedPreferences.dark_mode === 'boolean' ? savedPreferences.dark_mode : renderedDarkMode;
         if (darkMode === true) {
           document.documentElement.setAttribute('data-theme', 'dark');
         } else if (darkMode === false) {

@@ -13,6 +13,7 @@ function harness(initial = {}) {
   let transport;
   const listeners = {};
   const attrs = {};
+  let renderedDark;
   const context = {
     ref: value => ({ value }), computed: fn => ({ get value() { return fn(); } }),
     i18n: { global: { locale: { value: 'en' } } },
@@ -30,12 +31,15 @@ function harness(initial = {}) {
     ACCOUNT_GLOBAL_KEYS: ['language', 'dark_mode', 'theme', 'use_custom_theme', 'custom_colors',
       'font_size_factor', 'ui_scale', 'do_animation', 'saved_theme_id'],
     saveAccountPreferences() {},
+    rememberRenderedAppearance: value => { renderedDark = value; },
   };
   vm.createContext(context);
   vm.runInContext(`${source};globalThis.store=useAppSettingsStore();`, context);
   context.store.start();
   return {
     setStored: value => { stored = value; },
+    stored: () => structuredClone(stored),
+    renderedDark: () => renderedDark,
     emit: (name, event = {}) => listeners[name](event),
     receive: () => transport.onMessage({ type: 'SETTINGS_DATA', payload: {
       config: { language: 'zh', dark_mode: true, theme: 'Chrome' },
@@ -79,4 +83,14 @@ test('focus still applies explicit preference updates made by another page', () 
   h.setStored({ language: 'en', dark_mode: false });
   h.emit('focus');
   assert.deepEqual(h.state(), { language: 'en', dark: false, theme: 'Chrome' });
+});
+
+test('server defaults are remembered for startup without becoming account preferences', () => {
+  const h = harness({ language: 'en' });
+  h.receive();
+  assert.equal(h.renderedDark(), true);
+  assert.deepEqual(h.stored(), { language: 'en' });
+  h.setStored({ language: 'en', dark_mode: false });
+  h.emit('account-preferences-changed');
+  assert.equal(h.renderedDark(), false);
 });
