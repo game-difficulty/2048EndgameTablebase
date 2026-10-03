@@ -5,6 +5,14 @@
     "label": "Perfect!",
     "comparison": "absolute_difference",
     "tolerance": 3e-10,
+    "tolerance_by_dtype": {
+      "uint32": 3e-10,
+      "float32": 3e-10,
+      "1-float32": 3e-10,
+      "uint64": 1e-14,
+      "float64": 1e-14,
+      "1-float64": 1e-14
+    },
     "color": "#2e7d32"
   },
   "evaluations": [

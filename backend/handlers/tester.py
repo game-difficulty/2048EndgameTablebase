@@ -245,7 +245,7 @@ async def handle_tester_action(
             structured_result_lines.append(f"{label}: {display}")
 
         evaluation = PERFORMANCE_PERFECT_LABEL
-        loss = replay_step_goodness_ratio(selected_rate, best_rate)
+        loss = replay_step_goodness_ratio(selected_rate, best_rate, session.tester_result_dtype)
         if loss == 1.0:
             session.tester_combo += 1
             session.tester_max_combo = max(
@@ -326,7 +326,7 @@ async def handle_tester_action(
         elif session.tester_best_move is None:
             _tester_append_log(session, "Game Over: no possible moves left.")
             _tester_append_summary(session)
-        elif sum_goal is None and next_best_rate is not None and is_perfect_result(next_best_rate, 1.0):
+        elif sum_goal is None and next_best_rate is not None and is_perfect_result(next_best_rate, 1.0, session.tester_result_dtype):
             _tester_append_log(
                 session,
                 "Congratulations! You're about to reach the target tile.",

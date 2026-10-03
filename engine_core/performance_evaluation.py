@@ -7,6 +7,10 @@ from typing import Any
 
 
 DEFAULT_PERFECT_LABEL = "Perfect!"
+DEFAULT_PERFECT_TOLERANCES = {
+    "uint32": 3e-10, "float32": 3e-10, "1-float32": 3e-10,
+    "uint64": 1e-14, "float64": 1e-14, "1-float64": 1e-14,
+}
 DEFAULT_PERFECT_COLOR = "#2e7d32"
 DEFAULT_PERFECT_COMPARISON = "absolute_difference"
 DEFAULT_PERFECT_TOLERANCE = 3e-10
@@ -34,6 +38,34 @@ CONFIG_PATH = (
 )
 
 
+def _dtype_name(dtype) -> str:
+    name = str(dtype or "").strip().lower()
+    return {"f32": "float32", "f64": "float64",
+            "1-f32": "1-float32", "1-f64": "1-float64"}.get(name, name)
+
+
+def _normalize_perfect_tolerances(raw) -> dict[str, float]:
+    values = dict(DEFAULT_PERFECT_TOLERANCES)
+    if isinstance(raw, dict):
+        for dtype, value in raw.items():
+            name = _dtype_name(dtype)
+            if name not in values:
+                continue
+            try:
+                tolerance = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(tolerance) and tolerance >= 0:
+                values[name] = tolerance
+    return values
+
+
+def perfect_tolerance(dtype=None) -> float:
+    return PERFORMANCE_PERFECT_TOLERANCES.get(
+        _dtype_name(dtype), PERFORMANCE_PERFECT_TOLERANCE
+    )
+
+
 def _default_config() -> dict[str, Any]:
     return {
         "report_decimal_places": DEFAULT_REPORT_DECIMAL_PLACES,
@@ -41,6 +73,7 @@ def _default_config() -> dict[str, Any]:
             "label": DEFAULT_PERFECT_LABEL,
             "comparison": DEFAULT_PERFECT_COMPARISON,
             "tolerance": DEFAULT_PERFECT_TOLERANCE,
+            "tolerance_by_dtype": dict(DEFAULT_PERFECT_TOLERANCES),
             "color": DEFAULT_PERFECT_COLOR,
         },
         "evaluations": [dict(item) for item in DEFAULT_EVALUATIONS],
@@ -178,6 +211,9 @@ def load_performance_evaluation_config() -> dict[str, Any]:
             "color": _normalize_color(
                 raw_perfect.get("color"), DEFAULT_PERFECT_COLOR
             ),
+            "tolerance_by_dtype": _normalize_perfect_tolerances(
+                raw_perfect.get("tolerance_by_dtype")
+            ),
         }
         config["evaluations"] = _normalize_evaluations(raw.get("evaluations"))
         config["result_bar"] = _normalize_result_bar(raw.get("result_bar"))
@@ -202,6 +238,7 @@ PERFORMANCE_PERFECT_LABEL = str(PERFECT_CONFIG["label"])
 PERFORMANCE_PERFECT_COLOR = str(PERFECT_CONFIG["color"])
 PERFORMANCE_PERFECT_COMPARISON = str(PERFECT_CONFIG["comparison"])
 PERFORMANCE_PERFECT_TOLERANCE = float(PERFECT_CONFIG["tolerance"])
+PERFORMANCE_PERFECT_TOLERANCES = PERFECT_CONFIG["tolerance_by_dtype"]
 REPORT_DECIMAL_PLACES = int(PERFORMANCE_EVALUATION_CONFIG["report_decimal_places"])
 ANALYSIS_START_STEP = int(PERFORMANCE_EVALUATION_CONFIG["analysis"]["start_step"])
 REPORT_MIN_TEXT_LINES = int(
@@ -228,7 +265,7 @@ RESULT_BAR_STOPS: tuple[dict[str, float | str], ...] = tuple(
 )
 
 
-def is_perfect_result(selected_rate: float, best_rate: float) -> bool:
+def is_perfect_result(selected_rate: float, best_rate: float, dtype=None) -> bool:
     try:
         selected = float(selected_rate)
         best = float(best_rate)
@@ -236,11 +273,12 @@ def is_perfect_result(selected_rate: float, best_rate: float) -> bool:
         return False
     if not math.isfinite(selected) or not math.isfinite(best):
         return False
+    tolerance = perfect_tolerance(dtype)
     if PERFORMANCE_PERFECT_COMPARISON == "relative_ratio":
         if best <= 0:
-            return abs(best - selected) <= PERFORMANCE_PERFECT_TOLERANCE
-        return selected / best >= 1.0 - PERFORMANCE_PERFECT_TOLERANCE
-    return best - selected <= PERFORMANCE_PERFECT_TOLERANCE
+            return abs(best - selected) <= tolerance
+        return selected / best >= 1.0 - tolerance
+    return best - selected <= tolerance
 
 
 def public_performance_config() -> dict[str, Any]:
@@ -250,6 +288,7 @@ def public_performance_config() -> dict[str, Any]:
             "label": PERFORMANCE_PERFECT_LABEL,
             "comparison": PERFORMANCE_PERFECT_COMPARISON,
             "tolerance": PERFORMANCE_PERFECT_TOLERANCE,
+            "tolerance_by_dtype": dict(PERFORMANCE_PERFECT_TOLERANCES),
             "color": PERFORMANCE_PERFECT_COLOR,
         },
         "evaluations": [dict(item) for item in PERFORMANCE_EVALUATIONS],
