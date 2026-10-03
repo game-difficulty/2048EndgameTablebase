@@ -1,7 +1,7 @@
 import { sumGoalCompleted } from '../../../utils/goalTarget.js';
 import { restoreSuccessRate } from '../../../utils/successRate.js';
 import { encodeBoard } from '../../replay/engine/replayTransition.js';
-import { PERFORMANCE_LABELS } from '../../replay/engine/replayAnalysis.js';
+import { PERFORMANCE_LABELS, PERFORMANCE_PERFECT_LABEL } from '../../replay/engine/replayAnalysis.js';
 import {
   createPracticeSession,
   reducePracticeSession,
@@ -118,7 +118,7 @@ export function applyTesterLocalMove(session, {
   });
   if (!reduced.accepted) return { session, accepted: false, reason: reduced.reason };
 
-  const perfect = Number(lastStep.loss) <= 3e-10;
+  const perfect = lastStep.evaluation === PERFORMANCE_PERFECT_LABEL;
   const combo = perfect ? session.metrics.combo + 1 : 0;
   const performanceStats = { ...session.metrics.performance_stats };
   performanceStats[lastStep.evaluation] = Number(performanceStats[lastStep.evaluation] || 0) + 1;

@@ -8,6 +8,7 @@ from engine_core.Calculator import find_merge_positions, slide_distance
 from engine_core.performance_evaluation import (
     PERFORMANCE_PERFECT_LABEL,
     evaluation_of_performance as shared_evaluation_of_performance,
+    is_perfect_result,
 )
 
 REPLAY_DTYPE = np.dtype("uint64,uint8,uint32,uint32,uint32,uint32")
@@ -63,10 +64,10 @@ def replay_change_is_forced(encoded):
     return bool(int(encoded) & int(REPLAY_FORCED_FLAG))
 
 
-def replay_step_goodness_ratio(selected_rate, best_rate):
+def replay_step_goodness_ratio(selected_rate, best_rate, dtype=None):
     selected = float(selected_rate)
     best = float(best_rate)
-    if abs(best - selected) <= 3e-10:
+    if is_perfect_result(selected, best, dtype):
         return 1.0
     return selected / best if best > 0 else 1.0
 
@@ -115,8 +116,10 @@ def current_results(record, step):
     return dict(sorted(zip(keys, values), key=lambda item: item[1], reverse=True))
 
 
-def evaluation_of_performance(loss):
-    if loss > 1 - 3e-10:
+def evaluation_of_performance(loss, selected_rate=None, best_rate=None, dtype=None):
+    selected = loss if selected_rate is None else selected_rate
+    best = 1.0 if best_rate is None else best_rate
+    if is_perfect_result(selected, best, dtype):
         return PERFORMANCE_PERFECT_LABEL
     return shared_evaluation_of_performance(loss)
 
@@ -151,7 +154,7 @@ def analyze_replay(record, marker_threshold=1.0):
     for index in range(len(moves)):
         if not forced[index]:
             losses[index] = replay_step_goodness_ratio(
-                player[index], optimal[index]
+                player[index], optimal[index], "uint32"
             )
     goodness_of_fit = np.cumprod(losses)
 
@@ -160,7 +163,7 @@ def analyze_replay(record, marker_threshold=1.0):
     for index, loss in enumerate(losses):
         if forced[index]:
             pass
-        elif loss > 1 - 3e-10:
+        elif is_perfect_result(player[index], optimal[index], "uint32"):
             count += 1
         else:
             count = 0
@@ -173,7 +176,9 @@ def analyze_replay(record, marker_threshold=1.0):
     for index, loss in enumerate(losses):
         if forced[index]:
             continue
-        label = evaluation_of_performance(float(loss))
+        label = evaluation_of_performance(
+            float(loss), float(player[index]), float(optimal[index]), "uint32"
+        )
         counts[label] = counts.get(label, 0) + 1
 
     return {

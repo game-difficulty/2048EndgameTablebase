@@ -485,7 +485,7 @@ async def handle_tester_action(
             structured_result_lines.append(f"{label}: {display}")
 
         evaluation = PERFORMANCE_PERFECT_LABEL
-        loss = replay_step_goodness_ratio(selected_rate, best_rate)
+        loss = replay_step_goodness_ratio(selected_rate, best_rate, session.tester_result_dtype)
         if loss == 1.0:
             session.tester_combo += 1
             session.tester_max_combo = max(

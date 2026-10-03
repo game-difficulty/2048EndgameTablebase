@@ -32,6 +32,7 @@ from engine_core.performance_evaluation import (
     PERFORMANCE_PERFECT_LABEL,
     build_performance_stats,
     evaluation_of_performance as shared_evaluation_of_performance,
+    is_perfect_result,
     markdown_label,
 )
 from .remote_workers.analysis_proxy import RemoteAnalysisBookReader
@@ -739,7 +740,7 @@ class Analyzer:
             return True
 
         move_result = self.result[move.lower()]
-        if move_result is not None and best_result - move_result <= 3e-10:
+        if move_result is not None and is_perfect_result(move_result, best_result, success_rate_dtype):
             self.combo += 1
             self.max_combo = max(self.max_combo, self.combo)
             self.performance_stats[ANALYSIS_PERFECT_LABEL] += 1
@@ -760,7 +761,7 @@ class Analyzer:
                 )
         else:
             self.combo = 0
-            loss = replay_step_goodness_ratio(move_result, best_result)
+            loss = replay_step_goodness_ratio(move_result, best_result, success_rate_dtype)
             self.maximum_single_step_loss_relative = max(
                 self.maximum_single_step_loss_relative, 1 - loss
             )

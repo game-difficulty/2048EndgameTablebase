@@ -3,6 +3,7 @@ import {
   replayStepGoodnessRatio,
 } from './replayGoodness.js';
 import { replayMarkerIndices } from './replayMarkers.js';
+import { isPerfectResult } from '../../../utils/perfectTolerance.js';
 
 export const PERFORMANCE_PERFECT_LABEL = 'Perfect!';
 export const PERFORMANCE_EVALUATIONS = Object.freeze([
@@ -18,9 +19,9 @@ export const PERFORMANCE_LABELS = Object.freeze([
   ...PERFORMANCE_EVALUATIONS.map((item) => item.label),
 ]);
 
-export function evaluationOfPerformance(loss) {
+export function evaluationOfPerformance(loss, selectedRate = loss, bestRate = 1, dtype = 'uint32') {
   const numericLoss = Number(loss);
-  if (numericLoss > 1 - 3e-10) return PERFORMANCE_PERFECT_LABEL;
+  if (isPerfectResult(selectedRate, bestRate, dtype)) return PERFORMANCE_PERFECT_LABEL;
   return PERFORMANCE_EVALUATIONS.find((item) => numericLoss >= item.threshold)?.label
     || PERFORMANCE_EVALUATIONS[PERFORMANCE_EVALUATIONS.length - 1].label;
 }
@@ -40,20 +41,20 @@ export function analyzeReplay(replay, markerThreshold = 1) {
     const offset = index * 4;
     let maximum = 0;
     for (let direction = 0; direction < 4; direction += 1) {
-      maximum = Math.max(maximum, replay.rates[offset + direction]);
+      maximum = Math.max(maximum, replay.rates[offset + direction] / 4e9);
     }
     const isForced = replayChangeIsForced(replay.changes[index]);
     forced[index] = isForced ? 1 : 0;
     const move = (replay.changes[index] >> 5) & 0b11;
-    const player = replay.rates[offset + move];
+    const player = replay.rates[offset + move] / 4e9;
     const stepLoss = isForced ? 1 : replayStepGoodnessRatio(player, maximum);
     losses[index] = stepLoss;
     cumulative *= stepLoss;
     goodnessOfFit[index] = cumulative;
 
     if (!isForced) {
-      comboCount = stepLoss > 1 - 3e-10 ? comboCount + 1 : 0;
-      counts[evaluationOfPerformance(stepLoss)] += 1;
+      comboCount = isPerfectResult(player, maximum, 'uint32') ? comboCount + 1 : 0;
+      counts[evaluationOfPerformance(stepLoss, player, maximum, 'uint32')] += 1;
       scoredMoves += 1;
     }
     combo[index] = comboCount;

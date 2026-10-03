@@ -23,6 +23,7 @@ from engine_core.performance_evaluation import (
     PERFORMANCE_PERFECT_LABEL,
     build_performance_stats,
     evaluation_of_performance,
+    is_perfect_result,
 )
 
 from .serialization import sanitize_config
@@ -486,7 +487,7 @@ def _tester_append_post_lookup_logs(session):
     if session.tester_best_move is None:
         _tester_append_log(session, "Game Over: no possible moves left.")
         _tester_append_summary(session)
-    elif not str(session.tester_pattern[1]).startswith("sum-") and next_best_rate is not None and next_best_rate >= 1 - 3e-10:
+    elif not str(session.tester_pattern[1]).startswith("sum-") and next_best_rate is not None and is_perfect_result(next_best_rate, 1.0, session.tester_result_dtype):
         _tester_append_log(
             session,
             "Congratulations! You're about to reach the target tile.",

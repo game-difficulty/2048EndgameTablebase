@@ -16,7 +16,7 @@ export function buildOptimisticTesterLastStep({
   const bestRate = restoreSuccessRate(snapshotResults[bestMove], dtype);
   if (!bestMove || selectedRate == null || bestRate == null) return null;
 
-  const ratio = replayStepGoodnessRatio(selectedRate, bestRate);
+  const ratio = replayStepGoodnessRatio(selectedRate, bestRate, dtype);
   return {
     board: Array.isArray(board) ? [...board] : [],
     board_lines: [],
@@ -24,7 +24,7 @@ export function buildOptimisticTesterLastStep({
     results: snapshotResults,
     dtype: dtype || '?',
     message_lines: [],
-    evaluation: evaluationOfPerformance(ratio),
+    evaluation: evaluationOfPerformance(ratio, selectedRate, bestRate, dtype),
     direction,
     best_move: bestMove,
     loss: 1 - ratio,

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_PERFECT_LABEL = "Perfect!"
+DEFAULT_PERFECT_TOLERANCE = 3e-10
+DEFAULT_PERFECT_TOLERANCES = {
+    "uint32": 3e-10, "float32": 3e-10, "1-float32": 3e-10,
+    "uint64": 1e-14, "float64": 1e-14, "1-float64": 1e-14,
+}
 DEFAULT_EVALUATIONS = (
     {"label": "Excellent!", "threshold": 0.999},
     {"label": "Nice try!", "threshold": 0.99},
@@ -21,9 +27,41 @@ CONFIG_PATH = (
 )
 
 
+def _dtype_name(dtype) -> str:
+    name = str(dtype or "").strip().lower()
+    return {"f32": "float32", "f64": "float64",
+            "1-f32": "1-float32", "1-f64": "1-float64"}.get(name, name)
+
+
+def _normalize_perfect_tolerances(raw) -> dict[str, float]:
+    values = dict(DEFAULT_PERFECT_TOLERANCES)
+    if isinstance(raw, dict):
+        for dtype, value in raw.items():
+            name = _dtype_name(dtype)
+            if name not in values:
+                continue
+            try:
+                tolerance = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(tolerance) and tolerance >= 0:
+                values[name] = tolerance
+    return values
+
+
+def perfect_tolerance(dtype=None) -> float:
+    return PERFORMANCE_PERFECT_TOLERANCES.get(
+        _dtype_name(dtype), PERFORMANCE_PERFECT_TOLERANCE
+    )
+
+
 def _default_config() -> dict[str, Any]:
     return {
         "perfect_label": DEFAULT_PERFECT_LABEL,
+        "perfect": {
+            "tolerance": DEFAULT_PERFECT_TOLERANCE,
+            "tolerance_by_dtype": dict(DEFAULT_PERFECT_TOLERANCES),
+        },
         "evaluations": [dict(item) for item in DEFAULT_EVALUATIONS],
     }
 
@@ -67,11 +105,24 @@ def load_performance_evaluation_config() -> dict[str, Any]:
     if isinstance(raw, dict):
         perfect_label = str(raw.get("perfect_label") or DEFAULT_PERFECT_LABEL).strip()
         config["perfect_label"] = perfect_label or DEFAULT_PERFECT_LABEL
+        perfect = raw.get("perfect")
+        if isinstance(perfect, dict):
+            try:
+                tolerance = float(perfect.get("tolerance", DEFAULT_PERFECT_TOLERANCE))
+            except (TypeError, ValueError):
+                tolerance = DEFAULT_PERFECT_TOLERANCE
+            if math.isfinite(tolerance) and tolerance >= 0:
+                config["perfect"]["tolerance"] = tolerance
+            config["perfect"]["tolerance_by_dtype"] = _normalize_perfect_tolerances(
+                perfect.get("tolerance_by_dtype")
+            )
         config["evaluations"] = _normalize_evaluations(raw.get("evaluations"))
     return config
 
 
 PERFORMANCE_EVALUATION_CONFIG = load_performance_evaluation_config()
+PERFORMANCE_PERFECT_TOLERANCE = PERFORMANCE_EVALUATION_CONFIG["perfect"]["tolerance"]
+PERFORMANCE_PERFECT_TOLERANCES = PERFORMANCE_EVALUATION_CONFIG["perfect"]["tolerance_by_dtype"]
 PERFORMANCE_PERFECT_LABEL = str(
     PERFORMANCE_EVALUATION_CONFIG.get("perfect_label", DEFAULT_PERFECT_LABEL)
 ).strip() or DEFAULT_PERFECT_LABEL
@@ -86,6 +137,17 @@ PERFORMANCE_LABELS: tuple[str, ...] = (
     PERFORMANCE_PERFECT_LABEL,
     *[str(item["label"]) for item in PERFORMANCE_EVALUATIONS],
 )
+
+
+def is_perfect_result(selected_rate: float, best_rate: float, dtype=None) -> bool:
+    try:
+        selected = float(selected_rate)
+        best = float(best_rate)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(selected) or not math.isfinite(best):
+        return False
+    return best - selected <= perfect_tolerance(dtype)
 
 
 def markdown_label(label: str) -> str:
