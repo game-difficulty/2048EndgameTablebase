@@ -2,6 +2,7 @@ from __future__ import annotations
 from engine_core.GoalSpec import GoalSpec
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -18,6 +19,7 @@ from engine_core.VBoardMover import (
 from engine_core.BoardMover import s_gen_new_num as r_gen_new_num, s_move_board as r_move_board
 
 from ..actions import Action, EventType, Message
+from ..table_catalog import catalog_snapshot
 from ..animation import build_move_animation_metadata
 from ..session import GameSession
 from ..session import np_u64, u64
@@ -118,6 +120,7 @@ async def handle_trainer_action(
         path_list = _configure_trainer_tablebase(
             session, str(pattern), str(target), filepath, spawn_rate4
         )
+        await manager.broadcast(json.dumps({"type": "TABLE_CATALOG_CHANGED", "payload": catalog_snapshot()}))
 
         if payload.get("load_default") and path_list:
             try:

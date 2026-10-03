@@ -59,25 +59,9 @@
           </div>
         </div>
         <span class="text-text-secondary font-bold opacity-30 truncate">|</span>
-        <UiSelect
-          v-model="targetValue"
-          class="min-w-[5.5rem]"
-          :options="targetOptions"
-          :placeholder="$t('trainer.top.selectTarget')"
-          aria-label="Trainer target"
-          align="right"
-          trigger-class="top-menu-select"
-          option-class="ui-control font-black"
-          menu-class="z-[160]"
-          @change="handleTargetChange"
-        />
+        <GoalPicker v-model="targetValue" :targets="goalChoices" editable @change="handleTargetChange" />
         <span v-if="goalReached" role="status" class="text-accent font-bold">{{ $t('goals.completed') }}</span>
-        <button
-          @click="selectFolder"
-          class="ml-2 ui-kicker bg-btn-bg hover:bg-btn-hover text-white px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
-        >
-          {{ $t('trainer.top.path') }}
-        </button>
+        <TableImport @imported="onTablesImported" />
         <button
           @click="applyTablebase"
           class="btn-prominent ui-kicker px-2.5 py-1.5 rounded font-black uppercase tracking-tighter transition-all active:scale-95 shadow-sm"
@@ -87,6 +71,7 @@
       </div>
     </div>
 
+    <p v-if="patternType && targetValue && !tableAvailable" role="status" class="mb-3 w-full max-w-6xl ui-caption text-text-secondary">{{ $t('tables.missing') }}</p>
     <div class="trainer-layout relative z-0 w-full max-w-6xl flex flex-row gap-6 items-start">
       <div class="trainer-board-column flex flex-col items-center" style="width: 442px; min-width: 240px;">
         <div class="trainer-board-input-row w-full flex gap-2 mb-3">
@@ -275,11 +260,12 @@
 </template>
 
 <script setup>
-import { goalLabel } from '../../../utils/goalTarget';
+import GoalPicker from '../../../components/GoalPicker.vue';
+import TableImport from '../../../components/TableImport.vue';
+import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
-import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
 import { useTrainerSession } from '../composables/useTrainerSession';
@@ -308,7 +294,6 @@ const {
   goalReached,
   availableTargets,
   onPatternChange,
-  selectFolder,
   applyTablebase,
   hexInput,
   setBoard,
@@ -349,12 +334,20 @@ const {
   patternMenuRoot,
 } = useTrainerSession(toRef(props, 'active'), toRef(props, 'hotkeysEnabled'));
 
-const targetOptions = computed(() =>
-  availableTargets.value.map((target) => ({
-    value: target,
-    label: goalLabel(target),
-  }))
-);
+const { availableTables } = useAppSettingsStore();
+const goalChoices = computed(() => [...new Set([
+  ...availableTargets.value.filter(target => !target.startsWith('sum-')),
+  ...(availableTables.value[patternType.value] || []),
+])]);
+const tableAvailable = computed(() => availableTables.value[patternType.value]?.includes(targetValue.value));
+const onTablesImported = (rows) => {
+  const row = rows.find(item => item.pattern === patternType.value && item.target === targetValue.value) || rows[0];
+  if (!row) return;
+  const same = row.pattern === patternType.value && row.target === targetValue.value;
+  patternType.value = row.pattern;
+  targetValue.value = row.target;
+  applyTablebase(null, { loadDefault: !same });
+};
 
 const focusBoardHotkeys = (event) => {
   refocusBoardHotkeyTarget(boardHotkeyTarget, event?.target);

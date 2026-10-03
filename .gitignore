@@ -8,6 +8,7 @@ __pycache__/
 /tests/*
 !/tests/test_free_negative_layers.py
 !/tests/test_sum_targets.py
+!/tests/test_table_catalog.py
 .mypy_cache/
 .ruff_cache/
 .coverage

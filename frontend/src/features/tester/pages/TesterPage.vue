@@ -50,20 +50,12 @@
             </div>
           </div>
         </div>
-        <UiSelect
-          v-model="selectedTarget"
-          class="min-w-[5rem]"
-          :options="targetOptions"
-          aria-label="Tester target"
-          align="right"
-          trigger-class="top-menu-select"
-          option-class="ui-control font-black"
-          menu-class="z-[160]"
-          @change="handleApplyPatternSelection"
-        />
+        <GoalPicker v-model="selectedTarget" :targets="registeredTargets" @change="handleApplyPatternSelection" />
+        <TableImport @imported="onTablesImported" />
       </div>
     </div>
 
+    <p v-if="!isTargetAvailable(selectedTarget)" role="status" class="mb-3 w-full max-w-6xl ui-caption text-text-secondary">{{ $t('tables.missing') }}</p>
     <div class="relative z-0 grid w-full max-w-6xl grid-cols-[clamp(260px,58vh,442px)_minmax(0,1fr)] items-start gap-6">
       <section class="flex min-w-0 flex-col">
         <div class="mb-4 flex gap-2">
@@ -77,7 +69,7 @@
             @focus="selectTextInputContentsOnFocus"
           />
           <button class="action-btn min-w-[58px]" :disabled="!hexInput.trim()" @click="applyManualBoard">{{ $t('tester.controls.set') }}</button>
-          <button class="action-btn min-w-[72px]" :disabled="!selectedPattern || !selectedTarget" @click="resetRandom">{{ $t('tester.controls.random') }}</button>
+          <button class="action-btn min-w-[72px]" :disabled="!isTargetAvailable(selectedTarget)" @click="resetRandom">{{ $t('tester.controls.random') }}</button>
         </div>
 
         <div ref="boardHotkeyTarget" tabindex="-1" class="tester-board-shell mx-auto w-full outline-none focus:outline-none">
@@ -204,11 +196,12 @@
 </template>
 
 <script setup>
-import { goalLabel } from '../../../utils/goalTarget';
+import GoalPicker from '../../../components/GoalPicker.vue';
+import TableImport from '../../../components/TableImport.vue';
+import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { computed, ref, toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
-import UiSelect from '../../../components/UiSelect.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { createBoardViewport } from '../../../utils/boardViewport';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
@@ -260,7 +253,6 @@ const {
   metadata,
   dis32k,
   showInsights,
-  availableTargets,
   selectedPattern,
   selectedTarget,
   activePatternCategory,
@@ -328,13 +320,15 @@ const resultMiniBoardStyle = computed(() => {
   };
 });
 
-const targetOptions = computed(() =>
-  availableTargets.value.map((target) => ({
-    value: target,
-    label: goalLabel(target),
-    disabled: !isTargetAvailable(target),
-  }))
-);
+const { availableTables } = useAppSettingsStore();
+const registeredTargets = computed(() => availableTables.value[selectedPattern.value] || []);
+const onTablesImported = (rows) => {
+  const row = rows.find(item => item.pattern === selectedPattern.value && item.target === selectedTarget.value) || rows[0];
+  if (!row) return;
+  selectedPattern.value = row.pattern;
+  selectedTarget.value = row.target;
+  applyPatternSelection();
+};
 
 const focusBoardHotkeys = (event) => {
   refocusBoardHotkeyTarget(boardHotkeyTarget, event?.target);

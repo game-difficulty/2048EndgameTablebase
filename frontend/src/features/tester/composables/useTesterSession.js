@@ -19,7 +19,7 @@ import {
 } from '../../../utils/successRate';
 
 export function useTesterSession(activeRef) {
-  const { config: appConfig, performanceConfig } = useAppSettingsStore();
+  const { config: appConfig, performanceConfig, availableTables, catalogSpawnRate, targetTiles: catalogTargets, refreshSettings } = useAppSettingsStore();
 
   const fallbackPatternCategories = {
     basic: ['L3', 'LL', 'free8', 'free9', 'free10', '444'],
@@ -49,7 +49,7 @@ export function useTesterSession(activeRef) {
   const showInsights = ref(true);
   const patternCategories = ref(fallbackPatternCategories);
   const availableTargets = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
-  const availableTables = ref({});
+
   const selectedPattern = ref('L3');
   const selectedTarget = ref('512');
   const activePatternCategory = ref(Object.keys(fallbackPatternCategories)[0] || '');
@@ -109,7 +109,7 @@ export function useTesterSession(activeRef) {
     selectedPattern.value && selectedTarget.value ? `${selectedPattern.value}_${selectedTarget.value}` : 'Select Pattern'
   ));
   const isVariant = computed(() => isVariantPattern(selectedPattern.value, patternCategories.value));
-  const canMove = computed(() => ready.value && tableFound.value && wsStatus.value === 'connected');
+  const canMove = computed(() => ready.value && tableFound.value && isTargetAvailable(selectedTarget.value) && wsStatus.value === 'connected');
   const goodnessDisplay = computed(() => Number(metrics.value.goodness_of_fit ?? 1).toFixed(
     performanceConfig.value.report_decimal_places
   ));
@@ -515,7 +515,7 @@ export function useTesterSession(activeRef) {
       selectedPattern.value = payload.pattern;
       syncCategoryFromPattern(payload.pattern);
     }
-    if (payload?.target && payload.target !== '?' && availableTargets.value.includes(String(payload.target))) {
+    if (payload?.target && payload.target !== '?') {
       selectedTarget.value = String(payload.target);
     }
     if (
@@ -568,6 +568,7 @@ export function useTesterSession(activeRef) {
     }
     const target = event.target;
     if (target instanceof HTMLElement) {
+      if (target.closest('input, textarea, select, [role="dialog"], .ui-popover-select')) return;
       if (target.isContentEditable) return;
       if (target.closest('[data-tester-text-input="true"]')) return;
     }
@@ -608,10 +609,19 @@ export function useTesterSession(activeRef) {
     (isActive) => {
       if (isActive) {
         connect();
+        refreshSettings();
       }
     },
     { immediate: true }
   );
+
+  watch(catalogTargets, targets => { availableTargets.value = targets.map(String); });
+  watch(catalogSpawnRate, (value, previous) => {
+    if (previous === null || value === previous) return;
+    ready.value = false;
+    tableFound.value = false;
+    if (wsStatus.value === 'connected') applyPatternSelection();
+  });
 
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyDown, true);

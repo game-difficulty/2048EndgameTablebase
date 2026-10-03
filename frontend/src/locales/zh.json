@@ -1,5 +1,15 @@
 {
-  "goals": {"type": "目标类型", "tile": "单个数字", "sum": "盘面和", "sumLabel": "盘面和 {value}", "sumHint": "不计入 16384、32768；有效移动后，保证下一次出数能使盘面和达到目标即判成功。", "invalidSum": "请输入 4 至 16382 之间的偶数。", "unsupportedAD": "盘面和目标不支持 AD/EXAD，请选择 Classic、EX 或可用的 BC。", "completed": "目标已达成"},
+  "goals": {
+    "type": "目标类型",
+    "tile": "单个数字",
+    "sum": "盘面和",
+    "sumLabel": "盘面和 {value}",
+    "sumHint": "不计入 16384、32768；有效移动后，保证下一次出数能使盘面和达到目标即判成功。",
+    "invalidSum": "请输入 4 至 16382 之间的偶数。",
+    "unsupportedAD": "盘面和目标不支持 AD/EXAD，请选择 Classic、EX 或可用的 BC。",
+    "completed": "目标已达成",
+    "value": "目标数值"
+  },
   "tabs": {
     "home": "首页",
     "gamer": "游戏",
@@ -398,5 +408,20 @@
     "connecting": "连接中...",
     "connected": "已连接",
     "disconnected": "已断开"
+  },
+  "tables": {
+    "help": "选择结果目录，识别后将定式添加到训练、测试和分析的可用列表。",
+    "folder": "结果目录路径",
+    "browse": "浏览",
+    "scan": "识别",
+    "add": "添加所选定式",
+    "empty": "未找到可用结果。请选择包含结果文件的目录或其上级目录。",
+    "assumedRate": "* 旧结果没有出 4 概率记录，将按当前设置登记。",
+    "otherRate": "已添加。请将设置中的出 4 概率切换到结果对应的数值后使用。",
+    "noGoals": "暂无目标",
+    "missing": "此目标尚未关联结果，可导入已有定式。",
+    "import": "导入定式",
+    "increase": "增加",
+    "decrease": "减少"
   }
 }

@@ -22,6 +22,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     config: appConfig,
     categories: appCategories,
     targetTiles: appTargetTiles,
+    catalogSpawnRate,
     performanceConfig,
     refreshSettings,
     saveSetting,
@@ -278,7 +279,6 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (pending.fullPattern && (
       !parsed
       || !flatPatterns.value.includes(parsed.pattern)
-      || !availableTargets.value.includes(parsed.target)
     )) {
       return;
     }
@@ -846,6 +846,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const handleKeydown = (event) => {
     if (!hotkeysEnabledRef?.value) return;
+    if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"], .ui-popover-select')) return;
     if (event.code === 'Escape' && patternMenuOpen.value) {
       patternMenuOpen.value = false;
       return;
@@ -935,13 +936,14 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       if (normalizedTargets.length > 0) {
         availableTargets.value = normalizedTargets;
       }
-      if (targetValue.value && !availableTargets.value.includes(targetValue.value)) {
-        targetValue.value = '';
-      }
       applyTrainerJump();
     },
     { immediate: true, deep: true }
   );
+
+  watch(catalogSpawnRate, (value, previous) => {
+    if (previous !== null && value !== previous && wsStatus.value === 'connected') applyTablebase();
+  });
 
   watch(
     () => appConfig.value.dis_32k,

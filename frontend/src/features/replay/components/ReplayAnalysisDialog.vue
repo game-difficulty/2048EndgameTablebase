@@ -26,7 +26,7 @@
           <section class="rounded-[24px] border border-border-main/70 bg-bg-main/65 p-5 shadow-inner">
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.input.title') }}</div>
             <div class="mt-4 space-y-4">
-              <div class="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
+              <div class="grid grid-cols-1 gap-3">
                 <div ref="patternMenuRoot" class="relative">
                   <button
                     type="button"
@@ -78,15 +78,11 @@
                   </div>
                 </div>
 
-                <UiSelect
-                  v-model="selectedTarget"
-                  class="analysis-select-shell w-full"
-                  :options="targetOptions"
-                  aria-label="Analysis target"
-                  trigger-class="analysis-select-trigger w-full min-h-[3.25rem] rounded-[0.9rem] border border-border-main bg-bg-card px-[0.95rem] py-[0.78rem] ui-control font-black uppercase tracking-[0.06em] text-text-main"
-                  option-class="ui-control font-black uppercase tracking-[0.06em]"
-                  menu-class="z-[240]"
-                />
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <GoalPicker v-model="selectedTarget" :targets="registeredTargets" />
+                  <TableImport @imported="onTablesImported" />
+                </div>
+                <p v-if="!isTargetAvailable(selectedTarget)" class="ui-caption text-text-secondary">{{ $t('tables.missing') }}</p>
               </div>
 
               <div>
@@ -179,11 +175,12 @@
 </template>
 
 <script setup>
-import { goalLabel } from '../../../utils/goalTarget';
+import GoalPicker from '../../../components/GoalPicker.vue';
+import TableImport from '../../../components/TableImport.vue';
+import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-import UiSelect from '../../../components/UiSelect.vue';
 import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
 
@@ -202,7 +199,7 @@ const { t } = useI18n();
 const wsStatus = ref('disconnected');
 const categories = ref({});
 const targetTiles = ref(['64', '128', '256', '512', '1024', '2048', '4096', '8192', '16384']);
-const availableTables = ref({});
+const { availableTables, targetTiles: catalogTargets, refreshSettings } = useAppSettingsStore();
 const selectedPattern = ref('');
 const selectedTarget = ref('2048');
 const pathsInput = ref('');
@@ -246,13 +243,16 @@ const isTargetAvailable = (target, pattern = selectedPattern.value) => (
   && availableTables.value[pattern].map(String).includes(String(target))
 );
 
-const targetOptions = computed(() =>
-  targetTiles.value.map((target) => ({
-    value: target,
-    label: goalLabel(target),
-    disabled: !isTargetAvailable(target),
-  }))
-);
+const registeredTargets = computed(() => availableTables.value[selectedPattern.value] || []);
+const onTablesImported = (rows) => {
+  const row = rows.find(item => item.pattern === selectedPattern.value && item.target === selectedTarget.value) || rows[0];
+  if (row) {
+    selectedPattern.value = row.pattern;
+    selectedTarget.value = row.target;
+    activePatternCategory.value = patternGroups.value.find(group => group.items.includes(row.pattern))?.category || '';
+  }
+};
+watch(catalogTargets, values => { targetTiles.value = values; });
 
 const currentFileDisplay = computed(() => currentFile.value || t('analysis.progress.idle'));
 const progressPercent = computed(() => {
@@ -352,12 +352,12 @@ const ensureAvailableSelection = () => {
 const applyContext = (context) => {
   const nextPattern = String(context?.pattern || '').trim();
   const nextTarget = String(context?.target || '').trim();
-  if (nextPattern && isPatternAvailable(nextPattern)) {
+  if (nextPattern && patternGroups.value.some(group => group.items.includes(nextPattern))) {
     selectedPattern.value = nextPattern;
     const matchedGroup = patternGroups.value.find((group) => group.items.includes(nextPattern));
     if (matchedGroup) activePatternCategory.value = matchedGroup.category;
   }
-  if (nextTarget && targetTiles.value.includes(nextTarget) && isTargetAvailable(nextTarget)) {
+  if (nextTarget) {
     selectedTarget.value = nextTarget;
   } else if (!isTargetAvailable(selectedTarget.value)) {
     selectedTarget.value = targetTiles.value.find(
@@ -508,6 +508,7 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
+      refreshSettings();
       document.addEventListener('click', closePatternMenuOnClick);
       client?.send('ANALYSIS_GET_INIT');
     } else {

@@ -48,6 +48,15 @@ const config = ref({ ...DEFAULT_CONFIG });
 const categories = ref({});
 const themeMap = ref({});
 const targetTiles = ref([]);
+const availableTables = ref({});
+const catalogSpawnRate = ref(null);
+const tableRequests = new Map();
+let tableRequestId = 0;
+const applyCatalog = (payload = {}) => {
+  if (payload.available_tables) availableTables.value = payload.available_tables;
+  if (payload.target_tiles) targetTiles.value = payload.target_tiles.map(String);
+  if (payload.catalog_spawn_rate != null) catalogSpawnRate.value = Number(payload.catalog_spawn_rate);
+};
 const sumTargetPresets = ref({});
 const performanceConfig = ref(normalizePerformanceConfig(DEFAULT_PERFORMANCE_CONFIG));
 const buildProgressCurrent = ref(0);
@@ -196,6 +205,7 @@ const applyBuildFailed = () => {
 };
 
 const handleSettingsData = (payload = {}) => {
+  applyCatalog(payload);
   categories.value = payload.categories || {};
   themeMap.value = payload.theme_map || {};
   targetTiles.value = payload.target_tiles || [];
@@ -246,16 +256,33 @@ const connect = () => {
         handleSettingsData(message.payload);
       } else if (message.type === 'SETTING_UPDATED') {
         handleSettingUpdated(message.payload);
+        if (message.payload?.key === '4_spawn_rate') refreshSettings();
+      } else if (message.type === 'TABLE_CATALOG_CHANGED') {
+        applyCatalog(message.payload);
+      } else if (message.type === 'TABLE_RESPONSE') {
+        const pending = tableRequests.get(message.payload?.request_id);
+        if (pending) {
+          tableRequests.delete(message.payload.request_id);
+          clearTimeout(pending.timer);
+          if (message.payload.error) pending.reject(new Error(message.payload.error));
+          else pending.resolve(message.payload);
+        }
       } else if (message.type === 'BUILD_STARTED') {
         applyBuildStarted(message.payload);
       } else if (message.type === 'BUILD_PROGRESS') {
         applyBuildProgress(message.payload);
+        if (!isBuilding.value) refreshSettings();
       } else if (message.type === 'BUILD_FAILED') {
         applyBuildFailed();
       }
     },
     onClose: () => {
       wsStatus.value = 'disconnected';
+      for (const pending of tableRequests.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error('Connection closed'));
+      }
+      tableRequests.clear();
     },
   });
 
@@ -270,6 +297,21 @@ const refreshSettings = () => {
     pendingSettingsRefresh = false;
   }
 };
+
+const tableRequest = (action, data = {}) => new Promise((resolve, reject) => {
+  ensureStarted();
+  const request_id = `table_${++tableRequestId}`;
+  const timer = setTimeout(() => {
+    tableRequests.delete(request_id);
+    reject(new Error('Request timed out'));
+  }, 120000);
+  tableRequests.set(request_id, { resolve, reject, timer });
+  if (!client?.send(action, { ...data, request_id })) {
+    clearTimeout(timer);
+    tableRequests.delete(request_id);
+    reject(new Error('Not connected'));
+  }
+});
 
 const start = () => {
   if (started) {
@@ -382,6 +424,9 @@ export function useAppSettingsStore() {
     categories,
     themeMap,
     targetTiles,
+    availableTables,
+    catalogSpawnRate,
+    tableRequest,
     sumTargetPresets,
     performanceConfig,
     buildProgressCurrent,

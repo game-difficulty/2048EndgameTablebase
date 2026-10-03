@@ -37,6 +37,7 @@ from ..serialization import sanitize_config
 from ..session import GameSession
 from ..state import ConnectionManager
 from ..webview_api import Api
+from ..table_catalog import catalog_snapshot, scan_tables, import_tables
 
 
 MAX_DELETION_THRESHOLD = 0.999999
@@ -81,6 +82,22 @@ async def handle_settings_action(
     websocket: WebSocket,
     manager: ConnectionManager,
 ) -> bool:
+    if action in ("TABLE_CATALOG", "TABLE_SCAN", "TABLE_IMPORT", "TABLE_PICK_FOLDER"):
+        try:
+            if action == "TABLE_CATALOG":
+                result = catalog_snapshot()
+            elif action == "TABLE_PICK_FOLDER":
+                result = {"path": await asyncio.to_thread(Api().select_folder)}
+            elif action == "TABLE_SCAN":
+                result = {"tables": await asyncio.to_thread(scan_tables, payload.get("path", ""))}
+            else:
+                result = {"tables": import_tables(payload.get("tables", []))}
+                await manager.broadcast(json.dumps({"type": "TABLE_CATALOG_CHANGED", "payload": catalog_snapshot()}))
+            await websocket.send_json({"type": "TABLE_RESPONSE", "payload": {"request_id": payload.get("request_id"), **result}})
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            await websocket.send_json({"type": "TABLE_RESPONSE", "payload": {"request_id": payload.get("request_id"), "error": str(exc)}})
+        return True
+
     if action == Action.GET_SETTINGS:
         config = SingletonConfig().config.copy()
         config["ui_scale"] = config.get("ui_scale", 100)
@@ -101,6 +118,8 @@ async def handle_settings_action(
                     "categories": sanitize_config(category_info),
                     "theme_map": sanitize_config(theme_map),
                     "target_tiles": available_target_tokens(),
+                    "available_tables": SingletonConfig.get_available_pattern_targets(),
+                    "catalog_spawn_rate": float(config.get("4_spawn_rate", .1)),
                     "sum_target_presets": {name: list(meta.get("sum_targets", ())) for name, meta in pattern_catalog.items()},
                     "performance_config": sanitize_config(
                         public_performance_config()

@@ -25,10 +25,11 @@
       </div>
       <template v-else>
       <div v-show="activeSubTab === 'builder'" class="flex flex-col space-y-2 animate-fade-in">
-        <div class="grid min-h-[360px] grid-cols-1 gap-6 items-stretch md:grid-cols-[minmax(0,1fr)_minmax(0,1.618fr)]">
-          <div class="h-full space-y-5">
+        <div class="grid min-h-[360px] grid-cols-1 gap-6 items-stretch md:grid-cols-2">
+          <div class="min-w-0 h-full space-y-5 md:pt-5">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div class="flex flex-col">
-              <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.category') }}</label>
+              <label class="builder-field-label">{{ $t('settings.builder.category') }}</label>
               <UiSelect
                 v-model="selectedCategory"
                 class="w-full"
@@ -40,7 +41,7 @@
             </div>
 
             <div class="flex flex-col">
-              <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.pattern') }}</label>
+              <label class="builder-field-label">{{ $t('settings.builder.pattern') }}</label>
               <UiSelect
                 v-model="selectedPattern"
                 class="w-full"
@@ -52,24 +53,30 @@
             </div>
 
             <div class="flex flex-col">
-              <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.target') }}</label>
+              <label class="builder-field-label">{{ $t('goals.type') }}</label>
               <UiSelect
                 v-model="goalKind"
-                class="w-full mb-2"
+                class="w-full"
                 :options="[{value: 'tile', label: $t('goals.tile')}, {value: 'sum', label: $t('goals.sum')}]"
                 :aria-label="$t('goals.type')"
                 trigger-class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 ui-body font-bold text-text-main"
               />
-              <input v-if="goalKind === 'sum'" v-model.number="sumTarget" type="number" min="4" max="16382" step="2"
-                :aria-label="$t('goals.sum')" class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 text-text-main" />
-              <div v-if="goalKind === 'sum'" class="flex flex-wrap gap-2 mt-2">
+            </div>
+            <div class="flex flex-col min-w-0">
+              <label class="builder-field-label">{{ goalKind === 'sum' ? $t('goals.sum') : $t('settings.builder.target') }}</label>
+              <div v-if="goalKind === 'sum'" class="group relative min-w-0">
+                <input ref="sumTargetInput" v-model.number="sumTarget" type="number" min="4" max="16382" step="2"
+                  :aria-label="$t('goals.sum')" class="builder-number-input h-[42px] w-full bg-bg-main border border-border-main rounded-lg px-3 pr-9 ui-control font-black text-text-main outline-none hover:border-accent transition-colors shadow-sm" />
+                <div class="pointer-events-none absolute inset-y-1 right-1 flex w-5 flex-col overflow-hidden rounded-md border border-border-main/70 bg-bg-card/90 opacity-0 shadow-sm transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">
+                  <button type="button" @click="stepSumTarget(1)" class="number-spin-btn border-b border-border-main/60" aria-label="Increase board sum target">▲</button>
+                  <button type="button" @click="stepSumTarget(-1)" class="number-spin-btn" aria-label="Decrease board sum target">▼</button>
+                </div>
+              </div>
+              <div v-if="goalKind === 'sum' && (sumTargetPresets[selectedPattern] || []).length" class="flex flex-wrap gap-2 mt-2">
                 <button v-for="value in (sumTargetPresets[selectedPattern] || [])" :key="value" type="button"
                   class="rounded border border-border-main px-2 py-1 text-sm hover:border-accent"
                   @click="sumTarget = value">{{ value }}</button>
               </div>
-              <p v-if="goalKind === 'sum'" class="mt-2 text-xs text-text-muted">{{ $t('goals.sumHint') }}</p>
-              <p v-if="!goalValid" class="mt-2 text-sm text-red-500" role="alert">{{ $t('goals.invalidSum') }}</p>
-              <p v-if="!goalAlgorithmValid" class="mt-2 text-sm text-red-500" role="alert">{{ $t('goals.unsupportedAD') }}</p>
               <UiSelect v-if="goalKind === 'tile'"
                 v-model="selectedTarget"
                 class="w-full"
@@ -79,11 +86,14 @@
                 option-class="ui-body font-bold"
               />
             </div>
+            </div>
+            <p v-if="!goalValid" class="text-sm text-red-500" role="alert">{{ $t('goals.invalidSum') }}</p>
+            <p v-if="!goalAlgorithmValid" class="text-sm text-red-500" role="alert">{{ $t('goals.unsupportedAD') }}</p>
 
             <div class="flex flex-col border-t border-border-main pt-4 mt-2">
               <label class="ui-control font-bold text-text-main mb-2 uppercase tracking-wider">{{ $t('settings.builder.path') }}</label>
               <div class="flex gap-2 items-start">
-                <textarea v-model="buildPath" rows="3" class="w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none resize-y" />
+                <textarea v-model="buildPath" rows="3" class="min-w-0 w-full bg-bg-main border border-border-main rounded-lg px-3 py-2 ui-kicker text-text-main outline-none focus:border-accent transition-colors flex-1 appearance-none resize-y" />
                 <button @click="browseFolder" class="px-3 py-1.5 bg-btn-bg text-white rounded-lg font-black ui-control hover:bg-btn-hover active:scale-95 transition-all whitespace-nowrap shadow-sm">
                   {{ $t('settings.builder.browse') }}
                 </button>
@@ -99,7 +109,7 @@
             </div>
           </div>
 
-          <div class="h-full bg-border-main/5 p-5 rounded-2xl border border-border-main shadow-inner">
+          <div class="min-w-0 h-full bg-border-main/5 p-5 rounded-2xl border border-border-main shadow-inner">
             <div class="flex h-full flex-col gap-4">
               <div class="grid content-start grid-cols-1 gap-4 sm:grid-cols-2">
               <div class="flex flex-col">
@@ -196,7 +206,7 @@
               </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-y-4 gap-x-5 border-t border-border-main pt-4 sm:grid-cols-3">
+            <div class="grid grid-cols-1 gap-y-4 gap-x-5 border-t border-border-main pt-4 sm:grid-cols-2">
               <label class="builder-toggle-option cursor-pointer group">
                 <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderCompress" class="sr-only peer" @change="handleCompressChange" />
@@ -399,7 +409,7 @@
 </template>
 
 <script setup>
-import { computed, toRef } from 'vue';
+import { computed, ref, toRef } from 'vue';
 
 import UiSelect from '../../../components/UiSelect.vue';
 import { useSettingsSession } from '../composables/useSettingsSession';
@@ -462,6 +472,15 @@ const props = defineProps({
   browseFolder,
   startBuild,
 } = useSettingsSession(toRef(props, 'active'));
+
+const sumTargetInput = ref(null);
+const stepSumTarget = (direction) => {
+  const input = sumTargetInput.value;
+  if (!input) return;
+  if (direction > 0) input.stepUp();
+  else input.stepDown();
+  sumTarget.value = input.valueAsNumber;
+};
 
 const categoryOptions = computed(() =>
   Object.keys(categories.value || {}).map((category) => ({
