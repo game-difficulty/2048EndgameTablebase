@@ -9,6 +9,7 @@ import BoardSyntaxPreview from "../components/BoardSyntaxPreview.vue";
 import { insertAtCursor } from "../editorInsertion";
 import { refreshTilePalette } from "../tilePalette";
 import RichTools from "../components/RichTools.vue";
+import { usePasteImage } from "../pasteImage";
 const bodyInput = ref(null);
 function insertSyntax(snippet) {
   insertAtCursor(text, bodyInput.value, snippet);
@@ -17,6 +18,12 @@ const { user, boards } = inject("forum"),
   route = useRoute(),
   router = useRouter();
 const title = ref(""),
+  kind = ref("discussion"),
+  tags = ref(""),
+  pollOptions = ref(""),
+  pollDeadline = ref(""),
+  pollMax = ref(1),
+  pollResults = ref("always"),
   text = ref(""),
   boardSlug = ref("general"),
   board = ref(null),
@@ -33,6 +40,10 @@ const draftId = ref(crypto.randomUUID()),
   revision = ref(0),
   lastSaved = ref("");
 const key = submission();
+const pasteImage = usePasteImage(() => `${user.value?.id}:${draftId.value}`);
+function paste(event) {
+  pasteImage.paste(event, text);
+}
 let timer = null,
   savePromise = null,
   restoring = false,
@@ -44,6 +55,20 @@ const payload = computed(() => ({
   board_slug: boardSlug.value,
   text: text.value,
   board: board.value,
+  kind: kind.value,
+  tags: tags.value
+    .split(/[、,，]/)
+    .map((x) => x.trim())
+    .filter(Boolean),
+  poll:
+    kind.value === "poll"
+      ? {
+          options: pollOptions.value,
+          closes_at: pollDeadline.value,
+          max_choices: Number(pollMax.value),
+          results: pollResults.value,
+        }
+      : null,
 }));
 const signature = computed(() => JSON.stringify(payload.value));
 const dirty = computed(
@@ -82,6 +107,12 @@ function restore(draft) {
   revision.value = draft.revision;
   title.value = draft.payload.title || "";
   text.value = draft.payload.text || "";
+  kind.value = draft.payload.kind || "discussion";
+  tags.value = (draft.payload.tags || []).join("、");
+  pollOptions.value = draft.payload.poll?.options || "";
+  pollDeadline.value = draft.payload.poll?.closes_at || "";
+  pollMax.value = draft.payload.poll?.max_choices || 1;
+  pollResults.value = draft.payload.poll?.results || "always";
   boardSlug.value = draft.payload.board_slug || "general";
   board.value = draft.payload.board
     ? JSON.parse(JSON.stringify(draft.payload.board))
@@ -276,7 +307,20 @@ async function publish() {
       board_slug: boardSlug.value,
       title: title.value,
       body: body.value,
-      tags: [],
+      tags: payload.value.tags,
+      kind: kind.value,
+      poll:
+        kind.value === "poll"
+          ? {
+              options: pollOptions.value
+                .split("\n")
+                .map((x) => x.trim())
+                .filter(Boolean),
+              closes_at: new Date(pollDeadline.value).toISOString(),
+              max_choices: Number(pollMax.value),
+              results: pollResults.value,
+            }
+          : null,
     };
     const result = await api("/topics", {
       method: "POST",
@@ -329,6 +373,47 @@ onBeforeUnmount(() => {
   </div>
   <template v-else>
     <fieldset class="composer-fields" :disabled="publishing">
+      <div class="panel">
+        <label class="field"
+          >主题类型<select v-model="kind">
+            <option value="discussion">讨论 / 作品</option>
+            <option value="question">提问与反馈</option>
+            <option value="poll">投票</option>
+          </select></label
+        >
+        <label class="field"
+          >标签（逗号分隔，最多 5 个）<input v-model="tags" maxlength="124"
+        /></label>
+        <template v-if="kind === 'poll'"
+          ><label class="field"
+            >投票选项（每行一项，2—10 项）<textarea
+              v-model="pollOptions"
+              maxlength="1300"
+              rows="4"
+            /></label
+          ><label class="field"
+            >投票截止时间<input
+              v-model="pollDeadline"
+              type="datetime-local"
+              required /></label
+          ><label class="field"
+            >每人最多选择<input
+              v-model="pollMax"
+              type="number"
+              min="1"
+              max="10" /></label
+          ><label class="field"
+            >结果显示<select v-model="pollResults">
+              <option value="always">始终显示</option>
+              <option value="voted">投票后显示</option>
+              <option value="closed">截止后显示</option>
+            </select></label
+          >
+          <p class="muted">
+            发布后选项固定；截止前可以修改自己的选择。
+          </p></template
+        >
+      </div>
       <div class="heading">
         <div>
           <p class="eyebrow">CREATE & DISCUSS</p>
@@ -381,6 +466,7 @@ onBeforeUnmount(() => {
           >正文<textarea
             ref="bodyInput"
             v-model="text"
+            @paste="paste"
             rows="9"
             maxlength="20000"
             placeholder="描述你的发现、问题和想法…也可输入 [[board:4x4:盘面编码]] 插入棋盘"
@@ -388,6 +474,7 @@ onBeforeUnmount(() => {
         </label>
         <BoardSyntaxHelp @insert="insertSyntax" />
         <RichTools @insert="insertSyntax" />
+        <p role="status">{{ pasteImage.status.value }}</p>
         <BoardSyntaxPreview :text="text" />
         <div class="actions">
           <button type="button" @click="board ? (board = null) : addBoard()">

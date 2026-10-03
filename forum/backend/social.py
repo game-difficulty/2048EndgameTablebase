@@ -21,7 +21,7 @@ class SocialFeatures:
                 id=query,
             )
 
-    def profile(self, ident, user, before):
+    def profile(self, ident, user, before, before_reply=9223372036854775807):
         with self.engine.connect() as conn:
             profile = one(
                 conn,
@@ -46,7 +46,21 @@ class SocialFeatures:
                 id=ident,
                 before=before,
             )
-            return {**profile, "following": following, "topics": topics}
+            replies = all_rows(
+                conn,
+                """SELECT p.id,p.topic_id,p.post_number,p.created_at,left(p.body_text,240) AS excerpt,t.title
+                FROM forum_posts p JOIN forum_topics t ON t.id=p.topic_id
+                WHERE p.author_id=:id AND p.post_number>1 AND p.status='published' AND t.status='published'
+                AND p.id<:before ORDER BY p.id DESC LIMIT 20""",
+                id=ident,
+                before=before_reply,
+            )
+            return {
+                **profile,
+                "following": following,
+                "topics": topics,
+                "replies": replies,
+            }
 
     def follows(self, user):
         with self.engine.connect() as conn:
@@ -418,5 +432,12 @@ class SocialFeatures:
                 payload["reason"],
                 dict(appeal),
                 action["topic_id"],
+            )
+            self.system_notice(
+                conn,
+                appeal["user_id"],
+                "申诉处理结果",
+                payload["reason"],
+                f"appeal:{ident}",
             )
         return {"ok": True}

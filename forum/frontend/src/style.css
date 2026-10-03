@@ -749,3 +749,14 @@ footer {
 .appeals-section {
   margin-top: 36px;
 }
+.poll-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}

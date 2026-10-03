@@ -154,6 +154,10 @@ def replay_payload(raw):
             raise ValueError("size")
         if raw.startswith(b"\x1f\x8b"):
             raw = gunzip_limited(raw, MAX_REPLAY)
+        if raw.startswith(b"FBR1"):
+            from .branch import parse
+
+            return parse(raw)
         if raw.startswith((b"HPR1", b"HPR2")):
             header, events = engine.parse_replay(raw)
             initial = engine.initial(
@@ -267,6 +271,15 @@ def store(svc, user, raw, kind):
         return {"id": str(ident), "kind": kind, "metadata": meta}
 
 
+def replay_version(payload):
+    import hashlib
+
+    canonical = {k: payload[k] for k in ("variant", "initial", "moves")}
+    return hashlib.sha256(
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def import_play(svc, user, run_id):
     checked = fetch_play(svc.settings, run_id)
     with svc.engine.begin() as conn:
@@ -285,6 +298,7 @@ def import_play(svc, user, run_id):
             "run_id": str(run_id),
             "variant": checked["variant"],
             "verification": "public-source",
+            "artifact_version": replay_version(checked),
         }
         execute(
             conn,

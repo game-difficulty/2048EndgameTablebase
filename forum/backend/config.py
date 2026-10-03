@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from sqlalchemy.engine import make_url
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_REVISION = "0003_social"
+SCHEMA_REVISION = "0005_notice_category"
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,8 @@ class Settings:
     auth_db: Path | None = None
     play_origin: str = "https://play.2048tables.online"
     frontend_dist: Path = ROOT / "frontend" / "dist"
+    trusted_proxies: tuple[str, ...] = ()
+    ip_hash_secret: str = ""
 
     def __post_init__(self):
         if make_url(self.database_url).drivername != "postgresql+psycopg":
@@ -80,4 +82,10 @@ def load_settings() -> Settings:
         play_origin=os.environ.get(
             "FORUM_PLAY_ORIGIN", "https://play.2048tables.online"
         ).rstrip("/"),
+        trusted_proxies=tuple(
+            x.strip()
+            for x in os.environ.get("FORUM_TRUSTED_PROXIES", "").split(",")
+            if x.strip()
+        ),
+        ip_hash_secret=os.environ.get("FORUM_IP_HASH_SECRET", ""),
     )

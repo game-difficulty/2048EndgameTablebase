@@ -13,6 +13,10 @@ const tools = [
   ["引用", "> 引用内容"],
   ["列表", "- 第一项\n- 第二项"],
   ["代码", "```text\n代码或棋盘语法原文\n```"],
+  [
+    "折叠文本",
+    "```details 点击展开说明\n这里的内容按纯文本显示，不触发提及或附件。\n```",
+  ],
   ["链接", "[链接文字](https://2048tables.online/)"],
 ];
 async function upload(event, kind) {
@@ -83,7 +87,7 @@ async function importPlay() {
       <label class="field"
         >上传录像<input
           type="file"
-          accept=".hpr,.vrs,.rpl,.rpl1,.txt,.gz"
+          accept=".hpr,.vrs,.rpl,.rpl1,.txt,.gz,.fbr"
           :disabled="busy"
           @change="upload($event, 'replay')"
       /></label>

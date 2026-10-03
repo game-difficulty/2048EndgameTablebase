@@ -8,6 +8,8 @@ import Inbox from "./pages/Inbox.vue";
 import Moderation from "./pages/Moderation.vue";
 import MyCommunity from "./pages/MyCommunity.vue";
 import Profile from "./pages/Profile.vue";
+import Settings from "./pages/Settings.vue";
+import Operations from "./pages/Operations.vue";
 import "./style.css";
 import { refreshTilePalette } from "./tilePalette";
 
@@ -23,6 +25,8 @@ const router = createRouter({
     { path: "/moderation", component: Moderation },
     { path: "/community", component: MyCommunity },
     { path: "/u/:id", component: Profile },
+    { path: "/settings", component: Settings },
+    { path: "/operations", component: Operations },
     {
       path: "/:pathMatch(.*)*",
       component: {

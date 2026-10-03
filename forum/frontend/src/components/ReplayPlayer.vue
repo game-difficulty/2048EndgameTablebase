@@ -1,7 +1,13 @@
 <script setup>
-import { ref, computed, onBeforeUnmount, watch } from "vue";
+import { ref, computed, onBeforeUnmount, watch, inject } from "vue";
 import { api } from "../api";
 import Board from "./Board.vue";
+import BranchEditor from "./BranchEditor.vue";
+const { user } = inject("forum");
+const branch = ref(null),
+  loopStart = ref(0),
+  loopEnd = ref(0),
+  loop = ref(false);
 const props = defineProps({
   id: String,
   initialStep: { type: Number, default: 0 },
@@ -46,6 +52,7 @@ function cleanup() {
   worker = null;
   stop();
   data.value = null;
+  branch.value = null;
   frame.value = null;
 }
 async function load() {
@@ -72,12 +79,20 @@ async function load() {
       if (ticket !== epoch) return;
       if (message.type === "ready") {
         total.value = message.total;
+        loopEnd.value = message.total;
         loading.value = false;
       }
       if (message.type === "frame") {
         frame.value = message;
         step.value = message.step;
-        if (step.value >= total.value) stop();
+        if (
+          loop.value &&
+          playing.value &&
+          step.value >= loopEnd.value &&
+          loopEnd.value > loopStart.value
+        )
+          worker.postMessage({ type: "seek", step: Number(loopStart.value) });
+        else if (step.value >= total.value) stop();
       }
       if (message.type === "error") {
         error.value = message.message;
@@ -147,7 +162,9 @@ onBeforeUnmount(cleanup);
         {{
           data.verification === "public-source"
             ? "Play 公开来源，已重新检查可见性"
-            : "用户上传，规则校验通过；非正式成绩"
+            : data.verification === "hypothetical"
+              ? "假设分支，手动指定出数；非正式成绩"
+              : "用户上传，规则校验通过；非正式成绩"
         }}
         <a
           v-if="data.source_url"
@@ -194,6 +211,48 @@ onBeforeUnmount(cleanup);
           <option :value="100">快速</option></select
         ><button type="button" @click="copy">复制当前步数</button>
       </div>
+      <details class="panel">
+        <summary>片段循环与分支分析</summary>
+        <label class="field"
+          >片段起点<input
+            v-model="loopStart"
+            type="number"
+            min="0"
+            :max="total" /></label
+        ><label class="field"
+          >片段终点<input
+            v-model="loopEnd"
+            type="number"
+            min="0"
+            :max="total" /></label
+        ><label class="poll-option"
+          ><input
+            v-model="loop"
+            type="checkbox"
+            :disabled="
+              Number(loopEnd) <= Number(loopStart) ||
+              Number(loopEnd) > total ||
+              Number(loopStart) < 0
+            "
+          />循环播放片段</label
+        ><button
+          v-if="user && frame"
+          @click="
+            stop();
+            branch = { initial: [...frame.board], origin: `${id}@${step}` };
+          "
+        >
+          从此步创建假设分支
+        </button>
+      </details>
+      <BranchEditor
+        v-if="branch"
+        :key="branch.origin"
+        :initial="branch.initial"
+        :variant="data.variant"
+        :origin="branch.origin"
+        @close="branch = null"
+      />
       <p class="muted" role="status">{{ status }}</p></template
     >
     <p v-else-if="!loading" class="muted">按需加载，支持逐步查看和定位讨论。</p>

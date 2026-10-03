@@ -69,6 +69,7 @@ watch(() => user.value?.id, load, { immediate: true });
 </script>
 <template>
   <h1>我的社区</h1>
+  <RouterLink to="/settings" class="button">通知、屏蔽与隐私设置</RouterLink>
   <p v-if="error" class="notice error" role="alert">{{ error }}</p>
   <p v-if="!user" class="empty">请先登录。</p>
   <template v-else>

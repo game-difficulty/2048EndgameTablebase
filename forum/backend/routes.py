@@ -68,12 +68,35 @@ def topics(
     request: Request,
     user=Depends(current_user),
     board: str = Query("", max_length=40),
-    cursor: str = Query("", max_length=256),
+    cursor: str = Query("", max_length=2048),
     q: str = Query("", max_length=80),
     saved: bool = False,
     limit: int = Query(20, ge=1, le=50),
+    view: Literal[
+        "activity", "newest", "unanswered", "featured", "following", "unread"
+    ] = "activity",
+    tag: str = Query("", max_length=24),
+    author: int | None = Query(None, ge=1, le=9007199254740991),
+    topic_id: int | None = Query(None, ge=1, le=9007199254740991),
+    since: str | None = Query(None, max_length=40),
+    until: str | None = Query(None, max_length=40),
+    kind: Literal["", "discussion", "question", "poll"] = "",
 ):
-    return service(request).list_topics(user, board, cursor, q.strip(), saved, limit)
+    return service(request).list_topics(
+        user,
+        board,
+        cursor,
+        q.strip(),
+        saved,
+        limit,
+        view=view,
+        tag=tag,
+        author=author,
+        topic_id=topic_id,
+        since=since,
+        until=until,
+        kind=kind,
+    )
 
 
 @router.post("/topics", status_code=201)
@@ -94,8 +117,11 @@ def detail(
     after: int = Query(0, ge=0, le=2147483647),
     limit: int = Query(40, ge=1, le=100),
     focus_post: int | None = Query(None, ge=1, le=9007199254740991),
+    author_only: bool = False,
 ):
-    return service(request).detail(topic_id, user, after, limit, focus_post)
+    return service(request).detail(
+        topic_id, user, after, limit, focus_post, author_only
+    )
 
 
 @router.post("/topics/{topic_id}/posts", status_code=201)
@@ -165,8 +191,11 @@ def notifications(
     request: Request,
     user=Depends(require_user),
     before: int = Query(9223372036854775807, ge=1, le=9223372036854775807),
+    kind: Literal[
+        "", "reply", "mention", "subscription", "follow", "moderation", "system"
+    ] = "",
 ):
-    return {"items": service(request).notifications(user, before)}
+    return {"items": service(request).notifications(user, before, kind)}
 
 
 @router.put("/notifications/read")
@@ -255,8 +284,16 @@ def replay(request: Request, ident: UUID, user=Depends(current_user)):
         row = assets.access(conn, ident, user, svc)
     if row["kind"] == "play":
         result = assets.fetch_play(svc.settings, row["metadata"]["run_id"])
+        version = assets.replay_version(result)
+        if row["metadata"].get("artifact_version") != version:
+            raise ForumError(
+                "SOURCE_REVISED",
+                "Play 来源已修订或旧引用未绑定版本，请重新导入；原步数引用不会自动指向新录像。",
+                409,
+            )
         return {
             **result,
+            "artifact_version": version,
             "verification": "public-source",
             "source_url": f"{svc.settings.play_origin}/api/human/replays/{row['metadata']['run_id']}",
         }
@@ -374,9 +411,10 @@ def profile(
     request: Request,
     ident: int,
     before: int = Query(9223372036854775807, ge=1, le=9223372036854775807),
+    before_reply: int = Query(9223372036854775807, ge=1, le=9223372036854775807),
     user=Depends(current_user),
 ):
-    return service(request).profile(ident, user, before)
+    return service(request).profile(ident, user, before, before_reply)
 
 
 @router.get("/follows")

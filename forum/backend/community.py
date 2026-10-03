@@ -83,21 +83,7 @@ class CommunityFeatures:
         return {"enabled": enabled}
 
     def notification_status(self, user):
-        with self.engine.connect() as conn:
-            row = dict(
-                one(
-                    conn,
-                    """SELECT coalesce(max(id),0) AS latest,count(*) FILTER(WHERE read_at IS NULL) AS unread
-                FROM forum_notifications WHERE recipient_id=:u""",
-                    u=user.id,
-                )
-            )
-            pref = one(
-                conn,
-                "SELECT enabled FROM forum_notification_preferences WHERE user_id=:u",
-                u=user.id,
-            )
-            return {**row, "enabled": pref["enabled"] if pref else True}
+        return self.inbox_status(user)
 
     def notification_preference(self, user, enabled):
         with self.engine.begin() as conn:
@@ -115,7 +101,11 @@ class CommunityFeatures:
         with self.engine.begin() as conn:
             self.writer(conn, user)
             topic = self.topic(conn, ident, user, True)
-            self.writable_topic(topic)
+            if (
+                not self.moderate(conn, user, topic["board_id"])
+                or topic["status"] != "published"
+            ):
+                self.writable_topic(topic)
             if topic["author_id"] != user.id and not self.moderate(
                 conn, user, topic["board_id"]
             ):
@@ -160,7 +150,7 @@ class CommunityFeatures:
                     "SELECT t.* FROM forum_topics t WHERE t.id<:before AND t.title ILIKE :q AND "
                     + scope
                     + " ORDER BY t.id DESC LIMIT 50",
-                    **args
+                    **args,
                 )
             if section == "audit":
                 return all_rows(
@@ -169,7 +159,7 @@ class CommunityFeatures:
                     WHERE a.id<:before AND """
                     + scope
                     + " ORDER BY a.id DESC LIMIT 50",
-                    **args
+                    **args,
                 )
             if section == "reports":
                 return all_rows(
@@ -179,7 +169,7 @@ class CommunityFeatures:
                     WHERE r.status='open' AND r.id<:before AND """
                     + scope
                     + " ORDER BY r.id DESC LIMIT 50",
-                    **args
+                    **args,
                 )
             if not admin:
                 raise ForumError("FORBIDDEN", "此功能仅管理员可用。", 403)
@@ -191,7 +181,7 @@ class CommunityFeatures:
                     FROM forum_profiles p LEFT JOIN forum_sanctions s ON s.user_id=p.user_id AND s.expires_at>now()
                     WHERE p.user_id<:before AND (p.display_name ILIKE :q OR CAST(p.user_id AS text) ILIKE :q)
                     ORDER BY p.user_id DESC LIMIT 50""",
-                    **args
+                    **args,
                 )
             if section == "media":
                 return all_rows(
@@ -202,7 +192,7 @@ class CommunityFeatures:
                 return all_rows(
                     conn,
                     "SELECT id,kind,created_at,delivered_at,attempts,last_error FROM forum_outbox WHERE id<:before ORDER BY id DESC LIMIT 50",
-                    **args
+                    **args,
                 )
             raise ForumError("INVALID_SECTION", "未知管理页面。")
 
@@ -244,7 +234,9 @@ class CommunityFeatures:
         with self.engine.begin() as conn:
             self.writer(conn, user)
             if not one(
-                conn, "SELECT 1 FROM forum_profiles WHERE user_id=:id FOR UPDATE", id=ident
+                conn,
+                "SELECT 1 FROM forum_profiles WHERE user_id=:id FOR UPDATE",
+                id=ident,
             ):
                 raise ForumError("NOT_FOUND", "此账号尚未在论坛活动。", 404)
             action = payload["action"]
@@ -301,6 +293,16 @@ class CommunityFeatures:
                 payload["reason"],
                 dict(previous) if previous else {},
             )
+            if action in {"mute", "unmute"}:
+                from uuid import uuid4
+
+                self.system_notice(
+                    conn,
+                    ident,
+                    "社区禁言" if action == "mute" else "社区禁言已解除",
+                    payload["reason"],
+                    f"sanction:{uuid4()}",
+                )
         return {"ok": True}
 
     def edit_board(self, user, ident, payload):
@@ -317,7 +319,7 @@ class CommunityFeatures:
                 conn,
                 "UPDATE forum_boards SET name=:name,description=:description,position=:position,staff_only=:staff_only WHERE id=:id",
                 id=ident,
-                **{k: v for k, v in payload.items() if k != "reason"}
+                **{k: v for k, v in payload.items() if k != "reason"},
             )
             self.audit(
                 conn, user, "board", ident, "edit_board", payload["reason"], dict(old)

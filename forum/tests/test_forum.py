@@ -135,7 +135,9 @@ def test_hidden_content_search_notification_and_audit(client,app):
     assert client.get(f"{API}/topics/{t['topic_id']}").status_code==404
     assert client.get(API+"/topics?q=秘密").json()["items"]==[]
     assert client.get(f"{API}/topics/{t['topic_id']}",headers=headers(2)).status_code==200
-    notice=client.get(API+"/notifications",headers=headers(2)).json()["items"][0]
+    notices=client.get(API+"/notifications",headers=headers(2)).json()["items"]
+    assert any(n['kind']=='moderation' for n in notices)
+    notice=next(n for n in notices if n['kind']=='reply')
     assert not notice["available"] and notice["title"]=="内容已不可见"
     assert client.get(API+"/moderation/reports",headers=headers(1)).json()["items"]==[]
     with app.state.forum.engine.connect() as conn:

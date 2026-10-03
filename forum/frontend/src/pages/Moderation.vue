@@ -158,6 +158,9 @@ watch(
     <div>
       <p class="eyebrow">COMMUNITY ADMINISTRATION</p>
       <h1>社区管理</h1>
+      <RouterLink v-if="session?.is_admin" to="/operations" class="button"
+        >公告、来源动态与隐私请求</RouterLink
+      >
     </div>
     <button :disabled="loading" @click="load()">刷新</button>
   </div>

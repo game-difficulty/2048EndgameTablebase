@@ -13,9 +13,20 @@ import BoardSyntaxPreview from "../components/BoardSyntaxPreview.vue";
 import { insertAtCursor } from "../editorInsertion";
 import RichTools from "../components/RichTools.vue";
 import SubscribeButton from "../components/SubscribeButton.vue";
+import TopicExtensions from "../components/TopicExtensions.vue";
+import { usePasteImage } from "../pasteImage";
 import { useReplyDraft } from "../replyDraft";
 import { useReadingPosition } from "../readingPosition";
 const replyInput = ref(null);
+const authorOnly = ref(false),
+  revisions = ref(null);
+async function history(post) {
+  const ticket = generation;
+  await action(async () => {
+    const result = await api("/posts/" + post.id + "/revisions");
+    if (ticket === generation) revisions.value = result.items;
+  });
+}
 function insertSyntax(snippet, editing = false) {
   insertAtCursor(
     editing ? editText : reply,
@@ -42,6 +53,12 @@ const reportPost = ref(null),
   modReason = ref(""),
   status = ref("");
 const key = submission();
+const pasteImage = usePasteImage(
+  () => `${user.value?.id}:${route.params.id}:${editId.value}`,
+);
+function paste(event, editing = false) {
+  pasteImage.paste(event, editing ? editText : reply);
+}
 const draft = useReplyDraft(
   () => route.params.id,
   () => user.value?.id,
@@ -97,7 +114,9 @@ async function load(more = false, fromStart = false) {
       : !fromStart && focus
         ? `?focus_post=${focus}`
         : "";
-    const result = await api(`/topics/${route.params.id}${query}`);
+    const result = await api(
+      `/topics/${route.params.id}${query}${query ? "&" : "?"}author_only=${authorOnly.value}`,
+    );
     if (ticket !== generation) return;
     data.value = more
       ? { ...result, posts: [...data.value.posts, ...result.posts] }
@@ -215,6 +234,7 @@ watch(
   [() => route.params.id, () => user.value?.id],
   () => {
     data.value = null;
+    revisions.value = null;
     editId.value = null;
     reportPost.value = null;
     metadataOpen.value = false;
@@ -226,6 +246,7 @@ watch(
   () => route.hash,
   () => load(),
 );
+watch(authorOnly, () => load());
 </script>
 <template>
   <RouterLink to="/" class="back">← 返回讨论</RouterLink>
@@ -256,7 +277,7 @@ watch(
         v-if="
           user &&
           (user.id === data.topic.author_id || data.topic.can_moderate) &&
-          !data.topic.locked &&
+          (!data.topic.locked || data.topic.can_moderate) &&
           data.topic.status === 'published'
         "
         @click="openMetadata"
@@ -316,6 +337,21 @@ watch(
     <button v-if="data.start_after" @click="load(false, true)">
       从首楼阅读
     </button>
+    <TopicExtensions :data="data" @updated="load()" />
+    <label class="actions"
+      ><input type="checkbox" v-model="authorOnly" />只看楼主</label
+    >
+    <section v-if="revisions" class="panel">
+      <h2>正文修订历史</h2>
+      <button @click="revisions = null">关闭历史</button>
+      <article v-for="r in revisions" :key="r.revision">
+        <p>
+          版本 {{ r.revision }} · {{ new Date(r.created_at).toLocaleString() }}
+        </p>
+        <Document :body="r.body" />
+      </article>
+      <p v-if="!revisions.length">暂无历史修订。</p>
+    </section>
     <RouterLink
       v-if="reading.position.value && !route.hash"
       class="notice resume-reading"
@@ -340,7 +376,12 @@ watch(
         }}</time
         ><span v-if="post.edited_at" class="muted">已编辑</span>
       </header>
-      <p v-if="post.status === 'deleted'" class="muted">这条回复已删除。</p>
+      <p v-if="post.blocked" class="muted">
+        已屏蔽此用户的内容。可在社区设置中解除。
+      </p>
+      <p v-else-if="post.status === 'deleted'" class="muted">
+        这条回复已删除。
+      </p>
       <template v-else
         ><a v-if="post.reply_to" :href="'#p-' + post.reply_to" class="badge"
           >回复指定楼层</a
@@ -349,6 +390,7 @@ watch(
             >修改正文<textarea
               :id="`edit-body-${post.id}`"
               v-model="editText"
+              @paste="paste($event, true)"
               rows="6"
               maxlength="20000"
             />
@@ -369,6 +411,12 @@ watch(
         ><Document v-else :body="post.body" />
         <div class="actions" v-if="user">
           <button
+            v-if="post.author_id === user.id || data.topic.can_moderate"
+            @click="history(post)"
+          >
+            修订历史
+          </button>
+          <button
             :disabled="
               busy ||
               post.author_id === user.id ||
@@ -387,7 +435,7 @@ watch(
           ><button
             v-if="
               (post.author_id === user.id || data.topic.can_moderate) &&
-              !data.topic.locked &&
+              (!data.topic.locked || data.topic.can_moderate) &&
               data.topic.status === 'published'
             "
             @click="edit(post)"
@@ -454,6 +502,7 @@ watch(
           ><textarea
             ref="replyInput"
             v-model="reply"
+            @paste="paste($event)"
             rows="5"
             maxlength="20000"
             placeholder="说说你的思路…支持 [[board:4x4:盘面编码]]"
@@ -472,6 +521,7 @@ watch(
         </button>
       </fieldset>
       <p class="muted" role="status">{{ draft.status.value }}</p>
+      <p role="status">{{ pasteImage.status.value }}</p>
       <details v-if="draft.conflict.value" class="notice" open>
         <summary>云端草稿发生变化</summary>
         <pre>{{ draft.conflict.value.text || "（空草稿）" }}</pre>

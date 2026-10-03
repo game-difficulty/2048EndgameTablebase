@@ -33,7 +33,14 @@ function nodes(tokens) {
       continue;
     }
     if (t.type === "fence" || t.type === "code_block") {
-      current.push(h("pre", [h("code", t.content)]));
+      if (t.type === "fence" && /^details(?:\s|$)/.test(t.info.trim())) {
+        current.push(
+          h("details", { class: "collapsed-text" }, [
+            h("summary", t.info.trim().slice(7).trim() || "展开内容"),
+            h("p", { style: "white-space:pre-wrap" }, t.content),
+          ]),
+        );
+      } else current.push(h("pre", [h("code", t.content)]));
       continue;
     }
     if (t.type === "softbreak" || t.type === "hardbreak") {

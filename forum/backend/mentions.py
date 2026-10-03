@@ -52,7 +52,7 @@ def notify(conn, post_id, body, actor):
                 """INSERT INTO forum_notifications(recipient_id,actor_id,post_id,kind)
                 SELECT :u,:a,p.id,'mention' FROM forum_posts p JOIN forum_topics t ON t.id=p.topic_id
                 WHERE p.id=:p AND p.status='published' AND t.status='published'
-                AND NOT EXISTS(SELECT 1 FROM forum_notification_preferences WHERE user_id=:u AND NOT enabled)
+                AND forum_can_notify(:u,:a,t.board_id,'mention')
                 ON CONFLICT(recipient_id,post_id) DO UPDATE SET kind='mention' """,
                 p=post_id,
                 u=target,

@@ -57,7 +57,8 @@ def app(settings):
             forum_notifications,forum_reports,forum_moderation_actions,forum_idempotency,
             forum_outbox,forum_rate_windows,forum_media,forum_post_media,forum_subscriptions,
             forum_notification_preferences,forum_follows,forum_mentions,forum_reading,
-            forum_reply_drafts,forum_appeals CASCADE""")
+            forum_reply_drafts,forum_appeals,forum_polls,forum_votes,forum_blocks,forum_system_notifications,
+            forum_announcements,forum_privacy_requests,forum_ip_windows,forum_external_cards CASCADE""")
     engine.dispose()
     yield create_app(settings)
 

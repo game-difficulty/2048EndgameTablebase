@@ -9,18 +9,23 @@ const data = ref(null),
   busy = ref(false),
   copied = ref(false);
 let epoch = 0;
-async function load(more = false) {
+async function load(more = false, moreReplies = false) {
   const ticket = ++epoch;
   error.value = "";
-  if (!more) data.value = null;
+  if (!more && !moreReplies) data.value = null;
   try {
     const result = await api(
-      `/profiles/${route.params.id}${more ? "?before=" + data.value.topics.at(-1).id : ""}`,
+      `/profiles/${route.params.id}${more ? "?before=" + data.value.topics.at(-1).id : moreReplies ? "?before_reply=" + data.value.replies.at(-1).id : ""}`,
     );
     if (ticket === epoch)
       data.value = more
-        ? { ...result, topics: [...data.value.topics, ...result.topics] }
-        : result;
+        ? { ...data.value, topics: [...data.value.topics, ...result.topics] }
+        : moreReplies
+          ? {
+              ...data.value,
+              replies: [...data.value.replies, ...result.replies],
+            }
+          : result;
   } catch (e) {
     if (ticket === epoch) error.value = e.message;
   }
@@ -93,6 +98,23 @@ watch(
       @click="load(true)"
     >
       加载更早主题
+    </button>
+    <h2>公开回复</h2>
+    <p v-if="!data.replies.length" class="empty">暂无公开回复。</p>
+    <article v-for="r in data.replies" :key="r.id" class="topic-row">
+      <div>
+        <RouterLink :to="`/t/${r.topic_id}#p-${r.id}`"
+          >{{ r.title }} · #{{ r.post_number }}</RouterLink
+        >
+        <p>{{ r.excerpt }}</p>
+        <time class="muted">{{ new Date(r.created_at).toLocaleString() }}</time>
+      </div>
+    </article>
+    <button
+      v-if="data.replies.length && data.replies.length % 20 === 0"
+      @click="load(false, true)"
+    >
+      加载更早回复
     </button>
   </template>
 </template>

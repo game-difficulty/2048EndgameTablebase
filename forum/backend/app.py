@@ -1,8 +1,12 @@
 from contextlib import asynccontextmanager
 import logging
+import secrets
+import time
+from uuid import uuid4
+from fastapi import Query
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
@@ -11,6 +15,7 @@ from .config import SCHEMA_REVISION, load_settings
 from .db import make_engine, one
 from .errors import ForumError
 from .routes import router
+from .operation_routes import router as operation_router
 from .service import ForumService
 
 logger = logging.getLogger(__name__)
@@ -18,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 class RequestBoundary:
     """Bound chunked bodies too; never buffer an unbounded client upload."""
+
     def __init__(self, app, origin):
         self.app, self.origin = app, origin
 
@@ -30,8 +36,18 @@ class RequestBoundary:
             # Non-browser clients use explicit Bearer credentials; cookies and dev
             # headers require the exact configured browser origin, including port.
             bearer = headers.get(b"authorization", b"").lower().startswith(b"bearer ")
-            if (origin and origin != self.origin) or (not origin and (not bearer or b"cookie" in headers)):
-                return await JSONResponse({"detail": {"code": "ORIGIN_REJECTED", "message": "请求来源不受信任。"}}, status_code=403)(scope, receive, send)
+            if (origin and origin != self.origin) or (
+                not origin and (not bearer or b"cookie" in headers)
+            ):
+                return await JSONResponse(
+                    {
+                        "detail": {
+                            "code": "ORIGIN_REJECTED",
+                            "message": "请求来源不受信任。",
+                        }
+                    },
+                    status_code=403,
+                )(scope, receive, send)
             chunks, size = [], 0
             while True:
                 message = await receive()
@@ -39,9 +55,22 @@ class RequestBoundary:
                     return
                 data = message.get("body", b"")
                 size += len(data)
-                limit = 5 * 1024 * 1024 if scope["path"] == "/api/forum/v1/media" and scope["method"] == "POST" else 131072
+                limit = (
+                    5 * 1024 * 1024
+                    if scope["path"] == "/api/forum/v1/media"
+                    and scope["method"] == "POST"
+                    else 131072
+                )
                 if size > limit:
-                    return await JSONResponse({"detail": {"code": "BODY_TOO_LARGE", "message": "提交内容过大。"}}, status_code=413)(scope, receive, send)
+                    return await JSONResponse(
+                        {
+                            "detail": {
+                                "code": "BODY_TOO_LARGE",
+                                "message": "提交内容过大。",
+                            }
+                        },
+                        status_code=413,
+                    )(scope, receive, send)
                 chunks.append(data)
                 if not message.get("more_body"):
                     break
@@ -51,8 +80,13 @@ class RequestBoundary:
                 nonlocal delivered
                 if not delivered:
                     delivered = True
-                    return {"type": "http.request", "body": b"".join(chunks), "more_body": False}
+                    return {
+                        "type": "http.request",
+                        "body": b"".join(chunks),
+                        "more_body": False,
+                    }
                 return await receive()
+
             return await self.app(scope, bounded_receive, send)
         return await self.app(scope, receive, send)
 
@@ -63,8 +97,13 @@ def create_app(settings=None):
 
     def readiness():
         with engine.connect() as conn:
-            if one(conn, "SELECT version_num FROM alembic_version")["version_num"] != SCHEMA_REVISION:
-                raise RuntimeError("Forum schema mismatch; run the explicit Alembic migration first.")
+            if (
+                one(conn, "SELECT version_num FROM alembic_version")["version_num"]
+                != SCHEMA_REVISION
+            ):
+                raise RuntimeError(
+                    "Forum schema mismatch; run the explicit Alembic migration first."
+                )
 
     @asynccontextmanager
     async def lifespan(app):
@@ -78,28 +117,86 @@ def create_app(settings=None):
     app.state.settings = settings
     app.state.forum = ForumService(engine, settings)
     app.add_middleware(RequestBoundary, origin=settings.public_origin)
+    rate_secret = settings.ip_hash_secret or secrets.token_hex(32)
 
     @app.middleware("http")
     async def response_headers(request: Request, call_next):
+        from .rate_limit import allow, client_ip
+
+        started = time.monotonic()
+        request_id = str(uuid4())
+        if request.url.path.startswith("/api/"):
+            try:
+                permitted = await run_in_threadpool(
+                    allow,
+                    engine,
+                    client_ip(request, settings),
+                    request.method not in {"GET", "HEAD"},
+                    rate_secret,
+                )
+            except SQLAlchemyError:
+                return JSONResponse(
+                    {
+                        "detail": {
+                            "code": "DATABASE_UNAVAILABLE",
+                            "message": "服务暂时繁忙，请稍后重试。",
+                        }
+                    },
+                    status_code=503,
+                    headers={"Cache-Control": "private, no-store"},
+                )
+            if not permitted:
+                return JSONResponse(
+                    {
+                        "detail": {
+                            "code": "IP_RATE_LIMIT",
+                            "message": "请求频率过高，请稍后再试。",
+                        }
+                    },
+                    status_code=429,
+                    headers={"Retry-After": "60", "Cache-Control": "private, no-store"},
+                )
         response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "forum_request id=%s method=%s status=%s elapsed_ms=%d",
+            request_id,
+            request.method,
+            response.status_code,
+            int((time.monotonic() - started) * 1000),
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "private, no-store"
         else:
-            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            )
         return response
 
     @app.exception_handler(ForumError)
     async def forum_error(request, exc):
         headers = {"Retry-After": "60"} if exc.status == 429 else None
-        return JSONResponse({"detail": {"code": exc.code, "message": exc.message}}, status_code=exc.status, headers=headers)
+        return JSONResponse(
+            {"detail": {"code": exc.code, "message": exc.message}},
+            status_code=exc.status,
+            headers=headers,
+        )
 
     @app.exception_handler(SQLAlchemyError)
     async def database_error(request, exc):
         # Never log SQL parameters, account data, drafts or connection URLs.
         logger.error("Forum database failure (%s)", type(exc).__name__)
-        return JSONResponse({"detail": {"code": "DATABASE_UNAVAILABLE", "message": "服务暂时繁忙，请保留内容并稍后重试。"}}, status_code=503)
+        return JSONResponse(
+            {
+                "detail": {
+                    "code": "DATABASE_UNAVAILABLE",
+                    "message": "服务暂时繁忙，请保留内容并稍后重试。",
+                }
+            },
+            status_code=503,
+        )
 
     @app.get("/health/live")
     def live():
@@ -111,15 +208,52 @@ def create_app(settings=None):
         return {"status": "ok", "database": "postgresql", "revision": SCHEMA_REVISION}
 
     app.include_router(router)
+    app.include_router(operation_router)
+
+    @app.get("/robots.txt", include_in_schema=False)
+    def robots():
+        return Response(
+            "User-agent: *\nDisallow: /api/\nDisallow: /settings\nDisallow: /moderation\nDisallow: /operations\nDisallow: /compose\nSitemap: "
+            + settings.public_origin
+            + "/sitemap.xml\n",
+            media_type="text/plain",
+        )
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    def public_sitemap(
+        before: int = Query(9223372036854775807, ge=1, le=9223372036854775807)
+    ):
+        from .seo import sitemap
+
+        return Response(
+            sitemap(engine, settings.public_origin, before),
+            media_type="application/xml",
+            headers={"Cache-Control": "no-store"},
+        )
+
     dist = settings.frontend_dist.resolve()
     if (dist / "assets").is_dir():
-        app.mount("/assets", StaticFiles(directory=dist / "assets"), name="forum-assets")
+        app.mount(
+            "/assets", StaticFiles(directory=dist / "assets"), name="forum-assets"
+        )
     if (dist / "index.html").is_file():
+
         @app.get("/{path:path}", include_in_schema=False)
         def frontend(path: str):
             if path == "favicon.svg":
                 return FileResponse(dist / "favicon.svg", media_type="image/svg+xml")
             if path.startswith(("api/", "health/", "assets/")):
                 return JSONResponse({"detail": "Not found"}, status_code=404)
-            return FileResponse(dist / "index.html")
+            from .seo import page_html
+
+            content, status = page_html(
+                engine,
+                (dist / "index.html").read_text(encoding="utf-8"),
+                path,
+                settings.public_origin,
+            )
+            return HTMLResponse(
+                content, status_code=status, headers={"Cache-Control": "no-store"}
+            )
+
     return app
