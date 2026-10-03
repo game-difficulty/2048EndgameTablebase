@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 INVITED_WEEKLY_GRANT_UNITS = token_to_units(4096)
 PUBLIC_WEEKLY_GRANT_UNITS = token_to_units(512)
 SUPPORTER_WEEKLY_GRANT_UNITS = token_to_units(32768)
+MODERATOR_WEEKLY_GRANT_UNITS = token_to_units(131072)
 WEEKLY_GRANT_INTERVAL = timedelta(days=7)
 MAX_ADMIN_TOKEN_ADJUSTMENT = 100_000_000
 
@@ -303,6 +304,7 @@ def _weekly_grant_for_user(db: sqlite3.Connection, user_id: int) -> tuple[int, s
         """
         SELECT
           users.registered_with_invite,
+          users.role,
           COALESCE(user_entitlements.tier, 'free') AS entitlement_tier
         FROM users
         LEFT JOIN user_entitlements ON user_entitlements.user_id = users.id
@@ -310,6 +312,8 @@ def _weekly_grant_for_user(db: sqlite3.Connection, user_id: int) -> tuple[int, s
         """,
         (int(user_id),),
     ).fetchone()
+    if row is not None and row['role'] == 'moderator':
+        return MODERATOR_WEEKLY_GRANT_UNITS, 'moderator'
     if row is not None and str(row["entitlement_tier"] or "").strip().lower() == SUPPORTER_TIER:
         return SUPPORTER_WEEKLY_GRANT_UNITS, SUPPORTER_TIER
     if row is None or int(row["registered_with_invite"] or 0):

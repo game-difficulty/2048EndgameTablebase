@@ -130,11 +130,13 @@ def public_user(
     db: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     user_id = int(row["id"])
+    from .management import management_permissions
     return {
         "id": user_id,
         "email": row["email"],
         "display_name": row["display_name"] or "",
         "role": row["role"],
+        "management": management_permissions(row),
         "status": row["status"],
         "email_verified": bool(row["email_verified_at"]),
         "token_balance": get_token_balance(user_id, db=db),
@@ -821,15 +823,19 @@ def deactivate_account(
             rolling.refresh_user(db, variant, user_id)
 
 
-def set_account_status_for_admin(*, user_id: int, status: str) -> None:
+def set_account_status_for_admin(*, user_id: int, status: str, actor=None) -> None:
     """Temporarily disable or re-enable an account while preserving verified records."""
     target_status = str(status or "").strip().lower()
     if target_status not in {"active", "disabled"}:
         raise ValueError("Invalid account status.")
     with auth_db() as db:
-        user = db.execute("SELECT id,status FROM users WHERE id=?", (int(user_id),)).fetchone()
+        db.execute('BEGIN IMMEDIATE')
+        user = db.execute("SELECT * FROM users WHERE id=?", (int(user_id),)).fetchone()
         if user is None:
             raise FileNotFoundError("User not found.")
+        if actor is not None:
+            from .management import require_moderation_target
+            require_moderation_target(actor, user)
         if user["status"] != target_status:
             now = iso()
             db.execute(
@@ -838,6 +844,10 @@ def set_account_status_for_admin(*, user_id: int, status: str) -> None:
             )
             if target_status == "disabled":
                 _revoke_user_sessions(db, int(user_id))
+            if actor is not None:
+                db.execute('''INSERT INTO management_audit
+                    (user_id,operator_id,action,old_value,new_value,created_at) VALUES(?,?,'status',?,?,?)''',
+                    (user_id, actor['id'], user['status'], target_status, now))
         from backend.leaderboards.rolling_gamer import ensure_backfill as gamer_backfill
         gamer_backfill(db)
         from backend import rolling_leaderboards as rolling

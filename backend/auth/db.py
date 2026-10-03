@@ -128,6 +128,16 @@ def init_auth_db() -> None:
               created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS management_audit (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL REFERENCES users(id),
+              operator_id INTEGER NOT NULL REFERENCES users(id),
+              action TEXT NOT NULL,
+              old_value TEXT NOT NULL,
+              new_value TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS guest_sessions (
               guest_id TEXT PRIMARY KEY,
               token_hash TEXT NOT NULL UNIQUE,

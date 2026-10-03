@@ -627,19 +627,15 @@ const updateFixedLayoutScale = () => {
   );
 };
 
-const getTabLabel = (tab) => (tab.titleKey ? t(tab.titleKey) : tab.title);
+const getTabLabel = (tab) => (tab.id === TAB_IDS.ADMIN && !authUser.value?.management?.owner
+  ? t('admin.moderator.title') : (tab.titleKey ? t(tab.titleKey) : tab.title));
 const isTabPresented = (tabId) => (
   activeTab.value === tabId || (tabId === TAB_IDS.TRAINER && trainerDockActive.value)
 );
 const accountDisplayName = computed(() => authUser.value?.display_name || authUser.value?.email || '');
-const canOpenAdmin = computed(() => {
-  const email = String(authUser.value?.email || '').trim().toLowerCase();
-  const displayName = String(authUser.value?.display_name || '').trim().toLowerCase();
-  return email === 'assweeass@163.com' || displayName === 'user0' ||
-    (window.location.hostname === '127.0.0.1' && email === 'human-preview@localhost.invalid');
-});
+const canOpenAdmin = computed(() => Boolean(authUser.value?.management?.moderate));
 const hasSupporterPresentation = computed(() => (
-  authUser.value?.entitlements?.tier === 'supporter' || canOpenAdmin.value
+  authUser.value?.entitlements?.tier === 'supporter' || authUser.value?.management?.owner
 ));
 
 const claimTrainerKeyboardForBoardJump = () => {

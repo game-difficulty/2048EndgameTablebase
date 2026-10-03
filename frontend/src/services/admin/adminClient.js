@@ -27,6 +27,12 @@ async function requestJson(path, { method = 'GET', body } = {}) {
 }
 
 export const adminClient = {
+  permissions: () => requestJson('/api/admin/permissions'),
+  users: ({ q = '', page = 1, pageSize = 20, tier = 'all' } = {}) => requestJson(
+    `/api/admin/users?${new URLSearchParams({ q, page, page_size: pageSize, tier })}`),
+  setModerator: (userId, enabled) => requestJson(`/api/admin/users/${userId}/moderator`, {
+    method: 'POST', body: { enabled },
+  }),
   decideAssistanceReview: (id, approved, note) => requestJson(
     `/api/admin/assistance-reviews/${id}/decision`, { method: 'POST', body: { approved, note } }),
   profileReviews: ({ page = 1, status = 'all', changeType = 'all', query = '' } = {}) => {

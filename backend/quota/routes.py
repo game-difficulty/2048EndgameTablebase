@@ -17,6 +17,7 @@ from .service import (
     INVITED_WEEKLY_GRANT_UNITS,
     PUBLIC_WEEKLY_GRANT_UNITS,
     SUPPORTER_WEEKLY_GRANT_UNITS,
+    MODERATOR_WEEKLY_GRANT_UNITS,
     WEEKLY_GRANT_INTERVAL,
 )
 
@@ -76,6 +77,7 @@ def public_quota_rules() -> dict[str, Any]:
             "public": _tokens(PUBLIC_WEEKLY_GRANT_UNITS),
             "invited": _tokens(INVITED_WEEKLY_GRANT_UNITS),
             "supporter": _tokens(SUPPORTER_WEEKLY_GRANT_UNITS),
+            "moderator": _tokens(MODERATOR_WEEKLY_GRANT_UNITS),
             "interval_days": int(WEEKLY_GRANT_INTERVAL.days),
         },
         "operation_costs": {

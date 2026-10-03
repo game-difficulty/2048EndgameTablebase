@@ -11,7 +11,7 @@
         <span v-for="(tile,index) in item.board" :key="index" class="grid aspect-square place-items-center rounded bg-bg-card text-xs font-bold text-text-main">{{ tile || '' }}</span>
       </div>
       <p v-if="item.review_note" class="mt-2 text-text-secondary">{{ item.review_note }}</p>
-      <div v-if="item.status === 'pending' || item.status === 'approved'" class="mt-3 flex flex-wrap items-end gap-2">
+      <div v-if="item.can_manage !== false && (item.status === 'pending' || item.status === 'approved')" class="mt-3 flex flex-wrap items-end gap-2">
         <label class="admin-form-row min-w-[18rem] flex-1"><span>{{ zh ? '审核备注（必填）' : 'Review note (required)' }}</span><textarea v-model.trim="notes[item.id]" class="admin-input min-h-[4rem]" /></label>
         <button v-if="item.status === 'pending'" class="action-btn-small" type="button" :disabled="busy || !notes[item.id]" @click="decide(item,true)">{{ zh ? '批准归档' : 'Approve archive' }}</button>
         <button v-if="item.status === 'pending'" class="action-btn-small" type="button" :disabled="busy || !notes[item.id]" @click="decide(item,false)">{{ zh ? '拒绝' : 'Reject' }}</button>

@@ -38,8 +38,8 @@ const props = defineProps({ user: { type: Object, required: true } });
 const emit = defineEmits(['saved', 'refresh', 'logout']);
 const root = ref(null), open = ref(false), panel = ref(''), securityMode = ref('changePassword');
 const displayName = computed(() => props.user.display_name || props.user.email || '');
-const admin = computed(() => String(props.user.email || '').trim().toLowerCase() === 'assweeass@163.com' || String(props.user.display_name || '').trim().toLowerCase() === 'user0');
-const supporter = computed(() => props.user.entitlements?.tier === 'supporter' || admin.value);
+const admin = computed(() => Boolean(props.user.management?.moderate));
+const supporter = computed(() => props.user.entitlements?.tier === 'supporter' || props.user.management?.owner);
 function toggle() { open.value = !open.value; if (open.value) emit('refresh'); }
 function show(name) { open.value = false; panel.value = name; }
 function security(mode) { securityMode.value = mode; show('security'); }

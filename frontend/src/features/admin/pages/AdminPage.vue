@@ -1,12 +1,12 @@
 <template>
   <div class="page-root overflow-y-auto p-5" @click="actionMenuUserId = null">
     <div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
-      <header class="rounded-2xl border border-border-main bg-bg-card/88 p-5 shadow-sm backdrop-blur-md">
+      <header class="admin-page-header rounded-2xl border border-border-main bg-bg-card/88 p-5 shadow-sm backdrop-blur-md">
         <div class="flex flex-row items-end justify-between gap-4">
           <div>
             <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('admin.kicker') }}</div>
-            <h1 class="mt-1 ui-metric font-black text-text-main">{{ $t('admin.title') }}</h1>
-            <p class="mt-2 max-w-2xl ui-body text-text-secondary">{{ $t('admin.subtitle') }}</p>
+            <h1 class="mt-1 ui-metric font-black text-text-main">{{ $t(isOwner ? 'admin.title' : 'admin.moderator.title') }}</h1>
+            <p v-if="isOwner" class="mt-2 max-w-2xl ui-body text-text-secondary">{{ $t('admin.subtitle') }}</p>
           </div>
           <button type="button" class="action-btn-small justify-center" :disabled="loading" @click="refreshCurrent">
             {{ loading ? $t('common.updating') : $t('admin.refresh') }}
@@ -14,19 +14,19 @@
         </div>
       </header>
 
-      <AdminLiveControl :active="active" />
+      <AdminLiveControl v-if="isOwner" :active="active" />
       <div v-if="error" class="rounded-2xl border border-red-400/35 bg-red-500/10 p-4 ui-body font-bold text-red-500">
         {{ error }}
       </div>
 
-      <section class="grid grid-cols-6 gap-3">
+      <section v-if="isOwner" class="grid grid-cols-6 gap-3">
         <div v-for="card in summaryCards" :key="card.key" class="admin-card">
           <div class="ui-caption font-black uppercase text-text-secondary">{{ card.label }}</div>
           <div class="mt-2 text-2xl font-black text-text-main">{{ card.value }}</div>
         </div>
       </section>
 
-      <section class="admin-panel">
+      <section v-if="isOwner" class="admin-panel">
         <div class="admin-panel-head">
           <div>
             <h2>{{ $t('admin.tokenActivity.title') }}</h2>
@@ -219,9 +219,9 @@
                 <th>{{ $t('admin.users.id') }}</th>
                 <th>{{ $t('admin.users.user') }}</th>
                 <th>{{ $t('admin.users.status') }}</th>
-                <th>{{ $t('admin.users.tokens') }}</th>
-                <th>{{ $t('admin.users.sessions') }}</th>
-                <th>{{ $t('admin.users.usage') }}</th>
+                <th v-if="isOwner">{{ $t('admin.users.tokens') }}</th>
+                <th v-if="isOwner">{{ $t('admin.users.sessions') }}</th>
+                <th v-if="isOwner">{{ $t('admin.users.usage') }}</th>
                 <th>{{ $t('admin.users.created') }}</th>
                 <th>{{ $t('admin.users.lastLogin') }}</th>
                 <th>{{ $t('admin.users.actions') }}</th>
@@ -235,6 +235,7 @@
                 <td>#{{ item.id }}</td>
                 <td>
                   <div class="font-black text-text-main">{{ item.display_name || '-' }}</div>
+                  <span v-if="item.is_owner || item.role === 'moderator'" class="admin-tier-pill">{{ $t(item.is_owner ? 'admin.moderator.owner' : 'admin.moderator.identity') }}</span>
                   <div class="text-[0.75rem] font-bold text-text-secondary">{{ item.email }}</div>
                   <div v-if="item.entitlements?.is_supporter" class="mt-1">
                     <span class="admin-tier-pill">{{ $t('admin.entitlements.supporter') }}</span>
@@ -246,7 +247,7 @@
                     {{ item.status }}
                   </span>
                 </td>
-                <td>
+                <td v-if="isOwner">
                   <div>{{ formatTokens(item.token_balance?.total) }}</div>
                   <div class="text-[0.72rem] font-bold text-text-secondary">
                     {{ $t('admin.tokens.balanceDetail', {
@@ -255,24 +256,16 @@
                     }) }}
                   </div>
                 </td>
-                <td>{{ formatNumber(item.sessions) }}</td>
-                <td>{{ formatNumber(item.usage_events) }}</td>
+                <td v-if="isOwner">{{ formatNumber(item.sessions) }}</td>
+                <td v-if="isOwner">{{ formatNumber(item.usage_events) }}</td>
                 <td>{{ formatDate(item.created_at) }}</td>
                 <td>{{ formatDate(item.last_login_at) }}</td>
                 <td class="admin-user-action-cell">
                   <div class="admin-user-actions" data-admin-user-actions @click.stop>
-                    <button type="button" class="action-btn-small admin-action-trigger justify-center" :aria-expanded="actionMenuUserId === item.id" @click="toggleActionMenu(item.id)">
+                    <button type="button" class="action-btn-small admin-action-trigger justify-center" :aria-expanded="actionMenuUserId === item.id" @click="toggleActionMenu(item.id, $event)">
                       {{ $t('admin.actions.open') }}
                     </button>
                     <span v-if="item.pending_approval" class="admin-approval-dot" aria-hidden="true" />
-                    <div v-if="actionMenuUserId === item.id" class="admin-user-action-menu" role="menu">
-                      <button type="button" role="menuitem" @click="openTokenAdjust(item)">{{ $t('admin.tokens.adjust') }}</button>
-                      <button type="button" role="menuitem" @click="openApprovals(item)">{{ $t('admin.actions.approvals') }}</button>
-                      <button v-if="item.managed_test_account" type="button" role="menuitem" @click="openManagedPassword(item)">{{ $t('admin.actions.resetPassword') }}</button>
-                      <button type="button" role="menuitem" :class="{ danger: item.status === 'active' }" @click="openStatusChange(item)">
-                        {{ $t(item.status === 'active' ? 'admin.actions.disable' : 'admin.actions.enable') }}
-                      </button>
-                    </div>
                   </div>
                 </td>
               </tr>
@@ -289,7 +282,7 @@
           >
             &lt;
           </button>
-          <div class="admin-pagination-center">
+          <div v-if="isOwner" class="admin-pagination-center">
             <div class="ui-caption font-black text-text-secondary">
               {{ $t('admin.users.pagination', {
                 start: userRangeStart,
@@ -315,11 +308,12 @@
               </template>
             </div>
           </div>
+          <span v-else class="ui-caption">{{ $t('admin.moderator.page', { page: currentPage }) }}</span>
           <button
             type="button"
             class="admin-page-nav-btn"
             :aria-label="$t('admin.users.nextPage')"
-            :disabled="currentPage >= pageCount || loading"
+            :disabled="(isOwner ? currentPage >= pageCount : !usersPage.has_more) || loading"
             @click="goToPage(currentPage + 1)"
           >
             &gt;
@@ -338,6 +332,18 @@
         :active="active && adminSection === 'profileReviews'"
       />
     </div>
+
+    <Teleport to="body">
+      <div v-if="activeMenuUser" class="admin-user-action-menu admin-floating-menu" :style="actionMenuStyle" role="menu" data-admin-user-actions @click.stop>
+        <button v-if="isOwner" type="button" role="menuitem" @click="openTokenAdjust(activeMenuUser)">{{ $t('admin.tokens.adjust') }}</button>
+        <button type="button" role="menuitem" @click="openApprovals(activeMenuUser)">{{ $t('admin.actions.approvals') }}</button>
+        <button v-if="isOwner && activeMenuUser.managed_test_account" type="button" role="menuitem" @click="openManagedPassword(activeMenuUser)">{{ $t('admin.actions.resetPassword') }}</button>
+        <button v-if="canChangeRole(activeMenuUser)" type="button" role="menuitem" @click="openRoleChange(activeMenuUser)">{{ $t(activeMenuUser.role === 'moderator' ? 'admin.moderator.revoke' : 'admin.moderator.appoint') }}</button>
+        <button v-if="canChangeStatus(activeMenuUser)" type="button" role="menuitem" :class="{ danger: activeMenuUser.status === 'active' }" @click="openStatusChange(activeMenuUser)">
+          {{ $t(activeMenuUser.status === 'active' ? 'admin.actions.disable' : 'admin.actions.enable') }}
+        </button>
+      </div>
+    </Teleport>
 
     <div v-if="approvals.open" class="admin-modal">
       <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeApprovals" />
@@ -376,7 +382,21 @@
       </section>
     </div>
 
-    <div v-if="managedPassword.open" class="admin-modal">
+    <div v-if="roleChange.user && isOwner" class="admin-modal">
+      <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="!roleChange.submitting && (roleChange.user = null)" />
+      <section class="admin-modal-panel" role="dialog" aria-modal="true" :aria-label="$t('admin.moderator.identity')">
+        <h2 class="ui-metric font-black">{{ $t(roleChange.user.role === 'moderator' ? 'admin.moderator.revoke' : 'admin.moderator.appoint') }}</h2>
+        <p class="mt-2 ui-body">{{ roleChange.user.display_name }} · {{ roleChange.user.email }}</p>
+        <p class="mt-4 ui-body text-text-secondary">{{ $t('admin.moderator.confirmHint') }}</p>
+        <p v-if="roleChange.error" class="admin-alert error">{{ roleChange.error }}</p>
+        <div class="mt-5 grid grid-cols-2 gap-2">
+          <button class="action-btn-small justify-center" :disabled="roleChange.submitting" @click="roleChange.user = null">{{ $t('common.cancel') }}</button>
+          <button class="action-btn-small btn-prominent justify-center" :disabled="roleChange.submitting" @click="submitRoleChange">{{ $t('admin.moderator.confirm') }}</button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="managedPassword.open && isOwner" class="admin-modal">
       <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeManagedPassword" />
       <section class="admin-modal-panel">
         <div class="ui-caption font-black uppercase text-text-secondary">{{ $t('admin.actions.managedAccount') }}</div>
@@ -397,7 +417,7 @@
       </section>
     </div>
 
-    <div v-if="tokenAdjust.open" class="admin-modal">
+    <div v-if="tokenAdjust.open && isOwner" class="admin-modal">
       <div class="absolute inset-0 bg-slate-950/42 backdrop-blur-sm" @click="closeTokenAdjust" />
       <section class="admin-modal-panel">
         <div class="flex items-start justify-between gap-4">
@@ -494,7 +514,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { userError } from '../../../services/errors/userError.js';
 
@@ -511,6 +531,29 @@ const props = defineProps({
 });
 
 const { t } = useI18n();
+const permissions = ref(null);
+const isOwner = computed(() => Boolean(permissions.value?.owner));
+const roleChange = ref({ user: null, submitting: false, error: '' });
+const canChangeStatus = user => user.id !== permissions.value?.user_id && (isOwner.value
+  || (!user.is_owner && !['admin', 'moderator'].includes(user.role)));
+const canChangeRole = user => isOwner.value && !user.is_owner && user.id !== permissions.value?.user_id
+  && ['user', 'moderator'].includes(user.role) && (user.status === 'active' || user.role === 'moderator');
+const openRoleChange = user => {
+  actionMenuUserId.value = null;
+  roleChange.value = { user, submitting: false, error: '' };
+};
+const submitRoleChange = async () => {
+  roleChange.value.submitting = true;
+  try {
+    const { user } = await adminClient.setModerator(roleChange.value.user.id, roleChange.value.user.role !== 'moderator');
+    replaceUserInOverview(user);
+    roleChange.value.user = null;
+  } catch (error) {
+    roleChange.value.error = userError(error);
+  } finally {
+    roleChange.value.submitting = false;
+  }
+};
 const loading = ref(false);
 const adminSection = ref('users');
 const approvalTransactionsPanel = ref(null);
@@ -523,6 +566,8 @@ const pageSize = 20;
 const overview = ref(null);
 const activeChartIndex = ref(null);
 const actionMenuUserId = ref(null);
+const actionMenuStyle = ref({});
+const activeMenuUser = computed(() => users.value.find(user => user.id === actionMenuUserId.value));
 const approvals = ref({ open: false, user: null });
 const statusChange = ref({ open: false, user: null, target: 'disabled', submitting: false, error: '' });
 const managedPassword = ref({ open: false, user: null, password: '', submitting: false, error: '' });
@@ -615,6 +660,7 @@ const summaryCards = computed(() => [
 ]);
 const tierFilterOptions = computed(() => [
   { value: 'all', label: t('admin.users.tierAll') },
+  { value: 'moderator', label: t('admin.moderator.identity') },
   { value: 'supporter', label: t('admin.users.tierSupporter') },
   { value: 'free', label: t('admin.users.tierFree') },
   { value: 'pending', label: t('admin.users.tierPending') },
@@ -749,7 +795,7 @@ const runSearch = () => {
 };
 
 const setTierFilter = (value) => {
-  const nextValue = ['all', 'supporter', 'free', 'pending'].includes(value) ? value : 'all';
+  const nextValue = ['all', 'supporter', 'free', 'pending', 'moderator'].includes(value) ? value : 'all';
   if (tierFilter.value === nextValue) {
     return;
   }
@@ -759,7 +805,7 @@ const setTierFilter = (value) => {
 };
 
 const goToPage = (page) => {
-  const nextPage = Math.max(1, Math.min(Number(page || 1), pageCount.value));
+  const nextPage = Math.max(1, Math.min(Number(page || 1), isOwner.value ? pageCount.value : currentPage.value + (usersPage.value.has_more ? 1 : 0)));
   if (nextPage === currentPage.value) {
     return;
   }
@@ -785,8 +831,20 @@ const replaceUserInOverview = (updatedUser) => {
 
 const defaultTokenReason = () => t('admin.tokens.defaultReason');
 
-const toggleActionMenu = (userId) => {
+const toggleActionMenu = (userId, event) => {
+  const rect = event.currentTarget.getBoundingClientRect();
+  actionMenuStyle.value = {
+    left: `${Math.max(8, Math.min(rect.right - 200, window.innerWidth - 208))}px`,
+    ...(rect.bottom + 240 > window.innerHeight
+      ? { bottom: `${window.innerHeight - rect.top + 6}px` }
+      : { top: `${rect.bottom + 6}px` }),
+  };
   actionMenuUserId.value = actionMenuUserId.value === userId ? null : userId;
+};
+const dismissActionMenu = event => {
+  if (event.type === 'keydown' && event.key !== 'Escape') return;
+  if (event.type === 'pointerdown' && event.target.closest?.('[data-admin-user-actions]')) return;
+  actionMenuUserId.value = null;
 };
 
 const openApprovals = (user) => {
@@ -934,7 +992,8 @@ const refresh = async () => {
   loading.value = true;
   error.value = '';
   try {
-    overview.value = await adminClient.overview({
+    permissions.value = await adminClient.permissions();
+    overview.value = await (isOwner.value ? adminClient.overview : adminClient.users)({
       q: query.value,
       page: currentPage.value,
       pageSize,
@@ -942,6 +1001,10 @@ const refresh = async () => {
     });
     currentPage.value = Number(overview.value?.users_page?.page || currentPage.value);
   } catch (requestError) {
+    if ([401, 403].includes(requestError.status)) {
+      permissions.value = null;
+      overview.value = null;
+    }
     error.value = userError(requestError, t('admin.errors.loadFailed'));
   } finally {
     loading.value = false;
@@ -961,19 +1024,33 @@ const refreshCurrent = () => {
 };
 
 onMounted(() => {
+  document.addEventListener('pointerdown', dismissActionMenu);
+  document.addEventListener('keydown', dismissActionMenu);
+  window.addEventListener('scroll', dismissActionMenu, true);
+  window.addEventListener('resize', dismissActionMenu);
   if (props.active) {
     refresh();
   }
 });
 
+onUnmounted(() => {
+  document.removeEventListener('pointerdown', dismissActionMenu);
+  document.removeEventListener('keydown', dismissActionMenu);
+  window.removeEventListener('scroll', dismissActionMenu, true);
+  window.removeEventListener('resize', dismissActionMenu);
+});
+
 watch(() => props.active, (active) => {
-  if (active && !overview.value) {
+  if (active) {
     refresh();
   }
 });
 </script>
 
 <style scoped>
+.admin-page-header h1 { white-space: nowrap; }
+.admin-page-header .action-btn-small { width: auto; flex: 0 0 auto; }
+.admin-floating-menu.admin-user-action-menu { position: fixed; top: auto; bottom: auto; right: auto; width: 200px; z-index: 450; max-height: calc(100vh - 16px); overflow-y: auto; background: var(--bg-main); }
 .admin-section-tabs {
   display: inline-flex;
   align-self: flex-start;

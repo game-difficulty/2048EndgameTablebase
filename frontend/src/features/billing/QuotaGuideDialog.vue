@@ -158,6 +158,7 @@ const weeklyTiers = computed(() => {
     { key: 'public', tokens: rules.value.weekly_grants.public },
     { key: 'invited', tokens: rules.value.weekly_grants.invited },
     { key: 'supporter', tokens: rules.value.weekly_grants.supporter },
+    { key: 'moderator', tokens: rules.value.weekly_grants.moderator },
   ];
 });
 
@@ -299,7 +300,7 @@ watch(
 
 .weekly-tier-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
 }
 

@@ -651,6 +651,10 @@
           "supporter": {
             "label": "赞助者",
             "detail": "完成赞助并由站长确认"
+          },
+          "moderator": {
+            "label": "管理员",
+            "detail": "站长任命；不与赞助者额度叠加"
           }
         }
       },
@@ -705,6 +709,16 @@
     }
   },
   "admin": {
+    "moderator": {
+      "title": "管理员页",
+      "identity": "管理员",
+      "owner": "站长",
+      "appoint": "设为管理员",
+      "revoke": "撤销管理员",
+      "confirm": "确认变更",
+      "confirmHint": "变更立即生效。免费额度将重置为新身份的每周上限；常驻额度和赞助权益不变。",
+      "page": "第 {page} 页"
+    },
     "open": "站长页",
     "kicker": "管理",
     "title": "站长页",
@@ -712,7 +726,7 @@
     "refresh": "刷新",
     "empty": "暂无数据",
     "tabs": {
-      "label": "站长页查询类型",
+      "label": "管理页查询类型",
       "users": "用户查询",
       "approvals": "审批事务",
       "profileReviews": "头像与昵称备查"

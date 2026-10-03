@@ -3,9 +3,10 @@ from backend.auth.db import auth_db
 from .service import iso
 from .validation import canonical_display_name_key
 from .storage import delete_avatar_file
+from backend.auth.management import can_moderate_target, require_moderation_target, is_owner
 
 
-def list_reviews(page=1, status='pending', change_type='all', query=''):
+def list_reviews(page=1, status='pending', change_type='all', query='', *, actor=None):
     page = max(1, int(page))
     filters, params = [], []
     if status != 'all':
@@ -26,14 +27,20 @@ def list_reviews(page=1, status='pending', change_type='all', query=''):
     with auth_db() as db:
         total = db.execute(f'SELECT COUNT(*) {source} {where}', params).fetchone()[0]
         pending_total = db.execute("SELECT COUNT(*) FROM profile_change_reviews WHERE status='pending'").fetchone()[0]
+        if actor is not None and not is_owner(actor):
+            pending_users = db.execute('''SELECT u.* FROM profile_change_reviews r
+                JOIN user_profile_change_events e ON e.id=r.event_id
+                JOIN users u ON u.id=e.user_id WHERE r.status='pending' ''').fetchall()
+            pending_total = sum(can_moderate_target(actor, user) for user in pending_users)
         rows = db.execute(f'''SELECT e.id, e.user_id, e.change_type, e.old_value, e.new_value,
             e.ip_address, e.created_at,
-            u.display_name, u.email, p.avatar_key, r.status, r.reviewed_at {source}
+            u.display_name, u.email, u.role, p.avatar_key, r.status, r.reviewed_at {source}
             JOIN user_profiles p ON p.user_id=e.user_id
             {where} ORDER BY e.created_at DESC, e.id DESC LIMIT 20 OFFSET ?''', (*params, (page - 1) * 20)).fetchall()
     items = []
     for row in rows:
         item = dict(row)
+        item['can_manage'] = actor is None or can_moderate_target(actor, {**item, 'id': item['user_id']})
         item['is_current'] = (item.pop('avatar_key') == item['new_value']
                               if item['change_type'] == 'avatar'
                               else item['display_name'] == item['new_value'])
@@ -41,16 +48,24 @@ def list_reviews(page=1, status='pending', change_type='all', query=''):
     return dict(items=items, total=total, pending_total=pending_total)
 
 
-def review_all_pending(admin_id):
+def review_all_pending(admin_id, *, actor=None):
     with auth_db() as db:
         db.execute('BEGIN IMMEDIATE')
+        if actor is not None and not is_owner(actor):
+            rows = db.execute('''SELECT u.*, r.event_id FROM profile_change_reviews r
+                JOIN user_profile_change_events e ON e.id=r.event_id
+                JOIN users u ON u.id=e.user_id WHERE r.status='pending' ''').fetchall()
+            ids = [row['event_id'] for row in rows if can_moderate_target(actor, row)]
+            db.executemany("UPDATE profile_change_reviews SET status='reviewed', reviewed_by=?, reviewed_at=? WHERE event_id=? AND status='pending'",
+                           [(admin_id, iso(), ident) for ident in ids])
+            return {'updated': len(ids), 'skipped': len(rows) - len(ids)}
         cursor = db.execute('''UPDATE profile_change_reviews
             SET status='reviewed', reviewed_by=?, reviewed_at=?
             WHERE status='pending' ''', (admin_id, iso()))
         return {'updated': cursor.rowcount}
 
 
-def decide_review(event_id, action, admin_id):
+def decide_review(event_id, action, admin_id, *, actor=None):
     if action not in {'keep', 'revoke'}:
         raise ValueError('Invalid review action')
     old_key = None
@@ -60,6 +75,8 @@ def decide_review(event_id, action, admin_id):
             JOIN user_profile_change_events e ON e.id=r.event_id WHERE e.id=?''', (event_id,)).fetchone()
         if row is None:
             raise ValueError('Review not found')
+        if actor is not None:
+            require_moderation_target(actor, db.execute('SELECT * FROM users WHERE id=?', (row['user_id'],)).fetchone())
         if row['status'] in {'revoked', 'superseded'}:
             return {'status': row['status']}
         status, now = 'reviewed', iso()

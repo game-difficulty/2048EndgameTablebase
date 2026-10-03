@@ -31,6 +31,7 @@ class PublicQuotaRulesTests(unittest.TestCase):
                 "public": 512,
                 "invited": 4096,
                 "supporter": 32768,
+                "moderator": 131072,
                 "interval_days": 7,
             },
         )

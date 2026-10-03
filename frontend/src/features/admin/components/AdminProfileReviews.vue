@@ -78,7 +78,7 @@
             <td><span :class="['review-status', `is-${item.status}`]">{{ statusLabel(item.status) }}</span></td>
             <td class="review-ip">{{ item.ip_address || '—' }}</td>
             <td>
-              <div v-if="item.status === 'pending' || (item.is_current && item.status === 'reviewed')" class="review-actions">
+              <div v-if="item.can_manage !== false && (item.status === 'pending' || (item.is_current && item.status === 'reviewed'))" class="review-actions">
                 <button v-if="item.status === 'pending'" type="button" :disabled="busy" @click="decide(item, 'keep')">
                   <Check :size="15" />{{ copy.markReviewed }}
                 </button>

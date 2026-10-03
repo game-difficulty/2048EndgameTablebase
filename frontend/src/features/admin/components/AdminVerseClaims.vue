@@ -17,7 +17,7 @@
       <div v-if="claim.counts && Object.keys(claim.counts).length" class="text-text-secondary">
         {{ Object.entries(claim.counts).map(([mode,count])=>mode+': '+count).join(' · ') }}
       </div>
-      <div v-if="['pending','approved','failed','complete'].includes(claim.status) || stale(claim)" class="mt-3 flex flex-wrap items-end gap-2">
+      <div v-if="claim.can_manage !== false && (['pending','approved','failed','complete'].includes(claim.status) || stale(claim))" class="mt-3 flex flex-wrap items-end gap-2">
         <label class="admin-form-row min-w-[18rem] flex-1">
           <span>{{ zh ? '审核备注（可选）' : 'Review note (optional)' }}</span>
           <textarea v-model.trim="notes[claim.id]" class="admin-input min-h-[4rem]" />

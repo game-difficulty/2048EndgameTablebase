@@ -651,6 +651,10 @@
           "supporter": {
             "label": "Supporter",
             "detail": "Sponsorship confirmed by the administrator"
+          },
+          "moderator": {
+            "label": "Moderator",
+            "detail": "Appointed by the site owner; not added to the supporter allowance"
           }
         }
       },
@@ -705,6 +709,16 @@
     }
   },
   "admin": {
+    "moderator": {
+      "title": "Moderation",
+      "identity": "Moderator",
+      "owner": "Site owner",
+      "appoint": "Appoint moderator",
+      "revoke": "Revoke moderator role",
+      "confirm": "Confirm change",
+      "confirmHint": "This takes effect immediately. Free Tokens reset to the new role's weekly cap. Permanent Tokens and sponsorship benefits are unchanged.",
+      "page": "Page {page}"
+    },
     "open": "Admin",
     "kicker": "Operations",
     "title": "Admin",

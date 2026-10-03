@@ -62,7 +62,7 @@
         class="account-admin-button action-btn-small mt-2 w-full justify-center"
         @click="$emit('admin')"
       >
-        {{ $t('admin.open') }}
+        {{ $t(authUser.management?.owner ? 'admin.open' : 'admin.moderator.title') }}
       </button>
       <div class="account-security-actions mt-2 grid grid-cols-2 gap-2">
         <button type="button" class="action-btn-small justify-center" @click="$emit('security', 'changePassword')">

@@ -23,3 +23,22 @@ test('approval transaction panel queries summaries and reuses audited decision e
   assert.match(panel, /revokeArchiveApplication/);
   assert.doesNotMatch(panel, /replay|archive BLOB/i);
 });
+
+test('moderation page gates owner data requests and privileged controls', () => {
+  assert.match(page, /<AdminLiveControl v-if="isOwner"/);
+  assert.match(page, /permissions\.value = await adminClient\.permissions\(\)/);
+  assert.match(page, /isOwner\.value \? adminClient\.overview : adminClient\.users/);
+  assert.match(page, /v-if="isOwner"[^>]*@click="openTokenAdjust/);
+  assert.match(page, /canChangeRole\(activeMenuUser\)/);
+  assert.match(page, /canChangeStatus\(activeMenuUser\)/);
+  assert.match(client, /\/api\/admin\/permissions/);
+  assert.match(client, /\/api\/admin\/users\?/);
+});
+
+test('all shared account menus use server capabilities, not name or email checks', () => {
+  for (const path of ['App.vue', 'live/LiveAccountMenu.vue', 'human/HumanAccountMenu.vue']) {
+    const source = readFileSync(new URL(`../src/${path}`, import.meta.url), 'utf8');
+    assert.match(source, /management\?\.moderate/);
+    assert.doesNotMatch(source, /assweeass@163\.com|displayName === 'user0'/);
+  }
+});
