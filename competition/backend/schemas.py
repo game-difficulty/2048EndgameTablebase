@@ -31,6 +31,14 @@ class CreateCompetitionRequest(BaseModel):
     rules: dict | None = None
 
 
+class CreateDuelRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    name: str = Field(min_length=2, max_length=100)
+    projects: list[str] = Field(min_length=1, max_length=15)
+    command_id: str = Field(min_length=8, max_length=160)
+    clock_seconds: int = Field(default=1800, ge=30, le=86400, strict=True)
+
+
 class CreateEventRequest(BaseModel):
     team_size: int = Field(default=3, ge=1, le=16)
     slug: str = Field(min_length=2, max_length=64)

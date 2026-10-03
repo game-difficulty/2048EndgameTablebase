@@ -140,6 +140,7 @@ class EventCatalog:
         return self.detail(slug, principal)
 
     def link_in_transaction(self, db, slug, room, principal):
+        self.rooms._reject_duel_official(db, room)
         event = self._event(db, slug)
         if not FORMATS[event['format_key']]['capabilities']['rooms']:
             raise CompetitionError('EVENT_FORMAT_MISMATCH', '统计型赛事不使用对战房间。', 409)

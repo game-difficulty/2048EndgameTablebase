@@ -47,3 +47,52 @@ Private snapshots and public live projections include `rules` and `draft.workflo
 - Release the tournament and live readers together with the backend capability. Do not expose configurable room creation to readers that only understand A/B/C. Follow the repository's production backup/retention and verified-source deployment process. This implementation does not deploy automatically.
 
 Verification covers legacy tests, custom validation, BO5/BO7 drafts, private blind choices, repeated lineups, real A–G sessions, timeout fallback, idempotency, early termination, roster sizes, migration and API authorization. UI screenshots are local development artifacts under `output/playwright/`.
+
+## Free duels / fixed sequences
+
+`backend/room_flow.py` is the small common boundary for a match plan, readiness
+holds and starting a prepared room. Draft rooms continue through the existing BP
+engine. A fixed sequence stores its ordered project keys and private seed in
+`competition_fixed_series`, without fabricating a draft or secret lineup. Both
+paths share sessions, clocks, result publication, phase tokens, recovery and score
+aggregation. Project descriptors declare a `ResultPolicy`; the room service no
+longer infers a scoring metric from a renderer's protocol. Old descriptor wire
+snapshots remain compatible and rules versions still pin adapter selection.
+
+`backend/duel_rooms.py` provides the separate public-room creation policy. The
+authenticated `POST /api/duel-rooms` accepts `name`, `projects` (ordered unique
+project references, 1–15, including even counts), `clock_seconds` (30–86400,
+default 1800) and `command_id`. Unknown extra fields are rejected. The public
+`GET /api/duel-projects` returns registered non-test projects; the last registered
+version of each project is offered for new rooms. The server, not the caller,
+chooses and freezes the name, adapter and version. Old versions remain available
+to rooms already using them.
+
+The host takes Yellow seat 1 and cannot hand off that seat; another account joins
+White. Both lobby-ready commands start Game A directly. Later games require one
+explicit readiness command per player (using the existing player-readiness
+endpoint). No preview, prediction wait, BP, secret lineup or timeout auto-ready
+is inserted. The existing 30-second result display and shared per-side match
+clock, including Higher refunds and clock-expiry settlement, are retained. All
+selected games are played unless the existing clock-expiry policy ends play;
+ties are allowed. Scores count game wins, not sums of unlike project metrics.
+
+No organizer/referee role is granted, and even platform officials cannot invoke
+staff assignment, member removal, rematching, suspension, result override or
+force-finish on these rooms. Hosts can close their own room before play. Duels
+cannot be linked to events, produce no official record eligibility, do not
+create prediction markets and are not published in the official live directory.
+
+Abuse/lifecycle defaults: at most one active duel per account (host or seated
+opponent), one creation per 60 seconds and at most ten per rolling hour. Creation
+and joining checks use immediate transactions; repeated creation with the same
+command ID returns the original room. Pre-start and between-game waiting expire
+after 30 minutes; reads/readiness toggles do not extend the deadline. Expiration
+closes without assigning a winner and preserves completed results. Schema 17
+adds only the two new tables and their index; existing rooms are not rewritten.
+
+The `/duels` frontend uses separate creation/waiting components, supports ordered
+selection on touch devices and English/Chinese text, and reuses the existing
+room URL, transport, gameplay and settlement components. Snapshots expose
+`room_kind`, fixed `selected_projects` and `waiting_expires_at`; they do not expose
+the private series seed or leak legacy blind choices.

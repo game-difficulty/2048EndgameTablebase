@@ -10,6 +10,9 @@ import { userFacingError } from './errorMessages.js';
 import ProjectPlayground from './projects/ProjectPlayground.vue';
 import PlayerAvatar from './PlayerAvatar.vue';
 import EventCenter from './EventCenter.vue';
+import DuelLobby from './DuelLobby.vue';
+import DuelWaiting from './DuelWaiting.vue';
+import DuelGameReady from './DuelGameReady.vue';
 import MatchSettlement from '../../shared/MatchSettlement.vue';
 import RoomRulesPicker from './RoomRulesPicker.vue';
 import DraftWorkflow from '../../shared/DraftWorkflow.vue';
@@ -34,6 +37,7 @@ import {
 } from './projects/catalog.js';
 
 const pathname = ref(window.location.pathname);
+const isDuelRoute = computed(() => /^\/duels\/?$/.test(pathname.value));
 const projectRouteMatch = computed(() => pathname.value.match(/^\/projects(?:\/([^/]+))?\/?$/));
 const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(20|1[0-9]|[1-9]))?\/?$/));
 const isProjectRoute = computed(() => Boolean(projectRouteMatch.value || practiceRouteMatch.value));
@@ -53,6 +57,7 @@ const newRoomRules = ref(null);
 const newRoomRulesValid = ref(false);
 const createRoomOpen = ref(false);
 const room = ref(null);
+const isDuel = computed(() => room.value?.room_kind === 'duel');
 const loading = ref(true);
 const busy = ref(false);
 const error = ref('');
@@ -136,8 +141,8 @@ const currentCode = computed(() => {
   return match ? match[1].toUpperCase() : '';
 });
 const selectedProjects = computed(() => selectedProjectIds.value.map(id => PROJECT_BY_ID[id]).filter(Boolean));
-const activeRooms = computed(() => rooms.value.filter(item => item.status !== 'CANCELLED').sort((a,b) => (a.schedule?.starts_at || a.created_at).localeCompare(b.schedule?.starts_at || b.created_at)));
-const closedRooms = computed(() => rooms.value.filter(item => item.status === 'CANCELLED'));
+const activeRooms = computed(() => rooms.value.filter(item => item.room_kind !== 'duel' && item.status !== 'CANCELLED').sort((a,b) => (a.schedule?.starts_at || a.created_at).localeCompare(b.schedule?.starts_at || b.created_at)));
+const closedRooms = computed(() => rooms.value.filter(item => item.room_kind !== 'duel' && item.status === 'CANCELLED'));
 const orderedProjectOptions = computed(() => [
   ...selectedProjects.value,
   ...TOURNAMENT_PROJECTS.filter(project => !selectedProjectIds.value.includes(project.id)),
@@ -165,7 +170,7 @@ const settlementGames = computed(() => roomGameKeys.value.map(game => {
   const key = result?.project_key || gameProject(game);
   return { game_key:game, result, project:room.value?.projects?.find(p=>p.key===key),
     name:key ? projectName(key) : '', icon:roomProjectIcon(key),
-    players:{ yellow:lineup.value?.revealed_lineups?.yellow?.[game], white:lineup.value?.revealed_lineups?.white?.[game] } };
+    players: isDuel.value ? Object.fromEntries(['yellow','white'].map(side=>[side,room.value?.seats?.find(seat=>seat.side===side)])) : { yellow:lineup.value?.revealed_lineups?.yellow?.[game], white:lineup.value?.revealed_lineups?.white?.[game] } };
 }));
 const match = computed(() => {
   const value = room.value?.match;
@@ -608,7 +613,7 @@ async function closeRoom(item) {
   error.value = '';
   try {
     await api.closeRoom(item.room_code);
-    if (currentCode.value === item.room_code) navigate(competitionHomePath);
+    if (currentCode.value === item.room_code) navigate(item.room_kind==='duel' ? '/duels' : competitionHomePath);
     else rooms.value = (await api.list()).competitions || [];
   } catch (cause) {
     setError(cause);
@@ -832,7 +837,8 @@ function projectName(key) {
 }
 
 function projectDescription(key) {
-  return room.value?.projects?.find((project) => project.key === key)?.description || '具体目标与判定以本场公布的项目规则为准。';
+  const project = room.value?.projects?.find((project) => project.key === key);
+  return project?.description || PROJECT_BY_ID[project?.project_ref]?.description || '具体目标与判定以本场公布的项目规则为准。';
 }
 
 function roomProjectIcon(key) {
@@ -935,7 +941,7 @@ function playerAt(side, position) {
 }
 
 function gameProject(game) {
-  return draft.value?.workflow?.selected?.[roomGameKeys.value.indexOf(game)] || draft.value?.[`project_${String(game).toLowerCase()}`] || '';
+  return room.value?.selected_projects?.[game] || draft.value?.workflow?.selected?.[roomGameKeys.value.indexOf(game)] || draft.value?.[`project_${String(game).toLowerCase()}`] || '';
 }
 
 function draftSource(key) {
@@ -1067,7 +1073,9 @@ onBeforeUnmount(() => {
         <span class="account-dot"></span>
         {{ session.user.display_name }}
       </div>
-      <LanguageSwitch />
+      <div class="site-navigation"><LanguageSwitch />
+      <button class="secondary-button" type="button" @click="navigate(isDuelRoute ? competitionHomePath : '/duels')">{{ isDuelRoute ? $t('赛事中心') : (language==='zh'?'自由对决':'Free duels') }}</button>
+      </div>
     </header>
 
     <main v-if="loading" class="center-state">
@@ -1080,6 +1088,8 @@ onBeforeUnmount(() => {
       <p>{{ $t(error) }}</p>
       <a class="primary-button" :href="mainSiteUrl">{{ $t("前往主站登录") }}</a>
     </main>
+
+    <DuelLobby v-else-if="isDuelRoute && !room" :session="session" :rooms="rooms.filter(item=>item.room_kind==='duel')" :main-site-url="mainSiteUrl" @navigate="navigate" />
 
     <main v-else-if="!room" class="dashboard page-width">
       <EventCenter :key="eventSlug" :slug="eventSlug" :events="events" :can-create="canCreateEvent" :status-text="statusText" @navigate="navigate" @refresh="loadDashboard(routeEpoch)" @create-room="slug => { newRoomEventSlug = slug; createRoomOpen = true; }" />
@@ -1157,7 +1167,7 @@ onBeforeUnmount(() => {
       <section class="match-header">
         <div class="page-width match-header-inner">
           <div class="match-header-actions">
-            <button class="back-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ room.event?.name || $t('赛事中心') }}</button>
+            <button class="back-button" type="button" @click="navigate(isDuel ? '/duels' : room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ isDuel ? (language==='zh'?'自由对决':'Free duels') : room.event?.name || $t('赛事中心') }}</button>
             <button v-if="room.me.can_close" class="close-room-link" type="button" :disabled="busy" @click="closeRoom(room)">{{ $t("关闭房间") }}</button>
             <button v-if="(room.me.can_manage || room.me.staff_roles?.includes('referee')) && ['SEATING','READY_CHECK','DRAW','DRAFT_STEP','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(room.status)" class="close-room-link" :disabled="busy" @click="rematchRoom">{{ $t("落位错误重赛") }}</button>
           </div>
@@ -1165,11 +1175,11 @@ onBeforeUnmount(() => {
             <span class="room-code">{{ $t(room.room_code) }}</span>
             <h1>{{ room.name }}</h1>
           </div>
-          <div class="stage-chip"><span :class="['connection-dot', connection]"></span>{{ $t(match?.suspension?.active ? '暂停中 · ' : '') }}{{ $t(statusText[room.status] || room.status) }}</div>
+          <div class="stage-chip"><span :class="['connection-dot', connection]"></span>{{ $t(match?.suspension?.active ? '暂停中 · ' : '') }}{{ isDuel && isLobby ? (language==='zh'?'等待双方准备':'Waiting for players') : $t(statusText[room.status] || room.status) }}</div>
         </div>
       </section>
 
-      <section v-if="!['CANCELLED','FINISHED'].includes(room.status)" class="progress-strip">
+      <section v-if="!isDuel && !['CANCELLED','FINISHED'].includes(room.status)" class="progress-strip">
         <div :class="['progress-step', room.status === 'SEATING' ? 'active' : 'done']">{{ $t("选手落座") }}</div>
         <div :class="['progress-step', room.status === 'READY_CHECK' ? 'active' : !['SEATING', 'READY_CHECK'].includes(room.status) ? 'done' : '']">{{ $t("队长准备") }}</div>
         <div :class="['progress-step', room.status === 'DRAW' ? 'active' : !['SEATING', 'READY_CHECK', 'DRAW'].includes(room.status) ? 'done' : '']">{{ $t("先后手抽签") }}</div>
@@ -1179,7 +1189,7 @@ onBeforeUnmount(() => {
       </section>
 
       <div class="page-width room-content">
-        <details v-if="room.rules && !isGameStage" class="frozen-room-rules">
+        <details v-if="room.rules && !isGameStage && !isDuel" class="frozen-room-rules">
           <summary>{{ language==='zh'?'本房间规则':'Room rules' }} · {{ room.rules.game_count }} {{ language==='zh'?'局':'games' }} · {{ room.rules.team_size }} v {{ room.rules.team_size }}</summary>
           <p>{{ room.rules.series_mode==='all'?(language==='zh'?'打满全部对局':'Play every game'):(language==='zh'?`先赢 ${room.rules.wins_required} 局`:`First to ${room.rules.wins_required} wins`) }} · {{ lineupPolicyDescription(room.rules.lineup_policy, language) }}</p>
           <p>BP {{ room.rules.draft_seconds }}s · {{ language==='zh'?'布阵':'Lineup' }} {{ room.rules.lineup_seconds }}s · {{ language==='zh'?'每队总计时':'Team clock' }} {{ room.rules.team_clock_seconds }}s</p>
@@ -1219,7 +1229,7 @@ onBeforeUnmount(() => {
         </section>
         </Transition>
 
-        <section v-if="room.me.can_manage_members || (match && room.status.startsWith('GAME_'))" class="match-operations">
+        <section v-if="!isDuel && (room.me.can_manage_members || (match && room.status.startsWith('GAME_')))" class="match-operations">
           <details v-if="room.me.can_manage_members" class="operation-card"><summary>{{ $t("人员管理") }}</summary>
             <RoomMemberManagement v-model:user-id="manageUserId" :seats="room.seats" :removed-members="room.me.removed_members" :current-user-id="session?.user?.user_id" :busy="busy" @remove="manageMember($event)" @restore="manageMember($event, false)" />
           </details>
@@ -1312,7 +1322,7 @@ onBeforeUnmount(() => {
 
         <section v-if="isGameStage" class="game-hud" :aria-label='$t("当前比赛状态")'>
           <div class="game-hud-side yellow">
-            <button class="game-hud-back" type="button" :aria-label='$t("返回比赛列表")' @click="navigate(competitionHomePath)">←</button>
+            <button class="game-hud-back" type="button" :aria-label='$t("返回比赛列表")' @click="navigate(isDuel ? '/duels' : competitionHomePath)">←</button>
             <strong class="game-hud-series" :aria-label="$t(`黄方局分 ${match.series_score.yellow}`)">{{ $t(match.series_score.yellow) }}</strong>
             <span class="game-hud-team">{{ $t("黄方") }}<small>{{ $t("包干时间") }}</small></span>
             <strong class="game-hud-clock">{{ $t(formatTeamClock(teamClockMs('yellow'))) }}</strong>
@@ -1342,9 +1352,12 @@ onBeforeUnmount(() => {
         <section v-if="room.status === 'CANCELLED'" class="closed-room-panel">
           <p class="eyebrow">ROOM CLOSED</p>
           <h2>{{ $t("房间已关闭") }}</h2>
-          <p>{{ $t("这场比赛未进入抽签，不能继续落座或开赛。房间记录已保留，可返回大厅查看。") }}</p>
-          <button class="secondary-button" type="button" @click="navigate(competitionHomePath)">{{ $t("返回比赛大厅") }}</button>
+          <p v-if="isDuel">{{ language==='zh'?'房间已关闭或等待超时，不会自动开局或判胜。已完成的成绩保留。':'This room was closed or its waiting period expired. No game was auto-started and no winner was assigned. Completed results are kept.' }}</p>
+          <p v-else>{{ $t("这场比赛未进入抽签，不能继续落座或开赛。房间记录已保留，可返回大厅查看。") }}</p>
+          <MatchSettlement v-if="isDuel && match" :cancelled="true" :lang="language" :games="settlementGames" :score="match.series_score" />
+          <button class="secondary-button" type="button" @click="navigate(isDuel ? '/duels' : competitionHomePath)">{{ $t("返回比赛大厅") }}</button>
         </section>
+        <DuelWaiting v-else-if="isDuel && isLobby" :room="room" :busy="busy" :project-name="projectName" @claim="claim" @leave="leave" @ready="toggleReady" />
         <template v-else-if="isLobby">
           <section class="teams-grid">
             <div class="team-panel yellow-team">
@@ -1622,6 +1635,7 @@ onBeforeUnmount(() => {
           </section>
         </template>
 
+        <DuelGameReady v-else-if="isDuel && isGameReady" :room="room" :busy="busy" :project-name="projectName" :project-description="projectDescription" @ready="toggleGameReadiness" />
         <template v-else-if="isGameReady">
           <p v-if="stageWait > 0" class="muted">{{ $t("开局展示剩余 ") }}{{ $t(stageWait) }}{{ $t(" 秒，可提前就绪；展示结束且双方就绪后开始，不扣比赛用时。") }}</p>
           <div v-if="lineup?.revealed_lineups" class="public-matchups"><p v-for="game in roomGameKeys" :key="game">{{ lineup.revealed_lineups.yellow[game]?.display_name }}{{ $t(" — 项目 ") }}{{ $t(game) }} · {{ $t(projectName(gameProject(game))) }} — {{ lineup.revealed_lineups.white[game]?.display_name }}</p></div>
@@ -1654,7 +1668,7 @@ onBeforeUnmount(() => {
               <div class="roster-edge-title">{{ $t("黄方队员") }}</div>
               <div v-for="item in teamSeats('yellow')" :key="item.position" :class="['roster-edge-player', Number(match.players.yellow?.position) === item.position && 'active', match.sessions.yellow?.finished && Number(match.players.yellow?.position) === item.position && 'complete']">
                 <PlayerAvatar class="roster-edge-avatar" :person="item.seat" />
-                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `黄${item.position}` }}</strong><small>{{ $t(item.position === 1 ? '队长 · ' : '') }}{{ $t(rosterStatus('yellow', item.position)) }}</small></span>
+                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `黄${item.position}` }}</strong><small>{{ $t(!isDuel && item.position === 1 ? '队长 · ' : '') }}{{ $t(rosterStatus('yellow', item.position)) }}</small></span>
               </div>
             </div>
             <div class="project-dual-view">
@@ -1726,7 +1740,7 @@ onBeforeUnmount(() => {
             <div class="game-roster-edge white" :aria-label='$t("白方队员状态")'>
               <div class="roster-edge-title">{{ $t("白方队员") }}</div>
               <div v-for="item in teamSeats('white')" :key="item.position" :class="['roster-edge-player', Number(match.players.white?.position) === item.position && 'active', match.sessions.white?.finished && Number(match.players.white?.position) === item.position && 'complete']">
-                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `白${item.position}` }}</strong><small>{{ $t(item.position === 1 ? '队长 · ' : '') }}{{ $t(rosterStatus('white', item.position)) }}</small></span>
+                <span class="roster-edge-copy"><strong>{{ item.seat?.display_name || `白${item.position}` }}</strong><small>{{ $t(!isDuel && item.position === 1 ? '队长 · ' : '') }}{{ $t(rosterStatus('white', item.position)) }}</small></span>
                 <PlayerAvatar class="roster-edge-avatar" :person="item.seat" />
               </div>
             </div>
@@ -1748,12 +1762,13 @@ onBeforeUnmount(() => {
           <p v-for="side in ['yellow','white']" :key="`refund-${side}`" v-show="match.current_result[`${side}_refund_ms`]>0">{{ $t(sideName(side)) }}{{ $t("包干补时 +") }}{{ $t((match.current_result[`${side}_refund_ms`]/1000).toFixed(2)) }}{{ $t(" 秒") }}</p>
           <p v-if="stageWait">{{ $t("休整剩余 ") }}{{ $t(stageWait) }}{{ $t(" 秒，随后自动继续。") }}</p>
           <div class="confirmation-strip">
-            <strong>{{ $t("休整结束后自动进入") }}{{ $t(match.current_game_key==='C' ? '全场结算' : '下一项目') }}</strong>
+            <strong>{{ $t("休整结束后自动进入") }}{{ $t(match.current_game_key===roomGameKeys.at(-1) ? '全场结算' : '下一项目') }}</strong>
           </div>
         </section>
 
-        <MatchSettlement v-else-if="room.status === 'FINISHED'" :lang="language" :games="settlementGames" :teams="{yellow:{name:room.schedule?.yellow_name || t('黄方')},white:{name:room.schedule?.white_name || t('白方')}}" :score="match.series_score" :points="match.series_points" :winner="match.winner_side" :reason="match.finish_reason">
-          <button class="secondary-button" type="button" @click="navigate(room.event ? `/events/${room.event.slug}` : competitionHomePath)">{{ $t("返回比赛列表") }}</button>
+        <MatchSettlement v-else-if="room.status === 'FINISHED'" :lang="language" :games="settlementGames" :teams="{yellow:{name:room.schedule?.yellow_name || t('黄方')},white:{name:room.schedule?.white_name || t('白方')}}" :score="match.series_score" :points="isDuel ? null : match.series_points" :winner="match.winner_side" :reason="match.finish_reason">
+          <p v-if="isDuel">{{ language==='zh'?'平局':'Draws' }}: {{ match.series_score.draws }}</p>
+          <button class="secondary-button" type="button" @click="navigate(isDuel ? '/duels' : room.event ? `/events/${room.event.slug}` : competitionHomePath)">{{ $t("返回比赛列表") }}</button>
         </MatchSettlement>
         <div v-if="isGameStage && !isGamePlaying" class="phase-language"><LanguageSwitch /></div>
         </div>

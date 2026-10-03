@@ -47,6 +47,8 @@ button:disabled { cursor: not-allowed; }
   border-bottom: 1px solid var(--competition-border);
 }
 .brand { display: flex; align-items: center; gap: 10px; color: inherit; background: none; border: 0; text-align: left; }
+.site-navigation{display:flex;align-items:center;gap:12px}
+@media(max-width:600px){.site-navigation{flex-direction:column;align-items:flex-end;gap:6px}.site-navigation>.secondary-button{min-height:32px;padding:5px 12px;font-size:12px}}
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 7px; color: #fffdf8; background: #9f7b3e; font-weight: 800; }
 .brand strong, .brand small { display: block; }
 .brand small { margin-top: 1px; color: light-dark(#778394, #93a1b2); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }

@@ -1,6 +1,11 @@
 // Competition API and room socket errors share stable codes. Keep user-facing
 // wording here instead of displaying the backend's English diagnostic text.
 export const ERROR_MESSAGES = Object.freeze({
+  DUEL_ACTIVE_ROOM: '请先完成或关闭当前自由对决房间。',
+  DUEL_CREATE_LIMIT: '创建过于频繁，请稍后再试。',
+  DUEL_NO_OFFICIALS: '自由对决不支持裁判或举办方操作。',
+  DUEL_FIXED_SEATS: '房主固定为黄方，对手加入白方。',
+  DUEL_OWNER_LEAVE: '房主不参加时，请关闭房间。',
   REMATCH_WINDOW_CLOSED: '已进入布阵阶段，不再因落位错误重赛。',
   SCHEDULE_SEATS_FIXED: '请按报名表上的队内序号落座。',
   AUTH_REQUIRED: '请先登录后再操作。',

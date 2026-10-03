@@ -76,6 +76,8 @@ export const api = {
     method: 'POST', body: result,
   }),
   list: () => request('/api/competitions'),
+  duelProjects: () => request('/api/duel-projects'),
+  createDuel: (body) => request('/api/duel-rooms', { method: 'POST', body }),
   events: () => request('/api/events'),
   event: (slug) => request(`/api/events/${encodeURIComponent(slug)}`),
   eventStatistics: (slug) => request(`/api/events/${encodeURIComponent(slug)}/statistics`),

@@ -42,7 +42,9 @@ class ClientVariantAdapter:
     def descriptor(self) -> ProjectDescriptor:
         kind = "polyomino-board" if self.special_tiles else "2048-board"
         protocol = "polyomino-board-v1" if self.special_tiles else "2048-board-v2"
-        return ProjectDescriptor(self.project_id, self.rules_version, self.display_name, kind, protocol)
+        from .result_policy import ResultPolicy
+        return ProjectDescriptor(self.project_id, self.rules_version, self.display_name, kind, protocol,
+                                 result_policy=ResultPolicy('score' if self.rules.race else self.rules.result_metric, self.rules.race))
 
     def initial_state(self, *, seed: str) -> ProjectState:
         return ProjectState(tuple(tuple(0 for _ in range(self.rules.cols)) for _ in range(self.rules.rows)),

@@ -18,6 +18,7 @@ from .schemas import (
     CommandRequest,
     ManageMemberRequest,
     CreateCompetitionRequest,
+    CreateDuelRequest,
     CreateEventRequest,
     LinkEventRoomRequest,
     UpdateEventRequest,
@@ -76,6 +77,17 @@ def current_principal(request: Request) -> Principal:
 
 
 PrincipalDependency = Annotated[Principal, Depends(current_principal)]
+
+
+@router.get('/duel-projects')
+async def duel_projects(request: Request):
+    return {'projects': service_from_request(request).duels.catalog()}
+
+
+@router.post('/duel-rooms', status_code=201)
+async def create_duel(request: Request, payload: CreateDuelRequest, principal: PrincipalDependency):
+    room = await asyncio.to_thread(service_from_request(request).duels.create, principal, **payload.model_dump())
+    return {'competition': room}
 
 @router.post('/competitions/{room_code}/draft/step')
 async def draft_step(request: Request, room_code: str, payload: DraftStepRequest, principal: PrincipalDependency):

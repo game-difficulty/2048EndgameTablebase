@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from .contracts import ProjectDescriptor, ProjectState, PublicProjectView
+from .result_policy import ResultPolicy
 
 
 DIRECTIONS = {"up", "down", "left", "right"}
@@ -384,6 +385,7 @@ class Tournament2048Adapter:
             display_name=self.rules.display_name,
             view_kind="2048-board",
             view_protocol="2048-board-v2",
+            result_policy=ResultPolicy(self.rules.result_metric if not self.rules.race else 'score', self.rules.race),
         )
 
     def seed_for_side(self, shared_seed: str, side: str) -> str:

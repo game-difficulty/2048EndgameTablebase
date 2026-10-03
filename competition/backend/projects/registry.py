@@ -56,3 +56,11 @@ class ProjectRegistry:
 
     def descriptors(self) -> Iterable[ProjectDescriptor]:
         return tuple(self._descriptors[key] for key in sorted(self._descriptors))
+
+    def current_descriptors(self) -> Iterable[ProjectDescriptor]:
+        """Last registered version is offered for new rooms; old versions stay pinned."""
+        latest = {}
+        for descriptor in self._descriptors.values():
+            if not descriptor.test_only:
+                latest[descriptor.project_ref] = descriptor
+        return tuple(latest.values())

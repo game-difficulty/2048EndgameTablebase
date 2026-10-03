@@ -1,4 +1,9 @@
 const entries=`
+房主固定为黄方，对手加入白方。|The host plays Yellow; the opponent joins White.
+房主不参加时，请关闭房间。|If you do not wish to play, close your room.
+请先完成或关闭当前自由对决房间。|Finish or close your current free duel first.
+创建过于频繁，请稍后再试。|You are creating rooms too frequently. Please try again later.
+自由对决不支持裁判或举办方操作。|Free duels do not support referee or organizer actions.
 请选择本房间范围内的有效席位。|Choose a valid seat in this room.
 本队全部选手均需落座。|All players on your team must be seated.
 项目选禁|Project draft

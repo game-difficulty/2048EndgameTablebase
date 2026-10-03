@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from .result_policy import ResultPolicy
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class ProjectDescriptor:
     view_kind: str
     view_protocol: str
     test_only: bool = False
+    result_policy: ResultPolicy = field(default_factory=ResultPolicy)
 
     def snapshot(self) -> dict[str, Any]:
         return {

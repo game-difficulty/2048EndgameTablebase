@@ -6,6 +6,7 @@ from dataclasses import replace
 from typing import Any
 
 from .contracts import ProjectDescriptor, ProjectState, PublicProjectView
+from .result_policy import ResultPolicy
 from .tournament_variants import WALL, _digest, _move
 
 
@@ -104,6 +105,7 @@ class CargoTransportAdapter:
             display_name="真·华容道（4×4）",
             view_kind="cargo-transport",
             view_protocol="cargo-transport-v1",
+            result_policy=ResultPolicy('delivered_cargo'),
         )
 
     def _spawn_number(
