@@ -2,11 +2,11 @@
 export function compileTableLayers(value) {
   if (value?.version !== 1 || !Number.isSafeInteger(value.nums_adjust)
     || !Array.isArray(value.ranges) || value.ranges.length > 4096) return null;
-  let previous = -1;
+  let previous = -0x80000000 - 1;
   const ranges = [];
   for (const pair of value.ranges) {
     if (!Array.isArray(pair) || pair.length !== 2 || !pair.every(Number.isSafeInteger)
-      || pair[0] < 0 || pair[0] > pair[1] || pair[1] > 0xffffffff || pair[0] <= previous) return null;
+      || pair[0] < -0x80000000 || pair[0] > pair[1] || pair[1] > 0xffffffff || pair[0] <= previous) return null;
     ranges.push([...pair]);
     previous = pair[1];
   }
@@ -18,7 +18,7 @@ export function tableLayerAvailable(maskedBoard, coverage) {
   // The native reader receives the same 4-bit masked board and uses (sum + adjustment) / 2.
   const sum = maskedBoard.reduce((total, value) => total + Math.min(value, 32768), 0);
   const layer = (sum + coverage.numsAdjust) / 2;
-  if (!Number.isSafeInteger(layer) || layer < 0) return true;
+  if (!Number.isSafeInteger(layer)) return true;
   let low = 0, high = coverage.ranges.length - 1;
   while (low <= high) {
     const middle = (low + high) >>> 1;

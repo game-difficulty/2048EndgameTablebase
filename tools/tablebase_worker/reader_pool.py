@@ -52,7 +52,7 @@ BATTLE_ROUTE_TIE_ORDER = ("left", "right", "down", "up")
 def _count_available_layers(table: TableConfig) -> int:
     suffixes = "|".join(re.escape(suffix) for suffix in TABLE_FILE_SUFFIXES)
     layer_re = re.compile(
-        rf"^{re.escape(table.table_id)}_(\d+)(?:{suffixes}|b)$",
+        rf"^{re.escape(table.table_id)}_(-?\d+)(?:{suffixes}|b)$",
         re.IGNORECASE,
     )
     layers: set[int] = set()

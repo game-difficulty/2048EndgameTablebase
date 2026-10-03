@@ -2,7 +2,7 @@
 import os
 import re
 
-from backend.remote_workers.layers import MAX_LAYER_RANGES, MAX_LAYER
+from backend.remote_workers.layers import MAX_LAYER_RANGES, MAX_LAYER, MIN_LAYER
 
 
 class LayerInventory:
@@ -27,7 +27,7 @@ class LayerInventory:
 
     @staticmethod
     def _scan(table):
-        expression = re.compile(rf'^{re.escape(table.table_id)}_(\d+)(b|\.z|\.book|\.zbook|\.exzbook|\.exadbook|\.exadzbook|\.bccmp|\.bcraw|\.bcpos|\.bcsuc)$')
+        expression = re.compile(rf'^{re.escape(table.table_id)}_(-?\d+)(b|\.z|\.book|\.zbook|\.exzbook|\.exadbook|\.exadzbook|\.bccmp|\.bcraw|\.bcpos|\.bcsuc)$')
         layers, positions, successes = set(), set(), set()
         for path in table.paths:
             with os.scandir(path) as entries:
@@ -36,7 +36,7 @@ class LayerInventory:
                     if not match:
                         continue
                     ordinal, suffix = int(match[1]), match[2]
-                    if ordinal > MAX_LAYER:
+                    if not MIN_LAYER <= ordinal <= MAX_LAYER:
                         return None
                     if suffix in ('b', '.z'):
                         if entry.is_dir():

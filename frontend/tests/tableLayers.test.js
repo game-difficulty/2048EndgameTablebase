@@ -82,3 +82,15 @@ test('skipping a missing layer preserves the valid prefetched subscription on th
     assert.equal(requests[0].cancelled,false);
   } finally {cache.close();}
 });
+
+
+test('signed coverage keeps negative holes and both sides of zero', () => {
+  const coverage = compileTableLayers(layers(4, 22, [[-11,-10],[-8,1]]));
+  assert.ok(coverage);
+  for (const [layer, expected] of [[-11,true],[-10,true],[-9,false],[-8,true],[-1,true],[0,true],[1,true],[2,false]]) {
+    const masked = [32768,32768,32768,32768,22 + 2 * layer];
+    assert.equal(tableLayerAvailable(masked, coverage), expected);
+  }
+  assert.equal(compileTableLayers(layers(0,0,[[-2147483649,0]])), null);
+  assert.equal(compileTableLayers(layers(0,0,[[-2,0],[-1,1]])), null);
+});

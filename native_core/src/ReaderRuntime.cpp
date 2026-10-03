@@ -1,4 +1,5 @@
 #include "ReaderRuntime.h"
+#include "ReaderLayer.h"
 
 #include "BoardCodec.h"
 #include "BoardMover.h"
@@ -1590,20 +1591,10 @@ uint64_t encoded_board_value_sum(uint64_t board) {
     return total;
 }
 
-std::optional<uint32_t> bc_layer_ordinal(uint64_t board, int64_t nums_adjust) {
-    const int64_t seed_sum = -nums_adjust;
-    if (seed_sum < 0) {
-        return std::nullopt;
-    }
-    const uint64_t board_sum = encoded_board_value_sum(board);
-    if (board_sum < static_cast<uint64_t>(seed_sum)) {
-        return std::nullopt;
-    }
-    const uint64_t delta = board_sum - static_cast<uint64_t>(seed_sum);
-    if ((delta & 1ULL) != 0ULL || delta / 2ULL > std::numeric_limits<uint32_t>::max()) {
-        return std::nullopt;
-    }
-    return static_cast<uint32_t>(delta / 2ULL);
+std::optional<int64_t> bc_layer_ordinal(uint64_t board, int64_t nums_adjust) {
+    const int64_t delta = static_cast<int64_t>(encoded_board_value_sum(board)) + nums_adjust;
+    if (delta % 2 != 0) return std::nullopt;
+    return delta / 2;
 }
 
 struct BCSearchResult {
@@ -1652,7 +1643,7 @@ BCSearchResult find_bc_value(
     uint64_t canonical_board,
     int64_t nums_adjust
 ) {
-    const std::optional<uint32_t> ordinal = bc_layer_ordinal(canonical_board, nums_adjust);
+    const std::optional<int64_t> ordinal = bc_layer_ordinal(canonical_board, nums_adjust);
     if (!ordinal) {
         return {};
     }
@@ -2298,7 +2289,7 @@ ReaderMoveResult evaluate_classic_result_candidates(
         return {question_entries(), {}};
     }
     const int64_t nums = static_cast<int64_t>((board_value_sum(board_matrix) + nums_adjust) / 2);
-    if (nums < 0) {
+    if (nums < reader_free_layer_offset(pattern_full)) {
         return {blank_direction_entries(), {}};
     }
 
@@ -2392,7 +2383,7 @@ ReaderMoveResult evaluate_advanced_result_candidates(
         return {question_entries(), {}};
     }
     const int64_t nums = static_cast<int64_t>((board_value_sum(board_matrix) + nums_adjust) / 2);
-    if (nums < 0) {
+    if (nums < reader_free_layer_offset(pattern_full)) {
         return {blank_direction_entries(), {}};
     }
 
@@ -2486,7 +2477,7 @@ ReaderMoveResult evaluate_exad_result_candidates(
         return {question_entries(), {}};
     }
     const int64_t nums = static_cast<int64_t>((board_value_sum(board_matrix) + nums_adjust) / 2);
-    if (nums < 0) {
+    if (nums < reader_free_layer_offset(pattern_full)) {
         return {blank_direction_entries(), {}};
     }
 
@@ -2590,7 +2581,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
         return {question_entries(), {}};
     }
     const int64_t nums = static_cast<int64_t>((board_value_sum(board_matrix) + nums_adjust) / 2);
-    if (nums < 0) {
+    if (nums < reader_free_layer_offset(pattern_full)) {
         return {blank_direction_entries(), {}};
     }
 
@@ -2771,7 +2762,7 @@ bool parse_numbered_layer_filename(
     const fs::path &path,
     const std::string &pattern_full,
     const std::string &extension,
-    uint32_t &ordinal
+    int64_t &ordinal
 ) {
     const std::string name = NativePath::to_utf8_string(path.filename());
     const std::string prefix = pattern_full + "_";
@@ -2785,25 +2776,17 @@ bool parse_numbered_layer_filename(
     if (ordinal_text.empty()) {
         return false;
     }
-    uint64_t parsed = 0U;
-    for (char ch : ordinal_text) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        parsed = parsed * 10U + static_cast<uint64_t>(ch - '0');
-        if (parsed > std::numeric_limits<uint32_t>::max()) {
-            return false;
-        }
-    }
-    ordinal = static_cast<uint32_t>(parsed);
+    const auto parsed = parse_reader_layer_number(ordinal_text);
+    if (!parsed) return false;
+    ordinal = *parsed;
     return true;
 }
 
-std::vector<std::pair<uint32_t, fs::path>> bc_compressed_candidates(
+std::vector<std::pair<int64_t, fs::path>> bc_compressed_candidates(
     const std::vector<std::pair<std::string, std::string>> &path_list,
     const std::string &pattern_full
 ) {
-    std::vector<std::pair<uint32_t, fs::path>> candidates;
+    std::vector<std::pair<int64_t, fs::path>> candidates;
     for (const auto &path_entry : path_list) {
         if (path_entry.first.empty()) {
             continue;
@@ -2816,7 +2799,7 @@ std::vector<std::pair<uint32_t, fs::path>> bc_compressed_candidates(
             if (!entry.is_regular_file()) {
                 continue;
             }
-            uint32_t ordinal = 0U;
+            int64_t ordinal = 0U;
             if (parse_numbered_layer_filename(
                     entry.path(),
                     pattern_full,
@@ -2840,16 +2823,16 @@ std::vector<std::pair<uint32_t, fs::path>> bc_compressed_candidates(
 }
 
 struct BCExactCandidate {
-    uint32_t ordinal = 0U;
+    int64_t ordinal = 0U;
     fs::path position_path;
     fs::path success_path;
 };
 
-uint32_t bc_candidate_ordinal(const std::pair<uint32_t, fs::path> &item) {
+int64_t bc_candidate_ordinal(const std::pair<int64_t, fs::path> &item) {
     return item.first;
 }
 
-uint32_t bc_candidate_ordinal(const BCExactCandidate &item) {
+int64_t bc_candidate_ordinal(const BCExactCandidate &item) {
     return item.ordinal;
 }
 
@@ -2861,7 +2844,7 @@ std::vector<BCExactCandidate> bc_exact_candidates(
         std::vector<fs::path> position_paths;
         std::vector<fs::path> success_paths;
     };
-    std::unordered_map<uint32_t, Partial> partials;
+    std::unordered_map<int64_t, Partial> partials;
     for (const auto &path_entry : path_list) {
         if (path_entry.first.empty()) {
             continue;
@@ -2874,7 +2857,7 @@ std::vector<BCExactCandidate> bc_exact_candidates(
             if (!entry.is_regular_file()) {
                 continue;
             }
-            uint32_t ordinal = 0U;
+            int64_t ordinal = 0U;
             if (parse_numbered_layer_filename(entry.path(), pattern_full, ".bcpos", ordinal)) {
                 partials[ordinal].position_paths.push_back(entry.path());
             } else if (parse_numbered_layer_filename(entry.path(), pattern_full, ".bcsuc", ordinal)) {
@@ -2901,11 +2884,11 @@ std::vector<BCExactCandidate> bc_exact_candidates(
     return candidates;
 }
 
-std::vector<uint32_t> exad_layer_ordinals(
+std::vector<int64_t> exad_layer_ordinals(
     const fs::path &root,
     const std::string &pattern_full
 ) {
-    std::vector<uint32_t> ordinals;
+    std::vector<int64_t> ordinals;
     try {
         if (!fs::exists(root) || !fs::is_directory(root)) {
             return ordinals;
@@ -2919,7 +2902,7 @@ std::vector<uint32_t> exad_layer_ordinals(
             if (!entry.is_regular_file()) {
                 continue;
             }
-            uint32_t ordinal = 0U;
+            int64_t ordinal = 0U;
             for (const char *extension : extensions) {
                 if (parse_numbered_layer_filename(
                         entry.path(), pattern_full, extension, ordinal)) {
@@ -3071,7 +3054,8 @@ uint64_t sample_classic_book_state(
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
     for (const auto &path_entry : path_list) {
-        std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        std::vector<int> book_indices;
+        for (int layer = reader_free_layer_offset(pattern_full); layer < 10; ++layer) book_indices.push_back(layer);
         const DTypeInfo dtype_info = dtype_info_for_name(path_entry.second);
         size_t record_size = sizeof(SuccessEntry<uint32_t>);
         if (dtype_info.kind == SuccessRateKind::UInt64) {
@@ -3121,7 +3105,8 @@ uint64_t sample_advanced_book_state(
 ) {
     static thread_local std::mt19937 rng(std::random_device{}());
     for (const auto &path_entry : path_list) {
-        std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        std::vector<int> book_indices;
+        for (int layer = reader_free_layer_offset(pattern_full); layer < 10; ++layer) book_indices.push_back(layer);
         while (!book_indices.empty()) {
             std::uniform_int_distribution<size_t> pick(0, book_indices.size() - 1U);
             const size_t chosen = pick(rng);
@@ -3181,16 +3166,16 @@ uint64_t sample_exad_book_state(
     }
     for (const auto &path_entry : path_list) {
         const fs::path root = NativePath::from_utf8(path_entry.first);
-        std::vector<uint32_t> layer_ordinals = exad_layer_ordinals(root, pattern_full);
+        std::vector<int64_t> layer_ordinals = exad_layer_ordinals(root, pattern_full);
         const auto first_above_initial_range = std::upper_bound(
-            layer_ordinals.begin(), layer_ordinals.end(), 9U);
+            layer_ordinals.begin(), layer_ordinals.end(), int64_t{9});
         if (first_above_initial_range != layer_ordinals.begin()) {
             layer_ordinals.erase(first_above_initial_range, layer_ordinals.end());
             std::shuffle(layer_ordinals.begin(), layer_ordinals.end(), rng);
         } else if (layer_ordinals.size() > 1U) {
             layer_ordinals.resize(1U);
         }
-        for (uint32_t layer_ordinal : layer_ordinals) {
+        for (int64_t layer_ordinal : layer_ordinals) {
             const std::string layer_name = pattern_full + "_" + std::to_string(layer_ordinal);
             const fs::path exadbook_path = root / (layer_name + ".exadbook");
             EXADCompressedResult::ColdSampleResult sample;
@@ -3235,7 +3220,8 @@ uint64_t sample_ex_book_state(
         return 0ULL;
     }
     for (const auto &path_entry : path_list) {
-        std::vector<int> book_indices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        std::vector<int> book_indices;
+        for (int layer = reader_free_layer_offset(pattern_full); layer < 10; ++layer) book_indices.push_back(layer);
         while (!book_indices.empty()) {
             std::uniform_int_distribution<size_t> pick(0, book_indices.size() - 1U);
             const size_t chosen = pick(rng);

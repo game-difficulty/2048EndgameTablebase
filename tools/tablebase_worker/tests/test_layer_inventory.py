@@ -25,6 +25,20 @@ class LayerInventoryTests(unittest.TestCase):
             table = SimpleNamespace(table_id='free12_2048', paths=(first, second))
             self.assertEqual(LayerInventory().get(table), {'version': 1, 'ranges': [[0, 2], [4, 4], [7, 13]]})
 
+    def test_signed_layers_across_zero_and_limits(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root)
+            for name in ['-11.bccmp', '-10.bcraw', '-1.bcpos', '-1.bcsuc', '0.bccmp', '1.bcraw']:
+                (path / ('free12_2048_' + name)).touch()
+            table = SimpleNamespace(table_id='free12_2048', paths=(path,))
+            inventory = LayerInventory().get(table)
+            self.assertEqual(inventory['ranges'], [[-11, -10], [-1, 1]])
+            self.assertEqual(normalize_layer_inventory(inventory), inventory)
+            from tools.tablebase_worker.reader_pool import _count_available_layers
+            self.assertEqual(_count_available_layers(table), 5)
+        for ranges in [[[-2147483649, 0]], [[-1, 1], [0, 2]], [[-1, -2]]]:
+            self.assertIsNone(normalize_layer_inventory({'version': 1, 'ranges': ranges}))
+
     def test_cache_refreshes_on_add_delete_and_unreadable_is_unknown(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root)
