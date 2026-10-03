@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from engine_core.GoalSpec import GoalSpec
 
 from Config import SingletonConfig, category_info, pattern_catalog
 from engine_core.EXPhysicalPattern import resolve_ex_physical_pattern
@@ -29,6 +30,8 @@ def _symm_mode_value(name: str) -> int:
 
 
 def _target_rank(target: int) -> int:
+    if str(target).startswith("sum-"):
+        return GoalSpec.parse(target).encoding_rank
     value = int(target)
     if value >= 32 and (value & (value - 1)) == 0:
         return int(np.log2(value))
@@ -45,18 +48,23 @@ class BookReaderBC:
         if not hasattr(formation_core, "BCBookReader"):
             raise RuntimeError("formation_core does not expose BCBookReader")
 
+        self.goal_token = str(target)
         self.pattern = pattern
         self.target = _target_rank(target)
         meta = pattern_catalog.get(pattern)
         if meta is None:
             raise KeyError(f"Unknown pattern: {pattern}")
 
+        if str(target).startswith("sum-") and any(
+            ((int(board) >> shift) & 15) == 14
+            for board in meta.get("seed_boards", ()) for shift in range(0, 64, 4)):
+            self.target = 14
         resolution = None
         if not pattern.startswith("free"):
             resolution = resolve_ex_physical_pattern(
                 pattern,
                 meta.get("seed_boards", ()),
-                self.target,
+                _target_rank(target),
                 int(SingletonConfig().config.get("SmallTileSumLimit", 96)),
                 advanced=False,
             )

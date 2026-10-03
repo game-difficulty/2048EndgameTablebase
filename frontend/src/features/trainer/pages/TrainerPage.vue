@@ -10,8 +10,9 @@
     <div class="tool-page-header relative z-[120] w-full max-w-6xl flex items-center justify-between mb-4">
       <div class="tool-page-title-row flex items-center gap-3">
         <span class="tool-page-title text-3xl font-extrabold tracking-tight text-text-main font-[Cambria,serif]">
-          {{ isEmptyPattern ? $t('trainer.emptyPattern.label') : (currentPatternDisplay || '\u00a0') }}
+          {{ isEmptyPattern ? $t('trainer.emptyPattern.label') : (fullPatternLabel(currentPatternDisplay, $i18n.locale) || '\u00a0') }}
         </span>
+        <span v-if="goalCompleted" role="status" class="text-accent font-bold text-sm">{{ String($i18n.locale).startsWith('zh') ? '目标达成' : 'Goal reached' }}</span>
         <span :class="['badge-base', wsStatus === 'connected' ? 'badge-connection-connected' : 'badge-connection-disconnected']">
           {{ $t(`status.${wsStatus}`) }}
         </span>
@@ -88,7 +89,7 @@
         </div>
         <template v-if="!isEmptyPattern">
           <span class="text-text-secondary font-bold opacity-30 truncate">|</span>
-          <UiSelect
+          <GoalPicker
             v-model="targetValue"
             class="min-w-[5.5rem]"
             :options="targetOptions"
@@ -322,12 +323,13 @@
 </template>
 
 <script setup>
+import { fullPatternLabel } from '../../../utils/goalTarget.js';
 import { computed, ref, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
 import FitToolPage from '../../../components/FitToolPage.vue';
-import UiSelect from '../../../components/UiSelect.vue';
+import GoalPicker from '../../../components/GoalPicker.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
 import { useTrainerSession } from '../composables/useTrainerSession';
@@ -344,6 +346,7 @@ const { t } = useI18n();
 
 const {
   currentPatternDisplay,
+  goalCompleted,
   guestDemoActive,
   guestAttemptsRemaining,
   guestAttemptsTotal,

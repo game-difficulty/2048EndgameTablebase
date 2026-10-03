@@ -1,5 +1,6 @@
 #include "ReaderRuntime.h"
 #include "ReaderLayer.h"
+#include "TableGoal.h"
 
 #include "BoardCodec.h"
 #include "BoardMover.h"
@@ -2285,6 +2286,7 @@ ReaderMoveResult evaluate_classic_result_candidates(
     const std::string &pattern_full,
     int64_t nums_adjust
 ) {
+    const int sum_target = sum_goal_from_name(pattern_full);
     if (path_list.empty()) {
         return {question_entries(), {}};
     }
@@ -2303,7 +2305,7 @@ ReaderMoveResult evaluate_classic_result_candidates(
             continue;
         }
         const ClassicLookupContext lookup = make_classic_lookup_context(path_entry.first, filename, path_entry.second);
-        if (!lookup.book_exists && !lookup.compressed_exists) {
+        if (!sum_target && !lookup.book_exists && !lookup.compressed_exists) {
             continue;
         }
 
@@ -2326,7 +2328,9 @@ ReaderMoveResult evaluate_classic_result_candidates(
                 if (moved_board == encoded || !is_pattern(moved_board, reader.spec_.pattern_masks)) {
                     continue;
                 }
-                SearchValue value = find_classic_value_with_context(
+                SearchValue value = sum_goal_success(moved_board, sum_target)
+                    ? numeric_search_value(path_entry.second.rfind("1-float", 0) == 0 ? 0.0 : 1.0, path_entry.second)
+                    : find_classic_value_with_context(
                     lookup,
                     canonical_by_mode(moved_board, reader.spec_.symm_mode)
                 );
@@ -2577,6 +2581,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
     const std::string &pattern_full,
     int64_t nums_adjust
 ) {
+    const int sum_target = sum_goal_from_name(pattern_full);
     if (path_list.empty()) {
         return {question_entries(), {}};
     }
@@ -2587,7 +2592,7 @@ ReaderMoveResult evaluate_ex_result_candidates(
 
     const std::string filename = pattern_full + "_" + std::to_string(nums) + ".zbook";
     const std::optional<fs::path> zlut_path = first_existing_ex_zlut_path(path_list, pattern_full);
-    if (!zlut_path) {
+    if (!zlut_path && !sum_target) {
         return {blank_direction_entries(), {}};
     }
     const std::vector<int> operations = operation_sequence(
@@ -2621,7 +2626,9 @@ ReaderMoveResult evaluate_ex_result_candidates(
                 if (moved_board == encoded || !is_pattern(physical_moved, reader.spec_.pattern_masks)) {
                     continue;
                 }
-                SearchValue value = find_ex_value(
+                SearchValue value = sum_goal_success(moved_board, sum_target)
+                    ? numeric_search_value(path_entry.second.rfind("1-float", 0) == 0 ? 0.0 : 1.0, path_entry.second)
+                    : !zlut_path ? none_search_value() : find_ex_value(
                     path_entry.first,
                     filename,
                     *zlut_path,
@@ -2679,6 +2686,7 @@ ReaderMoveResult evaluate_bc_result_candidates(
     const std::string &pattern_full,
     int64_t nums_adjust
 ) {
+    const int sum_target = sum_goal_from_name(pattern_full);
     if (path_list.empty()) {
         return {question_entries(), "uint32"};
     }
@@ -2710,7 +2718,9 @@ ReaderMoveResult evaluate_bc_result_candidates(
                 continue;
             }
             const uint64_t canonical_board = canonical_by_mode(physical_moved, reader.spec_.symm_mode);
-            BCSearchResult value = find_bc_value(
+            BCSearchResult value = sum_goal_success(moved_board, sum_target)
+                ? BCSearchResult{numeric_search_value(1.0, "uint32"), "uint32", true}
+                : find_bc_value(
                 reader,
                 path_list,
                 pattern_full,

@@ -40,7 +40,7 @@ class FreeGoodnessBattleMode(BattleMode):
     def validate_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         full_pattern = str(payload.get("full_pattern") or "").strip()
         entry = resolve_tablebase(full_pattern)
-        if entry is None:
+        if entry is None or str(entry.get("target", "")).startswith("sum-"):
             raise ValueError("table_unavailable")
         target = int(entry.get("target") or 0)
         if target < 2:

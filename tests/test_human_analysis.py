@@ -378,6 +378,9 @@ def test_analysis_summary_reports_current_personal_game_rank():
 def test_analyzer_captures_same_unrounded_fit_as_written_stage_files():
     from backend.analysis_core import Analyzer
     analyzer = Analyzer.__new__(Analyzer)
+    from engine_core.GoalSpec import GoalSpec
+    analyzer.goal = GoalSpec.parse(512)
+    analyzer.sum_goal_completed = False
     analyzer.segment_summaries = []
     analyzer.segment_start_index = 5
     analyzer.text_list = ["line"] * 101
@@ -397,6 +400,9 @@ def test_analyzer_captures_same_unrounded_fit_as_written_stage_files():
 def test_analyzer_flushes_previous_stage_before_analyzing_new_board():
     from backend.analysis_core import Analyzer
     analyzer = Analyzer.__new__(Analyzer)
+    from engine_core.GoalSpec import GoalSpec
+    analyzer.goal = GoalSpec.parse(512)
+    analyzer.sum_goal_completed = False
     analyzer.pattern = "free10"
     analyzer.target = 9
     analyzer.large_tile_sum = 0
@@ -415,6 +421,9 @@ def test_analyzer_flushes_previous_stage_before_analyzing_new_board():
 def test_analyzer_does_not_count_unmatched_move_in_next_stage():
     from backend.analysis_core import Analyzer
     analyzer = Analyzer.__new__(Analyzer)
+    from engine_core.GoalSpec import GoalSpec
+    analyzer.goal = GoalSpec.parse(512)
+    analyzer.sum_goal_completed = False
     analyzer.pattern = "free10"
     analyzer.large_tile_sum = 7
     analyzer.segment_start_index = 0

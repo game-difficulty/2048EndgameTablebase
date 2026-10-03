@@ -1,3 +1,4 @@
+import { sumGoalCompleted } from '../../../utils/goalTarget.js';
 import { restoreSuccessRate } from '../../../utils/successRate.js';
 import { encodeBoard } from '../../replay/engine/replayTransition.js';
 import { PERFORMANCE_LABELS } from '../../replay/engine/replayAnalysis.js';
@@ -84,17 +85,20 @@ export function createTesterLocalSession({
     lastStep: emptyLastStep(),
     logs: Array.isArray(openingLogs) ? [...openingLogs] : [],
     records: [],
+    goalCompleted: false,
   };
 }
 
 export function applyTesterLocalMove(session, {
   direction,
+  target,
   results,
   dtype,
   spawnRate4,
   randomSource,
   nextContext,
 } = {}) {
+  if (session?.goalCompleted) return { session, accepted: false, reason: 'goal_completed' };
   if (!session?.practice) return { session, accepted: false, reason: 'session_required' };
   const normalizedDirection = String(direction || '').toLowerCase();
   const lastStep = buildOptimisticTesterLastStep({
@@ -135,6 +139,7 @@ export function applyTesterLocalMove(session, {
   const next = {
     ...session,
     practice: reduced.state,
+    goalCompleted: sumGoalCompleted(target, reduced.state, results?.[normalizedDirection], dtype),
     lastStep: {
       ...lastStep,
       message_lines: [message],

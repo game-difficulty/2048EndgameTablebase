@@ -1,3 +1,4 @@
+import { isSumTarget } from '../../../utils/goalTarget.js';
 export const TABLE_POLICY_VERSION = 1;
 
 export const normalizeTableSelection = selection => Array.isArray(selection)
@@ -10,4 +11,4 @@ export const tableAllowed = (table, selection) => selection === null
   ? !DEFAULT_EXCLUDED_TABLES.has(table.fullPattern)
   : selection.includes(table.fullPattern);
 
-export const aiCompatibleTable = table => Boolean(table.ai?.compatible && table.ai.policy_version === TABLE_POLICY_VERSION && !table.pattern.includes('_'));
+export const aiCompatibleTable = table => Boolean(!isSumTarget(table.target) && table.ai?.compatible && table.ai.policy_version === TABLE_POLICY_VERSION && !table.pattern.includes('_'));

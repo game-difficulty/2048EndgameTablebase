@@ -41,7 +41,11 @@ class PublicQuotaRulesTests(unittest.TestCase):
             for pattern in group["patterns"]
         }
         self.assertEqual(groups["L3"], 1)
-        self.assertEqual(groups["3x3free8"], 1)
+        self.assertNotIn("3x3free8", groups)
+        self.assertEqual(groups["3x3"], 1)
+        self.assertEqual(groups["2x4"], 1)
+        self.assertEqual(table_multiplier_units("3x3_sum-1800"), 1000)
+        self.assertEqual(table_multiplier_units("2x4_sum-900"), 1000)
         self.assertEqual(groups["free10"], 8)
         self.assertEqual(groups["free11"], 50)
         self.assertEqual(groups["free12"], 500)
@@ -63,7 +67,7 @@ class PublicQuotaRulesTests(unittest.TestCase):
             row["full_pattern"]: row
             for row in rules["tablebase_thresholds"]
         }
-        self.assertEqual(len(thresholds), 32)
+        self.assertEqual(len(thresholds), 33)
         self.assertEqual(thresholds["3x4free9_256"]["available_layers"], [[0, 157]])
         self.assertEqual(thresholds["3x4free9_512"]["available_layers"], [[0, 274]])
         self.assertEqual(thresholds["3x4free9_1024"]["available_layers"], [[0, 541]])
@@ -87,8 +91,12 @@ class PublicQuotaRulesTests(unittest.TestCase):
                 "available_layers": [[0, 511]],
             },
         )
-        self.assertEqual(thresholds["L3_1024"]["mode"], "relative")
-        self.assertEqual(thresholds["3x3free8_512"]["threshold"], 0.0)
+        self.assertEqual(thresholds["L3_1024"]["mode"], "absolute")
+        self.assertEqual(thresholds["L3_1024"]["threshold"], 0.0005)
+        self.assertNotIn("3x3free8_512", thresholds)
+        for full, end in (("3x3_sum-1800", 900), ("2x4_sum-900", 450)):
+            self.assertEqual(thresholds[full]["threshold"], 0.0)
+            self.assertEqual(thresholds[full]["available_layers"], [[0, end]])
         self.assertEqual(thresholds["442t_512"]["threshold"], 0.25)
         self.assertEqual(thresholds["2432t_2048"]["threshold"], 0.2)
         self.assertEqual(thresholds["2432t_2048"]["mode"], "relative")

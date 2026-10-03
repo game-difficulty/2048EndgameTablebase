@@ -1,4 +1,6 @@
 from __future__ import annotations
+from engine_core.GoalSpec import GoalSpec
+from backend.lookup_mask import replace_board_for_lookup
 
 import base64
 import os
@@ -469,7 +471,7 @@ class Analyzer:
         self,
         file_path: str,
         pattern: str,
-        target: int,
+        target: int | str,
         full_pattern: str,
         target_path: str,
         source_filename: str | None = None,
@@ -477,7 +479,9 @@ class Analyzer:
         self.full_pattern = full_pattern
         self.pattern = pattern
         self.variant = ""
-        self.target = target
+        self.goal = GoalSpec.parse(target, rank=not str(target).startswith("sum-"))
+        self.target = self.goal.encoding_rank
+        self.sum_goal_completed = False
         self.n_large_tiles = self.pattern_map[pattern][0]
         self.large_tile_sum = 0
 
@@ -493,7 +497,7 @@ class Analyzer:
             self.book_reader = RemoteAnalysisBookReader(
                 full_pattern=full_pattern,
                 pattern=pattern,
-                target=str(2**target),
+                target=self.goal.token,
                 use_variant=pattern in category_info.get("variant", []),
             )
         else:
@@ -598,6 +602,9 @@ class Analyzer:
         end_index = len(self.record_list)
         for i in range(len(self.record_list)):
             is_endgame = self.analyze_one_step(i)
+            if self.sum_goal_completed:
+                end_index = i + 1
+                break
             if is_endgame is None:
                 self.write_error(
                     "Table path not found, please make sure you have calculated the required table\n"
@@ -609,7 +616,7 @@ class Analyzer:
         self._flush_segment(end_index, end_index)
 
     def _flush_segment(self, report_step: int, end_index: int) -> None:
-        report = self.write_analysis(report_step) if len(self.text_list) > 100 else None
+        report = self.write_analysis(report_step) if (len(self.text_list) > 100 or (self.goal.kind == "sum" and self.step_count > 0)) else None
         replay = self.save_rec_to_file(report_step)
         if report is not None or replay is not None:
             self.segment_summaries.append({
@@ -639,7 +646,11 @@ class Analyzer:
         for record in self.record_list:
             board_encoded = np.uint64(record[0])
             board = self.bm.decode_board(board_encoded)
-            if self.pattern in category_info.get("variant", []):
+            if self.goal.kind == "sum":
+                masked_board = self.bm.decode_board(np.uint64(replace_board_for_lookup(
+                    board_encoded, self.pattern, self.n_large_tiles, self.goal.token,
+                    self.pattern in category_info.get("variant", []))))
+            elif self.pattern in category_info.get("variant", []):
                 masked_board = self.mask_variant_large_tiles(board.copy())
             elif self.check_nth_largest(board_encoded):
                 masked_board = self.mask_large_tiles(board.copy())
@@ -680,7 +691,7 @@ class Analyzer:
         if not move:
             return False
 
-        target = str(2**self.target)
+        target = self.goal.token
         self.result, success_rate_dtype = self.book_reader.move_on_dic(
             masked_board, self.pattern, target, self.full_pattern
         )
@@ -695,7 +706,7 @@ class Analyzer:
         best_result = self.result[best_move]
         if not best_result or best_result == "?":
             return False
-        if best_result == 1:
+        if best_result == 1 and self.goal.kind == "tile":
             self.record_replay(
                 board, move, new_tile, spawn_position, forced=True
             )
@@ -724,7 +735,7 @@ class Analyzer:
 
         self.record_replay(board, move, new_tile, spawn_position)
         self.step_count += 1
-        if self.step_count < 5:
+        if self.goal.kind != "sum" and self.step_count < 5:
             return True
 
         move_result = self.result[move.lower()]
@@ -789,10 +800,16 @@ class Analyzer:
         return True
 
     def analyze_one_step(self, i: int) -> bool | None:
+        if self.sum_goal_completed:
+            return False
         board_encoded, _, move_encoded, new_tile, spawn_position = self.record_list[i]
         board = self.bm.decode_board(board_encoded)
 
-        if self.pattern in category_info.get("variant", []):
+        if self.goal.kind == "sum":
+            masked = replace_board_for_lookup(board_encoded, self.pattern, self.n_large_tiles,
+                self.goal.token, self.pattern in category_info.get("variant", []))
+            masked_board = self.bm.decode_board(np.uint64(masked))
+        elif self.pattern in category_info.get("variant", []):
             masked_board = self.mask_variant_large_tiles(board.copy())
         elif self.check_nth_largest(board_encoded):
             masked_board = self.mask_large_tiles(board.copy())
@@ -809,9 +826,14 @@ class Analyzer:
             self._flush_segment(i, i)
 
         move = ("", "Left", "Right", "Up", "Down")[move_encoded]
-        return self._analyze_one_step(
-            board, masked_board, move, new_tile, spawn_position
-        )
+        analyzed = self._analyze_one_step(board, masked_board, move, new_tile, spawn_position)
+        if self.goal.kind == "sum" and move_encoded:
+            mover = self.vbm if self.pattern in category_info.get("variant", []) else self.bm
+            encoded = self.bm.encode_board(masked_board)
+            moved, _ = mover.s_move_board(encoded, int(move_encoded))
+            if int(moved) != int(encoded) and self.goal.reached(moved) and self.result.get(move.lower()) == 1:
+                self.sum_goal_completed = True
+        return analyzed
 
     def write_error(self, text: str) -> None:
         filename = self.full_pattern + "_error"
@@ -874,7 +896,7 @@ class Analyzer:
         *,
         forced: bool = False,
     ) -> None:
-        if self.step_count < 5:
+        if self.goal.kind != "sum" and self.step_count < 5:
             return
 
         rec_step_count = self.rec_step_count
@@ -901,7 +923,7 @@ class Analyzer:
 
     def save_rec_to_file(self, step: int) -> str | None:
         rec_step_count = self.rec_step_count
-        if self.full_pattern is None or rec_step_count < 2:
+        if self.full_pattern is None or rec_step_count < (1 if self.goal.kind == "sum" else 2):
             return None
 
         filename = (

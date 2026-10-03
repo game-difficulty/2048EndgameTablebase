@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from engine_core.GoalSpec import GoalSpec
 from Config import category_info, pattern_32k_tiles_map, pattern_catalog
 
 from .remote_workers.config import configured_remote_tables
@@ -134,6 +135,7 @@ def get_available_tablebases() -> list[dict[str, Any]]:
                 "dtype": str(entry.get("dtype") or "uint32"),
                 "spawn_rate": float(entry.get("spawn_rate", 0.1)),
                 "guest_available": _entry_guest_available(entry),
+                "goal": {"kind": GoalSpec.parse(entry["target"]).kind, "value": GoalSpec.parse(entry["target"]).value},
                 "ai": ai_table_metadata(entry),
             }
         )
@@ -143,7 +145,7 @@ def get_available_tablebases() -> list[dict[str, Any]]:
 def ai_table_metadata(entry: dict[str, Any]) -> dict[str, Any]:
     pattern = str(entry.get("pattern") or "")
     parameters = pattern_32k_tiles_map.get(pattern)
-    compatible = bool(parameters and pattern not in category_info.get("variant", [])
+    compatible = bool(not str(entry.get("target", "")).startswith("sum-") and parameters and pattern not in category_info.get("variant", [])
                       and "_" not in pattern)
     metadata = {"compatible": compatible, "policy_version": 1,
                 "large_tiles": int(parameters[0]) if parameters else 0,
@@ -282,14 +284,15 @@ def build_filepath_map_entry(
     return [(str(entry["_absolute_path"]), str(entry.get("dtype") or "uint32"))]
 
 
-def get_catalog_target_tiles() -> list[int]:
+def get_catalog_target_tiles() -> list[int | str]:
     targets = set()
     for table in get_available_tablebases():
         try:
-            targets.add(int(table["target"]))
+            goal = GoalSpec.parse(table["target"])
+            targets.add(goal.token if goal.kind == "sum" else goal.value)
         except (TypeError, ValueError):
             continue
-    return sorted(targets)
+    return sorted(targets, key=lambda value: (GoalSpec.parse(value).kind == "sum", GoalSpec.parse(value).value))
 
 
 def get_catalog_categories() -> dict[str, list[str]]:

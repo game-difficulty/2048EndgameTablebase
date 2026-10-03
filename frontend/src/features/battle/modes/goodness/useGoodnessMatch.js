@@ -1,3 +1,4 @@
+import { isSumTarget } from '../../../../utils/goalTarget.js';
 import {
   computed,
   onMounted,
@@ -329,7 +330,7 @@ export function useGoodnessMatch(
       fetchTablebaseCatalog(),
       fetch(getBackendUrl('/api/quota/rules')).then((response) => response.json()),
     ]);
-    catalog.value = tables;
+    catalog.value = tables.filter(table => !isSumTarget(table.target));
     quotaRules.value = rules;
   };
 

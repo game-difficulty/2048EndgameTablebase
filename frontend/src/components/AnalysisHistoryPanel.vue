@@ -23,7 +23,7 @@
         <section v-for="item in job.items || []" :key="item.id" class="analysis-history-item">
           <div class="analysis-history-item-title">
             <strong>{{ itemLabel(item) }}</strong>
-            <span>{{ modeLabel(item.variant) }} · {{ item.pattern }}-{{ item.target }}</span>
+            <span>{{ modeLabel(item.variant) }} · {{ item.pattern }}-{{ goalTargetLabel(item.target, language) }}</span>
           </div>
           <AnalysisStageList v-if="item.artifacts?.length" :artifacts="item.artifacts" :language="language" :opening="opening" @open="openReplay" />
           <small v-else class="analysis-history-empty">{{ item.status === 'failed' ? text('分析失败', 'Analysis failed') : text('没有可跳转的回放阶段', 'No replay stage is available') }}</small>
@@ -41,6 +41,7 @@
 </template>
 
 <script setup>
+import { goalTargetLabel } from '../utils/goalTarget.js';
 import { computed, nextTick, onMounted, ref } from 'vue';
 import { ChevronDown } from '@lucide/vue';
 import AnalysisStageList from '../features/replay/components/AnalysisStageList.vue';

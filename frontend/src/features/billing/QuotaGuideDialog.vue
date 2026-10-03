@@ -63,6 +63,7 @@
           <div class="section-heading">
             <h3>{{ $t('billing.quotaGuide.costs.title') }}</h3>
             <p>{{ $t('billing.quotaGuide.costs.note') }}</p>
+            <p>{{ $t('billing.quotaGuide.costs.sumGoals') }}</p>
           </div>
           <div class="quota-table-wrap">
             <table class="quota-table">
@@ -111,7 +112,7 @@
               </thead>
               <tbody>
                 <tr v-for="row in thresholdRows" :key="row.full_pattern">
-                  <td class="patterns">{{ row.full_pattern }}</td>
+                  <td class="patterns">{{ row.full_pattern.includes('_sum-') ? fullPatternLabel(row.full_pattern, locale) : row.full_pattern }}</td>
                   <td>{{ formatThreshold(row.threshold) }}</td>
                   <td>{{ formatThresholdMode(row.mode) }}</td>
                   <td>{{ row.available_layers?.map(([start, end]) => start === end ? String(start) : `${start}–${end}`).join(', ') || $t('billing.quotaGuide.thresholds.notRecorded') }}</td>
@@ -140,6 +141,7 @@ import { useI18n } from 'vue-i18n';
 
 import { getQuotaRules } from '../../services/quota/quotaClient';
 import TokenSources from './TokenSources.vue';
+import { fullPatternLabel } from '../../utils/goalTarget.js';
 
 const props = defineProps({
   open: Boolean,

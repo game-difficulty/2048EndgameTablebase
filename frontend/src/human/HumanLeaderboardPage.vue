@@ -23,7 +23,7 @@
         <span>{{ L('定式','Formation') }}</span>
         <select :value="formationKey" :disabled="!formations.length" @change="setFormation($event.target.value)">
           <option v-if="!formations.length" value=":">{{ L('暂无可用定式','No available formations') }}</option>
-          <option v-for="item in formations" :key="`${item.pattern}:${item.target}`" :value="`${item.pattern}:${item.target}`">{{ item.pattern }}-{{ item.target }}</option>
+          <option v-for="item in formations" :key="`${item.pattern}:${item.target}`" :value="`${item.pattern}:${item.target}`">{{ item.pattern }}-{{ goalTargetLabel(item.target, language) }}</option>
         </select>
       </label>
     </div>
@@ -73,6 +73,7 @@
 </template>
 
 <script setup>
+import { goalTargetLabel } from '../utils/goalTarget.js';
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import { json } from './client.js';
 import { language } from './i18n.js';

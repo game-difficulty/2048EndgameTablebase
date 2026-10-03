@@ -1,3 +1,4 @@
+import { sumGoalCompleted } from '../../../utils/goalTarget.js';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { useAppSettingsStore } from '../../../app/useAppSettings';
@@ -110,6 +111,8 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   const tableResult = ref({ dtype: '?', results: {} });
   const currentBoardHex = ref('');
   const resultsBoardHex = ref('');
+  const completedGoalBoard = ref('');
+  const goalCompleted = computed(() => completedGoalBoard.value === `${patternType.value}_${targetValue.value}:${currentBoardHex.value}`);
   const patternCategories = ref({});
   const availableTargets = ref([]);
   const catalogTables = ref([]);
@@ -193,6 +196,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       prefetchState: trainerPrefetchState,
       result: tableResult.value,
       resultsBoardHex: resultsBoardHex.value,
+      completedGoalBoard: completedGoalBoard.value,
       practice: localPracticeSession,
     });
   };
@@ -206,6 +210,9 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const syncLocalPracticeSession = ({ animate = true } = {}) => {
+    if (goalCompleted.value && localPracticeSession.transition?.kind === 'spawn') {
+      completedGoalBoard.value = `${patternType.value}_${targetValue.value}:${localPracticeSession.boardHex}`;
+    }
     board.value = [...localPracticeSession.board];
     boardFrameRevision += 1;
     boardFrame.value = animate
@@ -406,6 +413,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
     patternType.value = String(restored.pattern || patternType.value);
     targetValue.value = String(restored.target || targetValue.value);
+    completedGoalBoard.value = String(restored.completedGoalBoard || '');
     loadedTablebaseFullPattern.value = String(restored.loadedFullPattern || '');
     tablebasePath.value = String(restored.tablebaseStatus || 'not_selected');
     spawnMode.value = Math.max(0, Math.min(3, Math.trunc(Number(restored.spawnMode) || 0)));
@@ -1008,7 +1016,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   const scheduleDemoStep = (delayMs = getDemoDelayMs()) => {
     clearDemoTimer();
-    if (!demoActive.value || awaitingSpawn.value) return;
+    if (!demoActive.value || awaitingSpawn.value || goalCompleted.value) return;
     if (recordPlaybackAtEnd.value) {
       demoActive.value = false;
       clearStepQueue();
@@ -1016,7 +1024,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     }
     demoTimer = window.setTimeout(() => {
       demoTimer = null;
-      if (!demoActive.value || awaitingSpawn.value) return;
+      if (!demoActive.value || awaitingSpawn.value || goalCompleted.value) return;
       if (recordPlaybackActive.value) {
         playRecordStep(1, { fromDemo: true });
       } else {
@@ -1071,7 +1079,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const prepareResultsRequest = (boardHex, reason = 'manual', actor = currentActor.value) => {
-    if (isEmptyPattern.value || !tablebaseQueryAllowed()) return null;
+    if (isEmptyPattern.value || goalCompleted.value || !tablebaseQueryAllowed()) return null;
     if (recordOpen.value || (reason !== 'step' && !showResults.value) || awaitingSpawn.value) return null;
     if (wsStatus.value !== 'connected' || !tablebaseReadyForConnection) return null;
     if (!boardHex) return null;
@@ -1169,6 +1177,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
     if (
       !['up', 'down', 'left', 'right'].includes(normalized)
       || awaitingSpawn.value
+      || goalCompleted.value
       || (battlePracticeMismatch.value && [1, 2].includes(currentSpawnMode))
       || (currentSpawnMode !== 0 && currentSpawnMode !== 3 && wsStatus.value !== 'connected')
     ) {
@@ -1188,9 +1197,20 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
       stepExecutionPending.value = false;
       return false;
     }
+    const completed = resultsBoardHex.value === currentHex && sumGoalCompleted(
+      targetValue.value, reduced.state, tableResult.value.results?.[normalized], tableResult.value.dtype,
+    );
     localPracticeSession = reduced.state;
     syncLocalPracticeSession();
     invalidateResults();
+    if (completed) {
+      completedGoalBoard.value = `${patternType.value}_${targetValue.value}:${currentBoardHex.value}`;
+      demoActive.value = false;
+      clearDemoTimer();
+      clearStepQueue();
+      queuedMoveDirections.length = 0;
+      return true;
+    }
 
     const queryReason = queuedStepCount.value > 0 || demoActive.value ? 'step' : 'auto';
     const actor = currentActor.value;
@@ -1222,7 +1242,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const pumpQueuedSteps = () => {
-    if (!queuedStepCount.value || stepExecutionPending.value || awaitingSpawn.value) return;
+    if (!queuedStepCount.value || stepExecutionPending.value || awaitingSpawn.value || goalCompleted.value) return;
 
     const boardHex = currentBoardHex.value || hexInput.value;
     const resultsAreFresh = resultsBoardHex.value === boardHex && hasUsableResults.value;
@@ -1779,7 +1799,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const trainerStep = (lookupActor = null) => {
-    if (isEmptyPattern.value) return;
+    if (isEmptyPattern.value || (goalCompleted.value && !recordPlaybackActive.value)) return;
     if (recordPlaybackActive.value) {
       playRecordStep(1);
       return;
@@ -1861,7 +1881,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
   };
 
   const toggleDemo = (lookupActor = null) => {
-    if (isEmptyPattern.value) return;
+    if (isEmptyPattern.value || (goalCompleted.value && !recordPlaybackActive.value)) return;
     if (demoActive.value) {
       demoActive.value = false;
       clearDemoTimer();
@@ -2147,6 +2167,7 @@ export function useTrainerSession(activeRef, hotkeysEnabledRef = activeRef) {
 
   return {
     currentPatternDisplay,
+    goalCompleted,
     guestDemoActive,
     guestAttemptsRemaining,
     guestAttemptsTotal,

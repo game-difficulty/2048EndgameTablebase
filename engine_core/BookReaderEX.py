@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from engine_core.GoalSpec import GoalSpec
 
 from Config import SingletonConfig, category_info, pattern_catalog
 from engine_core.EXPhysicalPattern import resolve_ex_physical_pattern
@@ -29,6 +30,8 @@ def _symm_mode_value(name: str) -> int:
 
 
 def _target_rank(target: int) -> int:
+    if str(target).startswith("sum-"):
+        return GoalSpec.parse(target).encoding_rank
     value = int(target)
     if value >= 32 and (value & (value - 1)) == 0:
         return int(np.log2(value))
@@ -40,6 +43,7 @@ class BookReaderEX:
         if formation_core is None:
             raise RuntimeError("formation_core is unavailable")
 
+        self.goal_token = str(target)
         self.pattern = pattern
         self.target = _target_rank(target)
         meta = pattern_catalog.get(pattern)

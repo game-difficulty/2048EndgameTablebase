@@ -84,7 +84,7 @@
                   </div>
                 </div>
 
-                <UiSelect
+                <GoalPicker
                   v-model="selectedTarget"
                   class="analysis-select-shell w-full"
                   :options="targetOptions"
@@ -204,7 +204,7 @@ import { useI18n } from 'vue-i18n';
 import { openAsyncLink } from '../../../services/openAsyncLink.js';
 import { userError } from '../../../services/errors/userError.js';
 
-import UiSelect from '../../../components/UiSelect.vue';
+import GoalPicker from '../../../components/GoalPicker.vue';
 import AnalysisHistoryPanel from '../../../components/AnalysisHistoryPanel.vue';
 import AnalysisStageList from './AnalysisStageList.vue';
 import { analysisScoreLabel, replayDisplayName } from '../analysisPresentation.js';

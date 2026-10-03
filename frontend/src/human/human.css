@@ -301,7 +301,7 @@ p { color: var(--muted); font-size: 13px; line-height: 1.65; }
 .human-analysis-dialog { width: min(680px, 100%); }
 .analysis-selection-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 2px; color: var(--muted); font-size: 12px; }
 .analysis-selection-tools button { padding: 7px 10px; }
-.analysis-picker { display: grid; grid-template-columns: minmax(90px, .75fr) minmax(0, 1fr) minmax(90px, .75fr) auto; gap: 8px; align-items: end; margin: 18px 0; }
+.analysis-picker { display: grid; grid-template-columns: minmax(90px, .75fr) minmax(0, 1fr) minmax(150px, 1.25fr) auto; gap: 8px; align-items: end; margin: 18px 0; }
 .analysis-picker label { display: grid; gap: 5px; min-width: 0; font-size: 12px; }
 .analysis-picker select { width: 100%; min-width: 0; }
 .analysis-selected > div, .analysis-result-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }

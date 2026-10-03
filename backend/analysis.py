@@ -127,8 +127,12 @@ def run_batch_analysis(
     return entries
 
 
-def normalize_target_value(target: Any) -> tuple[str, int, str]:
+def normalize_target_value(target: Any) -> tuple[str, int | str, str]:
+    from engine_core.GoalSpec import GoalSpec
     target_tile = str(target or "").strip()
+    if target_tile.startswith("sum-"):
+        token = GoalSpec.parse(target_tile).token
+        return token, token, token
     if not target_tile:
         raise ValueError("Missing target tile")
 

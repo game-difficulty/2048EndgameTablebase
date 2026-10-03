@@ -121,6 +121,7 @@ export function useTesterSession(activeRef) {
   const queryInFlight = ref(false);
   const queuedMoveDirections = [];
   const statusMessage = ref('');
+  const goalCompleted = ref(false);
   const recordLength = ref(0);
   const pendingPracticeJump = ref(null);
   const lastStep = ref({
@@ -199,6 +200,7 @@ export function useTesterSession(activeRef) {
 
   const syncLocalTesterSession = ({ animate = true } = {}) => {
     if (!localTesterSession?.practice) return false;
+    goalCompleted.value = Boolean(localTesterSession.goalCompleted);
     const practice = localTesterSession.practice;
     board.value = [...practice.board];
     boardFrameRevision += 1;
@@ -272,6 +274,7 @@ export function useTesterSession(activeRef) {
   };
   const canMove = computed(() => (
     ready.value
+    && !goalCompleted.value
     && tableFound.value
     && !lookupPending.value
     && Object.values(results.value).some((value) => typeof value === 'number')
@@ -844,6 +847,7 @@ export function useTesterSession(activeRef) {
     const deterministicSpawn = createTesterSpawnRandomSource(testerPrefetchState);
     const moved = applyTesterLocalMove(localTesterSession, {
       direction: normalizedDirection,
+      target: selectedTarget.value,
       results: results.value,
       dtype: resultDtype.value,
       spawnRate4: spawnRate4(),
@@ -854,6 +858,13 @@ export function useTesterSession(activeRef) {
     testerPrefetchState = deterministicSpawn.nextState();
     localTesterSession = moved.session;
     syncLocalTesterSession();
+    if (goalCompleted.value) {
+      lookupPending.value = false;
+      queryInFlight.value = false;
+      queuedMoveDirections.length = 0;
+      persistLatestReplay();
+      return true;
+    }
     results.value = {};
     resultDtype.value = '?';
     lookupPending.value = true;
@@ -1008,7 +1019,7 @@ export function useTesterSession(activeRef) {
     ready.value = !!payload?.ready;
     tableFound.value = !!payload?.table_found;
     statusMessage.value = payload?.status || '';
-    if (ready.value && tableFound.value && localTesterSession) {
+    if (ready.value && tableFound.value && localTesterSession && !goalCompleted.value) {
       results.value = {};
       resultDtype.value = '?';
       lookupPending.value = true;
@@ -1032,7 +1043,7 @@ export function useTesterSession(activeRef) {
   };
 
   const handleTablebaseQueryResult = (payload) => {
-    if (payload?.page !== 'tester') return;
+    if (payload?.page !== 'tester' || goalCompleted.value) return;
     if (payload?.code) {
       if (payload?.query_id && payload.query_id === activeQuery?.queryId) {
         activeQuery = null;
@@ -1089,7 +1100,7 @@ export function useTesterSession(activeRef) {
   };
 
   const handleTablebasePrefetch = (payload) => {
-    if (payload?.page !== 'tester') return;
+    if (payload?.page !== 'tester' || goalCompleted.value) return;
     const fullPattern = String(payload?.full_pattern || '');
     const resultCatalogVersion = String(payload?.catalog_version || '');
     if (
@@ -1323,6 +1334,7 @@ export function useTesterSession(activeRef) {
     patternGroups,
     activePatternOptions,
     currentPatternDisplay,
+    goalCompleted,
     isVariant,
     displayedResultDtype,
     connectionBadgeClass,

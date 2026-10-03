@@ -1,3 +1,4 @@
+import { replayPatternFromFilename } from '../../../utils/goalTarget.js';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
@@ -390,7 +391,7 @@ export function useReplaySession(activeRef, emit) {
 
   const guessPatternFromFilename = (filename) => {
     const name = String(filename || '').split(/[\\/]/u).pop() || '';
-    return name.match(/^([A-Za-z0-9]+_\d+)/u)?.[1] || '';
+    return replayPatternFromFilename(name);
   };
   const shouldRelaxFileAccept = () => {
     if (typeof navigator === 'undefined') return false;

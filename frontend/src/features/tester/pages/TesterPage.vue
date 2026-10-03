@@ -2,7 +2,8 @@
   <div class="page-root">
     <div class="tool-page-header relative z-[120] mb-4 flex w-full max-w-6xl items-center justify-between gap-4">
       <div class="tool-page-title-row flex items-center gap-3">
-        <span class="tool-page-title font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main">{{ currentPatternDisplay }}</span>
+        <span class="tool-page-title font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main">{{ fullPatternLabel(currentPatternDisplay, $i18n.locale) }}</span>
+        <span v-if="goalCompleted" role="status" class="text-accent font-bold text-sm">{{ String($i18n.locale).startsWith('zh') ? '目标达成' : 'Goal reached' }}</span>
         <span :class="connectionBadgeClass">{{ $t(`status.${wsStatus}`) }}</span>
       </div>
 
@@ -45,7 +46,7 @@
             </div>
           </div>
         </div>
-        <UiSelect
+        <GoalPicker
           v-model="selectedTarget"
           class="min-w-[5rem]"
           :options="targetOptions"
@@ -204,10 +205,11 @@
 </template>
 
 <script setup>
+import { fullPatternLabel } from '../../../utils/goalTarget.js';
 import { computed, nextTick, ref, toRef, watch } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';
-import UiSelect from '../../../components/UiSelect.vue';
+import GoalPicker from '../../../components/GoalPicker.vue';
 import { refocusBoardHotkeyTarget } from '../../../utils/boardHotkeyFocus';
 import { createBoardViewport } from '../../../utils/boardViewport';
 import { selectTextInputContentsOnFocus } from '../../../utils/textInputSelection';
@@ -273,6 +275,7 @@ const {
   patternGroups,
   activePatternOptions,
   currentPatternDisplay,
+  goalCompleted,
   isVariant,
   displayedResultDtype,
   connectionBadgeClass,

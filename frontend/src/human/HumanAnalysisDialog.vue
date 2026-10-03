@@ -12,7 +12,7 @@
           <div v-if="summaries.length" class="analysis-summaries">
             <h3>{{ label('已完成的定式分析', 'Completed formation analyses') }}</h3>
             <div v-for="item in summaries" :key="item.id" class="analysis-result-row">
-              <span>{{ item.pattern }}-{{ item.target }}<small class="muted">{{ label('残局数', 'Endgames') }} {{ item.aggregate?.stage_count || 0 }}</small></span>
+              <span>{{ item.pattern }}-{{ goalTargetLabel(item.target, language) }}<small class="muted">{{ label('残局数', 'Endgames') }} {{ item.aggregate?.stage_count || 0 }}</small></span>
               <button v-if="item.aggregate?.poster_eligible" @click="showPoster(item.id)">{{ label('生成展示图', 'Make result card') }}</button>
               <small v-else class="muted">{{ posterUnavailable(item.aggregate) }}</small>
             </div>
@@ -34,13 +34,13 @@
               <select v-model="pattern"><option v-for="name in activePatterns" :key="name" :value="name">{{ name }}</option></select>
             </label>
             <label>{{ label('目标', 'Target') }}
-              <select v-model="target"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
+              <NativeGoalPicker v-model="target" :options="targets" :language="language" />
             </label>
             <button :disabled="!target || selected.length >= 6 || selected.some(item => item.pattern === pattern && item.target === target)" @click="addItem">{{ label('加入', 'Add') }}</button>
           </div>
           <div v-if="selected.length" class="analysis-selected">
             <div v-for="(item, index) in selected" :key="`${item.pattern}-${item.target}`">
-              <span>{{ index + 1 }}. {{ item.pattern }} · {{ item.target }}</span>
+              <span>{{ index + 1 }}. {{ item.pattern }} · {{ goalTargetLabel(item.target, language) }}</span>
               <button :aria-label="label('移除', 'Remove')" @click="removeItem(index)">×</button>
             </div>
           </div>
@@ -59,7 +59,7 @@
           <p v-if="job.current_file" class="small muted">{{ job.current_file }}</p>
           <div v-for="(entry, index) in job.items || []" :key="index" class="analysis-result-group">
             <div class="analysis-result-row">
-            <span>{{ entry.pattern }} · {{ entry.target }}<small v-if="entry.message" class="error-text">{{ serverErrorText(entry.message, language) }}</small></span>
+            <span>{{ entry.pattern }} · {{ goalTargetLabel(entry.target, language) }}<small v-if="entry.message" class="error-text">{{ serverErrorText(entry.message, language) }}</small></span>
             <span class="analysis-result-actions"><span>{{ { queued: label('等待中', 'Queued'), running: label('分析中', 'Running'), done: label('完成', 'Done'), failed: label('失败', 'Failed') }[entry.status] }}</span>
               <button v-if="entry.status === 'done' && entry.poster_eligible && entry.summary_id" @click="showPoster(entry.summary_id)">{{ label('生成展示图', 'Make result card') }}</button>
               <small v-else-if="entry.status === 'done'" class="muted">{{ label('暂不可出图', 'No result card') }}</small>
@@ -81,6 +81,7 @@
 </template>
 
 <script setup>
+import { goalTargetLabel, compareGoalTargets } from '../utils/goalTarget.js';
 import { serverErrorText } from '../services/errors/serverErrorText.js';
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { groupTablebasePatternsByCategory } from '../services/tablebases/catalogClient.js';
@@ -89,6 +90,7 @@ import { openAsyncLink } from '../services/openAsyncLink.js';
 import { language } from './i18n.js';
 import { loadLastAnalysisSelection, saveLastAnalysisSelection } from './analysisSelectionHistory.js';
 import HumanAnalysisPosterDialog from './HumanAnalysisPosterDialog.vue';
+import NativeGoalPicker from '../components/NativeGoalPicker.vue';
 import AnalysisStagePicker from './AnalysisStagePicker.vue';
 
 const props = defineProps({ runId: { type: String, required: true } });
@@ -108,7 +110,7 @@ const patternGroups = computed(() => Object.entries(groupTablebasePatternsByCate
   .map(([category, items]) => ({ category, items })));
 const patterns = computed(() => patternGroups.value.flatMap(group => group.items));
 const activePatterns = computed(() => patternGroups.value.find(group => group.category === patternCategory.value)?.items || []);
-const targets = computed(() => (options.value?.tables || []).filter(item => item.pattern === pattern.value).map(item => item.target).sort((a, b) => Number(a) - Number(b)));
+const targets = computed(() => (options.value?.tables || []).filter(item => item.pattern === pattern.value).map(item => item.target).sort(compareGoalTargets));
 const statusLabel = computed(() => ({ queued: label('等待中', 'Queued'), running: label('分析中', 'Running'), finished: label('已完成', 'Finished'), failed: label('失败', 'Failed') })[job.value?.status] || '');
 const endedAt = computed(() => options.value?.run.ended_at ? new Date(options.value.run.ended_at * 1000).toLocaleString(language.value === 'en' ? 'en-US' : 'zh-CN') : '');
 const posterEntries = computed(() => {

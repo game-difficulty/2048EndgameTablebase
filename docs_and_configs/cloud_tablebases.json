@@ -79,10 +79,17 @@
       "spawn_rate": 0.1
     },
     {
-      "pattern": "3x3free8",
-      "target": "512",
-      "relative_path": "3x3free8_512",
-      "dtype": "uint32",
+      "pattern": "3x3",
+      "target": "sum-1800",
+      "relative_path": "3x3_sum-1800_ex",
+      "dtype": "float64",
+      "spawn_rate": 0.1
+    },
+    {
+      "pattern": "2x4",
+      "target": "sum-900",
+      "relative_path": "2x4_sum-900_ex",
+      "dtype": "float64",
       "spawn_rate": 0.1
     }
   ]

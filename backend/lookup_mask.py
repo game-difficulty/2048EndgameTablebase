@@ -1,6 +1,8 @@
 """Logical lookup mask shared by readers and assistance review (not disk symmetry)."""
 from __future__ import annotations
 
+from engine_core.GoalSpec import GoalSpec
+
 MASK_VERSION = 1
 
 
@@ -26,20 +28,24 @@ def replace_variant_large_tiles(board_encoded, pattern, target):
     seeds = pattern_catalog.get(pattern, {}).get('seed_boards', ())
     if not len(seeds):
         return int(board_encoded)
-    rank = int(target).bit_length() - 1
+    goal = GoalSpec.parse(target)
+    rank = goal.encoding_rank
     board, walls = int(board_encoded), int(seeds[0])
     result = 0
     for i in range(16):
         tile = (board >> (4 * i)) & 15
         if (walls >> (4 * i)) & 15 == 15:
             tile = 15
-        elif tile >= rank:
+        elif goal.kind == "tile" and tile >= rank:
             tile = 14
         result |= tile << (4 * i)
     return result
 
 
 def replace_board_for_lookup(board_encoded, pattern, n, target, use_variant):
+    if str(target).startswith("sum-") and not use_variant:
+        GoalSpec.parse(target)
+        return int(board_encoded)
     return (replace_variant_large_tiles(board_encoded, pattern, target) if use_variant
             else replace_largest_tiles(board_encoded, n, target))
 
@@ -47,7 +53,8 @@ def replace_board_for_lookup(board_encoded, pattern, n, target, use_variant):
 def descriptor(full_pattern):
     from Config import pattern_catalog, pattern_32k_tiles_map, category_info
     pattern, target = full_pattern.rsplit('_', 1)
-    if pattern not in pattern_catalog or int(target) < 2:
+    GoalSpec.parse(target)
+    if pattern not in pattern_catalog:
         raise ValueError('invalid_evidence_pattern')
     variant = next((v for v in ('2x4', '3x3', '3x4') if pattern.startswith(v)), '4x4')
     return pattern, target, pattern_32k_tiles_map.get(pattern, [0])[0], pattern in category_info.get('variant', []), variant

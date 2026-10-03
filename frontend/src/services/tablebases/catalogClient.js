@@ -1,3 +1,4 @@
+import { compareGoalTargets } from '../../utils/goalTarget.js';
 import { getBackendUrl } from '../runtime/backendUrl.js';
 import { tablebaseResultCache } from './tablebaseResultCache.js';
 import { getPatternCategory, PATTERN_CATEGORY_ORDER } from '../../utils/patternCategories.js';
@@ -111,7 +112,7 @@ export function groupTablebasePatternsByCategory(tables = []) {
 
 export function getCatalogTargets(tables = []) {
   return [...new Set(tables.map((table) => table.target).filter(Boolean))]
-    .sort((left, right) => Number(left) - Number(right));
+    .sort(compareGoalTargets);
 }
 
 export function getCatalogTargetsForPattern(tables = [], pattern = '') {

@@ -46,7 +46,7 @@ class GoodnessBattleMode(BattleMode):
             else None
         ) or resolve_tablebase
         entry = resolver(full_pattern)
-        if entry is None:
+        if entry is None or str(entry.get("target", "")).startswith("sum-"):
             raise ValueError("table_unavailable")
         max_steps = payload.get("max_steps")
         if max_steps in (None, "", 0, "0"):

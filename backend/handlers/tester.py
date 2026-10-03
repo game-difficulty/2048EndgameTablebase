@@ -1,4 +1,5 @@
 from __future__ import annotations
+from engine_core.GoalSpec import GoalSpec
 
 import base64
 import time
@@ -549,6 +550,15 @@ async def handle_tester_action(
         _tester_append_log(session, "--------------------------------------------------")
         _tester_append_log(session, _tester_board_lines(session.board_encoded))
         _tester_append_log(session, "")
+        goal_token = str(session.tester_pattern[1])
+        if goal_token.startswith("sum-") and GoalSpec.parse(goal_token).reached(moved_board) and selected_rate == 1:
+            session.tester_ready = False
+            session.tester_status = "Board sum goal reached."
+            session.tester_post_lookup_context = None
+            session.tester_lookup_pending = False
+            _tester_append_log(session, session.tester_status)
+            await send_tester_state(websocket, session)
+            return True
         session.tester_post_lookup_context = {
             "board_encoded": u64(session.board_encoded),
             "logs_since": len(session.tester_logs),

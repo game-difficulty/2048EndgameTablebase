@@ -8,7 +8,7 @@
       <label>{{ t('玩家') }}<input v-model.trim="filters.username" maxlength="64" :placeholder="t('用户名')"></label>
       <label>{{ t('模式') }}<select v-model="filters.variant"><option v-for="item in variants" :key="item" :value="item">{{ item.replace('x',' × ') }}</option></select></label>
       <label>{{ t('定式') }}<input v-model.trim="filters.pattern" maxlength="80" :placeholder="t('全部定式')"></label>
-      <label>{{ t('目标') }}<input v-model.trim="filters.target" maxlength="12" :placeholder="t('全部目标')"></label>
+      <label>{{ t('目标') }}<select v-model="filters.target"><option value="">{{ t('全部目标') }}</option><option v-for="target in targetOptions" :key="target" :value="target">{{ goalTargetLabel(target, language) }}</option></select></label>
       <label>{{ t('评价') }}<select v-model="filters.grade"><option value="">{{ t('全部评价') }}</option><option v-for="grade in grades" :key="grade" :value="grade">{{ grade }}</option><option value="unrated">{{ t('未评级') }}</option></select></label>
       <button class="primary" type="submit">{{ t('筛选') }}</button>
     </form>
@@ -38,7 +38,7 @@
                   <button class="analysis-score-link" :title="t('查看原局')" @click="$emit('replay', item.run_id)">{{ number(item.score) }}</button>
                   <small>{{ date(item.run_ended_at) }}</small>
                 </div></td>
-                <td class="analysis-formation"><strong>{{ item.pattern }}</strong><span>{{ item.target }}</span></td>
+                <td class="analysis-formation"><strong>{{ item.pattern }}</strong><span>{{ goalTargetLabel(item.target, language) }}</span></td>
                 <td><span class="analysis-grade">{{ item.grade || '—' }}</span></td>
                 <td class="numeric analysis-fit">{{ percent(item.mean_goodness_of_fit) }}</td>
                 <td class="numeric">{{ number(item.stage_count) }}</td>
@@ -59,7 +59,7 @@
     <div v-if="detail" class="modal-backdrop" @click.self="closeDetail" @keydown.esc.stop.prevent="closeDetail">
       <section class="modal analysis-stage-dialog" role="dialog" aria-modal="true" :aria-label="t('回放阶段')" @keydown.tab="trapFocus">
         <button ref="closeButton" class="modal-close" :aria-label="t('关闭')" @click="closeDetail">×</button>
-        <h2>{{ t('回放阶段') }} <span class="muted">{{ detail.pattern }} · {{ detail.target }}</span></h2>
+        <h2>{{ t('回放阶段') }} <span class="muted">{{ detail.pattern }} · {{ goalTargetLabel(detail.target, language) }}</span></h2>
         <p class="analysis-stage-context"><strong>{{ detail.subject?.display_name }}</strong> · {{ number(detail.score ?? detail.run?.score) }} · {{ date(detail.run_ended_at ?? detail.run?.ended_at) }}</p>
         <p v-if="detailLoading" role="status">{{ t('正在读取分析…') }}</p>
         <p v-else-if="detailError" class="notice danger" role="alert">{{ detailError }} <button @click="openDetail(detail)">{{ t('重试') }}</button></p>
@@ -71,8 +71,10 @@
 </template>
 
 <script setup>
-import { nextTick, onUnmounted, reactive, ref, watch } from 'vue';
+import { goalTargetLabel, compareGoalTargets } from '../utils/goalTarget.js';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { json } from './client.js';
+import { fetchTablebaseCatalog } from '../services/tablebases/catalogClient.js';
 import { language, t } from './i18n.js';
 import AnalysisStagePicker from './AnalysisStagePicker.vue';
 import { openAsyncLink } from '../services/openAsyncLink.js';
@@ -85,6 +87,13 @@ let appliedFilters = { ...filters };
 const items = ref([]), loading = ref(false), error = ref(''), nextCursor = ref('');
 const cursors = ref(['']);
 const page = ref(0);
+const tableCatalog = ref([]);
+onMounted(async () => {
+  try { tableCatalog.value = await fetchTablebaseCatalog(); } catch { /* Existing results still supply filter choices. */ }
+});
+const targetOptions = computed(() => [...new Set([filters.target, ...tableCatalog.value.filter(item =>
+  (!filters.pattern || item.pattern === filters.pattern) && (filters.variant === '4x4' ? !/^[23]x[34]/u.test(item.pattern) : item.pattern.startsWith(filters.variant))
+).map(item => String(item.target)), ...items.value.map(item => String(item.target))].filter(Boolean))].sort(compareGoalTargets));
 const detail = ref(null), detailLoading = ref(false), opening = ref(false);
 const closeButton = ref(null), detailError = ref(''), replayError = ref('');
 let detailRequest = 0, loadRequest = 0, returnFocus = null, previousOverflow = null;

@@ -675,6 +675,7 @@
         "trophy": "**Minigame trophies**: Bronze / Silver / Gold / Grand earn **2,000 / 3,000 / 5,000 / 10,000**, **once per game, difficulty and tier**. **Higher tiers include unclaimed lower tiers**: a direct Grand earns **20,000**. Verified results only; existing verified trophies receive a one-time credit too."
       },
       "costs": {
+        "sumGoals": "3×3 (board sum 1800) and 2×4 (board sum 900) use their formation’s 1× rate for training, testing and replay analysis. Both tables are unpruned. Battle modes are not supported yet.",
         "title": "Tablebase and Feature Costs",
         "note": "Trainer and Tester use the same prices. Values are per operation.",
         "tablebase": "Tablebase",

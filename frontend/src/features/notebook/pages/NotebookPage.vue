@@ -2,7 +2,7 @@
   <div class="page-root">
     <div class="relative z-[120] mb-4 flex w-full max-w-6xl items-center justify-between gap-4">
       <div class="flex min-w-0 items-center gap-3">
-        <span class="truncate font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main">{{ currentPatternDisplay }}</span>
+        <span class="truncate font-[Cambria,serif] text-3xl font-extrabold tracking-tight text-text-main">{{ fullPatternLabel(currentPatternDisplay, $i18n.locale) }}</span>
         <span :class="connectionBadgeClass">{{ $t(`status.${wsStatus}`) }}</span>
       </div>
 
@@ -13,7 +13,7 @@
             class="top-menu-trigger"
             @click="togglePatternMenu"
           >
-            <span>{{ selectedPattern || $t('notebook.patternMenu.title') }}</span>
+            <span>{{ fullPatternLabel(selectedPattern, $i18n.locale) || $t('notebook.patternMenu.title') }}</span>
             <span class="ui-kicker opacity-60">{{ patternMenuOpen ? '▲' : '▼' }}</span>
           </button>
           <div
@@ -39,7 +39,7 @@
                   selectedPattern === pattern ? 'surface-prominent text-white' : 'text-text-main hover:bg-btn-bg/10'
                 ]"
               >
-                {{ pattern }}
+                {{ fullPatternLabel(pattern, $i18n.locale) }}
               </button>
             </div>
           </div>
@@ -177,6 +177,7 @@
 </template>
 
 <script setup>
+import { fullPatternLabel } from '../../../utils/goalTarget.js';
 import { toRef } from 'vue';
 
 import BaseBoard from '../../../components/BaseBoard.vue';

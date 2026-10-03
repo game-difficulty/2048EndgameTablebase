@@ -63,7 +63,7 @@ class AnalysisJob:
     session_id: int | None
     pattern: str
     target: str
-    target_value: int
+    target_value: int | str
     full_pattern: str
     input_paths: list[Path]
     input_names: dict[str, str]
