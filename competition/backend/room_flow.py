@@ -25,6 +25,11 @@ class RoomFlow:
     def is_duel(self, db, cid):
         return bool(db.execute('SELECT 1 FROM competition_duel_rooms WHERE competition_id=?', (cid,)).fetchone())
 
+    def kind(self, db, cid):
+        if db.execute('SELECT 1 FROM competition_time_attack WHERE competition_id=?', (cid,)).fetchone():
+            return 'time_attack'
+        return 'duel' if self.is_duel(db, cid) else 'competition'
+
     def freeze(self, db, cid, keys):
         db.execute('INSERT INTO competition_fixed_series VALUES(?,?,?)',
                    (cid, secrets.token_hex(32), json.dumps(keys)))
@@ -42,6 +47,8 @@ class RoomFlow:
     def begin(self, db, room, now):
         """Called exactly once, in the transaction accepting the second ready."""
         cid = room['id']
+        if self.kind(db, cid) == 'time_attack':
+            return self.rooms.time_attacks.begin(db, room, now)
         if self.rooms._rules(db, cid).get('workflow') != 'fixed_sequence':
             self.rooms._initialize_draw(db, cid, now=now)
             self.rooms._touch(db, cid, status='DRAW')

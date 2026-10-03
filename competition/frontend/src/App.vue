@@ -13,6 +13,8 @@ import EventCenter from './EventCenter.vue';
 import DuelLobby from './DuelLobby.vue';
 import DuelWaiting from './DuelWaiting.vue';
 import DuelGameReady from './DuelGameReady.vue';
+import TimeAttackLobby from './TimeAttackLobby.vue';
+import TimeAttackRoom from './TimeAttackRoom.vue';
 import MatchSettlement from '../../shared/MatchSettlement.vue';
 import RoomRulesPicker from './RoomRulesPicker.vue';
 import DraftWorkflow from '../../shared/DraftWorkflow.vue';
@@ -38,6 +40,7 @@ import {
 
 const pathname = ref(window.location.pathname);
 const isDuelRoute = computed(() => /^\/duels\/?$/.test(pathname.value));
+const isTimeAttackRoute = computed(() => /^\/time-attacks\/?$/.test(pathname.value));
 const projectRouteMatch = computed(() => pathname.value.match(/^\/projects(?:\/([^/]+))?\/?$/));
 const practiceRouteMatch = computed(() => pathname.value.match(/^\/practice(?:\/(20|1[0-9]|[1-9]))?\/?$/));
 const isProjectRoute = computed(() => Boolean(projectRouteMatch.value || practiceRouteMatch.value));
@@ -57,7 +60,9 @@ const newRoomRules = ref(null);
 const newRoomRulesValid = ref(false);
 const createRoomOpen = ref(false);
 const room = ref(null);
-const isDuel = computed(() => room.value?.room_kind === 'duel');
+const isTimeAttack = computed(() => room.value?.room_kind === 'time_attack');
+const isDuel = computed(() => ['duel','time_attack'].includes(room.value?.room_kind));
+const publicRoomHome = computed(() => isTimeAttack.value ? '/time-attacks' : '/duels');
 const loading = ref(true);
 const busy = ref(false);
 const error = ref('');
@@ -141,8 +146,8 @@ const currentCode = computed(() => {
   return match ? match[1].toUpperCase() : '';
 });
 const selectedProjects = computed(() => selectedProjectIds.value.map(id => PROJECT_BY_ID[id]).filter(Boolean));
-const activeRooms = computed(() => rooms.value.filter(item => item.room_kind !== 'duel' && item.status !== 'CANCELLED').sort((a,b) => (a.schedule?.starts_at || a.created_at).localeCompare(b.schedule?.starts_at || b.created_at)));
-const closedRooms = computed(() => rooms.value.filter(item => item.room_kind !== 'duel' && item.status === 'CANCELLED'));
+const activeRooms = computed(() => rooms.value.filter(item => !['duel','time_attack'].includes(item.room_kind) && item.status !== 'CANCELLED').sort((a,b) => (a.schedule?.starts_at || a.created_at).localeCompare(b.schedule?.starts_at || b.created_at)));
+const closedRooms = computed(() => rooms.value.filter(item => !['duel','time_attack'].includes(item.room_kind) && item.status === 'CANCELLED'));
 const orderedProjectOptions = computed(() => [
   ...selectedProjects.value,
   ...TOURNAMENT_PROJECTS.filter(project => !selectedProjectIds.value.includes(project.id)),
@@ -191,7 +196,7 @@ const isGamePlaying = computed(() => /^GAME_[A-O]_PLAYING$/.test(room.value?.sta
 const isGameResult = computed(() => /^GAME_[A-O]_RESULT$/.test(room.value?.status || ''));
 const showPlayingBoards = computed(() => isGamePlaying.value || (isGameResult.value
   && (clockNow.value < finishPlaybackUntil.value || Object.values(observerPending.value).some(Boolean))));
-const isGameStage = computed(() => /^GAME_[A-O]_(READY|PLAYING|RESULT)$/.test(room.value?.status || ''));
+const isGameStage = computed(() => !isTimeAttack.value && /^GAME_[A-O]_(READY|PLAYING|RESULT)$/.test(room.value?.status || ''));
 const remainingSeconds = computed(() => {
   const deadline = Date.parse(
     (room.value?.status === 'LINEUP' ? lineup.value?.deadline_at : draft.value?.deadline_at) || '',
@@ -613,7 +618,7 @@ async function closeRoom(item) {
   error.value = '';
   try {
     await api.closeRoom(item.room_code);
-    if (currentCode.value === item.room_code) navigate(item.room_kind==='duel' ? '/duels' : competitionHomePath);
+    if (currentCode.value === item.room_code) navigate(item.room_kind==='time_attack' ? '/time-attacks' : item.room_kind==='duel' ? '/duels' : competitionHomePath);
     else rooms.value = (await api.list()).competitions || [];
   } catch (cause) {
     setError(cause);
@@ -1075,6 +1080,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="site-navigation"><LanguageSwitch />
       <button class="secondary-button" type="button" @click="navigate(isDuelRoute ? competitionHomePath : '/duels')">{{ isDuelRoute ? $t('赛事中心') : (language==='zh'?'自由对决':'Free duels') }}</button>
+      <button class="secondary-button" type="button" @click="navigate(isTimeAttackRoute ? competitionHomePath : '/time-attacks')">{{ isTimeAttackRoute ? $t('赛事中心') : (language==='zh'?'限时竞速':'Time attack') }}</button>
       </div>
     </header>
 
@@ -1090,6 +1096,7 @@ onBeforeUnmount(() => {
     </main>
 
     <DuelLobby v-else-if="isDuelRoute && !room" :session="session" :rooms="rooms.filter(item=>item.room_kind==='duel')" :main-site-url="mainSiteUrl" @navigate="navigate" />
+    <TimeAttackLobby v-else-if="isTimeAttackRoute && !room" :session="session" :rooms="rooms.filter(item=>item.room_kind==='time_attack')" :main-site-url="mainSiteUrl" @navigate="navigate" />
 
     <main v-else-if="!room" class="dashboard page-width">
       <EventCenter :key="eventSlug" :slug="eventSlug" :events="events" :can-create="canCreateEvent" :status-text="statusText" @navigate="navigate" @refresh="loadDashboard(routeEpoch)" @create-room="slug => { newRoomEventSlug = slug; createRoomOpen = true; }" />
@@ -1167,7 +1174,7 @@ onBeforeUnmount(() => {
       <section class="match-header">
         <div class="page-width match-header-inner">
           <div class="match-header-actions">
-            <button class="back-button" type="button" @click="navigate(isDuel ? '/duels' : room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ isDuel ? (language==='zh'?'自由对决':'Free duels') : room.event?.name || $t('赛事中心') }}</button>
+            <button class="back-button" type="button" @click="navigate(isDuel ? publicRoomHome : room.event ? `/events/${room.event.slug}` : competitionHomePath)">← {{ isTimeAttack ? (language==='zh'?'限时竞速':'Time attack') : isDuel ? (language==='zh'?'自由对决':'Free duels') : room.event?.name || $t('赛事中心') }}</button>
             <button v-if="room.me.can_close" class="close-room-link" type="button" :disabled="busy" @click="closeRoom(room)">{{ $t("关闭房间") }}</button>
             <button v-if="(room.me.can_manage || room.me.staff_roles?.includes('referee')) && ['SEATING','READY_CHECK','DRAW','DRAFT_STEP','FIRST_PICK_BAN','SECOND_PICK_BAN','BLIND_PICK','C_DRAW'].includes(room.status)" class="close-room-link" :disabled="busy" @click="rematchRoom">{{ $t("落位错误重赛") }}</button>
           </div>
@@ -1175,7 +1182,7 @@ onBeforeUnmount(() => {
             <span class="room-code">{{ $t(room.room_code) }}</span>
             <h1>{{ room.name }}</h1>
           </div>
-          <div class="stage-chip"><span :class="['connection-dot', connection]"></span>{{ $t(match?.suspension?.active ? '暂停中 · ' : '') }}{{ isDuel && isLobby ? (language==='zh'?'等待双方准备':'Waiting for players') : $t(statusText[room.status] || room.status) }}</div>
+          <div class="stage-chip"><span :class="['connection-dot', connection]"></span>{{ $t(match?.suspension?.active ? '暂停中 · ' : '') }}{{ isDuel && isLobby ? (language==='zh'?'等待双方准备':'Waiting for players') : isTimeAttack && room.status==='GAME_A_PLAYING' ? (language==='zh'?'限时挑战中':'Time attack in progress') : $t(statusText[room.status] || room.status) }}</div>
         </div>
       </section>
 
@@ -1355,8 +1362,9 @@ onBeforeUnmount(() => {
           <p v-if="isDuel">{{ language==='zh'?'房间已关闭或等待超时，不会自动开局或判胜。已完成的成绩保留。':'This room was closed or its waiting period expired. No game was auto-started and no winner was assigned. Completed results are kept.' }}</p>
           <p v-else>{{ $t("这场比赛未进入抽签，不能继续落座或开赛。房间记录已保留，可返回大厅查看。") }}</p>
           <MatchSettlement v-if="isDuel && match" :cancelled="true" :lang="language" :games="settlementGames" :score="match.series_score" />
-          <button class="secondary-button" type="button" @click="navigate(isDuel ? '/duels' : competitionHomePath)">{{ $t("返回比赛大厅") }}</button>
+          <button class="secondary-button" type="button" @click="navigate(isDuel ? publicRoomHome : competitionHomePath)">{{ $t("返回比赛大厅") }}</button>
         </section>
+        <TimeAttackRoom v-else-if="isTimeAttack" :room="room" :busy="busy" @update="next=>applyRoom(next,{live:true})" @claim="claim" @leave="leave" @ready="toggleReady" />
         <DuelWaiting v-else-if="isDuel && isLobby" :room="room" :busy="busy" :project-name="projectName" @claim="claim" @leave="leave" @ready="toggleReady" />
         <template v-else-if="isLobby">
           <section class="teams-grid">

@@ -19,6 +19,8 @@ from .schemas import (
     ManageMemberRequest,
     CreateCompetitionRequest,
     CreateDuelRequest,
+    CreateTimeAttackRequest,
+    TimeAttackCommand,
     CreateEventRequest,
     LinkEventRoomRequest,
     UpdateEventRequest,
@@ -88,6 +90,24 @@ async def duel_projects(request: Request):
 async def create_duel(request: Request, payload: CreateDuelRequest, principal: PrincipalDependency):
     room = await asyncio.to_thread(service_from_request(request).duels.create, principal, **payload.model_dump())
     return {'competition': room}
+
+
+@router.post('/time-attack-rooms', status_code=201)
+async def create_time_attack(request: Request, payload: CreateTimeAttackRequest, principal: PrincipalDependency):
+    room = await asyncio.to_thread(service_from_request(request).time_attacks.create, principal, **payload.model_dump())
+    return {'competition': room}
+
+
+@router.post('/competitions/{room_code}/time-attack/attempt')
+async def time_attack_attempt(request: Request, room_code: str, payload: TimeAttackCommand, principal: PrincipalDependency):
+    room = await asyncio.to_thread(service_from_request(request).time_attacks.command, room_code, principal, **payload.model_dump())
+    await _broadcast(request, room['room_code'])
+    return {'competition': room}
+
+
+@router.get('/competitions/{room_code}/time-attack/best/{side}')
+async def time_attack_best(request: Request, room_code: str, side: str, principal: PrincipalDependency):
+    return await asyncio.to_thread(service_from_request(request).time_attacks.best_record, room_code, principal, side)
 
 @router.post('/competitions/{room_code}/draft/step')
 async def draft_step(request: Request, room_code: str, payload: DraftStepRequest, principal: PrincipalDependency):

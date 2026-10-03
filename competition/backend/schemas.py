@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_validator
 from typing import Literal
 
 
@@ -37,6 +37,25 @@ class CreateDuelRequest(BaseModel):
     projects: list[str] = Field(min_length=1, max_length=15)
     command_id: str = Field(min_length=8, max_length=160)
     clock_seconds: int = Field(default=1800, ge=30, le=86400, strict=True)
+
+
+class CreateTimeAttackRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    name: str = Field(min_length=2, max_length=100)
+    variant: Literal['4x4', '3x4', '2x4', '3x3']
+    target_kind: Literal['tile', 'board_sum']
+    target_value: int = Field(strict=True)
+    clock_seconds: int = Field(default=600, ge=30, le=86400, strict=True)
+    command_id: str = Field(min_length=8, max_length=160)
+
+
+class TimeAttackCommand(BaseModel):
+    model_config = {'extra': 'forbid'}
+    attempt_id: str = Field(min_length=1, max_length=64)
+    command_id: str = Field(min_length=8, max_length=160)
+    action: Literal['submit', 'restart']
+    base_sequence: int = Field(default=0, ge=0, strict=True)
+    events: list[list[StrictInt]] | None = Field(default=None, max_length=64)
 
 
 class CreateEventRequest(BaseModel):

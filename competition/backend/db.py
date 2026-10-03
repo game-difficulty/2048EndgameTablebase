@@ -6,10 +6,31 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS competition_time_attack (
+  competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
+  configuration_json TEXT NOT NULL,
+  started_at TEXT,
+  deadline_at TEXT,
+  winner_side TEXT
+);
+CREATE TABLE IF NOT EXISTS competition_time_attempts (
+  id TEXT PRIMARY KEY,
+  competition_id TEXT NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+  side TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  started_at TEXT NOT NULL,
+  seed TEXT NOT NULL,
+  state_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'playing',
+  pb_ms INTEGER,
+  events BLOB NOT NULL DEFAULT X'',
+  UNIQUE(competition_id, side, number)
+);
+CREATE INDEX IF NOT EXISTS idx_time_attempt_best ON competition_time_attempts(competition_id,side,pb_ms);
 CREATE TABLE IF NOT EXISTS competition_fixed_series (
   competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
   seed_hex TEXT NOT NULL,

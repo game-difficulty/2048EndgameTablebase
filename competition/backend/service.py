@@ -95,6 +95,8 @@ class CompetitionService:
         from .duel_rooms import DuelRooms
         self.room_flow = RoomFlow(self)
         self.duels = DuelRooms(self)
+        from .time_attack_rooms import TimeAttackRooms
+        self.time_attacks = TimeAttackRooms(self)
         from .event_catalog import EventCatalog
         self.events = EventCatalog(self)
         from .event_schedule import EventSchedule
@@ -1285,6 +1287,8 @@ class CompetitionService:
     ) -> tuple[sqlite3.Row, bool]:
         status = str(room["status"])
         cid = str(room['id'])
+        if self.room_flow.kind(db, cid) == 'time_attack':
+            return self.time_attacks.settle(db, room, now)
         if self.room_flow.is_duel(db, cid):
             room, expired = self.duels.expire(db, room, now)
             if expired:
@@ -2658,7 +2662,7 @@ class CompetitionService:
                 if ready_count == 2 and self.schedule.may_draw(db, competition_id, datetime.now(timezone.utc))
                 else CompetitionStatus.READY_CHECK.value
             )
-            if next_status != room["status"] and not (next_status == 'DRAW' and self._rules(db, competition_id).get('workflow') == 'fixed_sequence'):
+            if next_status != room["status"] and not (next_status == 'DRAW' and self._rules(db, competition_id).get('workflow') in ('fixed_sequence', 'time_attack')):
                 self._append_event(
                     db,
                     competition_id,
@@ -4230,7 +4234,7 @@ class CompetitionService:
         )
         return {
             "id": competition_id,
-            "room_kind": 'duel' if is_duel else 'competition',
+            "room_kind": self.room_flow.kind(db, competition_id),
             "rules": self._rules(db, competition_id),
             "room_code": str(room["room_code"]),
             "name": str(room["name"]),
@@ -4927,7 +4931,8 @@ class CompetitionService:
         rematch = db.execute("SELECT payload_json FROM competition_events WHERE competition_id=? AND event_type='competition.rematch' ORDER BY sequence DESC LIMIT 1", (competition_id,)).fetchone()
         return {
             "id": competition_id,
-            "room_kind": 'duel' if is_duel else 'competition',
+            "room_kind": self.room_flow.kind(db, competition_id),
+            "time_attack": self.time_attacks.view(db, room, principal, snapshot_now),
             "selected_projects": selected_projects if self._rules(db, competition_id).get('workflow') == 'fixed_sequence' else {},
             "waiting_expires_at": (db.execute('SELECT expires_at FROM competition_duel_rooms WHERE competition_id=?', (competition_id,)).fetchone()[0] if is_duel else None),
             "rules": self._rules(db, competition_id),

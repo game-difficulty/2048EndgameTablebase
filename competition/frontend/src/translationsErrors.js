@@ -1,4 +1,10 @@
 const entries=`
+该选手还没有有效的最佳局。|This player does not have a verified best run yet.
+请检查棋盘和目标：数字须为不小于 8 的 2 的幂，盘面和须为不小于 10 的偶数。|Check the board and target: use a power of two ≥ 8, or an even board sum ≥ 10.
+这不是限时竞速房间。|This is not a time attack room.
+操作记录校验失败，请恢复服务端已确认的尝试。|Move verification failed. Restore the server-confirmed attempt.
+尝试已变化，请恢复当前尝试后继续。|The attempt has changed. Restore the current attempt to continue.
+两次重开之间至少间隔半秒。|Wait at least half a second between restarts.
 房主固定为黄方，对手加入白方。|The host plays Yellow; the opponent joins White.
 房主不参加时，请关闭房间。|If you do not wish to play, close your room.
 请先完成或关闭当前自由对决房间。|Finish or close your current free duel first.

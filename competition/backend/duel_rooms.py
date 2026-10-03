@@ -19,7 +19,7 @@ class DuelRooms:
         # versions remain available to already-frozen rooms only.
         return [d.snapshot() for d in self.rooms.project_registry.current_descriptors()]
 
-    def create(self, principal, *, name, projects, command_id, clock_seconds=1800):
+    def create(self, principal, *, name, projects, command_id, clock_seconds=1800, _challenge=None):
         r = self.rooms
         if principal.user_id <= 0:
             raise CompetitionError('LOGIN_REQUIRED', '请先登录。', 401)
@@ -31,15 +31,22 @@ class DuelRooms:
             raise CompetitionError('INVALID_PROJECT_POOL', '请选择不重复的已注册项目。')
         rules = fixed_rules(len(projects), clock_seconds)
         catalog = {p['project_ref']: p for p in self.catalog()}
-        if any(p not in catalog for p in projects):
+        if _challenge is None and any(p not in catalog for p in projects):
             raise CompetitionError('PROJECT_ADAPTER_UNAVAILABLE', '项目不在服务端可用目录中。', 409)
-        pool = r._normalize_projects([dict(key=p, name=catalog[p]['display_name'], project_ref=p,
-                 adapter_rules_version=catalog[p]['rules_version'], rules_version=catalog[p]['rules_version']) for p in projects])
+        if _challenge is None:
+            pool = r._normalize_projects([dict(key=p, name=catalog[p]['display_name'], project_ref=p,
+                     adapter_rules_version=catalog[p]['rules_version'], rules_version=catalog[p]['rules_version']) for p in projects])
+        else:
+            from .projects.target_challenge import pool as challenge_pool
+            pool = challenge_pool(_challenge)
+            rules.update(workflow='time_attack', version='time-attack-v1')
         now = datetime.now(timezone.utc)
         with r.database.transaction(immediate=True) as db:
             previous = db.execute('SELECT c.* FROM competitions c JOIN competition_duel_rooms d ON d.competition_id=c.id WHERE d.owner_user_id=? AND d.command_id=?',
                                   (principal.user_id, command_id)).fetchone()
             if previous:
+                if r.room_flow.kind(db, previous['id']) != ('time_attack' if _challenge else 'duel'):
+                    raise CompetitionError('COMMAND_ID_REUSED', 'This creation command belongs to another room type.', 409)
                 return r._snapshot(db, previous, principal)
             # Expiration is based on creation/phase entry, not GETs or heartbeats.
             for row in db.execute("SELECT c.* FROM competitions c JOIN competition_duel_rooms d ON d.competition_id=c.id WHERE c.status NOT IN ('FINISHED','CANCELLED') AND d.expires_at<=?", (now.isoformat(),)).fetchall():
@@ -66,6 +73,10 @@ class DuelRooms:
             db.execute('INSERT INTO competition_duel_rooms VALUES(?,?,?,?,?)',
                        (cid, principal.user_id, command_id, now.isoformat(), (now+timedelta(minutes=self.WAIT_MINUTES)).isoformat()))
             r.room_flow.freeze(db, cid, projects)
+            if _challenge is not None:
+                import json
+                db.execute('INSERT INTO competition_time_attack(competition_id,configuration_json) VALUES(?,?)',
+                           (cid, json.dumps(_challenge)))
             db.execute('INSERT INTO competition_seats(competition_id,side,position,user_id,display_name_snapshot,seated_at) VALUES(?,\'yellow\',1,?,?,?)',
                        (cid, principal.user_id, principal.display_name, now.isoformat()))
             return r._snapshot(db, room, principal)

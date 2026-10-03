@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { language } from './i18n.js';
 import PlayerAvatar from './PlayerAvatar.vue';
-const props = defineProps({room: Object, busy: Boolean, projectName: Function});
+const props = defineProps({room: Object, busy: Boolean, projectName: Function, timeAttack: Boolean});
 const emit = defineEmits(['claim','leave','ready']);
 const en = computed(() => language.value==='en');
 const copied = ref(false);
@@ -10,7 +10,7 @@ async function copy() { try { await navigator.clipboard.writeText(window.locatio
 </script>
 <template>
   <section class="panel duel-waiting">
-    <div class="duel-wait-heading"><div><p class="eyebrow">FREE DUEL · 1 VS 1</p><h2>{{ en ? 'Waiting for both players' : '等待双方准备' }}</h2></div><button class="secondary-button" @click="copy">{{ copied ? (en ? 'Copied' : '已复制') : (en ? 'Copy invite link' : '复制邀请链接') }}</button></div>
+    <div class="duel-wait-heading"><div><p class="eyebrow">{{timeAttack ? 'TIME ATTACK · 1 VS 1' : 'FREE DUEL · 1 VS 1'}}</p><h2>{{ en ? 'Waiting for both players' : '等待双方准备' }}</h2></div><button class="secondary-button" @click="copy">{{ copied ? (en ? 'Copied' : '已复制') : (en ? 'Copy invite link' : '复制邀请链接') }}</button></div>
     <p>{{ en ? 'The first game starts when both players are ready. There is no automatic ready-up.' : '双方准备后直接开始第一局，不会超时自动准备。' }}</p>
     <div class="duel-players"><article v-for="side in ['yellow','white']" :key="side" :class="side">
       <PlayerAvatar v-if="room.seats.find(s=>s.side===side)" :person="room.seats.find(s=>s.side===side)" />
@@ -18,9 +18,9 @@ async function copy() { try { await navigator.clipboard.writeText(window.locatio
       <strong>{{ room.teams[side].ready ? (en ? 'Ready' : '已准备') : (en ? 'Not ready' : '未准备') }}</strong>
       <button v-if="!room.seats.some(s=>s.side===side) && !room.me.seat && room.me.can_claim_seat" class="primary-button" :disabled="busy" @click="emit('claim',side,1)">{{ en ? 'Take this seat' : '加入对决' }}</button>
     </article></div>
-    <h3>{{ en ? 'Project order' : '项目顺序' }}</h3>
-    <ol><li v-for="key in room.rules.game_keys" :key="key">{{ projectName(room.selected_projects[key]) }}</li></ol>
-    <p class="muted">{{ en ? 'Play all projects. Draws are allowed. Total time per player:' : '打满全部项目，允许平局。每人总用时：' }} {{ room.rules.team_clock_seconds/60 }} {{ en ? 'minutes' : '分钟' }}</p>
+    <h3 v-if="!timeAttack">{{ en ? 'Project order' : '项目顺序' }}</h3>
+    <ol v-if="!timeAttack"><li v-for="key in room.rules.game_keys" :key="key">{{ projectName(room.selected_projects[key]) }}</li></ol>
+    <p class="muted">{{ timeAttack ? (en ? 'Shared time limit:' : '共同比赛时限：') : (en ? 'Play all projects. Draws are allowed. Total time per player:' : '打满全部项目，允许平局。每人总用时：') }} {{ room.rules.team_clock_seconds/60 }} {{ en ? 'minutes' : '分钟' }}</p>
     <p class="muted">{{ en ? 'If the match has not started, this room closes at' : '若仍未开赛，房间将于' }} {{ new Date(room.waiting_expires_at).toLocaleString(en ? 'en-US' : 'zh-CN') }} {{ en ? '' : '关闭。' }}</p>
     <div class="action-buttons"><button v-if="room.me.can_leave_seat" class="secondary-button" :disabled="busy" @click="emit('leave')">{{ en ? 'Leave seat' : '离开席位' }}</button><button v-if="room.me.can_ready" class="primary-button" :disabled="busy" @click="emit('ready')">{{ room.teams[room.me.seat.side].ready ? (en ? 'Cancel ready' : '取消准备') : (en ? 'Ready' : '准备') }}</button></div>
   </section>

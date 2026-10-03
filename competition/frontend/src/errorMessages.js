@@ -1,6 +1,12 @@
 // Competition API and room socket errors share stable codes. Keep user-facing
 // wording here instead of displaying the backend's English diagnostic text.
 export const ERROR_MESSAGES = Object.freeze({
+  INVALID_CHALLENGE: '请检查棋盘和目标：数字须为不小于 8 的 2 的幂，盘面和须为不小于 10 的偶数。',
+  TIME_ATTACK_REQUIRED: '这不是限时竞速房间。',
+  INVALID_ATTEMPT: '操作记录校验失败，请恢复服务端已确认的尝试。',
+  STALE_ATTEMPT: '尝试已变化，请恢复当前尝试后继续。',
+  TIME_ATTACK_RESTART_LIMIT: '两次重开之间至少间隔半秒。',
+  NO_VALID_ATTEMPT: '该选手还没有有效的最佳局。',
   DUEL_ACTIVE_ROOM: '请先完成或关闭当前自由对决房间。',
   DUEL_CREATE_LIMIT: '创建过于频繁，请稍后再试。',
   DUEL_NO_OFFICIALS: '自由对决不支持裁判或举办方操作。',

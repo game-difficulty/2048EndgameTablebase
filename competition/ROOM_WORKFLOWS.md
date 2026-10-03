@@ -96,3 +96,67 @@ selection on touch devices and English/Chinese text, and reuses the existing
 room URL, transport, gameplay and settlement components. Snapshots expose
 `room_kind`, fixed `selected_projects` and `waiting_expires_at`; they do not expose
 the private series seed or leak legacy blind choices.
+# Timed personal-best rooms (schema 18)
+
+`/time-attacks` is a separate public 1v1 mode. `time_attack_rooms.py` owns the
+fixed-window attempt lifecycle, not the existing Faster/first-to-target logic.
+`projects/target_challenge.py` is its server-owned, versioned parameter registry
+and target/result contract. It reuses the standard deterministic human-play
+engine, without importing account history, leaderboard or reward services.
+
+- Four boards: 4x4, 3x4, 2x4 and 3x3; standard 90% 2 / 10% 4 spawns.
+- Tile targets: powers of two from 8 through 2^31; reaching a larger tile counts.
+- Board-sum targets: even integers from 10 through 2^31, exact equality after
+  the move's spawn. Overshooting ends that attempt without a result.
+- Duration: 30–86400 seconds, frozen with the project version and target at creation.
+- Both players explicitly ready up. The server creates their first attempts
+  together and persists a common deadline. No BP, lineup, referee or auto-ready.
+- Unlimited attempts during the window, with a 500 ms restart anti-spam interval;
+  no undo. Each attempt receives a fresh private random seed. Death or reaching
+  the target stops only that attempt. Restart preserves all previous valid PBs.
+- An attempt starts when its board is created on the server, not on first input.
+  **Official PB is server-confirmed elapsed milliseconds**, including delivery
+  latency. Client stopwatch values are explanatory, not trusted result values.
+  Moves are admitted inside the serialized transaction before the deadline;
+  at or after the deadline no new attempt or move is accepted. No late-upload grace.
+  Refresh, disconnect, background tabs and server restarts do not pause the window.
+- Lowest valid PB wins. A sole valid finisher wins; equal PBs or neither finishing
+  are draws. Incomplete attempts at the deadline do not count. Finalization is
+  idempotent and runs both from the normal deadline worker and request catch-up.
+
+Shared infrastructure: `DuelRooms.create` has an internal, server-validated
+challenge path; it persists the same public-room ownership/expiry metadata.
+Both modes share one active room per user, a 60-second create cooldown, a limit
+of 10 creations/hour and a 30-minute pre-start expiry. `RoomFlow.begin` dispatches
+to the mode. Existing seat/ready/close/room-snapshot/WebSocket interfaces remain.
+All official/event-linking/forced-result permissions remain denied, including to
+platform admins; no official live listing, predictions, event points or rewards.
+The target descriptor is deliberately kept out of the fixed-project duel picker:
+it requires this parameterized workflow, not a fake ordinary-game adapter.
+
+Additive tables: `competition_time_attack` (frozen config, start, deadline, winner)
+and `competition_time_attempts` (side, sequence number, seed, verified state,
+compact operation record, status, PB). Old room tables and semantics are retained.
+
+New APIs:
+
+- `POST /api/time-attack-rooms`: name, variant, target_kind (`tile`/`board_sum`),
+  target_value, clock_seconds, command_id. Extra configuration/privilege keys rejected.
+- `POST /api/competitions/{code}/time-attack/attempt`: action (`submit`/`restart`),
+  attempt_id, command_id; submit adds base_sequence and up to 64 `[event_code,delta_ms]`
+  pairs. The server replays and verifies movement and seeded spawns; it computes
+  the first target hit itself, rejects post-completion moves, and never trusts
+  supplied boards, completion flags or PBs. Command retries are idempotent; stale
+  attempt IDs or sequence numbers cannot change a newer attempt.
+- `GET /api/competitions/{code}/time-attack/best/{side}`: verified best-run replay.
+  Only completed PB seeds can be read by other users; active RNG/state is private.
+
+Room snapshots add `room_kind=time_attack` and `time_attack` configuration, timing,
+per-side current attempt, PB reference and completion count. The ordinary `match`
+payload stays null: attempts are not synthetic games or draft rounds.
+The bilingual UI uses an optimistic deterministic board plus a serialized,
+retryable sender; uncertain writes retry the same command ID. It resumes the last
+server-confirmed state after reload (unacknowledged local moves may be lost).
+PB replay uses the same verified operation codec; future tournament integration
+can reuse the target contract and timed-series controller without adding privileges
+to these public rooms.
