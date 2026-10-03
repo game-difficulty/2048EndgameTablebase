@@ -5,7 +5,7 @@ import { KEYBOARD_OWNERS, keyboardInputAllowed } from '../../../app/keyboardOwne
 import { useAppSettingsStore } from '../../../app/useAppSettings';
 import { tryDesktopDialog } from '../../../services/runtime/desktopDialogs';
 import { createWsClient } from '../../../services/ws/createWsClient';
-import { isVariantPattern } from '../../../utils/patternCategories';
+import { patternFromReplayFilename, resolveReplayVariant } from '../../../utils/replayVariant.js';
 import { createResultBarGradient } from '../../../utils/resultBars';
 import {
   evaluationColor,
@@ -49,6 +49,11 @@ export function useReplaySession(activeRef, emit) {
   const replayStatus = ref('');
   const replayPattern = ref('');
   const replaySource = ref('');
+  const replayUseVariant = ref(false);
+  const variantConflict = ref(false);
+  const variantNotice = computed(() => !variantConflict.value ? '' : isZh()
+    ? '回放的棋盘类型标记与定式不一致，已按定式修正。'
+    : 'The replay board-type flag conflicts with its formation and has been corrected.');
   const currentStep = ref(0);
   const totalSteps = ref(0);
   const replayResults = ref({});
@@ -400,13 +405,10 @@ export function useReplaySession(activeRef, emit) {
     if (replayPattern.value && String(replayPattern.value).includes('_')) return replayPattern.value;
     const source = String(replaySource.value || '');
     const fileName = source.split(/[\\/]/u).pop() || '';
-    const match = fileName.match(/^([A-Za-z0-9]+_(?:sum-)?\d+)(?=[_.]|$)/u);
-    return match ? match[1] : '';
+    return patternFromReplayFilename(fileName);
   };
 
-  const isVariant = computed(() => (
-    isVariantPattern(replayPattern.value || guessFullPattern(), appCategories.value)
-  ));
+  const isVariant = computed(() => replayUseVariant.value);
 
   const jumpToPractice = () => {
     if (!loaded.value || !currentHex.value) return;
@@ -431,7 +433,13 @@ export function useReplaySession(activeRef, emit) {
     currentHex.value = payload?.hex_str || '0000000000000000';
     loaded.value = !!payload?.loaded;
     replayStatus.value = payload?.status || '';
-    replayPattern.value = payload?.pattern || '';
+    const resolved = resolveReplayVariant({
+      pattern: payload?.pattern, source: payload?.source, useVariant: payload?.use_variant,
+    }, appCategories.value);
+    replayPattern.value = resolved.pattern;
+    replayUseVariant.value = typeof payload?.use_variant === 'boolean'
+      ? payload.use_variant : resolved.useVariant;
+    variantConflict.value = !!payload?.variant_conflict;
     replaySource.value = payload?.source || '';
     currentStep.value = Number(payload?.current_step || 0);
     totalSteps.value = Number(payload?.total_steps || 0);
@@ -577,6 +585,7 @@ export function useReplaySession(activeRef, emit) {
     replayStatus,
     replayPattern,
     isVariant,
+    variantNotice,
     replaySource,
     currentStep,
     totalSteps,

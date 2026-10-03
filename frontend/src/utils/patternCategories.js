@@ -1,10 +1,10 @@
-const FALLBACK_VARIANT_PATTERNS = ['2x4', '3x3', '3x4'];
+const FALLBACK_VARIANT_PATTERNS = ['2x4', '3x3', '3x4', '3x4free9', '3x3free8'];
 
 export const normalizePatternName = (patternLike) => {
   const raw = String(patternLike || '').trim();
   if (!raw) return '';
-  if (/_\d+$/u.test(raw)) {
-    return raw.replace(/_\d+$/u, '');
+  if (/_(?:sum-)?\d+$/u.test(raw)) {
+    return raw.replace(/_(?:sum-)?\d+$/u, '');
   }
   return raw;
 };

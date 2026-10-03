@@ -1,7 +1,7 @@
-import os
+import re
 
 import numpy as np
-from Config import SingletonConfig
+from Config import SingletonConfig, category_info
 from engine_core.VBoardMover import decode_board
 from engine_core.replay_utils import (
     analyze_replay,
@@ -25,6 +25,7 @@ def _replay_reset(session, status=""):
     session.replay_status = status
     session.replay_loaded = False
     session.replay_use_variant = False
+    session.replay_variant_conflict = False
     session.replay_current_step = 0
     session.replay_board_encoded = np_u64(0)
     session.replay_terminal_board_encoded = None
@@ -47,8 +48,9 @@ def _replay_reset(session, status=""):
 
 
 def _replay_pattern_from_path(path):
-    splits = os.path.basename(path).split("_")
-    return "_".join(splits[:2]) if len(splits) >= 2 else ""
+    name = str(path or "").replace("\\", "/").rsplit("/", 1)[-1]
+    match = re.match(r"^([A-Za-z0-9]+(?:_[A-Za-z][A-Za-z0-9]*)*_(?:sum-)?\d+)(?=[_.]|$)", name)
+    return match[1] if match else ""
 
 
 def _replay_sync_step(session, step, animate=False, previous_step=None):
@@ -124,13 +126,18 @@ def _replay_load_record(
     record,
     pattern="",
     source="",
-    use_variant=False,
+    use_variant=None,
     terminal_board=None,
 ):
+    pattern = pattern or _replay_pattern_from_path(source)
+    base_pattern = re.sub(r"_(?:sum-)?\d+$", "", pattern)
+    known_pattern = any(base_pattern in names for names in category_info.values())
+    resolved_variant = base_pattern in category_info.get("variant", []) if known_pattern else bool(use_variant)
+    session.replay_variant_conflict = known_pattern and isinstance(use_variant, bool) and use_variant != resolved_variant
     session.replay_record = record.copy()
     session.replay_pattern = pattern
     session.replay_source = source
-    session.replay_use_variant = bool(use_variant)
+    session.replay_use_variant = resolved_variant
     session.replay_terminal_board_encoded = (
         np_u64(terminal_board) if terminal_board is not None else None
     )
@@ -176,6 +183,8 @@ async def send_replay_state(websocket, session, metadata=None):
                 "loaded": session.replay_loaded,
                 "status": session.replay_status,
                 "pattern": session.replay_pattern,
+                "use_variant": session.replay_use_variant,
+                "variant_conflict": getattr(session, "replay_variant_conflict", False),
                 "source": session.replay_source,
                 "current_step": session.replay_current_step,
                 "total_steps": int(len(session.replay_record)),

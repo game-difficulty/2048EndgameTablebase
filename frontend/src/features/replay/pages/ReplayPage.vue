@@ -41,6 +41,7 @@
           <button class="action-btn min-w-[128px]" :disabled="!loaded" @click="jumpToPractice">{{ $t('replay.toolbar.jumpToPractice') }}</button>
         </div>
 
+        <p v-if="variantNotice" class="mb-3 text-text-secondary" role="status">{{ variantNotice }}</p>
         <div class="replay-board-shell mx-auto w-full">
           <BaseBoard :board="board" :metadata="metadata" :dis32k="dis32k" :is-variant="isVariant" @swipe="handleBoardSwipe" />
         </div>
@@ -211,6 +212,7 @@ const {
   performanceConfig,
   dis32k,
   isVariant,
+  variantNotice,
   menuOpen,
   menuRoot,
   demoActive,
