@@ -3,6 +3,8 @@
 ## Production Deployment Retention
 
 - Before any production deployment, read `docs_and_configs/deployment_retention.md`.
+- Do not compile native modules or build frontends on the low-memory production
+  host. Build off-host; apply the resource guards documented there to remote checks.
 - After a successful deployment and health checks, perform the retention review and cleanup described there. Include reclaimed space and final disk usage in the deployment report.
 - Keep the latest 3 releases per application, plus every release referenced by a current symlink, running process, or rollback pin. A running backend may still use an older release than the frontend's `current` link.
 - Database backups expire after 7 days, but always preserve the latest 3 verified backups of each database, regardless of age. Never delete live database files or their WAL/SHM files.

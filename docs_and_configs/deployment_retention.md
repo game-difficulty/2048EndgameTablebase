@@ -3,6 +3,25 @@
 Effective: 2026-09-30. Applies to future deployments of the 2048tables applications.
 This is an agent execution policy, not an installed cron job or systemd timer.
 
+## Build Resource Safety (2026-10-03 Incident)
+
+Native compilation with only 2 parallel jobs exhausted the production host's
+approximately 2 GiB RAM (no swap), making SSH and the cloud console unresponsive.
+The user had to reboot. A low job count is not a sufficient safety measure.
+
+- Do not compile native modules or build frontends on this production host.
+  Build locally or on a separate builder. Native artifacts must match the target
+  OS, architecture, Python ABI and runtime libraries; verify before switching.
+- Check available memory, swap, disk and service health before deployment.
+  Run remote preflight/maintenance in a named, bounded systemd unit. This recovery
+  used `MemoryMax=700M` and `CPUQuota=50%`; these are ceilings, not a guarantee of
+  spare capacity. Lower them or postpone if live services need more headroom.
+- If memory pressure or SSH latency rises, stop only the deployment's own unit
+  and verify recovery. Do not retry builds, add parallel jobs, change swap or
+  reboot automatically. Failed checks must not trigger a release switch.
+- Keep the current release intact until artifact checks and backups succeed;
+  after switching, verify service health before cleaning deployment artifacts.
+
 ## Releases: Latest 3 Plus Protected Versions
 
 For each application independently, retain its latest 3 successfully deployed
