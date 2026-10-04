@@ -81,12 +81,12 @@ import { openAsyncLink } from '../services/openAsyncLink.js';
 
 defineEmits(['back','player','replay']);
 const variants = ['4x4','3x4','3x3','2x4'];
-const grades = computed(() => filters.variant === '3x3'
+const grades = computed(() => ['3x3', '4x4'].includes(filters.variant)
   ? ['X','SSS','SS','S','A','B','C','D','E','F']
   : ['SSS','SS','S','A','B','C','D','E','F']);
 const filters = reactive({ username:'', variant:'4x4', pattern:'', target:'', grade:'' });
 watch(() => filters.variant, variant => {
-  if (variant !== '3x3' && filters.grade === 'X') filters.grade = '';
+  if (!['3x3', '4x4'].includes(variant) && filters.grade === 'X') filters.grade = '';
 });
 let appliedFilters = { ...filters };
 const items = ref([]), loading = ref(false), error = ref(''), nextCursor = ref('');

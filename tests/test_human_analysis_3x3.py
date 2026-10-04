@@ -107,7 +107,9 @@ def test_unsupported_targets_and_variants_are_not_enabled():
     (185, 1, 0, 'S'), (186, 1, 0, 'SS'),
     (289, 1, 0, 'SS'), (290, 1, 0, 'SSS'),
     (290, 1, ACCURACY_3X3[1] - 1e-10, 'SSS'),
-    (290, 1, ACCURACY_3X3[1], 'X'),
+    (290, 1, ACCURACY_3X3[1], 'SSS'),
+    (290, 1, ACCURACY_3X3[2] - 1e-10, 'SSS'),
+    (290, 1, ACCURACY_3X3[2], 'X'),
 ])
 def test_new_top_grade_boundaries_without_timer(combo, perfect, accuracy, expected):
     aggregate = dict(grading_profile=THREE_BY_THREE_PROFILE,

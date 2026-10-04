@@ -1,6 +1,6 @@
 import pytest
 
-from backend.human_play.analysis_grade import FIT_ANCHORS, SCORE_ANCHORS, SPEED_ANCHORS, _interpolate, grade_for_summary
+from backend.human_play.analysis_grade import FIT_ANCHORS, SCORE_ANCHORS, SPEED_ANCHORS, _interpolate, grade_for_summary, grade_result
 from backend.human_play.analysis_summary import poster_goal_tile
 
 
@@ -26,7 +26,9 @@ def test_every_anchor_and_midpoint_is_linear(anchors):
 
 
 @pytest.mark.parametrize("fit,score,seconds,expected", [
-    (.99, 850000, 1, "SSS"),
+    (.99, 850000, 1, "X"),
+    (.982, 850000, 1, "X"),
+    (.98199999, 850000, 1, "SSS"),
     (.98, 800000, 2, "SS"),
     (.95, 800000, 3, "S"),
     (.90, 800000, 3, "A"),
@@ -60,3 +62,15 @@ def test_tier_specific_fit_and_missing_speed():
     aggregate["mean_ms_per_timed_move"] = None
     assert grade_for_summary(variant="4x4", goal_tile=32768, score=850000,
                              aggregate=aggregate) is None
+
+
+@pytest.mark.parametrize('goal,fit', [(16384, .9958), (32768, .982), (65536, .956)])
+def test_x_threshold_is_inclusive_for_all_4x4_endgame_tiers(goal, fit):
+    aggregate = dict(stage_count=1, mean_goodness_of_fit=fit, mean_ms_per_timed_move=1000)
+    points, grade = grade_result(variant='4x4', goal_tile=goal, score=850000, aggregate=aggregate)
+    assert points == pytest.approx(96)
+    assert grade == 'X'
+    aggregate['mean_goodness_of_fit'] = fit - 1e-7
+    points, grade = grade_result(variant='4x4', goal_tile=goal, score=850000, aggregate=aggregate)
+    assert points < 96
+    assert grade == 'SSS'

@@ -321,11 +321,11 @@ def test_result_grade_is_persisted_and_prior_summary_can_be_graded_without_reana
         summary["aggregate"]["poster_eligible"] = True
         summary_id = save_summary(run_id="graded-run", user_id=7, pattern="free10",
                                   target="512", job_id="job", summary=summary)
-        assert get_summary(summary_id, 7)["grade"] == "SSS"
+        assert get_summary(summary_id, 7)["grade"] == "X"
         with database() as db:
             stored = json.loads(db.execute("SELECT summary_json FROM human_analysis_summaries WHERE id=?",
                                            (summary_id,)).fetchone()["summary_json"])
-            assert stored["grade"] == "SSS"
+            assert stored["grade"] == "X"
             stored["grade"] = None
             stored["grade_version"] = 1
             stored["timing_lossy"] = True
@@ -333,7 +333,7 @@ def test_result_grade_is_persisted_and_prior_summary_can_be_graded_without_reana
             db.execute("""UPDATE human_analysis_summaries
                 SET summary_json=?,aggregate_json=? WHERE id=?""",
                 (json.dumps(stored), json.dumps(stored["aggregate"]), summary_id))
-        assert get_summary(summary_id, 7)["grade"] == "SSS"
+        assert get_summary(summary_id, 7)["grade"] == "X"
         with database() as db:
             upgraded = json.loads(db.execute(
                 "SELECT summary_json FROM human_analysis_summaries WHERE id=?",
