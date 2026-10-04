@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+from backend.stream_snapshots import compact_public_view
 from .projects.contracts import ProjectState, PublicProjectView
 
 PROTOCOL = "client-runtime-v1"
@@ -30,7 +31,7 @@ def public_payload(state: ProjectState) -> dict[str, Any]:
             "awaiting_client": state.extra.get("checkpoint") is None}
 
 
-def public_view(adapter, state: ProjectState, generation: int, after_sequence: int = 0) -> dict[str, Any]:
+def public_view(adapter, state: ProjectState, generation: int, after_sequence: int = 0, *, recovery: bool = False) -> dict[str, Any]:
     view = PublicProjectView(
         adapter.descriptor.view_kind, adapter.descriptor.view_protocol,
         generation, int(state.extra.get("client_sequence", 0)), public_payload(state),
@@ -38,6 +39,8 @@ def public_view(adapter, state: ProjectState, generation: int, after_sequence: i
     frames = state.extra.get('frames', [])
     view['frame_start'] = frames[0]['sequence'] if frames else view['sequence']
     view['frames'] = [frame for frame in frames if frame['sequence'] > after_sequence]
+    if recovery:
+        return compact_public_view(view)
     return view
 
 

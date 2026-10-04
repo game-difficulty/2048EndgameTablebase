@@ -4641,7 +4641,7 @@ class CompetitionService:
                             and not suspended
                         ),
                     },
-                    "public_view": client_runtime.public_view(adapter, state, int(row["public_generation"])),
+                    "public_view": client_runtime.public_view(adapter, state, int(row["public_generation"]), recovery=True),
                 }
             my_session_row = next(
                 (

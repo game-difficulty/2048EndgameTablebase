@@ -12,6 +12,7 @@ from datetime import datetime
 
 from .dynamic_rooms import competition_provider
 from .human_content import HumanLiveStore
+from backend.stream_snapshots import compact_public_view
 
 
 def _source_time(projection):
@@ -105,13 +106,25 @@ class CompetitionMatchContent:
     def run_id(self):
         return self.room.metadata.get('public_key')
 
-    def snapshot(self):
-        result = {'match': self.projection}
+    def snapshot(self, *, incremental=False):
+        # Keep a small recovery window for short disconnects, not the entire
+        # retained replay. Ordinary deltas bypass this bootstrap compaction.
+        projection = self.incremental_projection if incremental else self.projection
+        if not incremental and projection is not None and 'project_public_views' in projection:
+            projection = {**projection, 'project_public_views': {
+                side: compact_public_view(view)
+                for side, view in projection['project_public_views'].items()
+            }}
+        result = {'match': projection}
         if self._clock_anchor is not None:
             # Cached projections retain their original time/remaining-ms pair. Give
             # new viewers a current source-domain clock, never the live host's wall clock.
             result['competition_server_time'] = self._clock_now()
         return result
+
+    def watermark(self):
+        return {key: (self.projection or {}).get(key) for key in
+                ('match_public_key', 'generation', 'content_sequence')}
 
     def _clock_now(self):
         if self._clock_anchor is None:

@@ -155,6 +155,7 @@ function receive(data){
   now.value=serverClock.now();
   if(sameMatch&&match.value?.phase?.endsWith('_PLAYING')&&incoming.phase?.endsWith('_RESULT'))finishPlaybackUntil.value=serverClock.now()+500;
   const sameGame=match.value?.match_public_key===incoming.match_public_key&&match.value?.generation===incoming.generation&&match.value?.current_game===incoming.current_game;
+  if(!sameGame){finishPlaybackUntil.value=0;playbackPending.value={yellow:false,white:false};}
   for(const side of sides){const next=incoming.project_public_views[side];if(next)incoming.project_public_views[side]=receivedProjectView(sameGame?match.value?.project_public_views?.[side]:null,next)}
   match.value=incoming;
 }

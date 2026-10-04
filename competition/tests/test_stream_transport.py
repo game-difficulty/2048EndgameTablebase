@@ -85,10 +85,71 @@ def test_writer_closes_instead_of_silently_detaching_on_backpressure():
         socket=AsyncMock(); detached=AsyncMock()
         writer=SocketWriter(socket,detached,byte_limit=10)
         await writer.put({'too':'large'})
+        await writer.close_task
         socket.close.assert_awaited_once_with(code=1013,reason='stream_backpressure')
         detached.assert_awaited_once()
         with contextlib.suppress(asyncio.CancelledError):
             await writer.task
+    asyncio.run(run())
+
+
+def test_slow_spectator_close_does_not_block_new_producer_batches():
+    async def run():
+        socket, detached = AsyncMock(), AsyncMock()
+        gate = asyncio.Event()
+        async def slow_close(**_):
+            await gate.wait()
+        socket.close.side_effect = slow_close
+        writer = SocketWriter(socket, detached, byte_limit=10)
+        await asyncio.wait_for(writer.put({'too':'large'}), .5)
+        assert writer.close_task is not None
+        # Subsequent enqueue calls also finish without waiting for that peer.
+        await asyncio.wait_for(writer.put({'another':'update'}), .5)
+        gate.set()
+        await writer.close_task
+        detached.assert_awaited_once()
+    asyncio.run(run())
+
+
+def test_public_room_broadcast_serializes_once_for_all_viewers():
+    from unittest.mock import patch
+    from competition.backend.hub import RoomHub
+    import json
+    async def run():
+        hub = RoomHub()
+        sockets = [AsyncMock() for _ in range(20)]
+        for socket in sockets:
+            await hub.connect('room', socket, None)
+        with patch('competition.backend.hub.json.dumps', wraps=json.dumps) as encode:
+            await hub.broadcast_message('room', {'type':'project.snapshot', 'data':{'instance_id':'A'}})
+            assert encode.call_count == 1
+        for socket in sockets:
+            await hub.disconnect('room', socket)
+    asyncio.run(run())
+
+
+def test_slow_viewer_keeps_latest_board_and_ordered_non_board_events():
+    async def run():
+        import json
+        socket, detached = AsyncMock(), AsyncMock()
+        writer = SocketWriter(socket, detached)
+        # Keep the sender idle while the producer outruns this viewer.
+        writer.task.cancel()
+        for seq in range(1, 120):
+            await writer.put({'type': 'project.snapshot', 'data': {'instance_id': 'A:yellow',
+                'public_view': {'sequence': seq, 'payload': {'score': seq}, 'frames': []}}})
+            if seq == 3:
+                await writer.put({'type': 'important', 'value': 'preserve'})
+        queued = []
+        while not writer.queue.empty():
+            text, _ = writer.queue.get_nowait()
+            queued.append(json.loads(text))
+        assert [m['value'] for m in queued if m['type'] == 'important'] == ['preserve']
+        views = [m['data']['public_view'] for m in queued if m['type'] == 'project.snapshot']
+        assert len(views) < 119
+        assert views[-1]['sequence'] == 119
+        assert not writer.closed
+        await writer.close()
     asyncio.run(run())
 
 

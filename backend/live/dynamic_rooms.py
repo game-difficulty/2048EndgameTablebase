@@ -55,6 +55,7 @@ class CompetitionMatchRoomProvider:
 
     def __init__(self):
         self._directory_cache = []
+        self.directory_available = None
 
     @staticmethod
     def _request(path):
@@ -98,6 +99,7 @@ class CompetitionMatchRoomProvider:
 
     def list_active_rooms(self):
         payload = self._request('/api/internal/live/rooms')
+        self.directory_available = payload is not None
         if payload is None:
             self._directory_cache = [room for room in self._directory_cache if self._unexpired(room)]
             return list(self._directory_cache)

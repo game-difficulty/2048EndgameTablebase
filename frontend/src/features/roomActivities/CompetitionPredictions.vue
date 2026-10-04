@@ -64,7 +64,7 @@ const data = ref({markets:[],available:false}), dialog = ref(null), entry = ref(
 const kinds = computed(()=>data.value.markets.map(m=>m.kind));
 const pooled = computed(()=>data.value.markets.some(m=>m.pricing==='pool'));
 const selection = reactive({winner:'',first_two:'',clinch_3:'',clinch_4:''}), amountsByKind = reactive({winner:500,first_two:500,clinch_3:500,clinch_4:500});
-let timer, focusBefore, epoch=0, fetching=false, refreshAfter=false, balanceVersion='';
+let timer, refreshTimer, focusBefore, epoch=0, fetching=false, refreshAfter=false, balanceVersion='', nextRefreshAt=0;
 const serverOffset=ref(0);
 const t=(zh,en)=>props.lang==='zh'?zh:en;
 const tokens=value=>(Number(value||0)/1000).toLocaleString(undefined,{maximumFractionDigits:3});
@@ -91,8 +91,26 @@ const winningLabel=kind=>{const item=market(kind);const option=item?.options.fin
 const storageKey=()=>`competition-bet-pending:${room.id}:${props.user?.id}`;
 function persist(){try{if(pending.value)sessionStorage.setItem(storageKey(),JSON.stringify(pending.value));else sessionStorage.removeItem(storageKey());}catch{}}
 function load(){pending.value=null;try{const value=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(value?.request_id)pending.value=value;}catch{}}
-async function api(body){const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),12000);try{const response=await fetch(url('/predictions'),{credentials:'same-origin',cache:'no-store',signal:controller.signal,...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});const result=await response.json();if(!response.ok)throw Object.assign(Error('request_failed'),{detail:result.detail});return result;}finally{clearTimeout(timeout);}}
-async function refresh(){if(fetching){refreshAfter=true;return;}fetching=true;const generation=epoch;try{const result=await api();if(generation!==epoch)return;data.value=result;serverOffset.value=Number(result.server_time)*1000-Date.now();for(const kind of kinds.value)if(market(kind)?.mine)selection[kind]=market(kind).mine.option_id;const version=JSON.stringify(result.markets.map(item=>[item.id,item.mine?.payout]));if(version!==balanceVersion){balanceVersion=version;emit('balance');}}catch{if(generation===epoch)data.value.available=false;}finally{if(generation===epoch){fetching=false;if(refreshAfter){refreshAfter=false;refresh();}}}}
+async function api(body){const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),12000);try{const response=await fetch(url('/predictions'),{credentials:'same-origin',cache:'no-store',signal:controller.signal,...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});const result=await response.json().catch(()=>({}));if(!response.ok)throw Object.assign(Error('request_failed'),{detail:result.detail,status:response.status,retryAfter:Number(response.headers.get('Retry-After'))});return result;}finally{clearTimeout(timeout);}}
+async function refresh(){
+  if(fetching){refreshAfter=true;return;}
+  const delay=nextRefreshAt-Date.now();
+  if(delay>0){refreshTimer ??= setTimeout(()=>{refreshTimer=null;refresh();},delay);return;}
+  clearTimeout(refreshTimer);refreshTimer=null;
+  fetching=true;nextRefreshAt=Date.now()+2000;const generation=epoch;
+  try{
+    const result=await api();if(generation!==epoch)return;
+    data.value=result;serverOffset.value=Number(result.server_time)*1000-Date.now();
+    for(const kind of kinds.value)if(market(kind)?.mine)selection[kind]=market(kind).mine.option_id;
+    const version=JSON.stringify(result.markets.map(item=>[item.id,item.mine?.payout]));
+    if(version!==balanceVersion){balanceVersion=version;emit('balance');}
+  }catch(cause){
+    if(generation===epoch){
+      data.value.available=false;
+      nextRefreshAt=Math.max(nextRefreshAt,Date.now()+(cause.status===429?Math.max(15,cause.retryAfter||0):3)*1000);
+    }
+  }finally{if(generation===epoch){fetching=false;if(refreshAfter){refreshAfter=false;refresh();}}}
+}
 async function open(){focusBefore=document.activeElement;opened.value=true;emit('open');load();dialog.value?.showModal();await refresh();}
 function close(){dialog.value?.close();opened.value=false;(focusBefore?.isConnected?focusBefore:entry.value)?.focus();}
 function backdrop(event){if(event.target!==dialog.value)return;const rect=dialog.value.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)close();}
@@ -114,10 +132,11 @@ async function submit(kind){
     else error.value=t('尚未确认，请使用原请求核对并重试，不会重复扣款。','Not yet confirmed. Check and retry the same request without duplicate charges.');
   }finally{if(generation===epoch)busy.value=false;}
 }
-watch(()=>props.user?.id,()=>{epoch++;busy.value=false;fetching=false;close();data.value={markets:[],available:false};for(const kind of Object.keys(selection))selection[kind]='';load();refresh();});
-watch(()=>props.state,()=>{if(['competition-fpmm-v1','competition-pool-v1'].includes(props.state?.protocol))refresh();});
+watch(()=>props.user?.id,()=>{epoch++;busy.value=false;fetching=false;refreshAfter=false;close();data.value={markets:[],available:false};for(const kind of Object.keys(selection))selection[kind]='';load();refresh();});
+// Board snapshots carry a fresh wrapper/server_time even when markets did not change.
+watch(()=>JSON.stringify([props.state?.protocol,props.state?.available,(props.state?.markets||[]).map(m=>[m.id,m.revision,m.status,m.winner])]),()=>{if(['competition-fpmm-v1','competition-pool-v1'].includes(props.state?.protocol))refresh();});
 onMounted(()=>{load();refresh();timer=setInterval(()=>{now.value=Date.now();if(props.connected&&!busy.value)refresh();},3000);});
-onUnmounted(()=>{epoch++;clearInterval(timer);});
+onUnmounted(()=>{epoch++;clearInterval(timer);clearTimeout(refreshTimer);});
 defineExpose({open,close});
 </script>
 <style scoped>

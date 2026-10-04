@@ -1,9 +1,22 @@
 // A socket being OPEN is not proof that snapshots or replies are still arriving.
 export function createWatchConnection({ room, url, canConnect, expired, onOpen, onDisconnect,
-  onMessage, onSnapshot, onEnded, onActivity, now = () => Date.now(), random = Math.random }) {
+  onMessage, onSnapshot, onEnded, onActivity, onResync, now = () => Date.now(), random = Math.random }) {
   let socket, watchdog, retry, probe, probeTimer;
   let stopped = false, started = false, failures = 0, epoch = 0;
   let startedAt = 0, openedAt = null, lastReceived = 0, lastPing = 0, synchronized = false;
+  let lastResync = -Infinity, installed = null;
+  const competition = room.protocol === 'competition-match-v1';
+  function resync() {
+    if (!onResync || now() - lastResync < 3000) return;
+    lastResync = now();
+    void Promise.resolve().then(onResync).catch(() => {});
+  }
+  function observeSnapshot(data) {
+    const next = data?.match;
+    if (!next) return;
+    if (!installed || next.match_public_key !== installed.match_public_key || next.generation > installed.generation ||
+      (next.generation === installed.generation && next.content_sequence >= installed.content_sequence)) installed = next;
+  }
 
   function cancelRetry() {
     ++epoch;
@@ -50,6 +63,7 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
     void schedule();
   }
   function check() {
+    if (!stopped && started && canConnect() && competition && now() - lastResync >= 15000) resync();
     const current = socket;
     if (stopped || !current) return;
     if (expired()) { detach(); return; }
@@ -79,6 +93,7 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
     current.onopen = () => {
       if (socket !== current || stopped) return;
       openedAt = lastReceived = lastPing = now();
+      if (competition) resync();
       onOpen?.(); // Backoff resets only after a successfully installed snapshot.
     };
     current.onmessage = async event => {
@@ -89,9 +104,14 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
         if (!(data instanceof ArrayBuffer) && (!data || typeof data.type !== 'string')) throw Error('invalid_message');
         if (data.type === 'snapshot' && (data.room_id !== room.id || data.protocol !== room.protocol)) throw Error('wrong_snapshot');
         lastReceived = now();
+        if (competition && data.type === 'match_watermark' && (!installed ||
+          data.match_public_key !== installed.match_public_key || data.generation > installed.generation ||
+          (data.generation === installed.generation && data.content_sequence > installed.content_sequence))) resync();
         await onMessage(data);
         if (socket !== current || stopped) return;
-        if (data.type === 'snapshot') { synchronized = true; failures = 0; onSnapshot?.(); }
+        if (data.type === 'snapshot' && (!competition || data.match)) {
+          observeSnapshot(data); synchronized = true; failures = 0; onSnapshot?.();
+        }
         onActivity?.();
       } catch { recover(current); }
     };
@@ -104,5 +124,5 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
     void schedule();
   }
   function stop() { stopped = true; detach(); }
-  return { connect, reconnect, check, cancelRetry, disconnect: detach, stop };
+  return { connect, reconnect, check, observeSnapshot, cancelRetry, disconnect: detach, stop };
 }

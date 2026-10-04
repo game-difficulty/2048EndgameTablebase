@@ -120,3 +120,25 @@ test('a final quake remains pending through completion metadata, then releases t
   assert.equal(seen.at(-1).sequence,1);
   player.close();
 });
+
+test('compact recovery preserves a complete short queue; a new game discards it',()=>{
+  const {player,seen,tick}=timedPlayback();
+  player.receive(view(0),'A');
+  player.receive(view(4,[1,2,3,4].map(frame)),'A');
+  player.receive({...view(5),resync:true},'A');
+  tick(1000);
+  assert.equal(seen.at(-1).sequence,5);
+  assert.deepEqual(seen.map(v=>v.sequence),[0,1,2,3,4,5]);
+  player.receive({...view(1),generation:2},'B');
+  tick(5000);
+  assert.equal(seen.at(-1).sequence,1);
+  assert.equal(player.pending.size,0);
+  player.close();
+});
+
+test('a bounded recovery window still catches up every move after a short disconnect',()=>{
+  const {player,seen,drain}=playback();
+  player.receive(view(38),'A');
+  player.receive(view(40,[33,34,35,36,37,38,39,40].map(frame),33),'A');
+  drain();assert.deepEqual(seen,[38,39,40]);
+});

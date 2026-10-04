@@ -46,6 +46,10 @@ def test_frame_batches_are_retained_and_recoverable_through_live_cursor(tmp_path
     view = service.live_projection(key, after_yellow=3)['project_public_views']['yellow']
     assert [f['sequence'] for f in view['frames']] == [4, 5, 6]
     assert view['frame_start'] == 1
+    room_view = service.snapshot('MATCH5', players[1])['match']['sessions']['yellow']['public_view']
+    assert room_view['sequence'] == 6
+    assert [f['sequence'] for f in room_view['frames']] == list(range(1, 7))
+    assert room_view['payload']['score'] == view['payload']['score']
     assert service.sync_client_game('MATCH5', players[0], **data, frames=frames)['duplicate']
     # A legacy checkpoint with a genuine gap advertises a new history floor.
     upload(service, players[0], sequence=10)

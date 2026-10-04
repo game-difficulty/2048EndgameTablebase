@@ -4,7 +4,8 @@ import { createWatchConnection } from '../src/live/watchConnection.js';
 import { canConnectLive, backgroundExpired } from '../src/live/pipPolicy.js';
 
 const room = { id: 'competition-demo', protocol: 'competition-match-v1', api_base: '/api/live/rooms/demo' };
-const snapshot = { type: 'snapshot', room_id: room.id, protocol: room.protocol };
+const snapshot = { type: 'snapshot', room_id: room.id, protocol: room.protocol,
+  match:{match_public_key:'demo',generation:1,content_sequence:1} };
 const flush = async () => { for (let i=0;i<8;i++) await Promise.resolve(); };
 function setup(t, overrides={}) {
   t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:1000});
@@ -130,4 +131,28 @@ test('background policy pauses retries, PiP permits recovery, and foreground che
   // A foreground check must not wait for the next throttled browser timer.
   t.mock.timers.setTime(Date.now()+31000);connection.check();
   assert.equal(sockets[2].readyState,2);
+});
+
+test('presence cannot suppress periodic match resync and a newer watermark triggers recovery',async t=>{
+  let requests=0;
+  const {connection,sockets,tick}=setup(t,{onResync:()=>{requests++;}});
+  sockets[0].open();await sockets[0].message(snapshot);await flush();
+  assert.equal(requests,1);
+  for(let i=0;i<12;i++){tick(5000);await sockets[0].message({type:'presence',online:true});await flush();}
+  assert.ok(requests>=5);
+  tick(3000);
+  await sockets[0].message({type:'match_watermark',match_public_key:'demo',generation:1,content_sequence:2});await flush();
+  const count=requests;
+  connection.observeSnapshot({...snapshot,match:{...snapshot.match,content_sequence:2}});
+  tick(3000);
+  await sockets[0].message({type:'match_watermark',match_public_key:'demo',generation:1,content_sequence:2});await flush();
+  assert.equal(requests,count);
+  assert.equal(sockets.length,1);
+});
+
+test('empty competition snapshots do not claim to have synchronized',async t=>{
+  const {sockets,state,tick}=setup(t);
+  sockets[0].open();await sockets[0].message({...snapshot,match:null});
+  assert.equal(state.ready,false);
+  tick(10000);assert.equal(sockets[0].readyState,2);
 });

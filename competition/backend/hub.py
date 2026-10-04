@@ -16,17 +16,40 @@ class SocketWriter:
         self.queue = asyncio.Queue(maxsize=128)
         self.bytes = 0
         self.closed = False
+        self.close_task = None
         self.task = asyncio.create_task(self.run())
 
-    async def put(self, message):
-        if self.closed:
+    async def put(self, message, encoded=None):
+        if self.closed or self.close_task:
             return
-        text = json.dumps(message, separators=(',', ':'), ensure_ascii=False)
-        size = len(text.encode())
+        if message.get('type') == 'project.snapshot' and (self.queue.qsize() >= 96 or self.bytes > 2 * 1024 * 1024):
+            update = message['data']
+            retained = []
+            while not self.queue.empty():
+                text, size = self.queue.get_nowait()
+                self.queue.task_done()
+                self.bytes -= size
+                old = json.loads(text)
+                if not (old.get('type') == 'project.snapshot' and
+                        old['data'].get('instance_id') == update.get('instance_id')):
+                    retained.append((text, size))
+            for text, size in retained:
+                self.queue.put_nowait((text, size))
+                self.bytes += size
+            message = {**message, 'data': {**update, 'public_view': {
+                **update['public_view'], 'frames': [], 'frame_start': update['public_view'].get('sequence', 0),
+            }}}
+            encoded = None
+        if encoded is None:
+            text = json.dumps(message, separators=(',', ':'), ensure_ascii=False)
+            encoded = (text, len(text.encode()))
+        text, size = encoded
         if self.queue.full() or self.bytes + size > self.byte_limit:
             log.warning('competition socket backpressure messages=%s queued_bytes=%s incoming_bytes=%s',
                         self.queue.qsize(), self.bytes, size)
-            await self.close(1013, 'stream_backpressure')
+            # A spectator's close handshake must not hold up the producer's
+            # receive loop (broadcast_message waits for all enqueue calls).
+            self.close_task = asyncio.create_task(self.close(1013, 'stream_backpressure'))
             return
         self.bytes += size
         self.queue.put_nowait((text, size))
@@ -76,10 +99,10 @@ class RoomHub:
         self._rooms[room_code][websocket] = principal
         self._writers[websocket] = SocketWriter(websocket, lambda: self.disconnect(room_code, websocket))
 
-    async def send(self, websocket, message):
+    async def send(self, websocket, message, encoded=None):
         writer = self._writers.get(websocket)
         if writer:
-            await writer.put(message)
+            await writer.put(message, encoded)
 
     async def disconnect(self, room_code, websocket):
         self._rooms[room_code].pop(websocket, None)
@@ -124,4 +147,6 @@ class RoomHub:
 
     async def broadcast_message(self, room_code, message):
         self.notify(room_code)
-        await asyncio.gather(*(self.send(socket, message) for socket in tuple(self._rooms.get(room_code, {}))))
+        text = json.dumps(message, separators=(',', ':'), ensure_ascii=False)
+        encoded = (text, len(text.encode()))
+        await asyncio.gather(*(self.send(socket, message, encoded) for socket in tuple(self._rooms.get(room_code, {}))))

@@ -122,3 +122,17 @@ test('temporary active-player denial resyncs and retries, another-page takeover 
     assert.equal(sockets.length,2);
   } finally { sender.close(); }
 });
+
+test('healthy ordered transport keeps delta uploads even after the former two-second checkpoint interval',t=>{
+  t.mock.timers.enable({apis:['Date','setTimeout','setInterval'],now:1000});
+  const {sender,sockets,receive}=fixture();
+  try{
+    sender.push(packet(2000));sender.flush();
+    receive({type:'stream.ack',accepted_sequence:2000});
+    t.mock.timers.tick(3000);
+    sender.push(packet(2001));sender.flush();
+    const batches=sockets[0].sent.filter(m=>m.type==='project.batch');
+    assert.equal(batches[1].data.checkpoint.delta_base,2000);
+    assert.ok(JSON.stringify(batches[1]).length<JSON.stringify(batches[0]).length/5);
+  }finally{sender.close();}
+});

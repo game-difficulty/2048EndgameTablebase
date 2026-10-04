@@ -100,8 +100,77 @@ def test_transit_keeps_recovery_history_but_broadcasts_only_new_frames():
     with patch('backend.live.competition_content.competition_provider.projection', return_value=state(10, [8, 9, 10])) as request:
         assert asyncio.run(content.refresh())
         assert request.call_args.args[1] == {'yellow': 7}
+    assert [f['sequence'] for f in content.projection['project_public_views']['yellow']['frames']] == [6, 7, 8, 9, 10]
     assert [f['sequence'] for f in content.snapshot()['match']['project_public_views']['yellow']['frames']] == [6, 7, 8, 9, 10]
     assert [f['sequence'] for f in content.incremental_projection['project_public_views']['yellow']['frames']] == [8, 9, 10]
+
+
+def test_compact_bootstrap_preserves_geometry_final_state_and_watermark():
+    import json
+    room = CompetitionMatchRoomProvider()._definition(directory_item())
+    payload = {'board': [[2, 4], [8, 16]], 'rows': 2, 'cols': 2,
+               'cargo': [{'cells': [0, 1, 2, 3]}], 'score': 1234, 'finished': True}
+    original = {**projection(), 'project_public_views': {'yellow': {
+        'payload': payload, 'sequence': 128, 'frames': [{'sequence': n, 'payload': payload} for n in range(128)]}, 'white': None}}
+    with patch('backend.live.competition_content.competition_provider.projection', return_value=original):
+        content = CompetitionMatchContent(room)
+    compact = content.snapshot()['match']
+    assert compact['project_public_views']['yellow']['payload'] == payload
+    assert len(original['project_public_views']['yellow']['frames']) == 128
+    assert len(compact['project_public_views']['yellow']['frames']) == 8
+    assert len(json.dumps(compact)) < len(json.dumps(original)) / 10
+    assert content.watermark() == {key: original[key] for key in ('match_public_key', 'generation', 'content_sequence')}
+
+
+def test_live_backpressure_coalesces_only_board_snapshots_not_paid_events():
+    queue = routes.ViewerQueue(byte_limit=2*1024*1024)
+    for seq in range(1, 60):
+        queue.put_nowait({'type': 'snapshot', 'room_id': 'demo', 'match': {
+            **projection(seq), 'project_public_views': {'yellow': {'sequence': seq, 'payload': {'score': seq}, 'frames': []}}}})
+        if seq in (2, 6):
+            queue.put_nowait({'type': 'gift', 'id': seq})
+    messages = []
+    while not queue.empty():
+        messages.append(queue.get_nowait())
+    assert [m['id'] for m in messages if m['type'] == 'gift'] == [2, 6]
+    snapshots = [m for m in messages if m['type'] == 'snapshot']
+    assert len(snapshots) < 59
+    assert snapshots[-1]['match']['content_sequence'] == 59
+    assert queue.bytes == 0
+
+
+def test_live_fanout_encodes_once_instead_of_twice_per_viewer():
+    import json
+    from backend.live.watch_transport import EncodedMessage
+    runtime = object.__new__(routes.LiveHub)
+    runtime.viewers = {object(): routes.ViewerQueue() for _ in range(20)}
+    with patch('backend.live.watch_transport.json.dumps', wraps=json.dumps) as encode:
+        runtime.broadcast({'type': 'snapshot', 'room_id': 'demo', 'match': projection()})
+        assert encode.call_count == 1
+        for queue in runtime.viewers.values():
+            message = queue.get_nowait()
+            assert isinstance(message, EncodedMessage)
+            assert json.loads(message.wire_text)['match']['content_sequence'] == 7
+        assert encode.call_count == 1
+
+
+def test_cold_directory_outage_is_retryable_not_a_permanently_ended_room():
+    provider = CompetitionMatchRoomProvider()
+    with patch.object(provider, '_request', return_value=None):
+        assert provider.resolve_room('competition-demo') is None
+    assert provider.directory_available is False
+    with patch.object(routes, 'competition_provider', provider), \
+         patch.object(routes.dynamic_room_registry, 'resolve_room', return_value=None):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(routes.room_detail('competition-demo'))
+        assert error.value.status_code == 503
+    with patch.object(provider, '_request', return_value={'rooms': []}):
+        assert provider.resolve_room('competition-demo') is None
+    with patch.object(routes, 'competition_provider', provider), \
+         patch.object(routes.dynamic_room_registry, 'resolve_room', return_value=None):
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(routes.room_detail('competition-demo'))
+        assert error.value.status_code == 404
 
 
 def test_competition_content_rejects_wrong_generation() -> None:

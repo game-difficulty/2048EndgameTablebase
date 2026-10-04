@@ -8,7 +8,7 @@ export class ProjectStreamSender {
     Object.assign(this, { createSocket, authenticate, phaseToken, onAck, onError, onDiagnostic, interval });
     this.frames = []; this.latest = null; this.inflight = new Map();
     this.accepted = 0; this.sent = 0; this.ready = false; this.closed = false;
-    this.previous = null; this.lastFull = 0; this.retry = 0;
+    this.previous = null; this.retry = 0;
     this.open();
   }
   open() {
@@ -89,7 +89,10 @@ export class ProjectStreamSender {
     if (!this.ready || this.closed || !this.latest || this.latest.sequence <= this.sent || this.inflight.size >= 4) return;
     if (this.socket.bufferedAmount > 256 * 1024) { this.schedule(this.interval); return; }
     const packet = this.latest, previous = this.previous;
-    const full = !previous || packet.finished || Date.now() - this.lastFull >= 2000;
+    // Ordered WebSocket batches and durable cumulative ACKs preserve the base.
+    // Reconnect resets previous; periodically resending all undo/metric history
+    // only creates growing bursts during an otherwise healthy connection.
+    const full = !previous || packet.finished;
     const checkpoint = full ? packet.checkpoint : checkpointDelta(previous.checkpoint, packet.checkpoint, previous.sequence);
     const frames = this.frames.filter(f => f.sequence > this.sent);
     const wire = { ...packet, elapsed_ms: Math.round(packet.elapsed_ms), checkpoint, frames, phase_token: this.phaseToken() };
@@ -100,7 +103,6 @@ export class ProjectStreamSender {
     try {
       this.socket.send(text);
       this.sent = packet.sequence; this.previous = packet; this.inflight.set(packet.sequence, Date.now());
-      if (full) this.lastFull = Date.now();
       this.onDiagnostic({ type: 'sent', sequence: packet.sequence, from: frames[0]?.sequence,
         bytes: new TextEncoder().encode(text).length, outstanding: this.inflight.size });
     } catch { this.disconnected(this.socket, {code:4001,reason:'send_failed'}); }

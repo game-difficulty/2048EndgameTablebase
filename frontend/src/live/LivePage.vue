@@ -233,6 +233,8 @@ import { useI18n } from 'vue-i18n';
 import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
 import { createWatchConnection } from './watchConnection.js';
+import { createSnapshotRecovery } from './snapshotRecovery.js';
+import { projectionIsOlder } from '../../../competition/shared/projectStateOrder.mjs';
 import { isRoomEndedEvent } from './roomLifecycle.js';
 import { canConnectLive, backgroundExpired } from './pipPolicy.js';
 import RoomStage from './RoomStage.vue';
@@ -307,7 +309,8 @@ let backgroundTimer,
   backgroundDeadline = 0,
   noticeTimer,
   stopped = false;
-let roomEnded = false;
+let roomEnded = false, installedMatch = null;
+const snapshotRecovery = createSnapshotRecovery({ url:url('/snapshot'), install:installSnapshot });
 const watchConnection = createWatchConnection({
   room,
   url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${room.api_base}/watch`,
@@ -316,6 +319,7 @@ const watchConnection = createWatchConnection({
   onOpen: () => { connected.value = true; void refreshSummary(); },
   onDisconnect: () => { connected.value = false; synchronized.value = false; },
   onMessage: receive,
+  onResync: () => snapshotRecovery.refresh(),
   onSnapshot: () => { synchronized.value = true; seenSnapshot.value = true; },
   onEnded: endRoom,
   onActivity: () => roomPip.value?.refresh(),
@@ -335,7 +339,8 @@ async function refreshSummary() {
     const data = await api(`/state?stats_range=${encodeURIComponent(statsRange.value)}`);
     if (stopped || request !== summaryRequest) return;
     likes.update(data.likes);
-    content.value?.receive({ ...data, type: 'summary' });
+    if (room.content_kind === 'competition-match') installSnapshot({ ...data, type:'snapshot' });
+    else content.value?.receive({ ...data, type: 'summary' });
     allTime.value = data.all_time || {};
     statsRange.value = data.stats_range || statsRange.value;
     const firstLoad = !chatHistoryLoaded;
@@ -358,6 +363,12 @@ async function refreshSummary() {
   }
 }
 function installSnapshot(data) {
+  if (data.match) {
+    if (projectionIsOlder(installedMatch, data.match)) return;
+    installedMatch = data.match;
+    seenSnapshot.value = true;
+  }
+  watchConnection.observeSnapshot(data);
   if (data.predictions) predictionState.value = { ...data.predictions, server_time:data.server_time };
   if (data.red_envelopes) redState.value = { ...data.red_envelopes, server_time: data.server_time };
   if (data.lucky_bags) luckyState.value = { bags: data.lucky_bags, server_time: data.server_time };
@@ -412,6 +423,7 @@ function endRoom() {
   roomEnded = true;
   stopped = true;
   watchConnection.stop();
+  snapshotRecovery.stop();
   emit('room-ended');
 }
 async function appendChat(data) {
@@ -557,6 +569,7 @@ async function visibility() {
 onMounted(async () => {
   document.documentElement.dataset.theme = "dark";
   document.addEventListener("visibilitychange", visibility);
+  if (room.content_kind === 'competition-match') connect();
   const data = await refreshSummary();
   if (stopped) return;
   if (data) {
@@ -572,6 +585,7 @@ onUnmounted(() => {
   clearTimeout(noticeTimer);
   clearTimeout(likeFlushTimer);
   watchConnection.stop();
+  snapshotRecovery.stop();
   document.removeEventListener("visibilitychange", visibility);
   document.body.classList.remove('live-focus-document');
 });

@@ -19,6 +19,7 @@ from backend.auth.principal import ActorRef
 from .store import week_bounds
 from .rooms import DEFAULT_ROOM, DEFAULT_ROOM_ID, ROOMS, RoomDefinition
 from .content import create_content
+from .watch_transport import EncodedMessage, serve_viewer
 from . import human_rooms
 from .dynamic_rooms import dynamic_room_registry, competition_provider
 from backend.room_activities import predictions
@@ -38,9 +39,28 @@ class ViewerQueue(asyncio.Queue):
 
     @staticmethod
     def size(item):
+        if isinstance(item, EncodedMessage):
+            return item.wire_bytes
         return len(item) if isinstance(item, bytes) else len(json.dumps(item, ensure_ascii=False).encode('utf-8'))
 
     def put_nowait(self, item):
+        # Only replace obsolete board snapshots under pressure. Chat, rewards,
+        # gifts and other events retain their order and are never discarded.
+        if (isinstance(item, dict) and item.get('type') == 'snapshot' and item.get('match')
+                and (self.qsize() >= 24 or self.bytes > 1024 * 1024)):
+            retained = []
+            while not self.empty():
+                old = self.get_nowait()
+                if not (isinstance(old, dict) and old.get('type') == 'snapshot'
+                        and old.get('room_id') == item.get('room_id') and old.get('match')):
+                    retained.append(old)
+            for old in retained:
+                self.put_nowait(old)
+            match = item['match']
+            item = {**item, 'match': {**match, 'project_public_views': {
+                side: ({**view, 'frames': [], 'frame_start': view.get('sequence', 0)} if view else None)
+                for side, view in (match.get('project_public_views') or {}).items()
+            }}}
         size = self.size(item)
         if self.bytes + size > self.byte_limit:
             raise asyncio.QueueFull
@@ -131,8 +151,7 @@ class LiveHub:
         self.chat = deque(sorted(history, key=lambda item: item['at'])[-100:], maxlen=100)
         if getattr(self.content, 'push_stream', False):
             def publish_projection():
-                snapshot = self.snapshot()
-                snapshot['match'] = self.content.incremental_projection
+                snapshot = self.snapshot(incremental=True)
                 self.broadcast(snapshot)
             self.content.on_update = publish_projection
         await self.content.start()
@@ -264,9 +283,10 @@ class LiveHub:
                     last_error = time.monotonic()
             await asyncio.sleep(1)
 
-    def snapshot(self):
+    def snapshot(self, *, incremental=False):
+        content = self.content.snapshot(incremental=incremental) if self.room.content_kind == 'competition-match' else self.content.snapshot()
         return dict(type='snapshot', room_id=self.room.id, protocol=self.room.protocol, online=self.control_status()['online'], paused=not self.control['enabled'],
-                    **self.content.snapshot(), viewers=len(self.audience.identities()),
+                    **content, viewers=len(self.audience.identities()),
                     lucky_bags=self.lucky_bags, red_envelopes=self.red_state,
                     predictions=self.activities.state, server_time=time.time())
 
@@ -369,6 +389,8 @@ class LiveHub:
             await asyncio.sleep(1)
 
     def broadcast(self, message):
+        if isinstance(message, dict) and not isinstance(message, EncodedMessage):
+            message = EncodedMessage(message)
         for queue in tuple(self.viewers.values()):
             if getattr(queue, 'closing', False):
                 continue
@@ -472,6 +494,8 @@ def _dynamic_hub_from_definition(definition):
 def _dynamic_hub(room_id):
     definition = dynamic_room_registry.resolve_room(room_id)
     if not definition:
+        if room_id.startswith('competition-') and competition_provider.directory_available is False:
+            raise HTTPException(503, 'competition_directory_unavailable')
         raise HTTPException(404, 'room_not_found')
     return _dynamic_hub_from_definition(definition)
 
@@ -675,6 +699,8 @@ async def room_detail(room_id: str):
         return ROOMS[room_id].public()
     definition = dynamic_room_registry.resolve_room(room_id)
     if not definition:
+        if room_id.startswith('competition-') and competition_provider.directory_available is False:
+            raise HTTPException(503, 'competition_directory_unavailable')
         raise HTTPException(404, 'room_not_found')
     return definition.public()
 
@@ -695,6 +721,14 @@ async def state(request: Request, stats_range: str = Query('all')):
     history = await asyncio.to_thread(visible_messages, list(hub.chat))
     return {**hub.snapshot(), **await asyncio.to_thread(hub.store.summary, stats_range), 'likes': hub.like_total, 'chat': history,
             'music_url': os.environ.get('LIVE_MUSIC_URL', ''), 'gifts': list(hub.gift_history)}
+
+
+@router.get('/rooms/{room_id}/snapshot')
+async def room_snapshot(request: Request, response: Response):
+    """Cheap, current public state; no chat, identity, or statistics queries."""
+    response.headers['Cache-Control'] = 'no-store'
+    runtime = resolve_hub(request)
+    return runtime.snapshot()
 
 
 @router.get('/status')
@@ -1011,64 +1045,54 @@ async def watch(ws: WebSocket):
     await ws.accept()
     queue = ViewerQueue(byte_limit=2 * 1024 * 1024 if hub.room.content_kind == 'competition-match' else 256 * 1024)
     hub.viewers[ws] = queue
-    queue.put_nowait(hub.snapshot())
-    user = None
-    with contextlib.suppress(Exception):
-        user = await asyncio.to_thread(current_user_from_websocket, ws)
-    if user:
-        already_present = user['id'] in hub.viewer_users.values()
-        hub.viewer_users[ws] = user['id']
-        hub.viewer_times[ws] = (time.time(), time.time())
-        if not already_present:
+
+    async def identify():
+        user = None
+        with contextlib.suppress(Exception):
+            user = await asyncio.to_thread(current_user_from_websocket, ws)
+        if user:
+            already_present = user['id'] in hub.viewer_users.values()
+            hub.viewer_users[ws] = user['id']
+            hub.viewer_times[ws] = (time.time(), time.time())
+            if not already_present:
+                with contextlib.suppress(Exception):
+                    event = await asyncio.to_thread(gifts.entrance, user)
+                    if event:
+                        hub.append_entrance_chat(dict(type='entrance', id=event['id'], at=event['at'], **event['actor']))
+                        hub.broadcast(event)
+        actor = ActorRef.from_user(user) if user else None
+        if not actor:
             with contextlib.suppress(Exception):
-                event = await asyncio.to_thread(gifts.entrance, user)
-                if event:
-                    hub.append_entrance_chat(dict(type='entrance', id=event['id'], at=event['at'], **event['actor']))
-                    hub.broadcast(event)
-    actor = ActorRef.from_user(user) if user else None
-    if not actor:
-        with contextlib.suppress(Exception):
-            guest = await asyncio.to_thread(current_guest_from_websocket, ws)
-            if guest:
-                actor = ActorRef.from_guest(guest)
-    identity = dict(name=actor.display_name if actor else 'Guest', avatar_url=None,
-                    supporter=False, supporter_level=0, guest=not bool(user))
-    if user:
-        with contextlib.suppress(Exception):
-            identity = await asyncio.to_thread(gifts.public_actor, user)
-    hub.audience.join(ws, actor.actor_key if actor else f'anonymous:{id(ws)}', identity)
+                guest = await asyncio.to_thread(current_guest_from_websocket, ws)
+                if guest:
+                    actor = ActorRef.from_guest(guest)
+        identity = dict(name=actor.display_name if actor else 'Guest', avatar_url=None,
+                        supporter=False, supporter_level=0, guest=not bool(user))
+        if user:
+            with contextlib.suppress(Exception):
+                identity = await asyncio.to_thread(gifts.public_actor, user)
+        hub.audience.join(ws, actor.actor_key if actor else f'anonymous:{id(ws)}', identity)
 
-    async def send():
-        while True:
-            item = await queue.get()
-            if item is None:
-                await asyncio.wait_for(ws.close(code=1013, reason='slow_consumer'), 5)
-                return
-            if isinstance(item, bytes):
-                await asyncio.wait_for(ws.send_bytes(item), 5)
-            else:
-                await asyncio.wait_for(ws.send_json(item), 5)
+    def on_ping():
+        if ws in hub.viewer_times:
+            hub.viewer_times[ws] = (hub.viewer_times[ws][0], time.time())
+        if hub.room.content_kind == 'competition-match':
+            try:
+                queue.put_nowait(dict(type='match_watermark', **hub.content.watermark()))
+            except asyncio.QueueFull:
+                # The bounded writer will drain or time out; never discard paid events.
+                pass
 
-    task = asyncio.create_task(send())
     try:
-        while not task.done():
-            incoming = await asyncio.wait_for(ws.receive_text(), 90)
-            if incoming != 'ping':
-                break
-            if ws in hub.viewer_times:
-                hub.viewer_times[ws] = (hub.viewer_times[ws][0], time.time())
-    except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError):
-        pass
+        queue.put_nowait(hub.snapshot())
+        await serve_viewer(ws, queue, identify, on_ping)
     finally:
         hub.viewers.pop(ws, None)
         hub.viewer_users.pop(ws, None)
         hub.viewer_times.pop(ws, None)
         hub.audience.leave(ws)
-        task.cancel()
-        with contextlib.suppress(Exception, asyncio.CancelledError):
-            await task
         with contextlib.suppress(Exception):
-            await ws.close()
+            await asyncio.wait_for(ws.close(), 2)
 
 
 @router.websocket('/rooms/{room_id}/publish')
