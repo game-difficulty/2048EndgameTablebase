@@ -99,6 +99,13 @@ class ReplayDecoder:
         with open(self.filepath, "rb") as file:
             raw_data = file.read()
 
+        # Verse's original VRS alphabet is single-byte, not a locale encoding.
+        if re.match(rb"^\d+x\d+-[^_]*_", raw_data):
+            try:
+                return raw_data.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw_data.decode("latin-1")
+
         # Downloaded play-site replays use the RPL1 binary payload directly,
         # while the analyzer historically only recognized its Base64 text
         # envelope.  Let both forms share the same validated decoder.  Without
@@ -161,6 +168,7 @@ class ReplayDecoder:
                 self._decode_2048next_format(replay_text)
                 return
 
+            replay_text = replay_text.lstrip("\ufeff").strip()
             new_format_match = re.match(r"^(\d+x\d+)-([^_]*)_(.*)$", replay_text)
             if new_format_match:
                 self._decode_new_format(
@@ -304,6 +312,11 @@ class ReplayDecoder:
         return board, current_score
 
     def _decode_new_format(self, variant_str: str, moves_str: str) -> None:
+        if len(moves_str) < 6 or len(moves_str) % 3:
+            raise ValueError("Invalid Verse replay record length")
+        if any(char not in NEW_CHAR_MAP for char in moves_str):
+            raise ValueError("Invalid character in Verse replay")
+
         if variant_str == "2x4":
             board, total_space, mover = np.uint64(0xFFFF00000000FFFF), 11, self.vbm
             self.variant = "2x4"
@@ -317,8 +330,7 @@ class ReplayDecoder:
             board, total_space, mover = np.uint64(0), 15, self.bm
             self.variant = "4x4"
         else:
-            logger.warning("Invalid variant %s", variant_str)
-            return
+            raise ValueError(f"Unsupported Verse replay variant: {variant_str}")
 
         num_moves = len(moves_str) // 3
         self.record_list = np.empty(

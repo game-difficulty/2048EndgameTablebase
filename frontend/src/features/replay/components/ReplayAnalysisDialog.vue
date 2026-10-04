@@ -38,7 +38,7 @@
           <section class="analysis-input-section">
             <div class="ui-control font-black uppercase tracking-[0.24em] text-text-secondary">{{ $t('analysis.input.title') }}</div>
             <div class="mt-4 space-y-4">
-              <div class="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
+              <div class="analysis-target-row">
                 <div ref="patternMenuRoot" class="relative">
                   <button
                     type="button"
@@ -919,6 +919,11 @@ onUnmounted(() => {
 }
 .analysis-input-section, .analysis-results-section { min-width: 0; padding: 0; }
 .analysis-input-section { overflow-y: auto; border-right: 1px solid var(--border-main); padding-right: 20px; }
+.analysis-target-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.analysis-target-row > :first-child { flex: 1 1 120px; min-width: 0; }
+.analysis-target-row > .analysis-select-shell { flex: 2 1 260px; min-width: 0; width: auto; }
+.analysis-target-row :deep(.analysis-select-shell > .ui-popover-select) { flex: 1 1 0; min-width: 0; }
+.analysis-target-row :deep(.analysis-select-trigger) { padding-inline: 10px; gap: 6px; }
 .analysis-results-section { display: flex; flex-direction: column; min-height: 0; }
 .analysis-progress-summary { flex: 0 0 auto; margin-top: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-main); }
 .analysis-results-list { display: flex; flex: 1 1 auto; min-height: 0; margin-top: 16px; }
