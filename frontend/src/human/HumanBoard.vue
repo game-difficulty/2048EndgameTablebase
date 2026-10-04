@@ -91,3 +91,9 @@ function cancel(e) {
   if (pointer?.id === e.pointerId) pointer = null;
 }
 </script>
+<style scoped>
+.moving-tile-inner.anim-new { animation: human-appear 200ms ease backwards; }
+.moving-tile-inner.anim-merged { animation: human-pop 200ms ease backwards; }
+@keyframes human-appear { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes human-pop { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
+</style>
