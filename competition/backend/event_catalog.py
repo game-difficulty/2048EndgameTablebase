@@ -104,6 +104,7 @@ class EventCatalog:
                     (room['id'], principal.user_id, room['id'], principal.user_id,room['id'],principal.user_id)).fetchone())
                 # Directory is public; never expose join codes or private room snapshots to spectators.
                 result['rooms'].append({'name': room['name'], 'status': room['status'],
+                    'fixture_id': (db.execute('SELECT id FROM tournament_fixtures WHERE competition_id=?', (room['id'],)).fetchone() or [None])[0],
                     'schedule': self.rooms.schedule.view(db, room['id']),
                     'series_score': dict(db.execute('SELECT yellow_wins AS yellow,white_wins AS white FROM competition_match_control WHERE competition_id=?', (room['id'],)).fetchone() or {}),
                     'room_code': room['room_code'] if may_enter else None,

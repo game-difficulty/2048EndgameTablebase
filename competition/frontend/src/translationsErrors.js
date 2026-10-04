@@ -1,4 +1,19 @@
 const entries=`
+请检查阶段名称、分组及完整队伍；每组须有 2 至 16 队且不能重复分组。|Check the stage name, groups and full teams. Each group needs 2–16 teams, with no duplicate assignments.
+该阶段名称已存在，请使用其他名称。|This stage name already exists. Choose another name.
+找不到该赛事对阵，请刷新时刻表。|This fixture was not found. Refresh the schedule.
+仅该场双方队长和举办方可操作时刻表。|Only the two captains for this fixture and the organizer can edit its schedule.
+对阵已更新，请刷新后重试。|The fixture has changed. Refresh and try again.
+参赛人员与生成对阵时不一致，请联系举办方处理。|The roster has changed since these fixtures were generated. Contact the organizer.
+同一队伍不能在同一时间安排两场比赛。|A team cannot book two matches at the same time.
+开赛时间已到或比赛流程已开始，不能改期。|The scheduled time has arrived or the match has started. Rescheduling is closed.
+该对阵或房间已有绑定，请刷新后检查。|This fixture or room is already bound. Refresh and check the schedule.
+请选择固定名单与该场两队完全一致的正式房间。|Choose an official room whose frozen roster matches both teams in this fixture.
+对方已提出改期，请先确认或拒绝。|The other captain has proposed a new time. Confirm or reject it first.
+当前没有待确认的改期。|There is no pending reschedule proposal.
+改期须由另一方队长确认或拒绝，提议方只能撤回。|The other captain must confirm or reject a reschedule. Its proposer can only withdraw it.
+请先锁定最终团队名单，再编排小组赛。|Lock the final team roster before scheduling group matches.
+开战时间须为未来时间，并包含时区。|The start time must be in the future and include a timezone.
 该选手还没有有效的最佳局。|This player does not have a verified best run yet.
 请检查棋盘和目标：数字须为不小于 8 的 2 的幂，盘面和须为不小于 10 的偶数。|Check the board and target: use a power of two ≥ 8, or an even board sum ≥ 10.
 这不是限时竞速房间。|This is not a time attack room.

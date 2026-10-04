@@ -23,6 +23,8 @@ from .schemas import (
     TimeAttackCommand,
     CreateEventRequest,
     LinkEventRoomRequest,
+    CreateFixtureStageRequest,
+    FixtureActionRequest,
     UpdateEventRequest,
     AssignEventOrganizerRequest,
     StatisticsRosterRequest,
@@ -312,6 +314,26 @@ async def enrollment_import(request: Request, slug: str, payload: EnrollmentRost
 @router.post('/events/{slug}/roster')
 async def import_event_roster(request: Request, slug: str, payload: StatisticsRosterRequest, principal: PrincipalDependency):
     return await asyncio.to_thread(service_from_request(request).events.statistics.import_roster, slug, principal, **payload.model_dump())
+
+
+@router.get('/events/{slug}/fixtures')
+async def event_fixtures(request: Request, slug: str, response: Response):
+    response.headers['Cache-Control'] = 'private, no-store'
+    return {'schedule': await asyncio.to_thread(service_from_request(request).fixtures.snapshot, slug, optional_principal(request))}
+
+
+@router.post('/events/{slug}/fixture-stages', status_code=201)
+async def create_fixture_stage(request: Request, slug: str, payload: CreateFixtureStageRequest, principal: PrincipalDependency):
+    return {'schedule': await asyncio.to_thread(service_from_request(request).fixtures.create_stage, slug, principal, **payload.model_dump())}
+
+
+@router.post('/events/{slug}/fixtures/{fixture_id}/actions')
+async def fixture_action(request: Request, slug: str, fixture_id: str, payload: FixtureActionRequest, principal: PrincipalDependency):
+    result = await asyncio.to_thread(service_from_request(request).fixtures.action, slug, fixture_id, principal, **payload.model_dump())
+    code = result.pop('_changed_room_code', None)
+    if code:
+        await _broadcast(request, code)
+    return result
 
 
 @router.post("/competitions", status_code=201)

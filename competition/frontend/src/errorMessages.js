@@ -1,6 +1,21 @@
 // Competition API and room socket errors share stable codes. Keep user-facing
 // wording here instead of displaying the backend's English diagnostic text.
 export const ERROR_MESSAGES = Object.freeze({
+  INVALID_FIXTURE_STAGE: '请检查阶段名称、分组及完整队伍；每组须有 2 至 16 队且不能重复分组。',
+  FIXTURE_STAGE_EXISTS: '该阶段名称已存在，请使用其他名称。',
+  FIXTURE_NOT_FOUND: '找不到该赛事对阵，请刷新时刻表。',
+  FIXTURE_CAPTAIN_REQUIRED: '仅该场双方队长和举办方可操作时刻表。',
+  FIXTURE_CHANGED: '对阵已更新，请刷新后重试。',
+  FIXTURE_ROSTER_CHANGED: '参赛人员与生成对阵时不一致，请联系举办方处理。',
+  FIXTURE_TIME_CONFLICT: '同一队伍不能在同一时间安排两场比赛。',
+  FIXTURE_SCHEDULE_CLOSED: '开赛时间已到或比赛流程已开始，不能改期。',
+  FIXTURE_ROOM_EXISTS: '该对阵或房间已有绑定，请刷新后检查。',
+  FIXTURE_ROOM_MISMATCH: '请选择固定名单与该场两队完全一致的正式房间。',
+  FIXTURE_PROPOSAL_EXISTS: '对方已提出改期，请先确认或拒绝。',
+  FIXTURE_NO_PROPOSAL: '当前没有待确认的改期。',
+  FIXTURE_OTHER_CAPTAIN_REQUIRED: '改期须由另一方队长确认或拒绝，提议方只能撤回。',
+  ROSTER_NOT_LOCKED: '请先锁定最终团队名单，再编排小组赛。',
+  INVALID_SCHEDULE_TIME: '开战时间须为未来时间，并包含时区。',
   INVALID_CHALLENGE: '请检查棋盘和目标：数字须为不小于 8 的 2 的幂，盘面和须为不小于 10 的偶数。',
   TIME_ATTACK_REQUIRED: '这不是限时竞速房间。',
   INVALID_ATTEMPT: '操作记录校验失败，请恢复服务端已确认的尝试。',

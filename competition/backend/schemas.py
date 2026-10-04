@@ -72,6 +72,38 @@ class LinkEventRoomRequest(BaseModel):
     room_code: str = Field(min_length=1, max_length=12)
 
 
+class FixtureGroupInput(BaseModel):
+    model_config = {'extra': 'forbid'}
+    name: str = Field(min_length=1, max_length=40)
+    team_ids: list[str] = Field(min_length=2, max_length=16)
+
+
+class CreateFixtureStageRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    name: str = Field(min_length=2, max_length=60)
+    groups: list[FixtureGroupInput] = Field(min_length=1, max_length=16)
+    projects: list[str] | None = Field(default=None, min_length=1, max_length=32)
+    rules: dict | None = None
+    command_id: str = Field(min_length=8, max_length=160)
+
+
+class FixtureActionRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    action: Literal['schedule', 'confirm', 'reject', 'cancel_proposal', 'bind']
+    revision: int = Field(ge=0, strict=True)
+    command_id: str = Field(min_length=8, max_length=160)
+    starts_at: str | None = Field(default=None, max_length=64)
+    room_code: str | None = Field(default=None, min_length=4, max_length=12)
+
+    @model_validator(mode='after')
+    def payload_for_action(self):
+        if (self.action == 'schedule') != (self.starts_at is not None):
+            raise ValueError('Only schedule requires starts_at')
+        if (self.action == 'bind') != (self.room_code is not None):
+            raise ValueError('Only bind requires room_code')
+        return self
+
+
 class AssignEventOrganizerRequest(BaseModel):
     user_id: int = Field(gt=0)
     dry_run: bool = True

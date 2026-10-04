@@ -99,6 +99,8 @@ class CompetitionService:
         self.time_attacks = TimeAttackRooms(self)
         from .event_catalog import EventCatalog
         self.events = EventCatalog(self)
+        from .event_fixtures import EventFixtures
+        self.fixtures = EventFixtures(self)
         from .event_schedule import EventSchedule
         self.schedule = EventSchedule(self)
         self.bootstrap_organizer_ids = bootstrap_organizer_ids
@@ -1626,12 +1628,13 @@ class CompetitionService:
             raise CompetitionError('DUEL_NO_OFFICIALS', '自由对决不支持裁判或举办方操作。', 403)
 
     def _create_room_records(self, db, principal, *, cid, code, name, projects, rules,
-                             configurable, grant_organizer, now, public_key=None):
+                             configurable, grant_organizer, now, public_key=None, owner_user_id=None):
         """Common persistence entry; permission and workflow policy stay with callers."""
+        owner_id = principal.user_id if owner_user_id is None else owner_user_id
         db.execute('''INSERT INTO competitions
             (id,public_key,room_code,name,status,created_by_user_id,version,created_at,updated_at)
             VALUES(?,?,?,?,'SEATING',?,1,?,?)''',
-            (cid, public_key or self._new_public_key(), code, name, principal.user_id, now, now))
+            (cid, public_key or self._new_public_key(), code, name, owner_id, now, now))
         self._insert_projects(db, cid, projects)
         if configurable:
             db.execute('INSERT INTO competition_room_rules VALUES(?,?)', (cid, json.dumps(rules)))
@@ -1639,7 +1642,7 @@ class CompetitionService:
                    (cid, 'room-flow-v1' if configurable else '819984-final-v1', rules['team_clock_seconds']*1000))
         if grant_organizer:
             db.execute('INSERT INTO competition_staff(competition_id,user_id,role,assigned_by_user_id,assigned_at) VALUES(?,?,?,?,?)',
-                       (cid, principal.user_id, StaffRole.ORGANIZER.value, principal.user_id, now))
+                       (cid, owner_id, StaffRole.ORGANIZER.value, principal.user_id, now))
         self._append_event(db, cid, 'competition.created', principal.user_id,
                            {'room_code':code, 'name':name, 'project_count':len(projects)})
         return self._room_row(db, code)
@@ -1725,6 +1728,7 @@ class CompetitionService:
                     if table=='competition_schedule':values.update(attendance_resolved=0,exception=None,starts_at=max(values['starts_at'],stamp))
                     db.execute(f'INSERT INTO {table} ({",".join(columns)}) VALUES({",".join("?" for _ in columns)})',[values[c] for c in columns])
             db.execute('INSERT INTO competition_staff VALUES(?,?,\'organizer\',?,?)',(cid,principal.user_id,principal.user_id,stamp))
+            db.execute('UPDATE tournament_fixtures SET competition_id=?, revision=revision+1, proposed_at=NULL, proposed_by_user_id=NULL WHERE competition_id=?', (cid, room['id']))
             self._append_event(db,room['id'],'competition.rematch',principal.user_id,{'replacement_room_code':code,'command_id':command_id})
             self._touch(db,room['id'],status='CANCELLED')
             self._append_event(db,cid,'competition.created',principal.user_id,{'replaces':room_code})
@@ -1774,13 +1778,18 @@ class CompetitionService:
                       ON staff.competition_id = competition.id
                     LEFT JOIN competition_seats AS seat
                       ON seat.competition_id = competition.id
+                    LEFT JOIN competition_scheduled_players AS scheduled
+                      ON scheduled.competition_id = competition.id
                     WHERE competition.created_by_user_id = ?
                        OR staff.user_id = ?
                        OR seat.user_id = ?
+                       OR (scheduled.user_id = ? AND NOT EXISTS (
+                           SELECT 1 FROM competition_expulsions e
+                           WHERE e.competition_id=competition.id AND e.user_id=scheduled.user_id))
                     ORDER BY competition.created_at DESC
                     LIMIT 100
                     """,
-                    (principal.user_id, principal.user_id, principal.user_id),
+                    (principal.user_id, principal.user_id, principal.user_id, principal.user_id),
                 ).fetchall()
             return [self._summary(db, row, principal) for row in rows]
 

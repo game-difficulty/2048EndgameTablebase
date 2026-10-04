@@ -6,10 +6,46 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS tournament_fixture_stages (
+  id TEXT PRIMARY KEY,
+  event_slug TEXT NOT NULL REFERENCES tournament_events(slug),
+  name TEXT NOT NULL,
+  groups_json TEXT NOT NULL,
+  projects_json TEXT NOT NULL,
+  rules_json TEXT NOT NULL,
+  organizer_user_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  request_json TEXT NOT NULL,
+  UNIQUE(event_slug, name), UNIQUE(event_slug, command_id)
+);
+CREATE TABLE IF NOT EXISTS tournament_fixtures (
+  id TEXT PRIMARY KEY,
+  stage_id TEXT NOT NULL REFERENCES tournament_fixture_stages(id),
+  group_name TEXT NOT NULL,
+  round_number INTEGER NOT NULL,
+  yellow_team_id TEXT NOT NULL,
+  white_team_id TEXT NOT NULL,
+  competition_id TEXT UNIQUE REFERENCES competitions(id),
+  revision INTEGER NOT NULL DEFAULT 0,
+  proposed_at TEXT,
+  proposed_by_user_id INTEGER,
+  UNIQUE(stage_id, yellow_team_id, white_team_id)
+);
+CREATE TABLE IF NOT EXISTS tournament_fixture_commands (
+  fixture_id TEXT NOT NULL REFERENCES tournament_fixtures(id),
+  command_id TEXT NOT NULL,
+  actor_user_id INTEGER NOT NULL,
+  request_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(fixture_id, command_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fixture_stage_event ON tournament_fixture_stages(event_slug);
+CREATE INDEX IF NOT EXISTS idx_fixture_stage ON tournament_fixtures(stage_id);
 CREATE TABLE IF NOT EXISTS competition_time_attack (
   competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
   configuration_json TEXT NOT NULL,
