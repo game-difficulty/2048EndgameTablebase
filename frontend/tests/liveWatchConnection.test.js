@@ -138,9 +138,9 @@ test('presence cannot suppress periodic match resync and a newer watermark trigg
   let requests=0;
   const {connection,sockets,tick}=setup(t,{onResync:()=>{requests++;}});
   sockets[0].open();await sockets[0].message(snapshot);await flush();
-  assert.equal(requests,1);
+  assert.equal(requests,0);
   for(let i=0;i<12;i++){tick(5000);await sockets[0].message({type:'presence',online:true});await flush();}
-  assert.ok(requests>=5);
+  assert.ok(requests>=2);
   tick(3000);
   await sockets[0].message({type:'match_watermark',match_public_key:'demo',generation:1,content_sequence:2});await flush();
   const count=requests;
@@ -156,6 +156,26 @@ test('empty competition snapshots do not claim to have synchronized',async t=>{
   sockets[0].open();await sockets[0].message({...snapshot,match:null});
   assert.equal(state.ready,false);
   tick(10000);assert.equal(sockets[0].readyState,2);
+});
+
+test('healthy snapshots and current watermarks suppress all periodic HTTP recovery',async t=>{
+  let requests=0;
+  const {sockets,tick}=setup(t,{onResync:()=>{requests++;}});
+  sockets[0].open();await sockets[0].message(snapshot);
+  for(let i=0;i<60;i++){
+    tick(10000);
+    await sockets[0].message(i%2?snapshot:{type:'match_watermark',...snapshot.match});
+    await flush();
+  }
+  assert.equal(requests,0);assert.equal(sockets.length,1);
+});
+
+test('a delayed initial snapshot gets HTTP fallback without pretending the socket is ready',async t=>{
+  let requests=0;
+  const {sockets,state,tick}=setup(t,{onResync:()=>{requests++;}});
+  sockets[0].open();tick(2000);await flush();assert.equal(requests,0);
+  tick(1000);await flush();assert.equal(requests,1);assert.equal(state.ready,false);
+  await sockets[0].message(snapshot);assert.equal(state.ready,true);
 });
 
 test('social channel synchronizes without a board and never starts board HTTP recovery',async t=>{

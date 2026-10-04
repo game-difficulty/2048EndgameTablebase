@@ -18,7 +18,7 @@ function renderer() {
     ${line('const currentServerNow=')}
     ${line('const phaseCountdown=')}
     ${line('const clock=')}
-    ${source.slice(source.indexOf('function receive(data){'),source.indexOf('let resyncPending='))}
+    ${source.slice(source.indexOf('function receive(data){'),source.indexOf('function requestProjectResync()'))}
     ${line('function resume()')}
     return {receive,resume,clock,countdown:()=>phaseCountdown.value,state:()=>match.value,tick:()=>{now.value=serverClock.now();}};
   `;

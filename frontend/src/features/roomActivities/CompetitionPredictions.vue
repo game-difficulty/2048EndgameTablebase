@@ -56,6 +56,7 @@ import { useActivities } from './context.js';
 import artwork from './assets/prediction-colored.webp';
 import PredictionHistory from './PredictionHistory.vue';
 import { marketTitle } from './matchPredictionLabels.js';
+import { competitionPollInterval } from './competitionPolling.js';
 const props = defineProps({ user:Object, connected:Boolean, online:Boolean, lang:String, state:Object, entryTarget:String });
 const emit = defineEmits(['login','balance','open']);
 const { room, url } = useActivities();
@@ -64,7 +65,7 @@ const data = ref({markets:[],available:false}), dialog = ref(null), entry = ref(
 const kinds = computed(()=>data.value.markets.map(m=>m.kind));
 const pooled = computed(()=>data.value.markets.some(m=>m.pricing==='pool'));
 const selection = reactive({winner:'',first_two:'',clinch_3:'',clinch_4:''}), amountsByKind = reactive({winner:500,first_two:500,clinch_3:500,clinch_4:500});
-let timer, refreshTimer, focusBefore, epoch=0, fetching=false, refreshAfter=false, balanceVersion='', nextRefreshAt=0;
+let timer, refreshTimer, focusBefore, epoch=0, fetching=false, refreshAfter=false, balanceVersion='', nextRefreshAt=0, lastRefreshAt=0;
 const serverOffset=ref(0);
 const t=(zh,en)=>props.lang==='zh'?zh:en;
 const tokens=value=>(Number(value||0)/1000).toLocaleString(undefined,{maximumFractionDigits:3});
@@ -93,11 +94,12 @@ function persist(){try{if(pending.value)sessionStorage.setItem(storageKey(),JSON
 function load(){pending.value=null;try{const value=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(value?.request_id)pending.value=value;}catch{}}
 async function api(body){const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),12000);try{const response=await fetch(url('/predictions'),{credentials:'same-origin',cache:'no-store',signal:controller.signal,...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});const result=await response.json().catch(()=>({}));if(!response.ok)throw Object.assign(Error('request_failed'),{detail:result.detail,status:response.status,retryAfter:Number(response.headers.get('Retry-After'))});return result;}finally{clearTimeout(timeout);}}
 async function refresh(){
+  if(document.hidden)return;
   if(fetching){refreshAfter=true;return;}
   const delay=nextRefreshAt-Date.now();
   if(delay>0){refreshTimer ??= setTimeout(()=>{refreshTimer=null;refresh();},delay);return;}
   clearTimeout(refreshTimer);refreshTimer=null;
-  fetching=true;nextRefreshAt=Date.now()+2000;const generation=epoch;
+  fetching=true;lastRefreshAt=Date.now();nextRefreshAt=lastRefreshAt+2000;const generation=epoch;
   try{
     const result=await api();if(generation!==epoch)return;
     data.value=result;serverOffset.value=Number(result.server_time)*1000-Date.now();
@@ -135,8 +137,15 @@ async function submit(kind){
 watch(()=>props.user?.id,()=>{epoch++;busy.value=false;fetching=false;refreshAfter=false;close();data.value={markets:[],available:false};for(const kind of Object.keys(selection))selection[kind]='';load();refresh();});
 // Board snapshots carry a fresh wrapper/server_time even when markets did not change.
 watch(()=>JSON.stringify([props.state?.protocol,props.state?.available,(props.state?.markets||[]).map(m=>[m.id,m.revision,m.status,m.winner])]),()=>{if(['competition-fpmm-v1','competition-pool-v1'].includes(props.state?.protocol))refresh();});
-onMounted(()=>{load();refresh();timer=setInterval(()=>{now.value=Date.now();if(props.connected&&!busy.value)refresh();},3000);});
-onUnmounted(()=>{epoch++;clearInterval(timer);clearTimeout(refreshTimer);});
+watch(()=>props.connected,value=>{if(value&&!document.hidden)refresh();});
+function foreground(){if(!document.hidden&&props.connected)refresh();}
+onMounted(()=>{load();refresh();document.addEventListener('visibilitychange',foreground);timer=setInterval(()=>{
+  now.value=Date.now();
+  const interval=competitionPollInterval({connected:props.connected,hidden:document.hidden,opened:opened.value,
+    busy:busy.value,pending:pending.value,markets:data.value.markets});
+  if(now.value-lastRefreshAt>=interval)refresh();
+},1000);});
+onUnmounted(()=>{epoch++;clearInterval(timer);clearTimeout(refreshTimer);document.removeEventListener('visibilitychange',foreground);});
 defineExpose({open,close});
 </script>
 <style scoped>

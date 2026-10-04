@@ -88,7 +88,9 @@ def make_runtime():
     room = RoomDefinition(id='competition-demo', title={'en': 'Test'}, content_kind='competition-match',
                           protocol='competition-match-v1', dynamic=True, metadata={'public_key':'demo','generation':1})
     with patch('backend.live.competition_content.competition_provider.projection', return_value=snapshot()['match']):
-        return routes.LiveHub(room)
+        runtime = routes.LiveHub(room)
+        runtime.content.accept_projection(snapshot()['match'])
+        return runtime
 
 
 def test_social_channel_has_no_board_backlog_and_legacy_protocol_is_unchanged():

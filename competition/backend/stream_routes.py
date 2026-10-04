@@ -11,18 +11,21 @@ from .errors import CompetitionError
 from .hub import SocketWriter
 from .schemas import ClientGameStateRequest
 from .stream_protocol import PROTOCOL
+from backend.projection_delta import ProjectionEncoder
+from backend.stream_snapshots import compact_public_view
 
 log = logging.getLogger(__name__)
 
 LIVE_RECHECK_SECONDS = 15
 
 
-async def relay_live_projections(socket, service, public_key, queue, *, interval=LIVE_RECHECK_SECONDS):
+async def relay_live_projections(socket, service, public_key, queue, *, interval=LIVE_RECHECK_SECONDS, deltas=False):
     """Notifications are hints; periodically verify the durable source watermark."""
     loop = asyncio.get_running_loop()
     cursors = {}
     game = None
     revision = None
+    encoder = ProjectionEncoder() if deltas else None
 
     async def publish():
         nonlocal cursors, game, revision
@@ -31,7 +34,12 @@ async def relay_live_projections(socket, service, public_key, queue, *, interval
         current = (projection.get('generation'), projection.get('current_game'))
         if game is not None and current != game:
             projection = await asyncio.wait_for(asyncio.to_thread(service.live_projection, public_key), 5)
-        await asyncio.wait_for(socket.send_json({'type': 'projection', 'projection': projection}), 5)
+        if game is None or current != game:
+            # Recovery establishes a new baseline; ordinary/final batches retain all new frames.
+            projection = {**projection, 'project_public_views': {
+                s: compact_public_view(v) for s, v in (projection.get('project_public_views') or {}).items()}}
+        message = encoder.encode(projection) if encoder else {'type': 'projection', 'projection': projection}
+        await asyncio.wait_for(socket.send_json(message), 5)
         game = (projection.get('generation'), projection.get('current_game'))
         revision = (projection['generation'], projection['content_sequence'])
         cursors = {s: v['sequence'] for s, v in projection.get('project_public_views', {}).items() if v}
@@ -155,7 +163,8 @@ def install_stream_routes(app, service, hub, settings):
         queue = hub.subscribe(code)
         await socket.accept()
         try:
-            await relay_live_projections(socket, service, public_key, queue)
+            await relay_live_projections(socket, service, public_key, queue,
+                                         deltas=socket.query_params.get('transport') == 'delta-v1')
         except (WebSocketDisconnect, asyncio.TimeoutError, RuntimeError):
             pass
         except CompetitionError:

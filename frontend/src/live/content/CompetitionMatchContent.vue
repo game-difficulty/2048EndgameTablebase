@@ -92,6 +92,7 @@ import './competitionTheme.css';
 import { useLiveTheme } from '../useLiveTheme.js';
 const darkTheme = useLiveTheme();
 const props=defineProps({lang:String,streamState:String});
+const emit=defineEmits(['resync']);
 const layoutRoot=ref(null);let stopAdaptiveLayout;
 onMounted(()=>{stopAdaptiveLayout=observeAdaptiveBoards(layoutRoot.value)});
 onUnmounted(()=>stopAdaptiveLayout?.());
@@ -159,14 +160,8 @@ function receive(data){
   for(const side of sides){const next=incoming.project_public_views[side];if(next)incoming.project_public_views[side]=receivedProjectView(sameGame?match.value?.project_public_views?.[side]:null,next)}
   match.value=incoming;
 }
-let resyncPending=false,lastResync=0;
-async function requestProjectResync(){
-  const key=match.value?.match_public_key;
-  if(!key||resyncPending||Date.now()-lastResync<1000)return;
-  resyncPending=true;lastResync=Date.now();
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3000);
-  try{const response=await fetch(`/api/live/rooms/competition-${encodeURIComponent(key)}/state`,{signal:controller.signal});if(response.ok){const data=await response.json();if(match.value?.match_public_key===key)receive({...data,type:'snapshot'})}}
-  catch{/* Playback has its own bounded snapshot fallback. */}finally{clearTimeout(timeout);resyncPending=false}
+function requestProjectResync(){
+  if(match.value?.match_public_key)emit('resync');
 }
 function resume(){now.value=serverClock.now()}
 function getPipFrame(){const currentMatch=match.value,lang=props.lang;return{key:`${currentMatch?.generation}:${currentMatch?.content_sequence}:${lang}`,width:960,height:540,draw(ctx){ctx.fillStyle='#111c30';ctx.fillRect(0,0,960,540);ctx.fillStyle='#f8fafc';ctx.textAlign='center';ctx.font='700 30px sans-serif';ctx.fillText(currentMatch?.name||(lang==='zh'?'2048 赛事':'2048 Competition'),480,105);ctx.font='800 86px sans-serif';ctx.fillText(`${currentMatch?.score?.yellow||0}  :  ${currentMatch?.score?.white||0}`,480,270);ctx.font='600 24px sans-serif';ctx.fillStyle='#aebbd0';ctx.fillText(competitionPhaseLabel(currentMatch?.phase,lang),480,345)}}}

@@ -98,6 +98,7 @@ def test_transit_keeps_recovery_history_but_broadcasts_only_new_frames():
             'yellow': {'sequence': sequence, 'frames': [{'sequence': i, 'payload': {}} for i in frames]}}}
     with patch('backend.live.competition_content.competition_provider.projection', return_value=state(7, [6, 7])):
         content = CompetitionMatchContent(room)
+        content.accept_projection(state(7, [6, 7]))
     with patch('backend.live.competition_content.competition_provider.projection', return_value=state(10, [8, 9, 10])) as request:
         assert asyncio.run(content.refresh())
         assert request.call_args.args[1] == {'yellow': 7}
@@ -115,6 +116,7 @@ def test_compact_bootstrap_preserves_geometry_final_state_and_watermark():
         'payload': payload, 'sequence': 128, 'frames': [{'sequence': n, 'payload': payload} for n in range(128)]}, 'white': None}}
     with patch('backend.live.competition_content.competition_provider.projection', return_value=original):
         content = CompetitionMatchContent(room)
+        content.accept_projection(original)
     compact = content.snapshot()['match']
     assert compact['project_public_views']['yellow']['payload'] == payload
     assert len(original['project_public_views']['yellow']['frames']) == 128
@@ -180,6 +182,7 @@ def test_competition_content_rejects_wrong_generation() -> None:
     wrong = {**projection(), 'generation': 2}
     with patch('backend.live.competition_content.competition_provider.projection', return_value=wrong):
         content = CompetitionMatchContent(room)
+        content.accept_projection(wrong)
     assert content.online is False
     assert content.snapshot() == {'match': None}
 
@@ -191,6 +194,7 @@ def test_competition_content_retains_last_frame_and_never_rewinds() -> None:
         return_value=projection(7),
     ):
         content = CompetitionMatchContent(room)
+        content.accept_projection(projection(7))
 
     with patch(
         'backend.live.competition_content.competition_provider.projection',
@@ -227,6 +231,7 @@ def test_same_revision_older_time_cannot_poison_cached_live_projection():
     initial = {**projection(), 'server_time': '2026-10-03T00:00:10+00:00'}
     with patch('backend.live.competition_content.competition_provider.projection', return_value=initial):
         content = CompetitionMatchContent(room)
+        content.accept_projection(initial)
     for timestamp in ('2026-10-03T00:00:05+00:00', None, 'invalid'):
         assert not content.accept_projection({**initial, 'server_time': timestamp, 'phase': 'LINEUP'})
         assert content.projection == initial
@@ -248,6 +253,7 @@ def test_identical_revision_and_timestamp_can_restore_missing_frames():
                 'project_public_views': {'yellow': {'sequence': 7, 'frames': [{'sequence': n} for n in frames]}}}
     with patch('backend.live.competition_content.competition_provider.projection', return_value=state([7])):
         content = CompetitionMatchContent(room)
+        content.accept_projection(state([7]))
     content.accept_projection(state([5, 6, 7]))
     assert [frame['sequence'] for frame in content.projection['project_public_views']['yellow']['frames']] == [5, 6, 7]
 
@@ -259,6 +265,7 @@ def test_relayed_source_clock_advances_across_cached_snapshots_and_late_samples(
     with patch('backend.live.competition_content.time.monotonic', return_value=0) as mono, \
          patch('backend.live.competition_content.competition_provider.projection', return_value=initial):
         content = CompetitionMatchContent(room)
+        content.accept_projection(initial)
         assert content.snapshot()['competition_server_time'] == 200
         mono.return_value = 12
         # No source changes: a new viewer still sees 48s rather than restarting at 60s.

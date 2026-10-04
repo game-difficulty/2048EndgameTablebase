@@ -1,10 +1,12 @@
 // One bounded recovery request. HTTP can restore the picture without claiming
 // that the WebSocket is healthy; the transport has its own synchronization state.
-export function createSnapshotRecovery({ url, install, fetcher = (...args) => fetch(...args) }) {
+export function createSnapshotRecovery({ url, install, fetcher = (...args) => fetch(...args), now = () => Date.now() }) {
   let pending, controller, stopped = false;
+  let lastSuccess = -Infinity;
   function refresh() {
     if (stopped) return Promise.resolve();
     if (pending) return pending;
+    if (now() - lastSuccess < 1000) return Promise.resolve();
     controller = new AbortController();
     const signal = controller.signal;
     pending = (async () => {
@@ -19,7 +21,10 @@ export function createSnapshotRecovery({ url, install, fetcher = (...args) => fe
           if (!response.ok) throw Error('snapshot_unavailable');
           return response.json();
         })(), timeout]);
-        if (!stopped && !signal.aborted) install({ ...data, type:'snapshot' });
+        if (!stopped && !signal.aborted) {
+          install({ ...data, type:'snapshot' });
+          lastSuccess = now();
+        }
       } catch { /* Retry on the next bounded watchdog/foreground request. */ }
       finally { clearTimeout(timer); pending = null; }
     })();

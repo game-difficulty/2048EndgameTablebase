@@ -5,14 +5,15 @@ import { readFileSync } from 'node:fs';
 
 test('the actual LivePage HTTP summary path also installs competition state',async()=>{
   const source=readFileSync(new URL('../src/live/LivePage.vue',import.meta.url),'utf8');
-  const body=source.slice(source.indexOf('async function refreshSummary()'),source.indexOf('function installSnapshot(data)'));
+  const name=source.includes('async function loadSummary()')?'loadSummary':'refreshSummary';
+  const body=source.slice(source.indexOf(`async function ${name}()`),source.indexOf('function installSnapshot(data)'));
   const seen=[];
   const refresh=new Function('api','installSnapshot',`
     let summaryRequest=0,stopped=false,chatHistoryLoaded=true;
     const room={content_kind:'competition-match'},likes={update(){}},allTime={},statsRange={value:'all'},
       chatList={value:{scrollHeight:1000,scrollTop:0,clientHeight:100}},messages={},musicUrl={value:'set'};
     const mergeLiveChat=()=>[],showNotice=()=>{},t=x=>x;
-    ${body}; return refreshSummary;
+    ${body}; return ${name};
   `)(async()=>({match:{phase:'GAME_B_PLAYING',content_sequence:20}}),data=>seen.push(data));
   await refresh();
   assert.equal(seen[0].type,'snapshot');assert.equal(seen[0].match.phase,'GAME_B_PLAYING');
@@ -48,4 +49,20 @@ test('unmount rejects a late recovery response',async()=>{
   const pending=recovery.refresh();recovery.stop();
   resolve({ok:true,json:async()=>({match:{content_sequence:99}})});
   await pending;assert.deepEqual(seen,[]);
+});
+
+test('playback and watchdog triggers share a short success cooldown',async()=>{
+  let clock=1000,calls=0;
+  const recovery=createSnapshotRecovery({url:'/snapshot',install:()=>{},now:()=>clock,
+    fetcher:async()=>{calls++;return {ok:true,json:async()=>({match:{content_sequence:calls}})};}});
+  await recovery.refresh();await recovery.refresh();clock+=999;await recovery.refresh();
+  assert.equal(calls,1);clock++;await recovery.refresh();assert.equal(calls,2);recovery.stop();
+});
+
+test('playback gaps use the parent recovery controller, not social history',()=>{
+  const content=readFileSync(new URL('../src/live/content/CompetitionMatchContent.vue',import.meta.url),'utf8');
+  const page=readFileSync(new URL('../src/live/LivePage.vue',import.meta.url),'utf8');
+  assert.match(content,/emit\('resync'\)/);
+  assert.doesNotMatch(content,/fetch\(/);
+  assert.match(page,/@resync="snapshotRecovery.refresh\(\)"/);
 });

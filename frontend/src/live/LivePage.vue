@@ -34,7 +34,7 @@
       <div class="room-stage-home">
       <div v-show="pipDetached" class="room-stage-placeholder"><p>{{ t('直播内容正在小窗中显示','The stream is playing in the mini player') }}</p><button @click="roomPip?.close()">{{ t('返回页面观看','Watch here') }}</button></div>
       <RoomStage ref="roomStage" :immersive="focusActive"><div class="content-stage">
-        <component :is="contentComponent" ref="content" :lang="lang" :stream-state="streamState" :pip-active="pipActive" @notice="showNotice" />
+        <component :is="contentComponent" ref="content" :lang="lang" :stream-state="streamState" :pip-active="pipActive" @notice="showNotice" @resync="snapshotRecovery.refresh()" />
       </div><template #overlays>
         <GiftEffects v-if="room.capabilities.gifts" ref="giftEffects" overlay v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
       </template></RoomStage></div>

@@ -6,6 +6,7 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
   let stopped = false, started = false, failures = 0, epoch = 0;
   let startedAt = 0, openedAt = null, lastReceived = 0, lastPing = 0, synchronized = false;
   let lastResync = -Infinity, installed = null;
+  let lastProof = 0;
   const competition = room.protocol === 'competition-match-v1' && channel !== 'social';
   const snapshotType = channel === 'social' ? 'social_snapshot' : 'snapshot';
   function resync() {
@@ -17,7 +18,10 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
     const next = data?.match;
     if (!next) return;
     if (!installed || next.match_public_key !== installed.match_public_key || next.generation > installed.generation ||
-      (next.generation === installed.generation && next.content_sequence >= installed.content_sequence)) installed = next;
+      (next.generation === installed.generation && next.content_sequence >= installed.content_sequence)) {
+      installed = next;
+      lastProof = now();
+    }
   }
 
   function cancelRetry() {
@@ -66,7 +70,10 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
     void schedule();
   }
   function check() {
-    if (!stopped && started && canConnect() && competition && now() - lastResync >= 15000) resync();
+    // A current snapshot/watermark proves the stream is caught up. Only missing
+    // proofs need HTTP fallback; give the socket bootstrap a three-second head start.
+    if (!stopped && started && canConnect() && competition && now() - lastResync >= 15000
+      && (synchronized ? now() - lastProof >= 30000 : now() - startedAt >= 3000)) resync();
     const current = socket;
     if (stopped || !current) return;
     if (expired()) { detach(); return; }
@@ -96,7 +103,6 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
     current.onopen = () => {
       if (socket !== current || stopped) return;
       openedAt = lastReceived = lastPing = now();
-      if (competition) resync();
       onOpen?.(); // Backoff resets only after a successfully installed snapshot.
     };
     current.onmessage = async event => {
@@ -111,6 +117,9 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
         if (competition && data.type === 'match_watermark' && (!installed ||
           data.match_public_key !== installed.match_public_key || data.generation > installed.generation ||
           (data.generation === installed.generation && data.content_sequence > installed.content_sequence))) resync();
+        if (competition && data.type === 'match_watermark' && installed &&
+          data.match_public_key === installed.match_public_key && data.generation === installed.generation &&
+          data.content_sequence === installed.content_sequence) lastProof = now();
         await onMessage(data);
         if (socket !== current || stopped) return;
         if (data.type === snapshotType && (!competition || data.match)) {

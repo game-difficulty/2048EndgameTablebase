@@ -13,6 +13,7 @@ from datetime import datetime
 from .dynamic_rooms import competition_provider
 from .human_content import HumanLiveStore
 from backend.stream_snapshots import compact_public_view
+from backend.projection_delta import ProjectionDecoder
 
 
 def _source_time(projection):
@@ -29,11 +30,9 @@ class CompetitionMatchContent:
         self.room = room
         self.store = HumanLiveStore()
         self.run = None
-        self.projection = competition_provider.projection(
-            room.metadata.get('public_key', '')
-        )
-        if not self._is_valid(self.projection):
-            self.projection = None
+        # The subscription supplies the only bootstrap. Never synchronously fetch
+        # a duplicate 128-frame HTTP projection while resolving a room.
+        self.projection = None
         self._clock_anchor = None
         self._clock_sample = None
         self._clock_at = time.monotonic()
@@ -78,16 +77,28 @@ class CompetitionMatchContent:
         if not origin or not token:
             return
         url = origin.replace('https://', 'wss://').replace('http://', 'ws://')
-        url += '/ws/internal/live/' + self.room.metadata['public_key']
+        url += '/ws/internal/live/' + self.room.metadata['public_key'] + '?transport=delta-v1'
         delay = .5
         while True:
             try:
                 async with connect(url, extra_headers={'X-Competition-Live-Token': token},
                                    max_size=2*1024*1024, open_timeout=5, ping_interval=15, ping_timeout=15) as socket:
                     delay = .5
+                    decoder = ProjectionDecoder()
+                    initial = True
                     while True:
                         message = json.loads(await asyncio.wait_for(socket.recv(), 35))
-                        if message.get('type') == 'projection' and self.accept_projection(message.get('projection')):
+                        fresh = decoder.decode(message)
+                        if fresh is None:
+                            continue
+                        if not self._is_valid(fresh):
+                            raise ValueError('invalid_projection')
+                        if initial:
+                            # Also bound legacy-server bootstraps during rolling upgrades.
+                            fresh = {**fresh, 'project_public_views': {s: compact_public_view(v)
+                                for s, v in (fresh.get('project_public_views') or {}).items()}}
+                            initial = False
+                        if self.accept_projection(fresh):
                             self.on_update()
             except asyncio.CancelledError:
                 raise
@@ -180,6 +191,8 @@ class CompetitionMatchContent:
         retained = deepcopy(fresh)
         same_game = previous.get('current_game') == fresh.get('current_game')
         for side, view in (retained.get('project_public_views') or {}).items():
+            if view is None:
+                continue
             old = ((previous.get('project_public_views') or {}).get(side) or {}) if same_game else {}
             floor = int(view.get('frame_start', 0))
             frames = {frame['sequence']: frame for frame in old.get('frames', [])

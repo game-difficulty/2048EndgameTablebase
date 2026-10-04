@@ -442,18 +442,19 @@ class LiveHub:
 
     async def maintenance(self):
         last_stats_refresh = 0
+        has_statistics = self.room.public()['capabilities']['statistics']
         while True:
             await asyncio.sleep(5)
-            if time.monotonic() - last_stats_refresh >= 60:
+            if has_statistics and time.monotonic() - last_stats_refresh >= 60:
                 await asyncio.to_thread(self.store.refresh_stats_snapshots, ('24h',))
                 last_stats_refresh = time.monotonic()
-            if week_bounds()[0] != self.summary_week:
+            if has_statistics and week_bounds()[0] != self.summary_week:
                 await asyncio.to_thread(self.store.refresh_stats_snapshots, ('24h', 'recent100', 'all'))
                 summary = await asyncio.to_thread(self.store.summary)
                 self.summary_week = summary['week']['start']
                 self.broadcast({**summary, 'type':'summary', 'likes':self.like_total})
             watch = self.audience.tick()
-            if self.snapshot()['online']:
+            if self.control_status()['online']:
                 await asyncio.to_thread(audience.online_tick, watch, room_id=self.room.id)
             if self.producer and time.monotonic()-self.last_seen >= (20 if self.producer_ready else 180):
                 expired = self.producer
@@ -578,15 +579,14 @@ async def _reconcile_dynamic_room(room_id, runtime, definition, now):
                 runtime.broadcast(snapshot)
         except Exception:
             logging.getLogger(__name__).exception('Dynamic content refresh delayed')
-    if now - getattr(runtime, 'last_dynamic_presence', -5) >= 5:
-        runtime.last_dynamic_presence = now
+    if now - getattr(runtime, 'last_dynamic_activity', -5) >= 5:
+        runtime.last_dynamic_activity = now
         if runtime.room.content_kind == 'competition-match':
             try:
                 await runtime.activities.refresh()
             except Exception:
                 logging.getLogger(__name__).exception('Competition activity refresh delayed')
-        runtime.broadcast(dict(type='presence', online=runtime.control_status()['online'],
-            paused=False, viewers=len(runtime.audience.identities())))
+        # LiveHub.maintenance is the sole presence publisher (also preserves paused).
 
 
 async def dynamic_maintenance():
