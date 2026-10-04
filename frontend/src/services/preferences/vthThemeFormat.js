@@ -10,14 +10,18 @@ export function normalizeVthTheme(raw) {
   for (const mode of modes) {
     const entries = raw[mode];
     if (!entries || typeof entries !== 'object' || Array.isArray(entries)) throw new Error('invalid_theme_file');
+    // Verse exports can include an empty palette for the unused display mode.
+    if (!Object.keys(entries).length) continue;
     result[mode] = {};
     for (const tile of [...VTH_TILE_VALUES.map(String), 'Super']) {
-      if (!(tile in entries)) continue;
-      const style = entries[tile];
+      const sourceTile = tile === 'Super' && !(tile in entries) ? 'super' : tile;
+      if (!(sourceTile in entries)) continue;
+      const style = entries[sourceTile];
       if (!style || typeof style !== 'object' || VTH_STYLE_KEYS.some(key => !COLOR.test(String(style[key] || '').trim()))) throw new Error('invalid_theme_color');
       result[mode][tile] = Object.fromEntries(VTH_STYLE_KEYS.map(key => [key, String(style[key]).trim()]));
     }
     if (VTH_TILE_VALUES.some(tile => !result[mode][tile])) throw new Error('theme_tiles_missing');
   }
+  if (!Object.keys(result).length) throw new Error('theme_tiles_missing');
   return result;
 }

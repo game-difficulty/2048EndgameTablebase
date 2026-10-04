@@ -78,6 +78,28 @@ class SavedThemeTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/profile/themes", headers=self.headers(), json={"name": "Same", "theme": good}).status_code, 201)
         self.assertEqual(self.client.post("/api/profile/themes", headers=self.headers(), json={"name": "same", "theme": good}).status_code, 409)
 
+    def test_verse_single_mode_import_and_round_trip(self):
+        for mode, other in (("dark", "light"), ("light", "dark")):
+            palette = theme_payload()[mode]
+            palette["super"] = dict(palette["65536"])
+            response = self.client.post("/api/profile/themes", headers=self.headers(),
+                                        json={"name": mode, "theme": {mode: palette, other: {}}})
+            self.assertEqual(response.status_code, 201, response.text)
+            saved = response.json()
+            self.assertEqual(set(saved["theme"]), {mode})
+            self.assertEqual(saved["theme"][mode]["Super"], palette["super"])
+            fetched = self.client.get(f"/api/profile/themes/{saved['id']}", headers=self.headers())
+            self.assertEqual(fetched.json()["theme"], saved["theme"])
+
+    def test_empty_partial_and_invalid_palettes_are_rejected(self):
+        for palette, code in (({"light": {}, "dark": {}}, "theme_tiles_missing"),
+                              ({**theme_payload(), "light": {"2": theme_payload()["light"]["2"]}}, "theme_tiles_missing"),
+                              (theme_payload("url(evil)"), "invalid_theme_color")):
+            response = self.client.post("/api/profile/themes", headers=self.headers(),
+                                        json={"name": "Invalid", "theme": palette})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["detail"], code)
+
 
 if __name__ == "__main__":
     unittest.main()

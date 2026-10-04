@@ -14,7 +14,7 @@ from .service import iso
 MAX_THEMES = 32
 MAX_PAYLOAD_BYTES = 64 * 1024
 TILE_KEYS = tuple(str(2 ** exponent) for exponent in range(1, 17))
-OPTIONAL_KEYS = frozenset({"Super"})
+OPTIONAL_KEYS = frozenset({"Super", "super"})
 STYLE_KEYS = (
     "--tile-color",
     "--tile-background",
@@ -70,14 +70,22 @@ def normalize_payload(value: object) -> dict:
     for mode, entries in value.items():
         if not isinstance(entries, dict) or set(entries) - set(TILE_KEYS) - OPTIONAL_KEYS:
             raise ThemeError("invalid_theme_file")
+        # An empty Verse palette means this mode inherits the supplied palette.
+        if not entries:
+            continue
         mode_result = {}
         for tile, style in entries.items():
             if not isinstance(style, dict) or set(style) != set(STYLE_KEYS):
                 raise ThemeError("invalid_theme_file")
-            mode_result[tile] = {key: _color(style[key]) for key in STYLE_KEYS}
+            canonical_tile = "Super" if tile == "super" else tile
+            if tile == "super" and "Super" in entries:
+                continue
+            mode_result[canonical_tile] = {key: _color(style[key]) for key in STYLE_KEYS}
         if not all(tile in mode_result for tile in TILE_KEYS):
             raise ThemeError("theme_tiles_missing")
         normalized[mode] = mode_result
+    if not normalized:
+        raise ThemeError("theme_tiles_missing")
     encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
     if len(encoded.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         raise ThemeError("theme_too_large", 413)
