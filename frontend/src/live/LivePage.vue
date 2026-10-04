@@ -234,6 +234,7 @@ import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
 import { createWatchConnection } from './watchConnection.js';
 import { createSnapshotRecovery } from './snapshotRecovery.js';
+import { createSharedRefresh } from './sharedRefresh.js';
 import { createMatchDeltaDecoder } from './matchDelta.js';
 import { projectionIsOlder } from '../../../competition/shared/projectStateOrder.mjs';
 import { isRoomEndedEvent } from './roomLifecycle.js';
@@ -355,10 +356,14 @@ const showNotice = (text) => {
 };
 let chatHistoryLoaded = false;
 let summaryRequest = 0;
-async function refreshSummary() {
+const sharedHumanSummary = createSharedRefresh(loadSummary);
+function refreshSummary() {
+  return room.content_kind === 'human-play' ? sharedHumanSummary() : loadSummary();
+}
+async function loadSummary() {
   const request = ++summaryRequest;
   try {
-    const data = await api(room.content_kind === 'competition-match' ? '/social-state' : `/state?stats_range=${encodeURIComponent(statsRange.value)}`);
+    const data = await api(['competition-match','human-play'].includes(room.content_kind) ? '/social-state' : `/state?stats_range=${encodeURIComponent(statsRange.value)}`);
     if (stopped || request !== summaryRequest) return;
     likes.update(data.likes);
     if (room.content_kind === 'competition-match' && data.match) installSnapshot({ ...data, type:'snapshot' });
@@ -601,7 +606,7 @@ onMounted(async () => {
   document.documentElement.dataset.theme = "dark";
   document.addEventListener("visibilitychange", visibility);
   if (room.content_kind === 'competition-match') connect();
-  const data = await refreshSummary();
+  const data = room.content_kind === 'human-play' ? undefined : await refreshSummary();
   if (stopped) return;
   if (data && !splitStreams) {
     installSnapshot(data);

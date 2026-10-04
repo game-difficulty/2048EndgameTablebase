@@ -17,7 +17,7 @@ function fixture(request) {
   const session={liveContext:()=>({run,browser:'browser',writer:'writer'}),
     getEvents:(start=0,end=events.length)=>events.slice(start,end),getEventCount:()=>events.length,liveCheckpoint:async()=>{}};
   const live=createLiveBroadcast(session,()=>0,request || (async path=>descriptor(path.split('/').at(-2))));
-  return {live,change(id,next=[]) {run={...run,id};events=next;},add(event) {events.push(event);}};
+  return {live,change(id,next=[]) {run={...run,id};events=next;},score(value){run={...run,score:value};},add(event) {events.push(event);}};
 }
 test('switch keeps socket and flushes new actions only after matching ready', async t=>{
   const original=globalThis.WebSocket;globalThis.WebSocket=Socket;t.after(()=>{globalThis.WebSocket=original;});
@@ -50,4 +50,36 @@ test('next lease waits for the outstanding switch acknowledgement', async t=>{
   await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(requested,['old','middle']);
   ws.ack('middle');await latest;assert.deepEqual(requested,['old','middle','new']);
   ws.ack('new');assert.equal(Socket.instances.length,1);assert.equal(ws.closed,false);
+});
+
+test('resume negotiation uploads only requested tail and flushes later moves after ready', async t=>{
+  const original=globalThis.WebSocket;globalThis.WebSocket=Socket;t.after(()=>{globalThis.WebSocket=original;});
+  const f=fixture(async path=>({...descriptor(path.split('/').at(-2)),resume_supported:true}));t.after(()=>f.live.dispose());
+  f.change('old',[[0,100],[1,200],[2,300]]);await f.live.start();const ws=Socket.instances[0];ws.open();
+  assert.equal(ws.messages.length,1);assert.equal(JSON.parse(ws.messages[0]).resume,true);
+  ws.onmessage({data:JSON.stringify({type:'prefix_request',run_id:'old',start:2,seq:3})});
+  f.add([3,400]);await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual([...ws.messages[1]],[72,76,80,49,0,2,44,1,0,0]);
+  ws.ack('old',3);assert.deepEqual([...ws.messages[2]],[3,144,1,0,0]);
+});
+
+test('missing server state requests full history; invalid resume boundary closes socket', async t=>{
+  const original=globalThis.WebSocket;globalThis.WebSocket=Socket;t.after(()=>{globalThis.WebSocket=original;});
+  const f=fixture(async path=>({...descriptor(path.split('/').at(-2)),resume_supported:true}));t.after(()=>f.live.dispose());
+  f.change('old',[[0,100],[1,200]]);await f.live.start();const ws=Socket.instances[0];ws.open();
+  ws.onmessage({data:JSON.stringify({type:'prefix_request',run_id:'old',start:0,seq:2})});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ws.messages[1].byteLength,15);
+  ws.onmessage({data:JSON.stringify({type:'prefix_request',run_id:'old',start:3,seq:2})});
+  // Completed uploads ignore duplicate requests; a new handshake rejects bad boundaries.
+  ws.ack('old',2);f.change('new',[[0,100]]);await f.live.runChanged();
+  ws.onmessage({data:JSON.stringify({type:'prefix_request',run_id:'new',start:2,seq:1})});await new Promise(resolve=>setImmediate(resolve));assert.equal(ws.closed,true);
+});
+
+test('current score best is derived while external best changes are sent once', async t=>{
+  const original=globalThis.WebSocket;globalThis.WebSocket=Socket;t.after(()=>{globalThis.WebSocket=original;});
+  const f=fixture();t.after(()=>f.live.dispose());await f.live.start();const ws=Socket.instances[0];ws.open();ws.ack('old');
+  f.score(1000);await new Promise(resolve=>setImmediate(resolve));const count=ws.messages.length;
+  f.live.updateBest(1000);assert.equal(ws.messages.length,count);
+  f.live.updateBest(2000);assert.equal(JSON.parse(ws.messages.at(-1)).best_score,2000);
+  f.live.updateBest(2000);f.live.updateBest(1500);assert.equal(ws.messages.length,count+1);
 });

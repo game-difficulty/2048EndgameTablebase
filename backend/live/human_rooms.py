@@ -216,6 +216,7 @@ def public_payload(room_data: dict) -> dict:
         "variant": room_data["variant"], "generation": int(room_data["generation"]),
         "status": room_data["status"], "started_at": float(room_data["started_at"]),
         "url": origin + path, "path": path,
+        "resume_supported": True,
         "publish_url": origin.replace("https://", "wss://").replace("http://", "ws://")
             + "/api/live/rooms/" + room_data["room_id"] + "/human-publish",
     }

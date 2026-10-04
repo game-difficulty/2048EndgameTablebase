@@ -17,7 +17,7 @@ const liveError = error => LIVE_ERRORS[error?.code || error?.message] || '直播
 export function createLiveBroadcast(session, getBest = () => 0, request = json) {
   const enabled=ref(false),state=ref('off'),room=ref(null),notice=ref('');
   let socket=null,retry=null,renewTimer=null,pingTimer=null,generation=0,sentSeq=0,ready=false,lease='',restoreJob=null,retryDelay=1500,appearance=null,publishingId=null,pendingId=null,switchSupported=false,transitionJob=Promise.resolve(),pendingAck=null,resolveAck=null;
-  const clearPending=()=>{resolveAck?.();resolveAck=null;pendingAck=null;pendingId=null;};
+  const clearPending=()=>{resolveAck?.();resolveAck=null;pendingAck=null;pendingId=null;pendingPrefix=null;};
   const setPending=id=>{pendingId=id;pendingAck=new Promise(resolve=>{resolveAck=resolve;});};
   const closeSocket=()=>{clearTimeout(retry);clearTimeout(renewTimer);clearInterval(pingTimer);clearPending();ready=false;if(socket){const current=socket;socket=null;current.close();}};
   const payload=()=>{const context=session.liveContext();if(!context?.run||context.run.guest||context.run.reason)throw Error('live_run_unavailable');return{context,body:{browser:context.browser,writer:context.writer,epoch:context.run.epoch}}};
@@ -25,20 +25,37 @@ export function createLiveBroadcast(session, getBest = () => 0, request = json) 
   const currentId=()=>session.liveContext()?.run?.id;
   const isCurrent=(own,id)=>enabled.value&&own===generation&&currentId()===id;
   const hello=(type,descriptor,context,events)=>({type,lease:descriptor.lease,seq:events.length,
+    ...(descriptor.resume_supported ? {resume:true} : {}),
     started_at:(context.run.firstMoveAt||Date.now())/1000,appearance,best_score:Number(getBest(context.run.variant)||0)});
+  let pendingPrefix=null, announcedBest=0;
+  async function sendPrefix(ws, descriptor, context, own, type) {
+    const events=session.getEvents(),id=context.run.id;
+    pendingPrefix={ws,events,id,own};
+    announcedBest=Number(getBest(context.run.variant)||0);
+    if(descriptor.resume_supported){ws.send(JSON.stringify(hello(type,descriptor,context,events)));return;}
+    const packet=await prefixPacket(events);
+    if(socket!==ws||!isCurrent(own,id))return;
+    ws.send(JSON.stringify(hello(type,descriptor,context,events)));ws.send(packet);
+  }
+  async function requestedPrefix(ws,data){
+    const pending=pendingPrefix;
+    if(!pending||pending.ws!==ws||data.run_id!==pending.id||!isCurrent(pending.own,pending.id))return;
+    if(!Number.isInteger(data.start)||data.start<0||data.start>pending.events.length||data.seq!==pending.events.length)throw Error('invalid_live_resume');
+    const packet=await prefixPacket(pending.events.slice(data.start));
+    if(socket===ws&&pendingPrefix===pending&&isCurrent(pending.own,pending.id)){pendingPrefix=null;ws.send(packet);}
+  }
   async function connect(descriptor,context,own){
     closeSocket();lease=descriptor.lease;room.value=descriptor;state.value='connecting';sentSeq=0;
-    const events=session.getEvents(),id=context.run.id;
-    const packet=await prefixPacket(events);if(!isCurrent(own,id))return;
+    const id=context.run.id;if(!isCurrent(own,id))return;
     const ws=new WebSocket(descriptor.publish_url);socket=ws;setPending(id);switchSupported=false;ws.binaryType='arraybuffer';
-    ws.onopen=()=>{if(socket!==ws||!isCurrent(own,id))return;ws.send(JSON.stringify(hello('hello',descriptor,context,events)));ws.send(packet)};
-    ws.onmessage=event=>{if(socket!==ws)return;try{const data=JSON.parse(event.data);if(data.type==='ready'){
+    ws.onopen=()=>{if(socket!==ws||!isCurrent(own,id))return;void sendPrefix(ws,descriptor,context,own,'hello').catch(()=>ws.close())};
+    ws.onmessage=event=>{if(socket!==ws)return;try{const data=JSON.parse(event.data);if(data.type==='prefix_request'){void requestedPrefix(ws,data).catch(()=>ws.close());return;}if(data.type==='ready'){
       if(data.run_id!==pendingId)return;
       clearPending();
       if(data.run_id!==currentId())return;
       publishingId=data.run_id;switchSupported=data.switch_supported===true;
       ready=true;retryDelay=1500;sentSeq=data.seq;state.value='live';notice.value='';scheduleRenew();
-      clearInterval(pingTimer);pingTimer=setInterval(()=>{if(socket===ws&&ws.readyState===1)ws.send(JSON.stringify({type:'ping'}))},10000);publishTail();
+      clearInterval(pingTimer);pingTimer=setInterval(()=>{if(socket===ws&&ws.readyState===1)ws.send(JSON.stringify({type:'ping'}))},10000);publishTail();updateBest(getBest(session.liveContext()?.run?.variant));
     }}catch{ws.close();}};
     ws.onclose=()=>{if(socket!==ws)return;socket=null;clearPending();ready=false;if(enabled.value)scheduleReconnect()};
   }
@@ -72,10 +89,10 @@ export function createLiveBroadcast(session, getBest = () => 0, request = json) 
       const descriptor=await request(`/api/human/runs/${id}/live`,{method:'POST',body});
       if(!isCurrent(own,id))return;
       if(socket?.readyState===1&&switchSupported){
-        const ws=socket,events=session.getEvents(),packet=await prefixPacket(events);
+        const ws=socket;
         if(!isCurrent(own,id)||socket!==ws)return;
         room.value=descriptor;lease=descriptor.lease;setPending(id);sentSeq=0;state.value='connecting';
-        ws.send(JSON.stringify(hello('switch',descriptor,context,events)));ws.send(packet);
+        await sendPrefix(ws,descriptor,context,own,'switch');
       }else await connect(descriptor,context,own);
     }finally{release();}
   }
@@ -97,7 +114,11 @@ export function createLiveBroadcast(session, getBest = () => 0, request = json) 
   async function runChanged(){if(!enabled.value)return;const id=currentId();try{await reconnect()}catch(error){if(!enabled.value||id!==currentId())return;notice.value=liveError(error);scheduleReconnect()}}
   function finish(){if(ready&&currentId()===publishingId&&socket?.readyState===1)socket.send(JSON.stringify({type:'end'}))}
   function updateAppearance(value){appearance=value;if(ready&&socket?.readyState===1)socket.send(JSON.stringify({type:'appearance',appearance}))}
-  function updateBest(value){if(ready&&socket?.readyState===1)socket.send(JSON.stringify({type:'best',best_score:Number(value||0)}))}
+  function updateBest(value){
+    const best=Number(value||0),score=Number(session.liveContext()?.run?.score||0);
+    if(!ready||socket?.readyState!==1||currentId()!==publishingId||best<=Math.max(announcedBest,score))return;
+    socket.send(JSON.stringify({type:'best',best_score:best}));announcedBest=best;
+  }
   async function share(lang='zh'){if(!room.value)return;const text=liveShareText(session.liveContext(),room.value,lang);const copied=await copyLiveShareText(text);notice.value=copied?(lang==='zh'?'直播分享文案已复制':'Stream message copied'):(lang==='zh'?'复制失败，请手动复制直播间地址。':'Copy failed. Please copy the room URL manually.')}
   function dispose(){enabled.value=false;generation++;closeSocket()}
   return{enabled,state,room,notice,start,stop,restore,publishTail,runChanged,finish,share,updateAppearance,updateBest,dispose};
