@@ -37,20 +37,35 @@ def accounts(user_ids):
 
 
 def accounts_by_username(usernames):
-    """Resolve current usernames only, using the main site's normalization rules."""
+    """Prefer exact current-name casing; never guess between legacy conflicts.
+
+    Return results keyed by normalized, case-preserving input names. The auth
+    database's case-folded uniqueness key can hide older case-distinct accounts
+    behind ``legacy-conflict:<id>:<key>`` keys.
+    """
     from backend.auth.db import get_auth_db_path
-    from backend.profile.validation import canonical_display_name_key
-    keys = sorted({canonical_display_name_key(name) for name in usernames})
+    from backend.profile.validation import canonical_display_name_key, normalize_display_name
+    requested = {normalize_display_name(name): canonical_display_name_key(name) for name in usernames}
+    keys = sorted(set(requested.values()))
     if not keys:
         return {}
     try:
         with closing(readonly(get_auth_db_path())) as db:
-            rows = db.execute(f"SELECT id,display_name FROM users WHERE display_name_key IN ({','.join('?' for _ in keys)}) AND status='active'", keys)
-            matches = {}
+            rows = db.execute(f"""SELECT id,display_name FROM users
+                WHERE (display_name_key IN ({','.join('?' for _ in keys)})
+                       OR display_name_key LIKE 'legacy-conflict:%') AND status='active'""", keys)
+            candidates = {}
             for row in rows:
                 key = canonical_display_name_key(row['display_name'])
                 if key in keys:
-                    matches.setdefault(key, []).append(row['id'])
+                    candidates.setdefault(key, []).append((row['id'], normalize_display_name(row['display_name'])))
+            matches = {}
+            for name, key in requested.items():
+                group = candidates.get(key, [])
+                exact = [uid for uid, current in group if current == name]
+                found = exact or [uid for uid, _ in group]
+                if found:
+                    matches[name] = found
             return matches
     except sqlite3.Error as exc:
         raise CompetitionError('EVENT_SOURCE_UNAVAILABLE', '账号数据源暂不可用，未导入任何名单。', 503) from exc

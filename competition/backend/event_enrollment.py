@@ -229,7 +229,7 @@ class EventEnrollment:
         with self.database.transaction() as db:
             self._manager(db, slug, principal)
             self._editable(self.config(db, slug), revision)
-        from backend.profile.validation import canonical_display_name_key
+        from backend.profile.validation import normalize_display_name
         entries = [dict(entry) for entry in entries]
         usernames = [entry['username'] for entry in entries if entry.get('username') is not None]
         matches = self.username_reader(usernames) if usernames else {}
@@ -239,7 +239,7 @@ class EventEnrollment:
             if username is not None:
                 if entry.get('user_id') is not None or not isinstance(username, str) or not username.strip():
                     fail(f'第 {index} 行必须只填写用户名或用户 ID。')
-                found = matches.get(canonical_display_name_key(username), [])
+                found = matches.get(normalize_display_name(username), [])
                 if len(found) != 1:
                     problems.append(f'第 {index} 行「{username}」：' + ('找不到有效的当前用户名' if not found else '匹配到多个账号'))
                 else:
