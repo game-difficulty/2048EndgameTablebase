@@ -89,6 +89,7 @@ import { json } from './client.js';
 import { openAsyncLink } from '../services/openAsyncLink.js';
 import { language } from './i18n.js';
 import { loadLastAnalysisSelection, saveLastAnalysisSelection } from './analysisSelectionHistory.js';
+import { recoverAnalysisJob } from './analysisJobRecovery.js';
 import HumanAnalysisPosterDialog from './HumanAnalysisPosterDialog.vue';
 import NativeGoalPicker from '../components/NativeGoalPicker.vue';
 import AnalysisStagePicker from './AnalysisStagePicker.vue';
@@ -144,8 +145,14 @@ async function refreshJob(id, currentGeneration) {
   if (jobRequestInFlight) return;
   jobRequestInFlight = true;
   try {
-    const data = await json(`/api/analysis/jobs/${encodeURIComponent(id)}`);
+    const data = await recoverAnalysisJob(jobId => json(`/api/analysis/jobs/${encodeURIComponent(jobId)}`), id);
     if (currentGeneration !== generation) return;
+    if (!data) {
+      clearInterval(timer);
+      sessionStorage.removeItem(`human-analysis:${props.runId}`);
+      job.value = null;
+      return;
+    }
     job.value = data;
     if (['finished', 'failed'].includes(data.status)) {
       clearInterval(timer);
@@ -155,8 +162,7 @@ async function refreshJob(id, currentGeneration) {
       }
     }
   } catch (e) { if (currentGeneration === generation) {
-    error.value = failure(e); clearInterval(timer);
-    if (e.status === 404) { sessionStorage.removeItem(`human-analysis:${props.runId}`); job.value = null; }
+    error.value = serverErrorText(e, language.value, label('分析任务暂时无法读取。', 'Could not load the analysis task.')); clearInterval(timer);
   } } finally { jobRequestInFlight = false; }
 }
 async function loadSummaries(currentGeneration = generation) {

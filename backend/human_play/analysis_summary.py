@@ -15,8 +15,8 @@ from .store import database
 from .verse_replay import PREFIX, UNKNOWN_TIMING_MS, _rpl1
 
 
-METRIC_VERSION = 1
-ANALYZER_VERSION = 1
+METRIC_VERSION = 2
+ANALYZER_VERSION = 2
 POSTER_GOALS = frozenset((16384, 32768, 65536))
 MAX_COUNTED_MOVE_MS = 20 * 60 * 1000
 
@@ -39,8 +39,8 @@ def prepare_poster_summary(summary: dict, *, pattern: str, target: str,
         fit = item.get("goodness_of_fit")
         counts = item.get("performance_counts") or {}
         count = sum(counts.values())
-        # Tile-goal analyses skip certain moves and the first four evaluated moves.
-        # Only categorized moves contributed to the stored product.
+        # Legacy tile-goal analyses omitted opening moves. Both legacy and
+        # current products cover categorized moves only, so use their counts.
         item["included"] = (count > 0 and fit is not None and math.isfinite(fit)
                             and 0 <= fit <= 1)
         item["exclusion_reason"] = None if item["included"] else "no_valid_evaluations"

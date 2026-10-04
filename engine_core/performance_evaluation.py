@@ -145,9 +145,13 @@ def is_perfect_result(selected_rate: float, best_rate: float, dtype=None) -> boo
         best = float(best_rate)
     except (TypeError, ValueError):
         return False
-    if not math.isfinite(selected) or not math.isfinite(best):
+    if not math.isfinite(selected) or not math.isfinite(best) or selected < 0 or best < 0:
         return False
-    return best - selected <= perfect_tolerance(dtype)
+    if best == 0:
+        return selected == 0
+    # Compare relative loss without dividing: an absolute epsilon gives easier
+    # goals and very small success probabilities different Perfect thresholds.
+    return best - selected <= perfect_tolerance(dtype) * best
 
 
 def markdown_label(label: str) -> str:

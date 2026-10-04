@@ -748,7 +748,7 @@ class Analyzer:
 
         self.record_replay(board, move, new_tile, spawn_position)
         self.step_count += 1
-        if self.goal.kind != "sum" and self.step_count < 5:
+        if self._skip_opening_moves() and self.step_count < 5:
             return True
 
         move_result = self.result[move.lower()]
@@ -900,6 +900,11 @@ class Analyzer:
     def evaluation_of_performance(loss) -> str:
         return shared_evaluation_of_performance(loss, markdown=True)
 
+    def _skip_opening_moves(self) -> bool:
+        # Only 3x3/2x4 formations grade and record the game from move one.
+        # Other formations retain their opening omission for either goal kind.
+        return not self.pattern.startswith(("3x3", "2x4"))
+
     def record_replay(
         self,
         board,
@@ -909,7 +914,7 @@ class Analyzer:
         *,
         forced: bool = False,
     ) -> None:
-        if self.goal.kind != "sum" and self.step_count < 5:
+        if self._skip_opening_moves() and self.step_count < 5:
             return
 
         rec_step_count = self.rec_step_count

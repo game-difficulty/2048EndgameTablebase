@@ -28,9 +28,22 @@ test('dtype aliases and unknown fallback', () => {
   assert.equal(perfectTolerance('?'), 3e-10);
 });
 
+test('Perfect is relative to the goal probability, including tiny success rates', () => {
+  for (const dtype of ['uint32', 'float64']) {
+    const epsilon = perfectTolerance(dtype);
+    for (const best of [.5, .01, .00003, 1e-20]) {
+      assert.equal(isPerfectResult(best * (1 - epsilon / 4), best, dtype), true);
+      assert.equal(isPerfectResult(best * (1 - epsilon * 4), best, dtype), false);
+    }
+  }
+  assert.equal(isPerfectResult(0, 0, 'float64'), true);
+  assert.equal(isPerfectResult(0, 1e-20, 'float64'), false);
+  assert.equal(isPerfectResult(-1, 0, 'float64'), false);
+});
+
 test('legacy uint32 replay compares normalized probabilities consistently', () => {
   const replay = { moveCount: 1, changes: Uint8Array.of(1 << 5),
-    rates: Uint32Array.of(2_000_000_000, 1_999_999_999, 0, 0) };
+    rates: Uint32Array.of(4_000_000_000, 3_999_999_999, 0, 0) };
   const result = analyzeReplay(replay);
   assert.equal(result.summary.final_gof, 1);
   assert.equal(result.summary.max_combo, 1);
