@@ -105,6 +105,13 @@ class ReplayDecoder:
         with open(self.filepath, "rb") as file:
             raw_data = file.read()
 
+        # Verse's original VRS alphabet is single-byte, not a locale encoding.
+        if re.match(rb"^\d+x\d+-[^_]*_", raw_data):
+            try:
+                return raw_data.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw_data.decode("latin-1")
+
         dt = np.dtype([("f0", "uint64"), ("f1", "uint32"), ("f2", "uint8")])
         item_size = dt.itemsize
 
@@ -147,6 +154,7 @@ class ReplayDecoder:
                 self._decode_2048next_format(replay_text)
                 return
 
+            replay_text = replay_text.lstrip("\ufeff").strip()
             new_format_match = re.match(r"^(\d+x\d+)-([^_]*)_(.*)$", replay_text)
             if new_format_match:
                 self._decode_new_format(
