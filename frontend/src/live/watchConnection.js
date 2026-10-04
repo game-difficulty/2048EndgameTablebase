@@ -1,11 +1,13 @@
 // A socket being OPEN is not proof that snapshots or replies are still arriving.
 export function createWatchConnection({ room, url, canConnect, expired, onOpen, onDisconnect,
-  onMessage, onSnapshot, onEnded, onActivity, onResync, now = () => Date.now(), random = Math.random }) {
+  onMessage, onSnapshot, onEnded, onActivity, onResync, channel = 'all', decoder,
+  now = () => Date.now(), random = Math.random }) {
   let socket, watchdog, retry, probe, probeTimer;
   let stopped = false, started = false, failures = 0, epoch = 0;
   let startedAt = 0, openedAt = null, lastReceived = 0, lastPing = 0, synchronized = false;
   let lastResync = -Infinity, installed = null;
-  const competition = room.protocol === 'competition-match-v1';
+  const competition = room.protocol === 'competition-match-v1' && channel !== 'social';
+  const snapshotType = channel === 'social' ? 'social_snapshot' : 'snapshot';
   function resync() {
     if (!onResync || now() - lastResync < 3000) return;
     lastResync = now();
@@ -29,6 +31,7 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
     const old = socket;
     socket = null; // Detach before close: CLOSING may never produce a close event.
     synchronized = false;
+    decoder?.reset();
     clearInterval(watchdog);
     cancelRetry();
     onDisconnect?.();
@@ -100,16 +103,17 @@ export function createWatchConnection({ room, url, canConnect, expired, onOpen, 
       if (socket !== current || stopped) return;
       if (expired()) { detach(); return; }
       try {
-        const data = event.data instanceof ArrayBuffer ? event.data : JSON.parse(event.data);
+        const raw = event.data instanceof ArrayBuffer ? event.data : JSON.parse(event.data);
+        const data = decoder ? decoder.decode(raw) : raw;
         if (!(data instanceof ArrayBuffer) && (!data || typeof data.type !== 'string')) throw Error('invalid_message');
-        if (data.type === 'snapshot' && (data.room_id !== room.id || data.protocol !== room.protocol)) throw Error('wrong_snapshot');
+        if (data.type === snapshotType && (data.room_id !== room.id || data.protocol !== room.protocol)) throw Error('wrong_snapshot');
         lastReceived = now();
         if (competition && data.type === 'match_watermark' && (!installed ||
           data.match_public_key !== installed.match_public_key || data.generation > installed.generation ||
           (data.generation === installed.generation && data.content_sequence > installed.content_sequence))) resync();
         await onMessage(data);
         if (socket !== current || stopped) return;
-        if (data.type === 'snapshot' && (!competition || data.match)) {
+        if (data.type === snapshotType && (!competition || data.match)) {
           observeSnapshot(data); synchronized = true; failures = 0; onSnapshot?.();
         }
         onActivity?.();

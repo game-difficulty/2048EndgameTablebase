@@ -82,6 +82,7 @@ def test_lobby_does_not_advertise_expired_runtime_with_connected_viewers():
     offline = SimpleNamespace(room=SimpleNamespace(dynamic=False), snapshot=lambda: {'online': False})
     with patch.object(routes, 'hub', offline), patch.object(routes, 'room_hubs', {}), \
          patch.object(routes, 'dynamic_hubs', {room.id: retained}), \
+         patch.object(routes.competition_provider, 'directory_available', True), \
          patch.object(routes.dynamic_room_registry, 'list_active_rooms', return_value=[]):
         assert asyncio.run(routes.lobby(Response()))['rooms'] == []
         with patch.object(routes.dynamic_room_registry, 'resolve_room', return_value=None):

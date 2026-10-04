@@ -38,9 +38,9 @@
       </div><template #overlays>
         <GiftEffects v-if="room.capabilities.gifts" ref="giftEffects" overlay v-model:mode="effectsMode" :lang="lang" :catalog="giftCatalog" />
       </template></RoomStage></div>
-      <RoomActivities v-if="hasRoomActivities" v-show="!focusActive" ref="redEnvelopes" :room="room" :transport="{api,url}" dock-target="#room-activity-dock" prediction-target="#room-prediction-entry" :lucky-state="luckyState" :red-state="redState" :prediction-state="predictionState" :user="user" :connected="connected" :online="online && synchronized && connected" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
+      <RoomActivities v-if="hasRoomActivities" v-show="!focusActive" ref="redEnvelopes" :room="room" :transport="{api,url}" dock-target="#room-activity-dock" prediction-target="#room-prediction-entry" :lucky-state="luckyState" :red-state="redState" :prediction-state="predictionState" :user="user" :connected="interactionConnected" :online="interactionOnline" :lang="lang" @login="loginOpen = true" @balance="giftPanel?.refreshBalance()">
         <template #default="{ bag, open, caption }">
-          <GiftPanel v-if="room.capabilities.gifts" :red-envelopes="room.capabilities.red_envelopes" ref="giftPanel" :user="user" :online="online && connected && synchronized" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
+          <GiftPanel v-if="room.capabilities.gifts" :red-envelopes="room.capabilities.red_envelopes" ref="giftPanel" :user="user" :online="interactionOnline" :lang="lang" @login="loginOpen = true" @catalog="giftCatalog = $event" @red-envelope="redEnvelopes?.compose()">
             <template #leading>
               <div v-if="room.capabilities.predictions" id="room-prediction-entry" class="room-prediction-entry"></div>
               <button v-if="bag" class="lucky-strip-entry" @click="open(bag)" :title="t('福袋','Lucky bags')"><LuckyBagIcon /><b>{{ t('福袋','Lucky bags') }}</b><small>{{ caption }}</small></button>
@@ -234,6 +234,7 @@ import { useLiveLayoutScale } from './liveLayout.js';
 import { liveConnectionState } from './connectionState.js';
 import { createWatchConnection } from './watchConnection.js';
 import { createSnapshotRecovery } from './snapshotRecovery.js';
+import { createMatchDeltaDecoder } from './matchDelta.js';
 import { projectionIsOlder } from '../../../competition/shared/projectStateOrder.mjs';
 import { isRoomEndedEvent } from './roomLifecycle.js';
 import { canConnectLive, backgroundExpired } from './pipPolicy.js';
@@ -252,6 +253,7 @@ const props = defineProps({ room: { type: Object, required: true } });
 const emit = defineEmits(['room-ended']);
 useLiveLayoutScale();
 const room = props.room;
+const splitStreams = room.content_kind === 'competition-match';
 const hasRoomActivities = computed(() => Boolean(
   room.capabilities.gifts || room.capabilities.red_envelopes
   || room.capabilities.lucky_bags || room.capabilities.predictions
@@ -280,6 +282,9 @@ const online = ref(false),
   viewers = ref(0),
   allTime = ref({});
 const synchronized = ref(false), seenSnapshot = ref(false), paused = ref(false);
+const socialReady = ref(false), socialOnline = ref(false);
+const interactionConnected = computed(() => splitStreams ? socialReady.value : connected.value);
+const interactionOnline = computed(() => splitStreams ? socialReady.value && socialOnline.value : online.value && connected.value && synchronized.value);
 const statsRange = ref('all');
 const statsRangeOptions = computed(() => [
   { value: '24h', label: t('24小时内', 'Last 24 hours') },
@@ -311,12 +316,15 @@ let backgroundTimer,
   stopped = false;
 let roomEnded = false, installedMatch = null;
 const snapshotRecovery = createSnapshotRecovery({ url:url('/snapshot'), install:installSnapshot });
+const watchUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${room.api_base}/watch`;
 const watchConnection = createWatchConnection({
   room,
-  url: `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${room.api_base}/watch`,
+  url: watchUrl + (splitStreams ? '?channel=board' : ''),
+  channel: splitStreams ? 'board' : 'all',
+  decoder: splitStreams ? createMatchDeltaDecoder(room) : undefined,
   canConnect: () => !stopped && canConnectLive(document.hidden, pipActive.value),
   expired: () => backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now()),
-  onOpen: () => { connected.value = true; void refreshSummary(); },
+  onOpen: () => { connected.value = true; if (!splitStreams) void refreshSummary(); },
   onDisconnect: () => { connected.value = false; synchronized.value = false; },
   onMessage: receive,
   onResync: () => snapshotRecovery.refresh(),
@@ -324,6 +332,20 @@ const watchConnection = createWatchConnection({
   onEnded: endRoom,
   onActivity: () => roomPip.value?.refresh(),
 });
+const socialConnection = splitStreams ? createWatchConnection({
+  room, url: watchUrl + '?channel=social', channel: 'social',
+  canConnect: () => !stopped && canConnectLive(document.hidden, pipActive.value),
+  expired: () => backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now()),
+  onOpen: () => { void refreshSummary(); },
+  onDisconnect: () => { socialReady.value = false; },
+  onMessage: receive,
+  onSnapshot: () => { socialReady.value = true; },
+  onEnded: endRoom,
+}) : null;
+function connections(method) {
+  watchConnection[method]();
+  socialConnection?.[method]();
+}
 const format = (n) =>
   Number(n || 0).toLocaleString(lang.value === "zh" ? "zh-CN" : "en-US");
 const showNotice = (text) => {
@@ -336,10 +358,11 @@ let summaryRequest = 0;
 async function refreshSummary() {
   const request = ++summaryRequest;
   try {
-    const data = await api(`/state?stats_range=${encodeURIComponent(statsRange.value)}`);
+    const data = await api(room.content_kind === 'competition-match' ? '/social-state' : `/state?stats_range=${encodeURIComponent(statsRange.value)}`);
     if (stopped || request !== summaryRequest) return;
     likes.update(data.likes);
-    if (room.content_kind === 'competition-match') installSnapshot({ ...data, type:'snapshot' });
+    if (room.content_kind === 'competition-match' && data.match) installSnapshot({ ...data, type:'snapshot' });
+    else if (room.content_kind === 'competition-match') await receive(data);
     else content.value?.receive({ ...data, type: 'summary' });
     allTime.value = data.all_time || {};
     statsRange.value = data.stats_range || statsRange.value;
@@ -369,13 +392,19 @@ function installSnapshot(data) {
     seenSnapshot.value = true;
   }
   watchConnection.observeSnapshot(data);
-  if (data.predictions) predictionState.value = { ...data.predictions, server_time:data.server_time };
-  if (data.red_envelopes) redState.value = { ...data.red_envelopes, server_time: data.server_time };
-  if (data.lucky_bags) luckyState.value = { bags: data.lucky_bags, server_time: data.server_time };
+  if (!splitStreams) installSocialState(data);
   online.value = data.online;
   paused.value = Boolean(data.paused);
   viewers.value = data.viewers;
   content.value?.receive(data);
+}
+function installSocialState(data) {
+  if (data.predictions) predictionState.value = { ...data.predictions, server_time:data.server_time };
+  if (data.red_envelopes) redState.value = { ...data.red_envelopes, server_time:data.server_time };
+  if (data.lucky_bags) luckyState.value = { bags:data.lucky_bags, server_time:data.server_time };
+  if (data.likes != null) likes.update(data.likes);
+  socialOnline.value = Boolean(data.online);
+  viewers.value = data.viewers;
 }
 async function receive(data) {
   if (data instanceof ArrayBuffer) {
@@ -388,6 +417,7 @@ async function receive(data) {
   else if (data.type === "snapshot") {
     installSnapshot(data);
   }
+  else if (data.type === 'social_snapshot') installSocialState(data);
   else if (data.type === 'lucky_bags') luckyState.value = data;
   else if (data.type === 'red_envelopes') redState.value = data;
   else if (data.type === 'predictions') predictionState.value = data;
@@ -402,6 +432,7 @@ async function receive(data) {
     else await appendChat(entranceChat(data));
   }
   else if (data.type === "presence") {
+    socialOnline.value = Boolean(data.online);
     online.value = data.online;
     paused.value = Boolean(data.paused);
     viewers.value = data.viewers;
@@ -422,7 +453,7 @@ function endRoom() {
   if (roomEnded) return;
   roomEnded = true;
   stopped = true;
-  watchConnection.stop();
+  connections('stop');
   snapshotRecovery.stop();
   emit('room-ended');
 }
@@ -436,7 +467,7 @@ async function appendChat(data) {
     }
 }
 function connect() {
-  watchConnection.connect();
+  connections('connect');
 }
 async function ensureActor() {
   if (!user.value) {
@@ -504,7 +535,7 @@ async function login() {
     password.value = "";
     loginOpen.value = false;
     loginError.value = "";
-    watchConnection.reconnect();
+    connections('reconnect');
   } catch (error) {
     loginError.value = serverErrorText(error, lang.value);
   }
@@ -515,7 +546,7 @@ async function logout() {
     user.value = null;
     actorPromise = null;
     await ensureActor().catch(() => {});
-    watchConnection.reconnect();
+    connections('reconnect');
   } catch {
     showNotice(t("退出失败，请重试。", "Could not sign out."));
   }
@@ -529,7 +560,7 @@ async function refreshIdentity() {
     const previousUserId = user.value?.id;
     user.value = (await api('/api/auth/me')).user;
     actorPromise = null;
-    if (previousUserId !== user.value?.id) watchConnection.reconnect();
+    if (previousUserId !== user.value?.id) connections('reconnect');
   } catch {}
 }
 function setPipActive(value) {
@@ -540,13 +571,13 @@ function setPipActive(value) {
   else if (document.hidden) visibility();
 }
 async function visibility() {
-  watchConnection.cancelRetry();
+  connections('cancelRetry');
   clearTimeout(backgroundTimer);
   if (document.hidden) {
     if (pipActive.value) { backgroundDeadline = 0; connect(); return; }
     backgroundDeadline = Date.now() + 180000;
     backgroundTimer = setTimeout(() => {
-      if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) watchConnection.disconnect();
+      if (backgroundExpired(document.hidden, pipActive.value, backgroundDeadline, Date.now())) connections('disconnect');
     }, 180000);
   }
   else {
@@ -554,14 +585,14 @@ async function visibility() {
     backgroundDeadline = 0;
     content.value?.resume();
     const previousUserId = user.value?.id;
-    if (expired) watchConnection.disconnect();
-    else watchConnection.check();
+    if (expired) connections('disconnect');
+    else connections('check');
     connect();
     await refreshIdentity();
     if (stopped || document.hidden) return;
     await ensureActor().catch(() => {});
     if (stopped || document.hidden) return;
-    if (previousUserId !== user.value?.id) watchConnection.reconnect();
+    if (previousUserId !== user.value?.id) connections('reconnect');
     connect();
     refreshSummary();
   }
@@ -572,7 +603,7 @@ onMounted(async () => {
   if (room.content_kind === 'competition-match') connect();
   const data = await refreshSummary();
   if (stopped) return;
-  if (data) {
+  if (data && !splitStreams) {
     installSnapshot(data);
   }
   await refreshIdentity();
@@ -584,7 +615,7 @@ onUnmounted(() => {
   clearTimeout(backgroundTimer);
   clearTimeout(noticeTimer);
   clearTimeout(likeFlushTimer);
-  watchConnection.stop();
+  connections('stop');
   snapshotRecovery.stop();
   document.removeEventListener("visibilitychange", visibility);
   document.body.classList.remove('live-focus-document');

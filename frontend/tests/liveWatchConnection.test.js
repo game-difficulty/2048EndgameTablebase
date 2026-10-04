@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createWatchConnection } from '../src/live/watchConnection.js';
 import { canConnectLive, backgroundExpired } from '../src/live/pipPolicy.js';
+import { createMatchDeltaDecoder } from '../src/live/matchDelta.js';
 
 const room = { id: 'competition-demo', protocol: 'competition-match-v1', api_base: '/api/live/rooms/demo' };
 const snapshot = { type: 'snapshot', room_id: room.id, protocol: room.protocol,
@@ -155,4 +156,30 @@ test('empty competition snapshots do not claim to have synchronized',async t=>{
   sockets[0].open();await sockets[0].message({...snapshot,match:null});
   assert.equal(state.ready,false);
   tick(10000);assert.equal(sockets[0].readyState,2);
+});
+
+test('social channel synchronizes without a board and never starts board HTTP recovery',async t=>{
+  let recoveries=0;
+  const {sockets,state,tick}=setup(t,{channel:'social',onResync:()=>{recoveries++;}});
+  sockets[0].open();await sockets[0].message({type:'social_snapshot',room_id:room.id,protocol:room.protocol,online:true});
+  assert.equal(state.ready,true);
+  for(let i=0;i<12;i++){tick(10000);await sockets[0].message({type:'pong'});await flush();}
+  assert.equal(recoveries,0);assert.equal(sockets.length,1);assert.equal(sockets[0].sent.length,12);
+});
+
+test('a board delta gap reconnects only the board; social gifts continue immediately',async t=>{
+  const {sockets,tick}=setup(t,{channel:'board',decoder:createMatchDeltaDecoder(room)});
+  const received=[];
+  const social=createWatchConnection({room,url:'wss://example.test/watch?channel=social',channel:'social',
+    canConnect:()=>true,expired:()=>false,onMessage:data=>received.push(data),random:()=>0});
+  t.after(()=>social.stop());social.connect();
+  const board=sockets[0],interactive=sockets[1];board.open();interactive.open();
+  await board.message({...snapshot,stream_epoch:'one',stream_sequence:1});
+  await interactive.message({type:'social_snapshot',room_id:room.id,protocol:room.protocol});
+  await board.message({type:'match_delta',room_id:room.id,protocol:room.protocol,stream_epoch:'one',base_sequence:2,stream_sequence:3});
+  assert.equal(board.readyState,2);assert.equal(interactive.readyState,1);
+  await interactive.message({type:'gift',id:'paid'});assert.equal(received.at(-1).id,'paid');
+  tick(1000);assert.equal(sockets.length,3);
+  const restarted=sockets[2];restarted.open();await restarted.message({...snapshot,stream_epoch:'two',stream_sequence:4});
+  assert.equal(restarted.readyState,1);assert.equal(interactive.readyState,1);
 });

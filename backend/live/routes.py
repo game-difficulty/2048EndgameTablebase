@@ -20,6 +20,7 @@ from .store import week_bounds
 from .rooms import DEFAULT_ROOM, DEFAULT_ROOM_ID, ROOMS, RoomDefinition
 from .content import create_content
 from .watch_transport import EncodedMessage, serve_viewer
+from .match_delta import MatchDeltaEncoder
 from . import human_rooms
 from .dynamic_rooms import dynamic_room_registry, competition_provider
 from backend.room_activities import predictions
@@ -46,7 +47,7 @@ class ViewerQueue(asyncio.Queue):
     def put_nowait(self, item):
         # Only replace obsolete board snapshots under pressure. Chat, rewards,
         # gifts and other events retain their order and are never discarded.
-        if (isinstance(item, dict) and item.get('type') == 'snapshot' and item.get('match')
+        if (getattr(self, 'channel', 'all') != 'board' and isinstance(item, dict) and item.get('type') == 'snapshot' and item.get('match')
                 and (self.qsize() >= 24 or self.bytes > 1024 * 1024)):
             retained = []
             while not self.empty():
@@ -80,6 +81,9 @@ class LiveHub:
         self.producer = None
         self.last_seen = 0
         self.viewers = {}
+        # Only the social/legacy connection owns presence and reward accounting.
+        self.board_viewers = {}
+        self.match_encoder = MatchDeltaEncoder()
         self.chat = deque(maxlen=100)
         self.rates = {}
         self.likes = 0
@@ -290,6 +294,13 @@ class LiveHub:
                     lucky_bags=self.lucky_bags, red_envelopes=self.red_state,
                     predictions=self.activities.state, server_time=time.time())
 
+    def social_snapshot(self):
+        return dict(type='social_snapshot', room_id=self.room.id, protocol=self.room.protocol,
+                    online=self.control_status()['online'], paused=not self.control['enabled'],
+                    viewers=len(self.audience.identities()), likes=self.like_total,
+                    lucky_bags=self.lucky_bags, red_envelopes=self.red_state,
+                    predictions=self.activities.state, server_time=time.time())
+
     async def refresh_red(self):
         async with self.red_lock:
             state = await asyncio.to_thread(red_envelopes.tick, room_id=self.room.id)
@@ -389,13 +400,24 @@ class LiveHub:
             await asyncio.sleep(1)
 
     def broadcast(self, message):
-        if isinstance(message, dict) and not isinstance(message, EncodedMessage):
+        board_message = None
+        is_match = isinstance(message, dict) and message.get('type') == 'snapshot' and message.get('protocol') == 'competition-match-v1'
+        if is_match:
+            board_message = EncodedMessage(self.match_encoder.encode(message))
+        elif isinstance(message, dict) and message.get('type') == 'room_ended':
+            board_message = EncodedMessage(message)
+        recipients = [queue for queue in tuple(self.viewers.values())
+                      if not (is_match and getattr(queue, 'channel', 'all') == 'social')]
+        if recipients and isinstance(message, dict) and not isinstance(message, EncodedMessage):
             message = EncodedMessage(message)
-        for queue in tuple(self.viewers.values()):
+        deliveries = [(queue, message) for queue in recipients]
+        if board_message is not None:
+            deliveries.extend((queue, board_message) for queue in tuple(getattr(self, 'board_viewers', {}).values()))
+        for queue, outgoing in deliveries:
             if getattr(queue, 'closing', False):
                 continue
             try:
-                queue.put_nowait(message)
+                queue.put_nowait(outgoing)
             except asyncio.QueueFull:
                 while not queue.empty():
                     queue.get_nowait()
@@ -455,6 +477,17 @@ dynamic_hubs = {}
 dynamic_task = None
 
 
+async def retire_runtime(runtime):
+    async def close(socket):
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(socket.close(code=1012), 2)
+    sockets = [*runtime.viewers, *getattr(runtime, 'board_viewers', {})]
+    if runtime.producer:
+        sockets.append(runtime.producer)
+    await asyncio.gather(*(close(socket) for socket in sockets))
+    await runtime.stop()
+
+
 def _dynamic_hub_from_definition(definition):
     room_id = definition.id
     runtime = dynamic_hubs.get(room_id)
@@ -467,9 +500,7 @@ def _dynamic_hub_from_definition(definition):
         runtime.room.description.clear(); runtime.room.description.update(definition.description)
         runtime.room.metadata.clear(); runtime.room.metadata.update(definition.metadata)
         return runtime
-    if runtime and (runtime.producer or runtime.viewers):
-        if runtime.producer:
-            asyncio.create_task(runtime.producer.close(code=1012))
+    previous = runtime
     runtime = LiveHub(definition)
     runtime.lucky_bags = lucky_bags.listing(room_id=room_id)
     runtime.gift_history.extend(gifts.recent_events(runtime.room.target))
@@ -487,6 +518,8 @@ def _dynamic_hub_from_definition(definition):
     except RuntimeError:
         loop = None
     if loop is not None:
+        if previous is not None:
+            previous.retirement_task = loop.create_task(retire_runtime(previous))
         runtime.start_task = loop.create_task(runtime.start())
     return runtime
 
@@ -525,18 +558,13 @@ async def _reconcile_dynamic_room(room_id, runtime, definition, now):
         if runtime.producer:
             with contextlib.suppress(Exception):
                 await runtime.producer.close(code=1008)
-        if not runtime.viewers and dynamic_hubs.get(room_id) is runtime:
+        if not runtime.viewers and not getattr(runtime, 'board_viewers', {}) and dynamic_hubs.get(room_id) is runtime:
             dynamic_hubs.pop(room_id, None)
             await runtime.stop()
         return
     metadata = definition.metadata if isinstance(definition, RoomDefinition) else definition
     if int(runtime.room.metadata.get('generation', 0)) != int(metadata.get('generation', 0)):
-        replacement = _dynamic_hub(room_id)
-        if replacement is not runtime:
-            # Existing websocket handlers retain the old hub: reconnect to the new one.
-            for viewer in tuple(runtime.viewers):
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(viewer.close(code=1012), 5)
+        _dynamic_hub(room_id)  # Replacement retires both channels without blocking directory refresh.
         return
     if runtime.producer and now - runtime.last_seen >= 20:
         with contextlib.suppress(Exception):
@@ -729,6 +757,16 @@ async def room_snapshot(request: Request, response: Response):
     response.headers['Cache-Control'] = 'no-store'
     runtime = resolve_hub(request)
     return runtime.snapshot()
+
+
+@router.get('/rooms/{room_id}/social-state')
+async def social_state(request: Request, response: Response):
+    response.headers['Cache-Control'] = 'no-store'
+    runtime = resolve_hub(request)
+    from backend.chat_moderation import visible_messages
+    history = await asyncio.to_thread(visible_messages, list(runtime.chat))
+    return {**runtime.social_snapshot(), 'chat': history, 'gifts': list(runtime.gift_history),
+            'music_url': os.environ.get('LIVE_MUSIC_URL', '')}
 
 
 @router.get('/status')
@@ -941,7 +979,7 @@ async def gift_send(request: Request):
     hub.limit(('gift-minute', user['id']), 30)
     hub.limit(('gift-ip', client_ip(request)), 90)
     try:
-        result = await asyncio.to_thread(gifts.send, user, body, hub.snapshot()['online'], target=hub.room.target)
+        result = await asyncio.to_thread(gifts.send, user, body, hub.control_status()['online'], target=hub.room.target)
     except InsufficientTokens as error:
         raise HTTPException(402, error.payload)
     except ValueError:
@@ -994,7 +1032,7 @@ async def chat(request: Request):
                    **identity, guest=actor.is_guest, user_id=actor.user_id if actor.is_user else None)
     hub.chat.append(message)
     hub.broadcast(message)
-    if hub.snapshot()['online']:
+    if hub.control_status()['online']:
         await asyncio.to_thread(audience.record, actor.actor_key, 'messages', room_id=hub.room.id)
     return {'ok': True}
 
@@ -1022,7 +1060,7 @@ async def like(request: Request):
         hub.limit(key, limit, cost=amount)
     hub.likes += amount
     hub.like_total += amount
-    if hub.snapshot()['online']:
+    if hub.control_status()['online']:
         await asyncio.to_thread(audience.record, actor.actor_key, 'likes', amount, room_id=hub.room.id)
     return {'ok': True, 'count': hub.like_total, 'accepted': amount}
 
@@ -1031,22 +1069,35 @@ async def like(request: Request):
 @router.websocket('/watch')
 async def watch(ws: WebSocket):
     hub = resolve_hub(ws)
+    channel = ws.query_params.get('channel', 'all')
+    if channel not in ('all', 'board', 'social') or (channel != 'all' and hub.room.content_kind != 'competition-match'):
+        await ws.close(code=1008)
+        return
     try:
         same_origin(ws.headers)
         hub.limit(('connect', websocket_client_ip(ws)), 30)
     except HTTPException:
         await ws.close(code=1008)
         return
-    total_viewers = len(routes_viewers())
-    if (len(hub.viewers) >= int(os.environ.get('LIVE_MAX_VIEWERS', '200'))
+    registry = hub.board_viewers if channel == 'board' else hub.viewers
+    total_viewers = (sum(len(getattr(runtime, 'board_viewers', {})) for runtime in
+                     [*room_hubs.values(), *dynamic_hubs.values()]) if channel == 'board' else len(routes_viewers()))
+    if (len(registry) >= int(os.environ.get('LIVE_MAX_VIEWERS', '200'))
             or total_viewers >= int(os.environ.get('LIVE_MAX_TOTAL_VIEWERS', '120'))):
         await ws.close(code=1013)
         return
     await ws.accept()
-    queue = ViewerQueue(byte_limit=2 * 1024 * 1024 if hub.room.content_kind == 'competition-match' else 256 * 1024)
-    hub.viewers[ws] = queue
+    queue = ViewerQueue(byte_limit=2 * 1024 * 1024 if hub.room.content_kind == 'competition-match' and channel != 'social' else 256 * 1024)
+    queue.channel = channel
+    # Publish an exact baseline before registering this socket. Existing delta
+    # viewers receive the same version; the new viewer gets a recovery window.
+    if channel == 'board':
+        hub.broadcast(hub.snapshot(incremental=True))
+    registry[ws] = queue
 
     async def identify():
+        if channel == 'board':
+            return
         user = None
         with contextlib.suppress(Exception):
             user = await asyncio.to_thread(current_user_from_websocket, ws)
@@ -1078,16 +1129,19 @@ async def watch(ws: WebSocket):
             hub.viewer_times[ws] = (hub.viewer_times[ws][0], time.time())
         if hub.room.content_kind == 'competition-match':
             try:
-                queue.put_nowait(dict(type='match_watermark', **hub.content.watermark()))
+                queue.put_nowait({'type': 'pong'} if channel == 'social'
+                                 else dict(type='match_watermark', **hub.content.watermark()))
             except asyncio.QueueFull:
                 # The bounded writer will drain or time out; never discard paid events.
                 pass
 
     try:
-        queue.put_nowait(hub.snapshot())
+        initial = (hub.match_encoder.full(hub.snapshot()) if channel == 'board' else
+                   hub.social_snapshot() if channel == 'social' else hub.snapshot())
+        queue.put_nowait(initial)
         await serve_viewer(ws, queue, identify, on_ping)
     finally:
-        hub.viewers.pop(ws, None)
+        registry.pop(ws, None)
         hub.viewer_users.pop(ws, None)
         hub.viewer_times.pop(ws, None)
         hub.audience.leave(ws)
