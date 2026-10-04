@@ -87,6 +87,7 @@ import { ServerClock } from '../../../../competition/shared/serverClock.mjs';
 import { competitionPhaseLabel, competitionProjectLabel, competitionProjectDescription } from '../../../../competition/shared/projectLabels.mjs';
 import { projectResultValue } from '../../../../competition/shared/projectMetrics.mjs';
 import CompetitionRosterHud from './CompetitionRosterHud.vue';
+import { rosterAssignments } from './competitionRosterAssignments.js';
 import './competitionTheme.css';
 import { useLiveTheme } from '../useLiveTheme.js';
 const darkTheme = useLiveTheme();
@@ -127,9 +128,7 @@ const session=side=>match.value?.session_status?.[side]||{};
 const readiness=side=>match.value?.game_readiness?.[side]||{};
 const confirmed=side=>Boolean(match.value?.captain_confirmation_status?.[side]);
 const currentPlayer=side=>current.value?.players?.[side];
-const playerProjects=side=>Object.fromEntries((match.value?.games||[]).filter(game=>game.players?.[side]?.position).map(game=>[
-  game.players[side].position, `${game.game_key} · ${projectName(game.project_key).replace(/\s*[（(]\d+\s*[×x]\s*\d+[）)]\s*$/, '')}`,
-]));
+const playerProjects=side=>rosterAssignments(match.value?.games, side, projectName);
 const clock=side=>{const value=match.value?.team_clocks?.[side];if(!value)return'30:00';const projectionTime=Date.parse(match.value?.server_time||'');const elapsed=value.state==='running'&&Number.isFinite(projectionTime)?Math.max(0,currentServerNow()-projectionTime):0;const ms=Math.max(0,Number(value.remaining_ms||0)-elapsed),seconds=Math.ceil(ms/1000);return`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`};
 const gameState=computed(()=>match.value?.phase?.endsWith('_RESULT')?t('休整后自动继续','Continuing after rest'):Object.values(match.value?.session_status||{}).some(item=>item.finished)?t('等待另一方完成','Waiting for the other side'):t('双方对局进行中','Both players in progress'));
 const resultText=result=>!result?t('待进行','Pending'):result.winner_side==='draw'?t('平局','Draw'):result.winner_side==='yellow'?t('黄方胜','Yellow win'):t('白方胜','White win');

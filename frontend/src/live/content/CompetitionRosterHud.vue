@@ -13,7 +13,9 @@
         </span>
         <span class="hud-copy"><strong :title="player.display_name">{{ player.display_name }}</strong>
           <small>{{ player.is_captain ? t('队长 · ', 'CPT · ') : '' }}{{ isActive(player) ? (finished ? t('已完成', 'DONE') : t('出战中', 'LIVE')) : t('候场', 'STANDBY') }}</small>
-          <small v-if="assignments?.[player.position]" class="hud-project" :title="assignments[player.position]">{{ assignments[player.position] }}</small>
+          <span v-if="assignments?.[player.position]?.length" class="hud-projects">
+            <small v-for="project in assignments[player.position]" :key="project" class="hud-project" :title="project">{{ project }}</small>
+          </span>
         </span>
       </a>
     </div>
@@ -59,7 +61,8 @@ const profileUrl = player => `https://play.2048tables.online/user/${encodeURICom
 .active .hud-avatar{border-color:var(--accent)}
 .hud-copy{display:grid;min-width:0;gap:5px}.hud-copy strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.hud-copy small{font-size:9px;line-height:1.4;color:var(--match-muted,#aebbd0)}.active .hud-copy small{color:var(--accent)}.finished .hud-copy small{color:var(--match-success,#78c59b)}
 .hud-player:hover strong{text-decoration:underline}.hud-player:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.hud-copy .hud-project{font-size:10px;color:var(--match-copy,#cbd5e1);overflow-wrap:anywhere}
+.hud-projects{display:grid;gap:3px;min-width:0}
+.hud-copy .hud-project{font-size:10px;color:var(--match-copy,#cbd5e1);overflow-wrap:anywhere;white-space:normal}
 .hud-toggle{pointer-events:auto;flex:0 0 24px;width:24px;min-height:48px;padding:0;border:1px solid var(--match-border,#475569);border-radius:0 7px 7px 0;background:var(--match-hud-toggle,rgba(15,23,42,.82));color:var(--accent);font-size:24px;cursor:pointer}
 .white .hud-toggle{border-radius:7px 0 0 7px}.hud-toggle:hover,.hud-toggle:focus-visible{background:var(--match-line,#334155);outline:2px solid var(--accent);outline-offset:-2px}
 @media(prefers-reduced-motion:reduce){.roster-hud,.hud-players{transition:none}}
