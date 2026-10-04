@@ -4,13 +4,13 @@ from __future__ import annotations
 import math
 
 
-GRADE_VERSION = 3
+GRADE_VERSION = 4
 THREE_BY_THREE_PROFILE = "3x3-v1"
 COMBO_3X3 = (13, 17, 27, 90, 158, 186, 203, 225, 290)
 PERFECT_3X3 = (.63, .67, .73, .85, .88, .895, .91, .92, .93)
 ACCURACY_3X3 = (.9940000, .9979000, .9992000, .9999300, .9999840,
                 .9999925, .9999957, .9999976, .9999990)
-GRADES_3X3 = ((17, "SSS"), (15, "SS"), (12, "S"), (9, "A"),
+GRADES_3X3 = ((20, "X"), (18, "SSS"), (15, "SS"), (12, "S"), (9, "A"),
               (7, "B"), (5, "C"), (3, "D"), (1, "E"))
 
 

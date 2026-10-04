@@ -223,6 +223,7 @@ export function analysisDuration(ms) {
 }
 
 const GRADE_STYLES = {
+  X: { light: '#f0ffff', mid: '#85e5ed', dark: '#318caa', glow: '#9ef5ff' },
   SSS: { light: '#fff3c9', mid: '#eac77e', dark: '#b17937', glow: '#f0c073' },
   SS: { light: '#f8e9ff', mid: '#d8b4ed', dark: '#8f5db2', glow: '#d9a7ed' },
   S: { light: '#eedcff', mid: '#b78bef', dark: '#7147a9', glow: '#a76de5' },
@@ -258,7 +259,7 @@ function drawGrade(ctx, rawGrade, copy) {
     ctx.translate(-centerX, 0);
   }
   ctx.lineJoin = 'round'; ctx.lineWidth = 1.6; ctx.strokeStyle = style.dark;
-  ctx.shadowColor = style.glow; ctx.shadowBlur = grade.startsWith('S') ? 16 : 6;
+  ctx.shadowColor = style.glow; ctx.shadowBlur = grade === 'X' || grade.startsWith('S') ? 16 : 6;
   ctx.strokeText(grade, centerX, 285);
   const gradient = ctx.createLinearGradient(0, 237, 0, 329);
   gradient.addColorStop(0, style.light);

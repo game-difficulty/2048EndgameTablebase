@@ -12,7 +12,7 @@ from .service import RunError, player_id_for_name, rankable_sql
 from .store import database
 
 
-GRADES = frozenset(("SSS", "SS", "S", "A", "B", "C", "D", "E", "F"))
+GRADES = frozenset(("X", "SSS", "SS", "S", "A", "B", "C", "D", "E", "F"))
 
 
 def _encode_cursor(ended: float, summary_id: int) -> str:

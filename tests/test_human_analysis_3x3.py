@@ -92,7 +92,7 @@ def test_fractional_points_are_added_without_rounding():
     aggregate['mean_single_step_accuracy'] = 1
     aggregate['evaluated_moves'] = 500
     aggregate['run_board_sum'] = 1536
-    assert grade_result(variant='3x3', goal_tile=None, score=1, aggregate=aggregate) == (30, 'SSS')
+    assert grade_result(variant='3x3', goal_tile=None, score=1, aggregate=aggregate) == (30, 'X')
 
 
 def test_unsupported_targets_and_variants_are_not_enabled():
@@ -100,6 +100,33 @@ def test_unsupported_targets_and_variants_are_not_enabled():
     for pattern, target, variant in [('3x3', '512', '3x3'), ('2x4', 'sum-894', '2x4')]:
         result = prepare_poster_summary(summary, pattern=pattern, target=target, variant=variant)
         assert 'grading_profile' not in result['aggregate']
+
+
+@pytest.mark.parametrize('combo,perfect,accuracy,expected', [
+    (26, 1, 0, 'A'), (27, 1, 0, 'S'),
+    (185, 1, 0, 'S'), (186, 1, 0, 'SS'),
+    (289, 1, 0, 'SS'), (290, 1, 0, 'SSS'),
+    (290, 1, ACCURACY_3X3[1] - 1e-10, 'SSS'),
+    (290, 1, ACCURACY_3X3[1], 'X'),
+])
+def test_new_top_grade_boundaries_without_timer(combo, perfect, accuracy, expected):
+    aggregate = dict(grading_profile=THREE_BY_THREE_PROFILE,
+                     mean_single_step_accuracy=accuracy, perfect_rate=perfect,
+                     max_combo=combo, evaluated_moves=500,
+                     run_board_sum=1016, run_elapsed_ms=None)
+    assert grade_result(variant='3x3', goal_tile=None, score=6948,
+                        aggregate=aggregate)[1] == expected
+
+
+def test_reference_no_timer_game_is_now_ss():
+    aggregate = dict(grading_profile=THREE_BY_THREE_PROFILE,
+                     mean_single_step_accuracy=.9999864, perfect_rate=406/454,
+                     max_combo=194, evaluated_moves=454,
+                     run_board_sum=1016, run_elapsed_ms=None)
+    points, grade = grade_result(variant='3x3', goal_tile=None, score=6948,
+                                aggregate=aggregate)
+    assert points == pytest.approx(17.7044830267)
+    assert grade == 'SS'
 
 
 @pytest.mark.parametrize('combo,expected_grade', [(26, 'E'), (27, 'D'), (28, 'D')])
@@ -114,7 +141,8 @@ def test_grade_boundaries_use_unrounded_total(combo, expected_grade):
 
 
 @pytest.mark.parametrize('target', ['1024', 'sum-1790'])
-def test_historical_summary_gets_button_and_grade_without_reanalysis(tmp_path, monkeypatch, target):
+@pytest.mark.parametrize('old_version', [2, 3])
+def test_historical_summary_gets_button_and_grade_without_reanalysis(tmp_path, monkeypatch, target, old_version):
     from backend.auth.db import init_auth_db, auth_db
     from backend.human_play import leaderboards
     from backend.human_play.store import init_db, database
@@ -138,16 +166,19 @@ def test_historical_summary_gets_button_and_grade_without_reanalysis(tmp_path, m
         old['aggregate'] = saved['aggregate']
         old['aggregate']['poster_eligible'] = False
         old.pop('run_timing')
-        old['grade_version'] = 2; old['grade'] = None
+        old['grade_version'] = old_version; old['grade'] = 'SSS' if old_version == 3 else None
         db.execute('UPDATE human_analysis_summaries SET summary_json=?,aggregate_json=? WHERE id=?',
                    (json.dumps(old),json.dumps(old['aggregate']),sid))
     assert list_summaries('3x3-run',1)[0]['aggregate']['poster_eligible']
     result = get_summary(sid,1)
     assert result['grade_version'] == GRADE_VERSION
-    assert result['grade'] == 'SSS'
+    assert result['grade'] == 'X'
     assert result['aggregate']['run_elapsed_ms'] == 600000
     assert result['aggregate']['mean_single_step_accuracy'] == pytest.approx(.999999)
     with database() as db:
         assert db.execute('SELECT COUNT(*) FROM human_analysis_summaries').fetchone()[0] == 1
+        indexed = db.execute('SELECT grade,grade_version FROM human_analysis_results WHERE summary_id=?', (sid,)).fetchone()
+        assert indexed['grade'] == 'X'
+        assert indexed['grade_version'] == GRADE_VERSION
         board = leaderboards.catalog(db)['strength']
         assert board == [{'variant':'3x3','pattern':'3x3','target':target,'results':1}]

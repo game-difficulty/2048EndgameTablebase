@@ -27,12 +27,13 @@ test('poster uses 3x3 metrics and readable target label while keeping 4x4 layout
   try {
     await drawAnalysisPoster({ canvas, language:'en', data: {
       pattern:'3x3',target:'sum-1790',run:{variant:'3x3',board:[1024,512,128,64,32,16,8,4,2],score:15000},
-      aggregate:{mean_single_step_accuracy:.999999,perfect_rate:.93,max_combo:300,run_elapsed_ms:480000,run_board_sum:1790},grade:'SSS',
+      aggregate:{mean_single_step_accuracy:.999999,perfect_rate:.93,max_combo:300,run_elapsed_ms:480000,run_board_sum:1790},grade:'X',
     } });
     assert.ok(labels.includes('3×3  ·  Board sum 1790'));
     assert.ok(labels.includes('99.99990%'));
     assert.ok(labels.includes('GEOMETRIC ACCURACY'));
     assert.ok(labels.includes('PERFECT'));
+    assert.ok(labels.includes('X'));
     assert.ok(!labels.includes('AVERAGE FIT'));
     labels.length = 0;
     await drawAnalysisPoster({ canvas, language:'en', data:{run:{variant:'4x4',board:[]},aggregate:{mean_goodness_of_fit:.9657}} });
