@@ -1,3 +1,0 @@
-{
-"free_cells":6,"target_rank":3,"seed":"76862459851309055","min_sum":10,"max_sum":28,"wall_sum":327680,"modulus":7,"threads":16,"p4":0.25,"terminal_value":4000000000,"generated_rows":250,"generation_seconds":0.0024564000777900219
-}

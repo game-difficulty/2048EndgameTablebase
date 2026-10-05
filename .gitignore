@@ -5,11 +5,10 @@ __pycache__/
 *.so
 .Python
 .pytest_cache/
-/tests/*
-!/tests/test_free_negative_layers.py
-!/tests/test_sum_targets.py
-!/tests/test_table_catalog.py
-!/tests/test_replay_variant_metadata.py
+/tests/
+/frontend/tests/
+/tools/
+/experiments/
 .mypy_cache/
 .ruff_cache/
 .coverage
