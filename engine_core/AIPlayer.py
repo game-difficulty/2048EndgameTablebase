@@ -7,6 +7,7 @@ from typing import Tuple, List
 import numpy as np
 
 from engine_core.BookReader import BookReaderDispatcher
+from engine_core.GoalSpec import GoalSpec
 from engine_core.reader_results import complete_positive_moves, certain_legal_moves, missing_immediate_merge_result
 from engine_core.Calculator import (
     ReverseLR,
@@ -17,7 +18,7 @@ from engine_core.Calculator import (
     RotateL,
     RotateR,
 )
-from Config import SingletonConfig, pattern_32k_tiles_map, DTYPE_CONFIG
+from Config import SingletonConfig, pattern_32k_tiles_map, category_info, DTYPE_CONFIG
 from engine_core.BoardMover import decode_board
 from engine_core.BoardMover import move_board, encode_board
 
@@ -57,6 +58,8 @@ class BaseDispatcher:
 
     # mask最大的n个格子
     def mask(self, n):
+        if n == 0:
+            return self.board.copy()
         flat_arr = self.board.flatten()
         max_indices = np.argpartition(flat_arr, -n)[-n:]
         flat_arr[max_indices] = 32768
@@ -125,7 +128,11 @@ class DispatcherCommon(BaseDispatcher):
 
                 pattern = pattern_param[0]
                 target_str = pattern_param[1]
-                target = int(np.log2(int(target_str)))
+                goal = GoalSpec.parse(target_str)
+                if goal.kind == "sum" and pattern in category_info.get("variant", []):
+                    continue
+                # Ranking uses the next tile size; lookup keeps the actual goal.
+                target = (goal.value - 1).bit_length()
                 if pattern not in pattern_32k_tiles_map:
                     continue
 
@@ -174,7 +181,12 @@ class DispatcherCommon(BaseDispatcher):
         if table in self._table_cooldowns:
             return None
 
+        sum_goal = GoalSpec.parse(target_str) if target_str.startswith("sum-") else None
+        if sum_goal is not None and np.count_nonzero(self.board >= (1 << target)) < _32k:
+            return None
         masked_board = self.mask(_32k)
+        if sum_goal is not None and sum_goal.reached(encode_board(masked_board)):
+            return None
         small_sum = int(masked_board.sum()) - _32k * 32768
         require_complete = small_sum < (32 if pattern == "free10" else 28)
 
@@ -182,7 +194,7 @@ class DispatcherCommon(BaseDispatcher):
             masked_board, pattern, target_str, table
         )
         _, _, _, zero_val = DTYPE_CONFIG.get(success_rate_dtype, DTYPE_CONFIG["uint32"])
-        if missing_immediate_merge_result(self.board, 1 << target, r1, zero_val):
+        if sum_goal is None and missing_immediate_merge_result(self.board, 1 << target, r1, zero_val):
             self.ai_search_moves = None
             self.last_operator = 0
             self.current_table = "AI"
@@ -208,7 +220,7 @@ class DispatcherCommon(BaseDispatcher):
         move = list(r1.keys())[0]
         success_rate = r1[move]
 
-        if isinstance(success_rate, (float, np.floating)):
+        if sum_goal is None and isinstance(success_rate, (float, np.floating)):
             target_val = 1 << target
             # 所有小于 target_val 的格子并求和 or 直接求余数
             remainder = (
@@ -243,10 +255,10 @@ class DispatcherCommon(BaseDispatcher):
                 self.current_table = "AI"
                 return "AI"
 
-            if success_rate > 0:
-                self.last_operator = i
-                self.current_table = table
-                return move
+        if isinstance(success_rate, (float, np.floating)) and success_rate > 0:
+            self.last_operator = i
+            self.current_table = table
+            return move
 
         return None
 
