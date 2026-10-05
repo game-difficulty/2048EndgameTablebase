@@ -29,6 +29,10 @@ NB_MODULE(ai_core, m) {
         
         .def_rw("max_d", &AIPlayer::max_d)
         .def_rw("merge_urgency", &AIPlayer::merge_urgency)
+        .def_rw("protect_merge_depth", &AIPlayer::protect_merge_depth)
+        .def_prop_ro("merge_target", [](const AIPlayer &self) {
+            return self.merge_depth.target ? (1 << self.merge_depth.target) : 0;
+        })
         .def_rw("best_operation", &AIPlayer::best_operation)
         .def_rw("board", &AIPlayer::board)
         .def_rw("max_threads", &AIPlayer::max_threads)

@@ -17,6 +17,11 @@ class AIPlayer:
 
     def start_search(self, depth: int = 3) -> None: ...
 
+    protect_merge_depth: bool
+
+    @property
+    def merge_target(self) -> int: ...
+
     @property
     def max_d(self) -> int: ...
 

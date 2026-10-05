@@ -506,6 +506,7 @@ void AIPlayer::reset_board(uint64_t new_board) {
   best_operation = 0;
   board = new_board;
   node = 0;
+  merge_depth = {};
 }
 
 void AIPlayer::update_spawn_rate(double new_rate) {
@@ -727,10 +728,13 @@ int32_t AIPlayer::search_branch(uint64_t t, int32_t depth,
 
   // 动态深度衰减
   int32_t effective_depth = depth;
-  if (empty_slots_count > 5 && masked_count < 4) {
-    effective_depth = std::min(effective_depth, 3);
-  } else if (empty_slots_count > 4 && masked_count < 4) {
-    effective_depth = std::min(effective_depth, 4);
+  if (empty_slots_count > 4 && masked_count < 4) {
+    const int ordinary = empty_slots_count > 5 ? 3 : 4;
+    if (depth > ordinary) {
+      const int cap = merge_depth.pending(t) ?
+          (empty_slots_count > 5 ? 6 : 7) : ordinary;
+      effective_depth = std::min(depth, cap);
+    }
   }
 
   int32_t temp = 0;
@@ -884,7 +888,9 @@ void AIPlayer::start_search(int32_t depth) {
     top_scores[i] = -dead_score;
 
   // 不修改成员 board
+  merge_depth.reset(board, protect_merge_depth);
   uint64_t masked_board = apply_dynamic_mask();
+  merge_depth.rebase(masked_board);
 
   int32_t current_max_threads = max_threads;
   if (depth < 5) {
@@ -910,6 +916,7 @@ void AIPlayer::start_search(int32_t depth) {
     masked_count = 0;
     threshold = std::max(threshold, 6000);
     cache.clear();
+    merge_depth.rebase(board);
 #pragma omp parallel
     {
 #pragma omp single
@@ -999,12 +1006,12 @@ uint64_t AIPlayer::apply_dynamic_mask() {
 
   if (condA_part1 || condA_part2) {
     if (rem > 1000) {
-      current_board = mask(current_board, 11);
+      current_board = mask(current_board, merge_depth.mask_threshold(11));
     } else {
-      current_board = mask(current_board, 9);
+      current_board = mask(current_board, merge_depth.mask_threshold(9));
     }
   } else {
-    current_board = mask(current_board, 12);
+    current_board = mask(current_board, merge_depth.mask_threshold(12));
   }
 
   // 5. 统计 0xF 的个数并更新 masked_count

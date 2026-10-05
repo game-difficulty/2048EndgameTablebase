@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <tuple>
+#include "MergeDepthPolicy.h"
 
 // ------------------------------------------------------------------
 // 评分与评估相关数据结构
@@ -76,6 +77,8 @@ public:
   int32_t max_d;
   int32_t max_layer;
   double merge_urgency = 0.0;
+  bool protect_merge_depth = true;
+  MergeDepthPolicy merge_depth;
   uint8_t best_operation;
   uint64_t board;
   uint32_t board_sum;

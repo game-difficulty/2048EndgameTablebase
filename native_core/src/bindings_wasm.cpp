@@ -70,6 +70,7 @@ EMSCRIPTEN_BINDINGS(ai_core) {
         
         .property("max_d", &AIPlayer::max_d)
         .property("merge_urgency", &AIPlayer::merge_urgency)
+        .property("protect_merge_depth", &AIPlayer::protect_merge_depth)
         .property("best_operation", &AIPlayer::best_operation)
         .property("board", &AIPlayer::board)
         .property("max_threads", &AIPlayer::max_threads)
