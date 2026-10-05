@@ -25,7 +25,7 @@ class _AnalysisTask:
         if self.websocket is None or self.message is None:
             return
         try:
-            await self.websocket.send_json(self.message)
+            await asyncio.wait_for(self.websocket.send_json(self.message), timeout=5.0)
         except Exception:
             logger.warning("Analysis connection lost; retaining task state for reconnect", exc_info=True)
             self.websocket = None
