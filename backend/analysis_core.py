@@ -477,6 +477,19 @@ class ReplayDecoder:
             self.record_list["f4"][i] = 15 - pos
 
 
+def _open_analysis_output(path: str, *, binary: bool = False):
+    original = Path(path)
+    candidate = original
+    index = 0
+    while True:
+        try:
+            # Exclusive creation also prevents collisions between batch workers.
+            return candidate.open("xb" if binary else "x", encoding=None if binary else "utf-8")
+        except FileExistsError:
+            index += 1
+            candidate = original.with_name(f"{original.stem}({index}){original.suffix}")
+
+
 class Analyzer:
     pattern_map = Config.pattern_32k_tiles_map
 
@@ -794,7 +807,7 @@ class Analyzer:
             + f"_{self.goodness_of_fit:.{REPORT_DECIMAL_PLACES}f}.txt"
         )
         target_file_path = os.path.join(self.target_path, filename)
-        with open(target_file_path, "w", encoding="utf-8") as file:
+        with _open_analysis_output(target_file_path) as file:
             for line in self.text_list:
                 file.write(line.replace("**", "") + "\n")
 
@@ -890,7 +903,8 @@ class Analyzer:
             if transition:
                 terminal_board = transition["next_board_encoded"]
         self.record[rec_step_count] = replay_sentinel(terminal_board)
-        self.record[: rec_step_count + 1].tofile(target_file_path)
+        with _open_analysis_output(target_file_path, binary=True) as file:
+            self.record[: rec_step_count + 1].tofile(file)
 
 
 def count_32ks(board):
