@@ -12,7 +12,9 @@ Local/cloud native and WASM source files now use 7 with five empty cells,
 ordinary positions keep 4/3. Existing `masked_count < 4` and empty-cell
 conditions remain unchanged; already-shallower depths are not increased.
 No new parameter, chain-length calculation, scoring, pruning, cache or
-task change is introduced. Production DLL/WASM files have not been replaced.
+task change is introduced. The tracked `docs/ai_core.wasm` has since been
+rebuilt for this policy; desktop native modules are rebuilt during release
+packaging. Referenced test scripts and outputs are retained locally only.
 The four merge-depth regression tests pass, including 10,000 random boards,
 cap boundaries, the reported depth-8 move, ordinary-stage invariance, and
 local/cloud parity for native and host-compiled WASM source probes.

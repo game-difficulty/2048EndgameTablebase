@@ -1,5 +1,15 @@
 # Merge-goal depth protection validation (2026-10-06)
 
+## Release Status
+
+The measurements below describe the earlier uncapped-protection experiment,
+not the final v13.6.1 policy. The shipped policy caps pending-goal searches
+at 7 with five empty cells and 6 with six or more; ordinary/completed-goal
+caps remain 4/3. Existing masking-count conditions and search time budgets
+remain unchanged. See `ai_merge_depth_caps_experiment_20261006.md` for the
+selected implementation. Referenced test scripts and outputs are retained
+locally and are not distributed with the repository or release packages.
+
 ## Implementation
 
 - Shared `native_core/include/MergeDepthPolicy.h` is used by native and WASM

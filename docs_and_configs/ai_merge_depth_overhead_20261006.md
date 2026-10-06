@@ -68,6 +68,10 @@ above, including the reported position at depth 8.
 
 ## Changes And Reproduction
 
+These are historical uncapped-protection measurements, not performance
+figures for the final v13.6.1 pending-goal caps of 7/6. The test scripts and
+outputs referenced below are local-only artifacts.
+
 The depth guard is synchronized in local/cloud, native/WASM source files.
 No scoring, pruning, cache or scheduling change is made. Existing production
 DLLs and frontend WASM files are not replaced; the live Worker is not restarted.
