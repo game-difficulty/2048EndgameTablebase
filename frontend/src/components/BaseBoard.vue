@@ -27,13 +27,13 @@
         v-for="tile in activeTiles"
         :key="tile.id"
         class="tile z-10"
-        :class="{'no-transition': tile.isInterrupting}"
+        :class="{'no-transition': tile.isInterrupting, merging: tile.isMerged}"
         :style="getTilePosStyle(tile)"
       >
         <div
           class="tile-inner rounded-lg flex items-center justify-center font-bold"
           :class="{
-            'anim-new': tile.isNew,
+            'anim-new': tile.isNew && !tile.isHidden,
             'anim-merged': tile.isMerged && !tile.isHidden,
             'opacity-0': tile.isHidden
           }"
@@ -49,7 +49,8 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from 'vue';
+import { computed, ref, watch, nextTick, onUnmounted } from 'vue';
+import { BOARD_ANIMATION_DURATION, BOARD_MERGE_REVEAL_DELAY, BOARD_SPAWN_REVEAL_DELAY } from './boardMotion.js';
 
 import { createBoardViewport, logicalIndexToVisual } from '../utils/boardViewport';
 
@@ -250,9 +251,7 @@ const clearAnimationTimers = () => {
 
 const revealMergedTiles = () => {
     activeTiles.value = activeTiles.value.map(tile => {
-        if (tile.isDying) {
-            return { ...tile, isHidden: true };
-        }
+        // Keep the source pair visible below the merged tile during its pop.
         if (tile.isMerged && tile.isHidden) {
             return { ...tile, isHidden: false };
         }
@@ -384,22 +383,23 @@ watch(() => [props.board, props.isVariant], async ([newBoard]) => {
     revealMergeTimeout = setTimeout(() => {
         revealMergedTiles();
         revealMergeTimeout = null;
-    }, 100);
+    }, BOARD_MERGE_REVEAL_DELAY);
 
     revealAppearTimeout = setTimeout(() => {
         revealAppearingTiles();
         revealAppearTimeout = null;
-    }, 125);
+    }, BOARD_SPAWN_REVEAL_DELAY);
 
     animTimeout = setTimeout(() => {
         fastForwardAnimations(false);
         animTimeout = null;
-    }, 300);
+    }, BOARD_ANIMATION_DURATION);
 
 }, { deep: true });
 
 // Initial setup render
 syncToBoardRaw();
+onUnmounted(clearAnimationTimers);
 
 const getTilePosStyle = (tile) => {
   const visualPosition = logicalIndexToVisual(tile.row * 4 + tile.col, boardViewport.value);
@@ -531,6 +531,8 @@ const getTileLabelStyle = (tile) => {
   transition: transform 0.1s ease-in-out;
 }
 
+.tile.merging { z-index: 11; }
+
 .no-transition {
   transition: none !important;
 }
@@ -565,7 +567,7 @@ const getTileLabelStyle = (tile) => {
 }
 
 @keyframes pop {
-  0% { transform: scale(1); }
+  0% { transform: scale(0); }
   50% { transform: scale(1.2); }
   100% { transform: scale(1); }
 }
