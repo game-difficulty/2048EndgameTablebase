@@ -933,7 +933,6 @@ def _run_zmask_build(
         cold_pathnames,
         layer_offset=free_layer_offset(pattern) if not is_variant else 0,
     )
-    run_options.chunked_solve = False
     formation_core.run_pattern_build_zmask(
         np.asarray(arr_init, dtype=np.uint64), pattern_spec, run_options
     )

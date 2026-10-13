@@ -75,7 +75,8 @@ CompressStats compress_zbook_to_ex_result(
     uint32_t bucket_block_buckets = 4096,
     uint32_t success_block_values = 65536,
     int compression_level = 5,
-    const ResultCompression::Context &context = {}
+    const ResultCompression::Context &context = {},
+    uint32_t max_workers = 0
 );
 
 CompressStats compress_prefix36_layer_view_to_ex_result(

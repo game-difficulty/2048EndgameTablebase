@@ -2,6 +2,7 @@
 
 #include "EXFrozenLayer.h"
 #include "EXIoConfig.h"
+#include "EXSectionWriter.h"
 #include "EXPrefix40Layer.h"
 #include "CompressionBridge.h"
 #include "Formation.h"
@@ -22,6 +23,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <type_traits>
+#ifndef _WIN32
+#include <sys/sysinfo.h>
+#endif
 
 #if defined(_OPENMP)
 #include <omp.h>
@@ -1809,7 +1813,8 @@ double compress_layer_result_from_memory(
     return now_seconds() - t0;
 }
 
-double compress_layer_result_from_file(const RunOptions &options, int step) {
+double compress_layer_result_from_file(const RunOptions &options, int step, bool low_memory = false,
+                                      bool source_changed = false) {
     if (!options.compress) {
         return 0.0;
     }
@@ -1818,7 +1823,7 @@ double compress_layer_result_from_file(const RunOptions &options, int step) {
         return 0.0;
     }
     const std::string existing_output_path = existing_compressed_layer_file_path(options, step);
-    if (compressed_layer_is_fresh(zbook_path, existing_output_path)) {
+    if (!source_changed && compressed_layer_is_fresh(zbook_path, existing_output_path)) {
         std::error_code ec;
         NativePath::remove(zbook_path, ec);
         return 0.0;
@@ -1840,10 +1845,11 @@ double compress_layer_result_from_file(const RunOptions &options, int step) {
         zbook_path,
         lut_file_path(options.pathname),
         temp_path,
-        4096U,
+        low_memory ? 64U : 4096U,
         65536U,
         5,
-        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative}
+        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative},
+        low_memory ? 1U : 0U
     );
     FileIOUtils::finalize_temporary_file(temp_path, output_path);
     NativePath::remove(zbook_path, ec);
@@ -1851,13 +1857,13 @@ double compress_layer_result_from_file(const RunOptions &options, int step) {
     return now_seconds() - t0;
 }
 
-double compress_all_layer_results(const RunOptions &options) {
+double compress_all_layer_results(const RunOptions &options, bool low_memory = false) {
     if (!options.compress || options.steps <= 0) {
         return 0.0;
     }
     const double t0 = now_seconds();
     for (int step = 0; step < options.steps; ++step) {
-        (void)compress_layer_result_from_file(options, step);
+        (void)compress_layer_result_from_file(options, step, low_memory);
     }
     return now_seconds() - t0;
 }
@@ -3028,7 +3034,7 @@ OptimalBranchStats mark_optimal_branches_from_source(
     return total;
 }
 
-template <typename Mover, typename T>
+template <typename Mover, typename T, int Spawn = 0>
 void recalculate_batch_prefix36_write(
     const uint64_t *boards,
     const uint64_t *output_positions,
@@ -3103,20 +3109,24 @@ void recalculate_batch_prefix36_write(
             const uint16_t ref = static_cast<uint16_t>((board_slot << 4U) | cell);
             workspace.best2[ref] = zero_value;
             workspace.best4[ref] = zero_value;
-            const uint64_t spawn2 = board | (1ULL << (4U * cell));
-            const auto moves2 = Mover::move_all_dir(spawn2);
-            const uint64_t b2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
-            for (uint64_t moved : b2) {
-                if (moved != spawn2 && is_pattern(moved, spec.pattern_masks)) {
-                    push1(moved, ref);
+            if constexpr (Spawn != 2) {
+                const uint64_t spawn2 = board | (1ULL << (4U * cell));
+                const auto moves2 = Mover::move_all_dir(spawn2);
+                const uint64_t b2[4] = {std::get<0>(moves2), std::get<1>(moves2), std::get<2>(moves2), std::get<3>(moves2)};
+                for (uint64_t moved : b2) {
+                    if (moved != spawn2 && is_pattern(moved, spec.pattern_masks)) {
+                        push1(moved, ref);
+                    }
                 }
             }
-            const uint64_t spawn4 = board | (2ULL << (4U * cell));
-            const auto moves4 = Mover::move_all_dir(spawn4);
-            const uint64_t b4[4] = {std::get<0>(moves4), std::get<1>(moves4), std::get<2>(moves4), std::get<3>(moves4)};
-            for (uint64_t moved : b4) {
-                if (moved != spawn4 && is_pattern(moved, spec.pattern_masks)) {
-                    push2(moved, ref);
+            if constexpr (Spawn != 1) {
+                const uint64_t spawn4 = board | (2ULL << (4U * cell));
+                const auto moves4 = Mover::move_all_dir(spawn4);
+                const uint64_t b4[4] = {std::get<0>(moves4), std::get<1>(moves4), std::get<2>(moves4), std::get<3>(moves4)};
+                for (uint64_t moved : b4) {
+                    if (moved != spawn4 && is_pattern(moved, spec.pattern_masks)) {
+                        push2(moved, ref);
+                    }
                 }
             }
         }
@@ -3142,17 +3152,34 @@ void recalculate_batch_prefix36_write(
             const uint32_t cell = countr_zero_u32(empty_mask);
             empty_mask &= empty_mask - 1U;
             const size_t best_index = static_cast<size_t>(board_slot) * 16U + static_cast<size_t>(cell);
-            success_probability += static_cast<Acc>(workspace.best2[best_index]) *
-                (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
-            success_probability +=
-                static_cast<Acc>(workspace.best4[best_index]) * static_cast<Acc>(spawn_rate4);
+            if constexpr (Spawn == 2) {
+                success_probability += static_cast<Acc>(workspace.best4[best_index]);
+            } else {
+                success_probability += static_cast<Acc>(workspace.best2[best_index]) *
+                    (static_cast<Acc>(1) - static_cast<Acc>(spawn_rate4));
+                if constexpr (Spawn == 0) {
+                    success_probability += static_cast<Acc>(workspace.best4[best_index]) *
+                        static_cast<Acc>(spawn_rate4);
+                }
+            }
             ++empty_count;
         }
-        const T value = empty_count > 0U
-            ? static_cast<T>(success_probability / static_cast<Acc>(empty_count))
-            : zero_value;
-        current.success_values[static_cast<size_t>(output_positions[board_slot])] = value;
-        checksum += success_checksum_bits(value) * (output_positions[board_slot] + 1ULL);
+        T stored;
+        if constexpr (Spawn == 1) {
+            Acc value = zero_value;
+            if (empty_count > 0U) {
+                value = success_probability / static_cast<Acc>(empty_count) +
+                    static_cast<Acc>(current.success_values[output_positions[board_slot]]) *
+                    static_cast<Acc>(spawn_rate4);
+            }
+            stored = static_cast<T>(value);
+        } else {
+            stored = empty_count > 0U
+                ? static_cast<T>(success_probability / static_cast<Acc>(empty_count))
+                : zero_value;
+        }
+        current.success_values[static_cast<size_t>(output_positions[board_slot])] = stored;
+        checksum += success_checksum_bits(stored) * (output_positions[board_slot] + 1ULL);
     }
     const double finalize_t1 = now_seconds();
 
@@ -3168,7 +3195,7 @@ void recalculate_batch_prefix36_write(
     stats.checksum += checksum;
 }
 
-template <typename Mover, typename T>
+template <typename Mover, typename T, int Spawn = 0>
 RecalcStats recalculate_current_layer(
     Prefix36LayerT<T> &current,
     const Prefix36LayerT<T> &future1,
@@ -3182,7 +3209,9 @@ RecalcStats recalculate_current_layer(
 ) {
     const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
     const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
-    current.success_values.assign(static_cast<size_t>(current.live_board_count), zero_value);
+    if constexpr (Spawn != 1) {
+        current.success_values.assign(static_cast<size_t>(current.live_board_count), zero_value);
+    }
     const double t0 = now_seconds();
     std::vector<RecalcStats> per_thread(static_cast<size_t>(num_threads));
 #pragma omp parallel num_threads(num_threads)
@@ -3197,7 +3226,7 @@ RecalcStats recalculate_current_layer(
             if (board_buffer_count == 0U) {
                 return;
             }
-            recalculate_batch_prefix36_write<Mover, T>(
+            recalculate_batch_prefix36_write<Mover, T, Spawn>(
                 board_buffer.data(),
                 output_buffer.data(),
                 board_buffer_count,
@@ -4267,6 +4296,8 @@ SolveStepSummary keep_only_optimal_branches_prefix36(
         : keep_only_optimal_branches_prefix36_impl<BoardMover, T>(spec, options, lut);
 }
 
+#include "EXSplitSolve.inl"
+
 template <typename T>
 SolveStepSummary solve_single_step_impl(
     const PatternSpec &spec,
@@ -4398,6 +4429,7 @@ void run_pattern_solve_typed(
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
     RuntimeControls::DeletionThresholdState deletion_threshold_state =
         RuntimeControls::current_deletion_thresholds(options);
+    bool used_split_solve = false;
     if (options.steps >= 3) {
         Prefix36LayerT<T> future1;
         Prefix36LayerT<T> future2;
@@ -4416,8 +4448,11 @@ void run_pattern_solve_typed(
                     std::to_string(target_step)
                 );
             }
+            ex_seekable_input(options, target_step);
             promote_generated_layer_input(options, target_step, spec, mode, io_config, lut, num_threads);
+            remove_generated_layer_input(options, target_step);
             const double t0 = now_seconds();
+            target = {};
             target = read_layer_input<T>(options, target_step, io_config, lut.dense_lut, num_threads, &lut);
             cached_step = target_step;
             return now_seconds() - t0;
@@ -4449,28 +4484,61 @@ void run_pattern_solve_typed(
                     std::to_string(step)
                 );
             }
-            double carried_read_seconds = 0.0;
-            carried_read_seconds += load_cached_future(step + 1, future1, cached_future1_step);
-            carried_read_seconds += load_cached_future(step + 2, future2, cached_future2_step);
-            const double read_t0 = now_seconds();
-            Prefix36LayerT<T> current = read_layer_input<T>(
-                options, step, io_config, lut.dense_lut, num_threads, &lut);
-            const double read_seconds = carried_read_seconds + (now_seconds() - read_t0);
-            carried_read_seconds = 0.0;
+            const std::string current_path = ex_seekable_input(options, step);
+            const auto current_header = ex_input_header(current_path, lut);
+            const auto header1 = cached_future1_step == step + 1
+                ? make_layer_header(future1, spec, mode)
+                : ex_input_header(ex_seekable_input(options, step + 1), lut);
+            const auto header2 = cached_future2_step == step + 2
+                ? make_layer_header(future2, spec, mode)
+                : ex_input_header(ex_seekable_input(options, step + 2), lut);
+            const uint64_t current_bytes = ex_layer_resident_estimate(current_header);
+            const uint64_t bytes1 = ex_layer_resident_estimate(header1);
+            const uint64_t bytes2 = ex_layer_resident_estimate(header2);
+            const uint64_t cached_bytes = layer_metadata_bytes(future1) + layer_metadata_bytes(future2) +
+                (future1.success_values.capacity() + future2.success_values.capacity()) * sizeof(T);
+            const uint64_t available = ex_available_memory();
+            const uint64_t forced_budget = ex_solve_env_bytes("EX_SOLVE_MEMORY_BYTES");
+            // Leave headroom for parallel workspaces, file buffers and the OS.
+            const uint64_t pool = available ? available + cached_bytes : 512ULL * 1024 * 1024;
+            const uint64_t reserve = std::max<uint64_t>(256ULL * 1024 * 1024,
+                uint64_t(num_threads) * 4ULL * 1024 * 1024);
+            const uint64_t budget = forced_budget ? forced_budget :
+                (pool > reserve ? (pool - reserve) * 3 / 4 : 0);
+            const uint64_t full_need = std::max(2 * current_bytes + bytes1 + bytes2,
+                current_bytes + bytes1 + 2 * bytes2);
+            const uint64_t max_future = std::max(bytes1, bytes2);
+            const uint64_t forced_chunk = ex_solve_env_bytes("EX_TEST_CURRENT_CHUNK_BYTES");
+            const bool split = options.chunked_solve || forced_chunk || full_need > budget;
+            const bool resident_current = !forced_chunk && max_future + 2 * current_bytes <= budget;
+            if (split && max_future >= budget && !forced_chunk)
+                throw std::runtime_error("EX split solve cannot fit one successor layer in the available memory budget");
+            const uint64_t chunk_budget = forced_chunk ? forced_chunk : std::max<uint64_t>(1,
+                std::min<uint64_t>(64ULL * 1024 * 1024, (budget > max_future ? budget - max_future : 0) / 4));
             deletion_threshold_state =
                 RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
-            const SolveStepSummary step_summary = solve_loaded_step_impl(
-                spec,
-                options,
-                lut.dense_lut,
-                lut.row_luts,
-                step,
-                current,
-                future1,
-                future2,
-                read_seconds,
-                deletion_threshold_state
-            );
+            SolveStepSummary step_summary;
+            if (split) {
+                used_split_solve = true;
+                future1 = {};
+                cached_future1_step = kNoSolveResumeStep;
+                step_summary = solve_split_step<T>(spec, options, lut, step, current_path, chunk_budget,
+                    resident_current, future2, cached_future2_step, load_cached_future, deletion_threshold_state);
+            } else {
+                double read_seconds = load_cached_future(step + 1, future1, cached_future1_step);
+                read_seconds += load_cached_future(step + 2, future2, cached_future2_step);
+                const double read_t0 = now_seconds();
+                Prefix36LayerT<T> current = read_layer_input<T>(
+                    options, step, io_config, lut.dense_lut, num_threads, &lut);
+                read_seconds += now_seconds() - read_t0;
+                step_summary = solve_loaded_step_impl(
+                    spec, options, lut.dense_lut, lut.row_luts, step, current, future1, future2,
+                    read_seconds, deletion_threshold_state);
+                future2 = std::move(future1);
+                future1 = std::move(current);
+                cached_future2_step = cached_future1_step;
+                cached_future1_step = step;
+            }
             total.input_live += step_summary.input_live;
             total.output_live += step_summary.output_live;
             total.bitmap_live += step_summary.bitmap_live;
@@ -4484,10 +4552,6 @@ void run_pattern_solve_typed(
             total.read_seconds += step_summary.read_seconds;
             total.total_seconds += step_summary.total_seconds;
             total.compute_seconds += step_summary.compute_seconds;
-            future2 = std::move(future1);
-            future1 = std::move(current);
-            cached_future2_step = cached_future1_step;
-            cached_future1_step = step;
         }
     }
     if (options.optimal_branch_only) {
@@ -4504,7 +4568,7 @@ void run_pattern_solve_typed(
         total.total_seconds += optimal_summary.total_seconds;
         total.compute_seconds += optimal_summary.compute_seconds;
     } else {
-        const double compress_seconds = compress_all_layer_results(options);
+        const double compress_seconds = compress_all_layer_results(options, used_split_solve);
         total.total_seconds += compress_seconds;
         total.current_write_seconds += compress_seconds;
     }

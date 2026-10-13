@@ -1,6 +1,6 @@
 # EX / EXAD Runtime Design Context
 
-Last updated: 2026-06-06
+Last updated: 2026-10-13
 
 This document is the current maintenance map for the EX and EXAD production
 paths. It is meant to be a practical reference for future debugging and
@@ -53,6 +53,8 @@ EX native:
 - `native_core/src/BookSolverEX.cpp`
 - `native_core/src/EXPrefix36Runtime.cpp`
 - `native_core/src/EXPrefix36Core.inl`
+- `native_core/src/EXSplitSolve.inl`
+- `native_core/include/EXSectionWriter.h`
 - `native_core/include/EXPrefix36Runtime.h`
 - `native_core/include/EXCompressedResult.h`
 - `native_core/src/EXCompressedResult.cpp`
@@ -228,18 +230,16 @@ The persisted sections are conceptually:
 - `bucket_keys[]`
 - `bitmap_offsets[]`
 - `success_offsets[]`
-- `large_rank_offsets[]`
 - `small_bitmap_bytes[]`
 - `large_bitmap_words[]`
-- `large_rank_bases[]`
 - `success_values[]`
 
 The in-memory direct bucket entry is kept compact. It currently packs lookup
 fields into a 16-byte entry.
 
-Large bitmap rank bases are runtime/format support for O(1)-ish ordinal
-calculation. They are present in the raw `.zbook` format. Compressed EX stores
-its own compressed block directories instead.
+Large bitmap rank offsets/bases are rebuilt at read time for O(1)-ish ordinal
+calculation; current version-5 `.zbook` files do not persist them. Compressed
+EX stores its own compressed block directories instead.
 
 ## 4. EX Generation
 
@@ -310,7 +310,37 @@ for step = steps - 3 down to 0:
     optionally compress no-longer-needed future
 ```
 
-EX solve keeps two full future layers in memory, plus the current layer.
+EX normally keeps two full future layers plus the current layer. Before each
+step it estimates the resident layers, query indexes and compaction headroom,
+then selects one of three routes:
+
+- `solve`: the existing three-layer calculation.
+- `split_solve`: resident current plus one successor; compute spawn-4 first,
+  release `L[s+2]`, load `L[s+1]`, then combine spawn-2.
+- `chunked_solve`: the same two passes, but read current in bounded bucket
+  ranges and spool partial results to disk. No whole current-layer allocation.
+
+Both split routes retain `L[s+1]` and its index for the next step's spawn-4
+pass. The intermediate mean for spawn-4 is stored as `T`, as in AD; only the
+second pass applies the spawn probabilities and zero compaction. Whole-layer
+and split calculations can therefore differ slightly through rounding.
+
+`RunOptions.chunked_solve` forces a split route, with the current-layer choice
+still based on memory. Otherwise selection is automatic. `EX_SOLVE_MEMORY_BYTES`
+can override the layer working-set budget for diagnostics. The budget does
+not include the already-loaded LUT. At least one indexed successor and one
+bucket must fit; the code reports insufficient memory rather than silently
+switching to a different lookup algorithm.
+
+`EXLayerChunks` handles disk and resident-memory bucket ranges, and
+`EXSectionWriter` assembles the existing six-section file format. Current
+output is published before a threshold-pruned dependency replaces its exact
+file. Result decompression is block-streamed; generated archives are extracted
+through `SevenZipSequentialReader` before seekable reads. Low-memory result
+compression uses smaller bucket blocks and one worker to bound scratch memory.
+Generation and the optional optimal-branch post-pass retain their existing
+memory behavior. The standalone single-layer diagnostic entrypoint retains
+the original whole-layer route.
 
 Core optimizations:
 
@@ -655,21 +685,21 @@ For each unsolved step:
 2. Ensure current temp layer exists.
 3. Remove stale chunk scratch for this step.
 4. First pass:
-   - load full `future1` (`step + 1`) and build direct indexes
+   - reuse cached `future2` (`step + 2`), or load it and build direct indexes
    - stream current temp by AD slot through `EXAD::LayerSlotReader`
    - split a large slot into bucket-range chunks using a row budget
-   - recalculate only spawn-2 contribution
+   - recalculate only spawn-4 contribution
    - write partial slot chunks
-   - release `future1`
+   - stage retirement, then release `future2`
 5. Second pass:
-   - load full `future2` (`step + 2`) and build direct indexes
+   - load full `future1` (`step + 1`) and build direct indexes
    - read partial chunks
-   - recalculate spawn-4 contribution
+   - recalculate spawn-2 contribution
    - zero-compact each chunk
    - write final slot chunks
-   - release `future2`
+   - retain `future1` and its index for the next step's first pass
 6. Merge 48 slot chunks into one `.exadbook`.
-7. Delete chunk scratch and current temp layer.
+7. Publish staged retirement, then delete chunk scratch and current temp layer.
 
 This means:
 
