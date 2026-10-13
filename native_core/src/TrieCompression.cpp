@@ -4,10 +4,12 @@
 #include "FormationRuntime.h"
 #include "NativeLzma.h"
 #include "PathUtils.h"
+#include "ResultCompression.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -197,7 +199,8 @@ template <typename T>
 std::vector<TrieSegmentEntry> compress_and_save_serial(
     std::vector<TrieNode64> &ind3,
     const std::vector<CompactBookEntry<T>> &book,
-    const fs::path &z_path
+    const fs::path &z_path,
+    bool stored_values
 ) {
     std::vector<TrieSegmentEntry> segments;
     segments.reserve(book.size() / 16000ULL + 2ULL);
@@ -215,7 +218,7 @@ std::vector<TrieSegmentEntry> compress_and_save_serial(
         if (end - start > kTrieBlockTarget) {
             const uint8_t *bytes = reinterpret_cast<const uint8_t *>(book.data() + start);
             const size_t byte_count = (end - start) * sizeof(CompactBookEntry<T>);
-            std::vector<uint8_t> block = compress_xz_block_native(bytes, byte_count, 1);
+            std::vector<uint8_t> block = ResultCompression::encode(bytes, byte_count, 1, stored_values);
             if (!block.empty()) {
                 FileIOUtils::write_exact(out, block.data(), block.size(), NativePath::to_utf8_string(z_path));
             }
@@ -230,7 +233,7 @@ std::vector<TrieSegmentEntry> compress_and_save_serial(
 
     const uint8_t *tail_bytes = reinterpret_cast<const uint8_t *>(book.data() + start);
     const size_t tail_count = (book.size() - start) * sizeof(CompactBookEntry<T>);
-    std::vector<uint8_t> block = compress_xz_block_native(tail_bytes, tail_count, 1);
+    std::vector<uint8_t> block = ResultCompression::encode(tail_bytes, tail_count, 1, stored_values);
     if (!block.empty()) {
         FileIOUtils::write_exact(out, block.data(), block.size(), NativePath::to_utf8_string(z_path));
     }
@@ -268,18 +271,27 @@ template <typename T>
 std::vector<TrieSegmentEntry> compress_and_save_parallel(
     std::vector<TrieNode64> &ind3,
     const std::vector<CompactBookEntry<T>> &book,
-    const fs::path &z_path
+    const fs::path &z_path,
+    bool stored_values
 ) {
     auto [infos, updated_ind3] = get_segment_positions(ind3, book.size());
     ind3 = std::move(updated_ind3);
 
     std::vector<std::vector<uint8_t>> blocks(infos.size());
+    std::vector<std::exception_ptr> errors(infos.size());
     #pragma omp parallel for schedule(dynamic, 8)
     for (int64_t idx = 0; idx < static_cast<int64_t>(infos.size()); ++idx) {
         const SegmentInfo &info = infos[static_cast<size_t>(idx)];
         const uint8_t *bytes = reinterpret_cast<const uint8_t *>(book.data() + info.start);
         const size_t byte_count = static_cast<size_t>(info.end - info.start) * sizeof(CompactBookEntry<T>);
-        blocks[static_cast<size_t>(idx)] = compress_xz_block_native(bytes, byte_count, 1);
+        try {
+            blocks[static_cast<size_t>(idx)] = ResultCompression::encode(bytes, byte_count, 1, stored_values);
+        } catch (...) {
+            errors[static_cast<size_t>(idx)] = std::current_exception();
+        }
+    }
+    for (const auto &error : errors) {
+        if (error) std::rethrow_exception(error);
     }
 
     std::vector<TrieSegmentEntry> segments;
@@ -293,9 +305,7 @@ std::vector<TrieSegmentEntry> compress_and_save_parallel(
     }
     for (size_t idx = 0; idx < infos.size(); ++idx) {
         const auto &block = blocks[idx];
-        if (!block.empty()) {
-            FileIOUtils::write_exact(out, block.data(), block.size(), NativePath::to_utf8_string(z_path));
-        }
+        FileIOUtils::write_exact(out, block.data(), block.size(), NativePath::to_utf8_string(z_path));
         current_size += static_cast<uint64_t>(block.size());
         segments.push_back({infos[idx].split_index, current_size});
     }
@@ -316,6 +326,9 @@ bool trie_compress_typed(const std::string &book_path, const std::string &output
     }
 
     TrieIndexData<T> data = build_trie_index(rows);
+    const bool stored_values = ResultCompression::use_stored_values(
+        reinterpret_cast<const uint8_t *>(data.book.data()),
+        data.book.size() * sizeof(CompactBookEntry<T>), sizeof(CompactBookEntry<T>), 1, book_path);
     fs::path final_dir = output_reference_path;
     final_dir.replace_extension(".z");
     fs::path temp_dir = final_dir;
@@ -333,8 +346,8 @@ bool trie_compress_typed(const std::string &book_path, const std::string &output
         z_path += "z";
         std::vector<TrieSegmentEntry> segments =
             (data.book.size() >= kTrieParallelThreshold)
-                ? compress_and_save_parallel(data.ind3, data.book, z_path)
-                : compress_and_save_serial(data.ind3, data.book, z_path);
+                ? compress_and_save_parallel(data.ind3, data.book, z_path, stored_values)
+                : compress_and_save_serial(data.ind3, data.book, z_path, stored_values);
         if (segments.empty()) {
             fs::remove_all(temp_dir, cleanup_ec);
             return false;
@@ -369,6 +382,16 @@ bool trie_compress_typed(const std::string &book_path, const std::string &output
         write_binary_vector(ii_path, ind3_short);
         write_binary_vector(i_path, ind);
         write_binary_vector(s_path, segments);
+
+        const uint64_t encoded_bytes = fs::file_size(z_path) + fs::file_size(ii_path) +
+                                       fs::file_size(i_path) + fs::file_size(s_path);
+        if (encoded_bytes >= size - size / 20) {
+            std::clog << "RESULT_COMPRESSION path=" << book_path
+                      << " mode=original reason=final_size raw_bytes=" << size
+                      << " stored_bytes=" << encoded_bytes << '\n';
+            fs::remove_all(temp_dir, cleanup_ec);
+            return false; // Preserve the source .book when the complete trie has no useful saving.
+        }
 
         std::error_code publish_ec;
         fs::remove_all(final_dir, publish_ec);

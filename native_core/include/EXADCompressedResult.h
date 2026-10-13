@@ -3,6 +3,7 @@
 #include "EXADIO.h"
 #include "EXADSolvedLayer.h"
 #include "FormationRuntime.h"
+#include "ResultCompression.h"
 
 #include <cstdint>
 #include <string>
@@ -54,7 +55,8 @@ CompressStats compress_exad_solved_layer_to_result(
     const std::string& output_path,
     uint32_t bucket_block_raw_target_bytes = 512u * 1024u,
     uint32_t success_block_values = 65536u,
-    int compression_level = 5);
+    int compression_level = 5,
+    const ResultCompression::Context &context = {});
 
 template <typename T>
 CompressStats compress_exad_solved_layer_to_result_from_memory(
@@ -64,7 +66,8 @@ CompressStats compress_exad_solved_layer_to_result_from_memory(
     const std::string& output_path,
     uint32_t bucket_block_raw_target_bytes = 512u * 1024u,
     uint32_t success_block_values = 65536u,
-    int compression_level = 5);
+    int compression_level = 5,
+    const ResultCompression::Context &context = {});
 
 template <typename T>
 EXAD::SolvedLayer<T> read_exad_compressed_layer(

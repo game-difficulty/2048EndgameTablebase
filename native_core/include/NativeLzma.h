@@ -75,6 +75,8 @@ private:
 };
 
 std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, int lvl = 1);
+// Standard XZ stream containing uncompressed LZMA2 chunks, readable by existing decoders.
+std::vector<uint8_t> store_xz_block_native(const uint8_t *data, size_t size);
 std::vector<uint8_t> decompress_xz_block_native(const uint8_t *data, size_t size);
 uint64_t crc64_bytes_native(const uint8_t *data, size_t size);
 

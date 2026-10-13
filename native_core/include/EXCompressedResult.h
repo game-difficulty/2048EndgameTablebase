@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FormationRuntime.h"
+#include "ResultCompression.h"
 
 #include <cstdint>
 #include <string>
@@ -73,7 +74,8 @@ CompressStats compress_zbook_to_ex_result(
     const std::string &output_path,
     uint32_t bucket_block_buckets = 4096,
     uint32_t success_block_values = 65536,
-    int compression_level = 5
+    int compression_level = 5,
+    const ResultCompression::Context &context = {}
 );
 
 CompressStats compress_prefix36_layer_view_to_ex_result(
@@ -82,7 +84,8 @@ CompressStats compress_prefix36_layer_view_to_ex_result(
     const std::string &output_path,
     uint32_t bucket_block_buckets = 4096,
     uint32_t success_block_values = 65536,
-    int compression_level = 5
+    int compression_level = 5,
+    const ResultCompression::Context &context = {}
 );
 
 void decompress_ex_result_to_zbook(

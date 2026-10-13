@@ -4,6 +4,7 @@
 #include "EXADSolvedLayer.h"
 #include "NativeLzma.h"
 #include "PathUtils.h"
+#include "ResultCompression.h"
 
 #include <algorithm>
 #include <array>
@@ -581,7 +582,8 @@ CompressStats compress_layer_impl(
     EXAD::DTypeMode mode,
     uint32_t bucket_block_raw_target_bytes,
     uint32_t success_block_values,
-    int compression_level) {
+    int compression_level,
+    const ResultCompression::Context &context) {
     const double t0 = wall_time_seconds();
     if (layer.lut_signature != 0 && luts.config_signature != 0 &&
         layer.lut_signature != luts.config_signature) {
@@ -691,6 +693,12 @@ CompressStats compress_layer_impl(
     }
 
     const auto* values_bytes = reinterpret_cast<const uint8_t*>(layer.success_values.data());
+    const bool stored_values = ResultCompression::with_layer_policy(
+        context, static_cast<uint32_t>(mode), compression_level,
+        {layer.row_width.begin(), layer.row_width.end()}, [&] {
+            return ResultCompression::use_stored_values(
+                values_bytes, layer.success_values.size() * sizeof(T), sizeof(T), compression_level, output_path);
+        });
     const uint32_t value_workers = compression_worker_count(value_block_count);
     for (uint64_t batch_begin = 0; batch_begin < value_block_count; batch_begin += value_workers) {
         const uint64_t batch_end = std::min<uint64_t>(value_block_count, batch_begin + value_workers);
@@ -705,7 +713,7 @@ CompressStats compress_layer_impl(
                 std::vector<uint8_t> raw(values_bytes + first * sizeof(T),
                                          values_bytes + first * sizeof(T) + raw_size);
                 CompressedValueBlock result;
-                result.compressed = compress_block_or_throw(raw, compression_level);
+                result.compressed = ResultCompression::encode(raw.data(), raw.size(), compression_level, stored_values);
                 result.raw_size = raw_size;
                 result.dir.first_value_index = first;
                 result.dir.value_count = count;
@@ -754,7 +762,8 @@ CompressStats compress_impl(
     EXAD::DTypeMode mode,
     uint32_t bucket_block_raw_target_bytes,
     uint32_t success_block_values,
-    int compression_level) {
+    int compression_level,
+    const ResultCompression::Context &context) {
     const auto luts = EXAD::read_lut_file(exadlut_path);
     auto layer = EXAD::read_solved_layer_file<T>(exadbook_path, mode, {});
     return compress_layer_impl(
@@ -766,7 +775,8 @@ CompressStats compress_impl(
         mode,
         bucket_block_raw_target_bytes,
         success_block_values,
-        compression_level
+        compression_level,
+        context
     );
 }
 
@@ -1696,27 +1706,28 @@ CompressStats compress_exad_solved_layer_to_result(
     const std::string& output_path,
     uint32_t bucket_block_raw_target_bytes,
     uint32_t success_block_values,
-    int compression_level) {
+    int compression_level,
+    const ResultCompression::Context &context) {
     const auto mode = read_exadbook_dtype_mode(exadbook_path);
     switch (mode) {
     case EXAD::DTypeMode::UInt32:
         return compress_impl<uint32_t>(exadbook_path, exadlut_path, output_path, mode,
                                        bucket_block_raw_target_bytes, success_block_values,
-                                       compression_level);
+                                       compression_level, context);
     case EXAD::DTypeMode::UInt64:
         return compress_impl<uint64_t>(exadbook_path, exadlut_path, output_path, mode,
                                        bucket_block_raw_target_bytes, success_block_values,
-                                       compression_level);
+                                       compression_level, context);
     case EXAD::DTypeMode::Float32:
     case EXAD::DTypeMode::OneMinusFloat32:
         return compress_impl<float>(exadbook_path, exadlut_path, output_path, mode,
                                     bucket_block_raw_target_bytes, success_block_values,
-                                    compression_level);
+                                    compression_level, context);
     case EXAD::DTypeMode::Float64:
     case EXAD::DTypeMode::OneMinusFloat64:
         return compress_impl<double>(exadbook_path, exadlut_path, output_path, mode,
                                      bucket_block_raw_target_bytes, success_block_values,
-                                     compression_level);
+                                     compression_level, context);
     }
     throw std::runtime_error("unsupported EXAD dtype mode");
 }
@@ -1729,7 +1740,8 @@ CompressStats compress_exad_solved_layer_to_result_from_memory(
     const std::string& output_path,
     uint32_t bucket_block_raw_target_bytes,
     uint32_t success_block_values,
-    int compression_level) {
+    int compression_level,
+    const ResultCompression::Context &context) {
     return compress_layer_impl(
         layer,
         luts,
@@ -1739,7 +1751,8 @@ CompressStats compress_exad_solved_layer_to_result_from_memory(
         layer.dtype_mode,
         bucket_block_raw_target_bytes,
         success_block_values,
-        compression_level
+        compression_level,
+        context
     );
 }
 
@@ -1750,7 +1763,8 @@ template CompressStats compress_exad_solved_layer_to_result_from_memory<uint32_t
     const std::string&,
     uint32_t,
     uint32_t,
-    int);
+    int,
+    const ResultCompression::Context &);
 template CompressStats compress_exad_solved_layer_to_result_from_memory<uint64_t>(
     const EXAD::SolvedLayer<uint64_t>&,
     const EXAD::Luts&,
@@ -1758,7 +1772,8 @@ template CompressStats compress_exad_solved_layer_to_result_from_memory<uint64_t
     const std::string&,
     uint32_t,
     uint32_t,
-    int);
+    int,
+    const ResultCompression::Context &);
 template CompressStats compress_exad_solved_layer_to_result_from_memory<float>(
     const EXAD::SolvedLayer<float>&,
     const EXAD::Luts&,
@@ -1766,7 +1781,8 @@ template CompressStats compress_exad_solved_layer_to_result_from_memory<float>(
     const std::string&,
     uint32_t,
     uint32_t,
-    int);
+    int,
+    const ResultCompression::Context &);
 template CompressStats compress_exad_solved_layer_to_result_from_memory<double>(
     const EXAD::SolvedLayer<double>&,
     const EXAD::Luts&,
@@ -1774,7 +1790,8 @@ template CompressStats compress_exad_solved_layer_to_result_from_memory<double>(
     const std::string&,
     uint32_t,
     uint32_t,
-    int);
+    int,
+    const ResultCompression::Context &);
 
 template <typename T>
 EXAD::SolvedLayer<T> read_exad_compressed_layer(

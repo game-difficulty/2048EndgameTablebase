@@ -109,6 +109,15 @@ std::wstring utf8_to_wide(const std::string &value) {
 #endif
 
 struct LzmaApi {
+    decltype(&lzma_block_uncomp_encode) block_uncomp_encode = nullptr;
+    decltype(&lzma_block_unpadded_size) block_unpadded_size = nullptr;
+    decltype(&lzma_stream_header_encode) stream_header_encode = nullptr;
+    decltype(&lzma_stream_footer_encode) stream_footer_encode = nullptr;
+    decltype(&lzma_index_init) index_init = nullptr;
+    decltype(&lzma_index_end) index_end = nullptr;
+    decltype(&lzma_index_append) index_append = nullptr;
+    decltype(&lzma_index_size) index_size = nullptr;
+    decltype(&lzma_index_buffer_encode) index_buffer_encode = nullptr;
 #ifdef _WIN32
     HMODULE module = nullptr;
 #else
@@ -187,6 +196,15 @@ LzmaApi &lzma_api() {
             reinterpret_cast<lzma_ret (*)(uint64_t *, uint32_t, const lzma_allocator *, const uint8_t *, size_t *, size_t, uint8_t *, size_t *, size_t)>(
                 load_symbol("lzma_stream_buffer_decode"));
         api.loaded = api.stream_buffer_bound && api.easy_buffer_encode && api.stream_buffer_decode;
+        api.block_uncomp_encode = reinterpret_cast<decltype(api.block_uncomp_encode)>(load_symbol("lzma_block_uncomp_encode"));
+        api.block_unpadded_size = reinterpret_cast<decltype(api.block_unpadded_size)>(load_symbol("lzma_block_unpadded_size"));
+        api.stream_header_encode = reinterpret_cast<decltype(api.stream_header_encode)>(load_symbol("lzma_stream_header_encode"));
+        api.stream_footer_encode = reinterpret_cast<decltype(api.stream_footer_encode)>(load_symbol("lzma_stream_footer_encode"));
+        api.index_init = reinterpret_cast<decltype(api.index_init)>(load_symbol("lzma_index_init"));
+        api.index_end = reinterpret_cast<decltype(api.index_end)>(load_symbol("lzma_index_end"));
+        api.index_append = reinterpret_cast<decltype(api.index_append)>(load_symbol("lzma_index_append"));
+        api.index_size = reinterpret_cast<decltype(api.index_size)>(load_symbol("lzma_index_size"));
+        api.index_buffer_encode = reinterpret_cast<decltype(api.index_buffer_encode)>(load_symbol("lzma_index_buffer_encode"));
     });
     return api;
 }
@@ -1323,6 +1341,46 @@ bool is_readable_7z_or_xz_archive(const std::string &archive_path) {
 
 std::vector<uint8_t> compress_xz_block_native(const uint8_t *data, size_t size, int lvl) {
     return xz_compress_bytes(data, size, static_cast<uint32_t>(lvl));
+}
+
+std::vector<uint8_t> store_xz_block_native(const uint8_t *data, size_t size) {
+    const auto &api = lzma_api();
+    if (!api.loaded || !api.block_uncomp_encode || !api.block_unpadded_size ||
+        !api.stream_header_encode || !api.stream_footer_encode || !api.index_init ||
+        !api.index_end || !api.index_append || !api.index_size || !api.index_buffer_encode) {
+        throw std::runtime_error("liblzma uncompressed XZ encoder unavailable");
+    }
+    if (size != 0 && data == nullptr) throw std::invalid_argument("null XZ input");
+    const size_t capacity = api.stream_buffer_bound(size);
+    if (capacity == 0) throw std::overflow_error("XZ stored block too large");
+    std::vector<uint8_t> output(capacity);
+    lzma_stream_flags flags{};
+    flags.check = LZMA_CHECK_CRC64;
+    if (api.stream_header_encode(&flags, output.data()) != LZMA_OK) {
+        throw std::runtime_error("XZ stored stream header failed");
+    }
+    size_t pos = LZMA_STREAM_HEADER_SIZE;
+    lzma_filter filters[] = {{LZMA_VLI_UNKNOWN, nullptr}};
+    lzma_block block{};
+    block.check = flags.check;
+    block.filters = filters;
+    if (api.block_uncomp_encode(&block, data, size, output.data(), &pos, capacity) != LZMA_OK) {
+        throw std::runtime_error("XZ stored block encoding failed");
+    }
+    auto release_index = [&](lzma_index *index) { api.index_end(index, nullptr); };
+    std::unique_ptr<lzma_index, decltype(release_index)> index(api.index_init(nullptr), release_index);
+    if (!index) throw std::bad_alloc();
+    if (api.index_append(index.get(), nullptr, api.block_unpadded_size(&block), size) != LZMA_OK ||
+        api.index_buffer_encode(index.get(), output.data(), &pos, capacity) != LZMA_OK) {
+        throw std::runtime_error("XZ stored stream index failed");
+    }
+    flags.backward_size = api.index_size(index.get());
+    if (capacity - pos < LZMA_STREAM_HEADER_SIZE ||
+        api.stream_footer_encode(&flags, output.data() + pos) != LZMA_OK) {
+        throw std::runtime_error("XZ stored stream footer failed");
+    }
+    output.resize(pos + LZMA_STREAM_HEADER_SIZE);
+    return output;
 }
 
 std::vector<uint8_t> decompress_xz_block_native(const uint8_t *data, size_t size) {

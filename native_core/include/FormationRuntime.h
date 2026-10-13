@@ -16,6 +16,7 @@
 #include <optional>
 #include <charconv>
 #include <mutex>
+#include <memory>
 #include <system_error>
 #include <type_traits>
 #include <unordered_map>
@@ -45,6 +46,8 @@ struct PatternSpec {
     uint64_t physical_pattern_signature = 0;
 };
 
+namespace ResultCompression { struct ValuePolicy; }
+
 struct RunOptions {
     int target = 0; // Encoding exponent (legacy tile goal also uses this exponent).
     int sum_target = 0; // 0 = legacy tile goal; otherwise post-move sum modulo 16384.
@@ -61,6 +64,7 @@ struct RunOptions {
     double relative_deletion_threshold = 0.0;
     std::string deletion_threshold_signal_path;
     bool compress = false;
+    std::shared_ptr<ResultCompression::ValuePolicy> result_value_policy;
     bool compress_temp_files = false;
     bool optimal_branch_only = false;
     bool chunked_solve = false;

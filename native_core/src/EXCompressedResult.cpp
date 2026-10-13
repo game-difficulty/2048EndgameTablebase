@@ -5,6 +5,7 @@
 #include "FileIOUtils.h"
 #include "NativeLzma.h"
 #include "PathUtils.h"
+#include "ResultCompression.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1115,7 +1116,8 @@ CompressStats compress_prefix36_layer_file(
     const std::string &output_path,
     uint32_t bucket_block_buckets,
     uint32_t success_block_values,
-    int compression_level
+    int compression_level,
+    const ResultCompression::Context &context
 ) {
     const double t0 = wall_time_seconds();
     if (bucket_block_buckets == 0U || success_block_values == 0U) {
@@ -1286,6 +1288,15 @@ CompressStats compress_prefix36_layer_file(
         }
     }
 
+    const bool stored_values = ResultCompression::with_layer_policy(context, source.dtype_mode, compression_level, {}, [&] {
+        std::ifstream sample_file(NativePath::from_utf8(zbook_path), std::ios::binary);
+        if (!sample_file) throw std::runtime_error("failed to open EX sample: " + zbook_path);
+        return ResultCompression::use_stored_values(
+            source.success_value_count * source.value_size, source.value_size, compression_level, output_path,
+            [&](uint64_t offset, size_t take) {
+                return read_range_from(sample_file, layout.success_values_offset + offset, take, zbook_path);
+            });
+    });
     const uint32_t success_workers = compression_worker_count(success_block_count);
     for (uint64_t batch_begin = 0; batch_begin < success_block_count; batch_begin += success_workers) {
         const uint64_t batch_end = std::min<uint64_t>(success_block_count, batch_begin + success_workers);
@@ -1308,7 +1319,7 @@ CompressStats compress_prefix36_layer_file(
                     zbook_path
                 );
                 CompressedPrefix36SuccessBlock result;
-                result.compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
+                result.compressed = ResultCompression::encode(raw.data(), raw.size(), compression_level, stored_values);
                 result.raw_size = raw.size();
                 result.entry.first_value_index = first;
                 result.entry.value_count = count;
@@ -1348,7 +1359,8 @@ CompressStats compress_prefix36_layer_view_impl(
     const std::string &output_path,
     uint32_t bucket_block_buckets,
     uint32_t success_block_values,
-    int compression_level
+    int compression_level,
+    const ResultCompression::Context &context
 ) {
     const double t0 = wall_time_seconds();
     if (bucket_block_buckets == 0U || success_block_values == 0U) {
@@ -1493,6 +1505,11 @@ CompressStats compress_prefix36_layer_view_impl(
         }
     }
 
+    const bool stored_values = ResultCompression::with_layer_policy(context, layer.dtype_mode, compression_level, {}, [&] {
+        return ResultCompression::use_stored_values(
+            static_cast<const uint8_t *>(layer.success_values),
+            layer.success_value_count * layer.value_size, layer.value_size, compression_level, output_path);
+    });
     const uint32_t success_workers = compression_worker_count(success_block_count);
     for (uint64_t batch_begin = 0; batch_begin < success_block_count; batch_begin += success_workers) {
         const uint64_t batch_end = std::min<uint64_t>(success_block_count, batch_begin + success_workers);
@@ -1506,7 +1523,7 @@ CompressStats compress_prefix36_layer_view_impl(
                 );
                 std::vector<uint8_t> raw = prefix36_success_raw_from_view(layer, first, count);
                 CompressedPrefix36SuccessBlock result;
-                result.compressed = compress_block_or_throw(raw.data(), raw.size(), compression_level);
+                result.compressed = ResultCompression::encode(raw.data(), raw.size(), compression_level, stored_values);
                 result.raw_size = raw.size();
                 result.entry.first_value_index = first;
                 result.entry.value_count = count;
@@ -2141,7 +2158,8 @@ CompressStats compress_zbook_to_ex_result(
     const std::string &output_path,
     uint32_t bucket_block_buckets,
     uint32_t success_block_values,
-    int compression_level
+    int compression_level,
+    const ResultCompression::Context &context
 ) {
     if (is_prefix36_layer_file(zbook_path)) {
         return compress_prefix36_layer_file(
@@ -2150,7 +2168,8 @@ CompressStats compress_zbook_to_ex_result(
             output_path,
             bucket_block_buckets,
             success_block_values,
-            compression_level
+            compression_level,
+            context
         );
     }
     throw std::runtime_error("EX compression only supports current prefix36 zbook files; rebuild the input layer");
@@ -2162,7 +2181,8 @@ CompressStats compress_prefix36_layer_view_to_ex_result(
     const std::string &output_path,
     uint32_t bucket_block_buckets,
     uint32_t success_block_values,
-    int compression_level
+    int compression_level,
+    const ResultCompression::Context &context
 ) {
     return compress_prefix36_layer_view_impl(
         layer,
@@ -2170,7 +2190,8 @@ CompressStats compress_prefix36_layer_view_to_ex_result(
         output_path,
         bucket_block_buckets,
         success_block_values,
-        compression_level
+        compression_level,
+        context
     );
 }
 

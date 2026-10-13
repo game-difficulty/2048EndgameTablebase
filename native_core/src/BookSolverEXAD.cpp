@@ -618,10 +618,13 @@ double maybe_compress_exad_solved_file(const RunOptions &options, int step, bool
     );
     const std::string compressed_path = lease.path();
     const double t0 = wall_time_seconds();
+    const auto thresholds = RuntimeControls::current_deletion_thresholds(options);
     EXADCompressedResult::compress_exad_solved_layer_to_result(
         solved_path,
         EXAD::lut_file_path(options.pathname),
-        compressed_path
+        compressed_path,
+        512U * 1024U, 65536U, 5,
+        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative}
     );
     const double elapsed = wall_time_seconds() - t0;
     if (remove_source_after_compress) {
@@ -675,11 +678,14 @@ double compress_exad_solved_layer_from_memory(
     std::error_code ec;
     NativePath::remove(temp_path, ec);
     const double t0 = wall_time_seconds();
+    const auto thresholds = RuntimeControls::current_deletion_thresholds(options);
     EXADCompressedResult::compress_exad_solved_layer_to_result_from_memory(
         layer,
         luts,
         solved_path,
-        temp_path
+        temp_path,
+        512U * 1024U, 65536U, 5,
+        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative}
     );
     FileIOUtils::finalize_temporary_file(temp_path, compressed_path);
     NativePath::remove(solved_path, ec);
@@ -4409,8 +4415,10 @@ void recalculate_process_exad_chunked_impl(
 void run_pattern_solve_exad_cpp(
     const std::vector<uint64_t> &arr_init,
     const AdvancedPatternSpec &spec,
-    const RunOptions &options
+    const RunOptions &input_options
 ) {
+    RunOptions options = input_options;
+    options.result_value_policy = std::make_shared<ResultCompression::ValuePolicy>();
     (void)HybridSearch::mode();
     const bool use_chunked_solve = options.chunked_solve || exad_force_standard_chunked_solve();
     switch (success_rate_kind_from_name(options.success_rate_dtype)) {

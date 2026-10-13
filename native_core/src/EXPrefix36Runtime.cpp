@@ -1791,13 +1791,15 @@ double compress_layer_result_from_memory(
     const std::string temp_path = output_path + ".tmp";
     std::error_code ec;
     NativePath::remove(temp_path, ec);
+    const auto thresholds = RuntimeControls::current_deletion_thresholds(options);
     EXCompressedResult::compress_prefix36_layer_view_to_ex_result(
         layer_compression_view(layer, spec, mode),
         lut_file_path(options.pathname),
         temp_path,
         4096U,
         65536U,
-        5
+        5,
+        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative}
     );
     FileIOUtils::finalize_temporary_file(temp_path, output_path);
     if (remove_zbook_after) {
@@ -1833,13 +1835,15 @@ double compress_layer_result_from_file(const RunOptions &options, int step) {
     const std::string temp_path = output_path + ".tmp";
     std::error_code ec;
     NativePath::remove(temp_path, ec);
+    const auto thresholds = RuntimeControls::current_deletion_thresholds(options);
     EXCompressedResult::compress_zbook_to_ex_result(
         zbook_path,
         lut_file_path(options.pathname),
         temp_path,
         4096U,
         65536U,
-        5
+        5,
+        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative}
     );
     FileIOUtils::finalize_temporary_file(temp_path, output_path);
     NativePath::remove(zbook_path, ec);
@@ -4536,8 +4540,10 @@ void run_pattern_solve_typed(
 void run_pattern_solve(
     const std::vector<uint64_t> &arr_init,
     const PatternSpec &spec,
-    const RunOptions &options
+    const RunOptions &input_options
 ) {
+    RunOptions options = input_options;
+    options.result_value_policy = std::make_shared<ResultCompression::ValuePolicy>();
     switch (dtype_mode_from_name(options.success_rate_dtype)) {
         case DTypeMode::UInt64:
             run_pattern_solve_typed<uint64_t>(arr_init, spec, options);
@@ -4560,9 +4566,11 @@ void run_pattern_solve(
 void run_pattern_solve_single_layer(
     const std::vector<uint64_t> &arr_init,
     const PatternSpec &spec,
-    const RunOptions &options,
+    const RunOptions &input_options,
     int step
 ) {
+    RunOptions options = input_options;
+    options.result_value_policy = std::make_shared<ResultCompression::ValuePolicy>();
     const LutBundle lut = load_or_build_prefix36_lut(arr_init, spec, options);
     switch (dtype_mode_from_name(options.success_rate_dtype)) {
         case DTypeMode::UInt64:
