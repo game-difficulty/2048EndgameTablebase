@@ -3953,6 +3953,53 @@ void recalculate_process_exad_impl(
     append_exad_solve_stats_record(options, total_record);
 }
 
+// Prepare retirement while +4 is resident, but keep exact files until the
+// dependent current layer has been published successfully.
+struct EXADStagedRetirement {
+    StoragePaths::ReservedWritePath lease;
+    std::string staged_path;
+    std::string source_path;
+    bool compressed = false;
+
+    ~EXADStagedRetirement() {
+        if (!staged_path.empty()) {
+            std::error_code ec;
+            NativePath::remove(staged_path, ec);
+            NativePath::remove(FileIOUtils::temp_write_path(staged_path), ec);
+        }
+    }
+
+    template <typename T>
+    void prepare(const RunOptions &options, int step, const EXAD::SolvedLayer<T> &layer,
+                 const EXAD::Luts &luts, FileIOUtils::DirectIoConfig io_config,
+                 RuntimeControls::DeletionThresholdState thresholds) {
+        compressed = options.compress;
+        source_path = exad_solved_file_path(options, step);
+        lease = StoragePaths::reserve_write_path(
+            options, compressed ? StoragePaths::ArtifactRole::Cold : StoragePaths::ArtifactRole::Hot,
+            step, compressed ? EXADCompressedResult::kCompressedLayerFileExtension : ".exadbook",
+            compressed ? estimate_exad_compressed_bytes(layer) : EXAD::solved_serialized_size(layer));
+        staged_path = lease.path() + ".retire_tmp";
+        if (compressed) {
+            EXADCompressedResult::compress_exad_solved_layer_to_result_from_memory(
+                layer, luts, source_path, staged_path, 512U * 1024U, 65536U, 5,
+                {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative});
+        } else {
+            EXAD::write_solved_layer_file(staged_path, layer, io_config);
+        }
+    }
+
+    void publish() {
+        if (staged_path.empty()) return;
+        FileIOUtils::finalize_temporary_file(staged_path, lease.path());
+        staged_path.clear();
+        if (compressed && EXAD::solved_file_exists(source_path)) {
+            remove_exad_solved_file_after_compression(source_path, lease.path());
+        }
+        lease.release();
+    }
+};
+
 template <typename T>
 void recalculate_process_exad_chunked_impl(
     const std::vector<uint64_t> &arr_init,
@@ -4001,6 +4048,8 @@ void recalculate_process_exad_chunked_impl(
         }
     };
 
+    EXAD::SolvedLayer<T> future = empty_future_layer<T>(dtype_mode);
+    int cached_future_step = std::numeric_limits<int>::min();
     for (int step = solve_plan.first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
@@ -4048,6 +4097,14 @@ void recalculate_process_exad_chunked_impl(
         std::array<EXADSlotChunkManifest, bucket_slot_count()> manifests{};
         std::array<std::vector<std::string>, bucket_slot_count()> partial_chunk_paths{};
         EXAD::LayerFileInfo layer_info{};
+        double future_compact_seconds = 0.0;
+        double future_write_seconds = 0.0;
+        double compress_seconds = 0.0;
+        uint64_t future_threshold_values_before = 0;
+        uint64_t future_threshold_values_after = future_threshold_values_before;
+        double effective_deletion_threshold = 0.0;
+
+        EXADStagedRetirement retirement;
 
         if (!exad_temp_layer_exists(options, step)) {
             ensure_exad_temp_through_cpp(arr_init, spec, options, step);
@@ -4059,13 +4116,18 @@ void recalculate_process_exad_chunked_impl(
         }
         const std::string layer_path = exad_existing_temp_layer_path(options, step);
         {
-            EXAD::SolvedLayer<T> future = empty_future_layer<T>(dtype_mode);
-            int cached_future_step = std::numeric_limits<int>::min();
+            // Across consecutive steps, the previous +2 layer is this +4 layer.
+            // A skipped layer breaks that identity; release it before loading.
+            const bool reused = cached_future_step == step + 2;
+            if (!reused) future = empty_future_layer<T>(dtype_mode);
             load_future_layer(
-                options, step + 1, dtype_mode, luts, future, cached_future_step, io_config,
+                options, step + 2, dtype_mode, luts, future, cached_future_step, io_config,
                 future_read_seconds, future_index_seconds
             );
 
+            debug_log("EXAD chunked step " + std::to_string(step) +
+                      " spawn4 future=" + std::to_string(step + 2) +
+                      (reused ? " reused" : " loaded"));
             const double open_t0 = wall_time_seconds();
             EXAD::LayerSlotReader reader(layer_path, io_config);
             layer_info = reader.info();
@@ -4109,13 +4171,13 @@ void recalculate_process_exad_chunked_impl(
                     recalculate_exad_direct_single_future(
                         current,
                         future,
-                        1ULL,
-                        1.0 - options.spawn_rate4,
+                        2ULL,
+                        options.spawn_rate4,
                         luts,
                         masker.tiles_combination_table,
                         masker.permutation_table,
                         param,
-                        static_cast<uint32_t>(2 * step) + ini_board_sum + 2U,
+                        static_cast<uint32_t>(2 * step) + ini_board_sum + 4U,
                         spec,
                         max_scale,
                         zero_val,
@@ -4135,7 +4197,57 @@ void recalculate_process_exad_chunked_impl(
                 }
             }
             reader.close();
+            future_threshold_values_before = static_cast<uint64_t>(future.success_values.size());
+            future_threshold_values_after = future_threshold_values_before;
+            if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state) && !future.empty()) {
+                bool should_compact_future = deletion_threshold_state.absolute > 0.0;
+                T layer_threshold = RuntimeControls::absolute_deletion_threshold(
+                    zero_val,
+                    max_scale,
+                    deletion_threshold_state
+                );
+                if (deletion_threshold_state.relative > 0.0) {
+                    const auto [ignored_future_values, future_max] =
+                        EXAD::solved_value_count_and_max(future, zero_val);
+                    (void)ignored_future_values;
+                    if (future_max > zero_val) {
+                        const T relative_threshold = RuntimeControls::relative_deletion_threshold(
+                            future_max,
+                            zero_val,
+                            deletion_threshold_state
+                        );
+                        layer_threshold = RuntimeControls::max_deletion_threshold(
+                            layer_threshold,
+                            relative_threshold
+                        );
+                        should_compact_future = true;
+                    }
+                }
+                if (should_compact_future) {
+                    effective_deletion_threshold =
+                        RuntimeControls::normalized_deletion_threshold(layer_threshold, zero_val, max_scale);
+                    const double future_compact_t0 = wall_time_seconds();
+                    EXAD::SolvedLayer<T> compacted_future =
+                        EXAD::compact_solved_layer(future, luts, layer_threshold, num_threads);
+                    future_compact_seconds = wall_time_seconds() - future_compact_t0;
+                    future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
+
+                    const double stage_t0 = wall_time_seconds();
+                    retirement.prepare(options, step + 2, compacted_future, luts,
+                                       io_config, deletion_threshold_state);
+                    const double stage_seconds = wall_time_seconds() - stage_t0;
+                    if (options.compress) compress_seconds += stage_seconds;
+                    else future_write_seconds += stage_seconds;
+                }
+            }
+            if (options.compress && retirement.staged_path.empty() && step + 2 <= last_solve_step) {
+                const double stage_t0 = wall_time_seconds();
+                retirement.prepare(options, step + 2, future, luts,
+                                   io_config, deletion_threshold_state);
+                compress_seconds += wall_time_seconds() - stage_t0;
+            }
             future = empty_future_layer<T>(dtype_mode);
+            cached_future_step = std::numeric_limits<int>::min();
         }
         maybe_throw_exad_chunked_test_stop(
             "EXAD_TEST_STOP_AFTER_CHUNKED_FIRST_PASS_STEP",
@@ -4143,18 +4255,9 @@ void recalculate_process_exad_chunked_impl(
             "after_first_pass"
         );
 
-        double future_compact_seconds = 0.0;
-        double future_write_seconds = 0.0;
-        double compress_seconds = 0.0;
-        uint64_t future_threshold_values_before = 0;
-        uint64_t future_threshold_values_after = future_threshold_values_before;
-        double effective_deletion_threshold = 0.0;
-
         {
-            EXAD::SolvedLayer<T> future = empty_future_layer<T>(dtype_mode);
-            int cached_future_step = std::numeric_limits<int>::min();
             load_future_layer(
-                options, step + 2, dtype_mode, luts, future, cached_future_step, io_config,
+                options, step + 1, dtype_mode, luts, future, cached_future_step, io_config,
                 future_read_seconds, future_index_seconds
             );
 
@@ -4176,13 +4279,13 @@ void recalculate_process_exad_chunked_impl(
                     recalculate_exad_direct_single_future(
                         current,
                         future,
-                        2ULL,
-                        options.spawn_rate4,
+                        1ULL,
+                        1.0 - options.spawn_rate4,
                         luts,
                         masker.tiles_combination_table,
                         masker.permutation_table,
                         param,
-                        static_cast<uint32_t>(2 * step) + ini_board_sum + 4U,
+                        static_cast<uint32_t>(2 * step) + ini_board_sum + 2U,
                         spec,
                         max_scale,
                         zero_val,
@@ -4236,57 +4339,6 @@ void recalculate_process_exad_chunked_impl(
                     }
                 }
             }
-
-            future_threshold_values_before = static_cast<uint64_t>(future.success_values.size());
-            future_threshold_values_after = future_threshold_values_before;
-            if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state) && !future.empty()) {
-                bool should_compact_future = deletion_threshold_state.absolute > 0.0;
-                T layer_threshold = RuntimeControls::absolute_deletion_threshold(
-                    zero_val,
-                    max_scale,
-                    deletion_threshold_state
-                );
-                if (deletion_threshold_state.relative > 0.0) {
-                    const auto [ignored_future_values, future_max] =
-                        EXAD::solved_value_count_and_max(future, zero_val);
-                    (void)ignored_future_values;
-                    if (future_max > zero_val) {
-                        const T relative_threshold = RuntimeControls::relative_deletion_threshold(
-                            future_max,
-                            zero_val,
-                            deletion_threshold_state
-                        );
-                        layer_threshold = RuntimeControls::max_deletion_threshold(
-                            layer_threshold,
-                            relative_threshold
-                        );
-                        should_compact_future = true;
-                    }
-                }
-                if (should_compact_future) {
-                    effective_deletion_threshold =
-                        RuntimeControls::normalized_deletion_threshold(layer_threshold, zero_val, max_scale);
-                    const double future_compact_t0 = wall_time_seconds();
-                    EXAD::SolvedLayer<T> compacted_future =
-                        EXAD::compact_solved_layer(future, luts, layer_threshold, num_threads);
-                    future_compact_seconds = wall_time_seconds() - future_compact_t0;
-                    future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
-
-                    if (options.compress) {
-                        compress_seconds += compress_exad_solved_layer_from_memory(
-                            options,
-                            step + 2,
-                            compacted_future,
-                            luts
-                        );
-                    } else {
-                        const double future_write_t0 = wall_time_seconds();
-                        write_exad_solved_layer_file(options, step + 2, compacted_future, io_config);
-                        future_write_seconds = wall_time_seconds() - future_write_t0;
-                    }
-                }
-            }
-            future = empty_future_layer<T>(dtype_mode);
         }
         maybe_throw_exad_chunked_test_stop(
             "EXAD_TEST_STOP_AFTER_CHUNKED_FINAL_CHUNKS_STEP",
@@ -4322,13 +4374,14 @@ void recalculate_process_exad_chunked_impl(
         );
         solved_lease.release();
         current_write_seconds += wall_time_seconds() - merge_t0;
+        const double publish_t0 = wall_time_seconds();
+        retirement.publish();
+        future_write_seconds += wall_time_seconds() - publish_t0;
         maybe_throw_exad_chunked_test_stop(
             "EXAD_TEST_STOP_AFTER_CHUNKED_SOLVED_WRITE_STEP",
             step,
             "after_solved_write"
         );
-        compress_seconds += maybe_compress_exad_solved_file(options, step, true);
-
         NativePath::remove_all(chunk_dir, cleanup_ec);
         if (cleanup_ec) {
             throw std::runtime_error("failed to remove EXAD chunk directory: " + chunk_dir);
@@ -4405,6 +4458,7 @@ void recalculate_process_exad_chunked_impl(
     total_record.deletion_threshold = deletion_threshold_state.absolute;
     total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     match_dict.clear();
+    future = empty_future_layer<T>(dtype_mode);
     total_record.compress_seconds += compress_all_exad_solved_files(options, true);
     remove_exad_temp_layers(options);
     append_exad_solve_stats_record(options, total_record);
