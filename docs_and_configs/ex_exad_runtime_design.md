@@ -238,8 +238,34 @@ The in-memory direct bucket entry is kept compact. It currently packs lookup
 fields into a 16-byte entry.
 
 Large bitmap rank offsets/bases are rebuilt at read time for O(1)-ish ordinal
-calculation; current version-5 `.zbook` files do not persist them. Compressed
-EX stores its own compressed block directories instead.
+calculation; raw layer files do not persist them. A reserved direct-entry rank
+marker reuses the full bitmap-word offset when the identical dense rank offset
+exceeds the packed 28-bit range, keeping the entry at 16 bytes. Compressed EX
+stores its own compressed block directories instead.
+
+### EX Scaled Success Offsets
+
+`success_offsets[]` and direct entries retain 32-bit offsets. Each layer has a
+power-of-two `success_stride`; the decoded address is
+`uint64(offset) * success_stride + bucket_ordinal`. Buckets keep key order and
+their individual success spans are padded to a stride multiple. The smallest
+fitting stride is selected using the padded unit count, not just the live count.
+Small layers use stride 1 with no padding. There are no small/large partitions.
+
+- `live_board_count` counts actual positions; `success_storage_count` includes
+  padding, even for generated layers without a success payload.
+- Kernels, compaction and sampling only visit bitmap-selected values. Padding
+  must not affect success maxima, pruning, or reported position counts.
+- Split/chunked solving keeps the input stride through both passes and output
+  concatenation; whole-layer compaction may select a smaller stride.
+- Legacy version 5 remains readable and is still written for stride 1. Strided
+  raw and compressed layers use version 6 without enlarging either header or
+  changing section widths. `reserved16` stores log2(stride); raw `reserved1`
+  and compressed `reserved0` store the padded count. `.zlut` is unchanged.
+- Existing `.exgen` layers are loaded as stride 1 without conversion or forward
+  regeneration. A generation resume still loads its local anchors and rebuilds
+  only the transient carry needed for the unfinished next layer. Old binaries
+  reject version 6 rather than interpreting scaled offsets as absolute offsets.
 
 ## 4. EX Generation
 

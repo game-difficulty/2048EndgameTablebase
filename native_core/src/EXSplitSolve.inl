@@ -72,7 +72,7 @@ uint64_t ex_layer_resident_estimate(const LayerFileHeader &header) {
         choose_direct_table_size(header.bucket_count) * (sizeof(uint32_t) + sizeof(BucketEntry));
     return layer_file_bytes(header) + header.bucket_count * (sizeof(uint32_t) + sizeof(BucketEntry)) +
         index_bytes + header.large_bitmap_words * sizeof(uint16_t) +
-        (header.success_value_count ? 0ULL : header.live_board_count * header.value_size);
+        (header.success_value_count ? 0ULL : layer_success_storage_count(header) * header.value_size);
 }
 
 template <typename T>
@@ -97,6 +97,7 @@ public:
         layer = {};
         layer.layer_sum = header.layer_sum;
         layer.threshold_bits = header.threshold_bits;
+        layer.success_stride = layer_success_stride(header);
         if (cursor_ == header.bucket_count) return false;
         uint64_t small_begin = UINT64_MAX, small_end = 0, large_begin = UINT64_MAX, large_end = 0;
         uint64_t value_begin = 0, value_end = 0;
@@ -112,22 +113,22 @@ public:
             const uint64_t next_large_begin = small ? large_begin : std::min(large_begin, uint64_t(bitmaps_[i]));
             const uint64_t next_small_end = small ? end : small_end;
             const uint64_t next_large_end = small ? large_end : end;
-            if (layer.bucket_keys.empty()) value_begin = values_[i];
+            if (layer.bucket_keys.empty()) value_begin = EXSuccessLayout::decode(values_[i], layer.success_stride);
             if (values_[i + 1] < values_[i]) throw std::runtime_error("EX split success offsets are unordered");
             const uint64_t estimate = (layer.bucket_keys.size() + 1) * 80ULL +
                 (next_small_begin == UINT64_MAX ? 0 : next_small_end - next_small_begin) +
                 (next_large_begin == UINT64_MAX ? 0 : (next_large_end - next_large_begin) * 10ULL) +
-                (values_[i + 1] - value_begin) * sizeof(T);
+                (EXSuccessLayout::decode(values_[i + 1], layer.success_stride) - value_begin) * sizeof(T);
             if (!layer.bucket_keys.empty() && estimate > budget) break;
             if (layer.bucket_keys.empty() && estimate > budget &&
                 !ex_solve_env_bytes("EX_TEST_CURRENT_CHUNK_BYTES"))
                 throw std::runtime_error("EX split solve cannot fit a single bucket in the current chunk budget");
             small_begin = next_small_begin; small_end = next_small_end;
             large_begin = next_large_begin; large_end = next_large_end;
-            value_end = values_[i + 1];
+            value_end = EXSuccessLayout::decode(values_[i + 1], layer.success_stride);
             layer.bucket_keys.push_back(key);
             layer.bitmap_offsets.push_back(bitmaps_[i]);
-            layer.success_offsets.push_back(static_cast<uint32_t>(values_[i] - value_begin));
+            layer.success_offsets.push_back(static_cast<uint32_t>(values_[i] - value_begin / layer.success_stride));
             ++cursor_;
         }
         if (small_begin != UINT64_MAX) {
@@ -141,15 +142,17 @@ public:
             read(4, large_begin * 8, layer.large_bitmap_words.data(), layer.large_bitmap_words.size() * 8);
         }
         for (size_t i = 0; i < layer.bucket_keys.size(); ++i) {
-            const bool small = valid_suffix_count_for_key(sizes_, layer.bucket_keys[i], path_) <= header.threshold_bits;
+            const uint32_t valid = valid_suffix_count_for_key(sizes_, layer.bucket_keys[i], path_);
+            const bool small = valid <= header.threshold_bits;
             layer.bitmap_offsets[i] -= static_cast<uint32_t>(small ? small_begin : large_begin);
+            layer.live_board_count += bucket_live_count(layer, i, valid);
         }
-        layer.live_board_count = value_end - value_begin;
-        if (value_end > header.live_board_count) throw std::runtime_error("EX split value range mismatch");
+        layer.success_storage_count = value_end - value_begin;
+        if (value_end > layer_success_storage_count(header)) throw std::runtime_error("EX split value range mismatch");
         if (header.success_value_count) {
             if (header.value_size != sizeof(T) || value_end > header.success_value_count)
                 throw std::runtime_error("EX split dtype/value count mismatch");
-            layer.success_values.resize(layer.live_board_count);
+            layer.success_values.resize(layer.success_storage_count);
             read(5, value_begin * sizeof(T), layer.success_values.data(), layer.success_values.size() * sizeof(T));
         }
         return true;
@@ -177,7 +180,8 @@ private:
         read(0, cursor_ * 8, keys_.data(), n * 8);
         read(1, cursor_ * 4, bitmaps_.data(), n * 4);
         read(2, cursor_ * 4, values_.data(), n * 4);
-        values_[n] = cursor_ + n < header.bucket_count ? 0 : header.live_board_count;
+        values_[n] = cursor_ + n < header.bucket_count ? 0 :
+            static_cast<uint32_t>(layer_success_storage_count(header) / layer_success_stride(header));
         if (cursor_ + n < header.bucket_count) read(2, (cursor_ + n) * 4, &values_[n], 4);
     }
     std::string path_;
@@ -199,11 +203,14 @@ public:
         header_.small_bitmap_bytes = header_.large_bitmap_words = 0;
     }
     void append(const Prefix36LayerT<T> &layer) {
+        if (layer.bucket_keys.empty()) return;
+        if (layer.success_stride != layer_success_stride(header_))
+            throw std::runtime_error("EX split output stride mismatch");
         std::vector<uint32_t> bitmaps(layer.bitmap_offsets), values(layer.success_offsets);
         for (size_t i = 0; i < bitmaps.size(); ++i) {
             const bool small = sizes_[sum_index(key_remaining_sum(layer.bucket_keys[i]))] <= layer.threshold_bits;
             const uint64_t bitmap = bitmaps[i] + (small ? writer_.size(3) : writer_.size(4) / 8);
-            const uint64_t value = uint64_t(values[i]) + header_.success_value_count;
+            const uint64_t value = uint64_t(values[i]) + header_.success_value_count / layer.success_stride;
             if (bitmap > UINT32_MAX || value > UINT32_MAX) throw std::runtime_error("EX split output offset overflow");
             bitmaps[i] = static_cast<uint32_t>(bitmap);
             values[i] = static_cast<uint32_t>(value);
@@ -219,6 +226,7 @@ public:
         header_.success_value_count += layer.success_values.size();
     }
     void finish(FileIOUtils::DirectIoConfig io) {
+        header_.reserved1 = layer_success_stride(header_) == 1 ? 0 : header_.success_value_count;
         header_.small_bitmap_bytes = writer_.size(3);
         header_.large_bitmap_words = writer_.size(4) / 8;
         writer_.finish(header_, io);
@@ -275,7 +283,7 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
         throw std::runtime_error("EX split solve dtype does not match input; resume with the original dtype");
     summary.input_live = input.header.live_board_count;
     auto lease = StoragePaths::reserve_write_path(options, StoragePaths::ArtifactRole::Hot, step,
-        kLayerFileExtension, 3 * (layer_file_bytes(input.header) + input.header.live_board_count * sizeof(T)));
+        kLayerFileExtension, 3 * (layer_file_bytes(input.header) + layer_success_storage_count(input.header) * sizeof(T)));
     EXSplitWork work{lease.path() + ".spawn4.tmp", {}};
     Prefix36LayerT<T> current;
     if (cached_step != step + 2) future = {};
@@ -336,7 +344,7 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
         Prefix36LayerT<T> chunk;
         while (chunks.next(chunk, chunk_budget)) {
             t0 = now_seconds();
-            chunk = compact_layer(chunk, lut.dense_lut, threshold, threads);
+            chunk = compact_layer(chunk, lut.dense_lut, threshold, threads, chunk.success_stride);
             summary.future_compact_seconds += now_seconds() - t0;
             t0 = now_seconds();
             out.append(chunk);
@@ -359,7 +367,7 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
         ex_split_pass<1>(chunk, future, spec, options, lut, step);
         summary.recalc_seconds += now_seconds() - t;
         const double c = now_seconds();
-        chunk = compact_layer(chunk, lut.dense_lut, zero, threads);
+        chunk = compact_layer(chunk, lut.dense_lut, zero, threads, chunk.success_stride);
         summary.compact_seconds += now_seconds() - c;
         summary.output_live += chunk.live_board_count;
         summary.bitmap_bits += layer_bitmap_bits(chunk);

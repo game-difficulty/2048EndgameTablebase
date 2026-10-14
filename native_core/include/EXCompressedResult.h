@@ -53,6 +53,7 @@ struct Prefix36LayerView {
     uint64_t logical_pattern_signature = 0;
     uint64_t physical_pattern_signature = 0;
     uint64_t live_board_count = 0;
+    uint64_t success_stride = 1;
 
     const uint64_t *bucket_keys = nullptr;
     const uint32_t *bitmap_offsets = nullptr;

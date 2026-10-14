@@ -90,6 +90,15 @@ struct LayerFileHeader {
     uint64_t reserved1 = 0;
 };
 
+uint64_t layer_success_stride(const LayerFileHeader &header) {
+    return EXSuccessLayout::stride(header.version, header.reserved16);
+}
+
+uint64_t layer_success_storage_count(const LayerFileHeader &header) {
+    return EXSuccessLayout::storage_count(header.version, header.reserved16, header.reserved1,
+        header.live_board_count, header.success_value_count);
+}
+
 struct LutFileHeader {
     char magic[8];
     uint32_t version = kLutVersion;
@@ -523,9 +532,10 @@ void validate_layer_header(const LayerFileHeader &header, const std::string &pat
     if (std::memcmp(header.magic, kLayerMagic, sizeof(kLayerMagic)) != 0) {
         throw std::runtime_error("invalid EX prefix36 layer file magic, rebuild required: " + path);
     }
-    if (header.version != kLayerVersion) {
+    if (header.version != kLayerVersion && header.version != EXSuccessLayout::kStridedVersion) {
         throw std::runtime_error("unsupported EX prefix36 layer version, rebuild required: " + path);
     }
+    layer_success_storage_count(header);
     const DTypeMode mode = dtype_mode_from_header(header);
     if (header.success_kind != static_cast<uint32_t>(storage_kind_for_dtype_mode(mode)) ||
         header.value_size != value_size_for_dtype_mode(mode)) {
@@ -952,6 +962,9 @@ LayerFileHeader make_layer_header(
 ) {
     LayerFileHeader header{};
     std::memcpy(header.magic, kLayerMagic, sizeof(kLayerMagic));
+    header.version = EXSuccessLayout::version(layer.success_stride);
+    header.reserved16 = EXSuccessLayout::shift(layer.success_stride);
+    header.reserved1 = layer.success_stride == 1 ? 0 : layer.success_storage_count;
     header.success_kind = static_cast<uint32_t>(storage_kind_for_dtype_mode(mode));
     header.dtype_mode = static_cast<uint32_t>(mode);
     header.layer_sum = layer.layer_sum;
@@ -1106,6 +1119,8 @@ Prefix36LayerT<T> read_layer_file_from_reader(
     layer.layer_sum = header.layer_sum;
     layer.threshold_bits = header.threshold_bits;
     layer.live_board_count = header.live_board_count;
+    layer.success_stride = layer_success_stride(header);
+    layer.success_storage_count = layer_success_storage_count(header);
     layer.bucket_keys.resize(static_cast<size_t>(header.bucket_count));
     layer.bitmap_offsets.resize(static_cast<size_t>(header.bucket_count));
     layer.success_offsets.resize(static_cast<size_t>(header.bucket_count));
@@ -1732,6 +1747,7 @@ EXCompressedResult::Prefix36LayerView layer_compression_view(
     view.logical_pattern_signature = spec.logical_pattern_signature;
     view.physical_pattern_signature = spec.physical_pattern_signature;
     view.live_board_count = layer.live_board_count;
+    view.success_stride = layer.success_stride;
 
     view.bucket_keys = layer.bucket_keys.empty() ? nullptr : layer.bucket_keys.data();
     view.bitmap_offsets = layer.bitmap_offsets.empty() ? nullptr : layer.bitmap_offsets.data();
@@ -2205,7 +2221,7 @@ template <typename T>
 void build_terminal_success(Prefix36LayerT<T> &layer, const DenseLow24RankLut &dense_lut, const PatternSpec &spec, const RunOptions &options, int num_threads) {
     const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
     const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
-    layer.success_values.assign(static_cast<size_t>(layer.live_board_count), zero_value);
+    layer.success_values.assign(static_cast<size_t>(layer.success_storage_count), zero_value);
 #pragma omp parallel for schedule(dynamic, 256) num_threads(num_threads)
     for (int64_t bucket_idx_signed = 0; bucket_idx_signed < static_cast<int64_t>(layer.bucket_keys.size()); ++bucket_idx_signed) {
         const uint32_t bucket_idx = static_cast<uint32_t>(bucket_idx_signed);
@@ -2214,7 +2230,7 @@ void build_terminal_success(Prefix36LayerT<T> &layer, const DenseLow24RankLut &d
         const uint32_t group = sum_index(key_remaining_sum(key));
         const uint32_t valid_count = dense_lut.size_table[group];
         const uint32_t unrank_offset = dense_lut.offset_table[group];
-        const uint32_t success_base = layer.success_offsets[bucket_idx];
+        const uint64_t success_base = decoded_success_base(layer, bucket_idx);
         uint32_t ordinal = 0U;
         auto set_success = [&](uint32_t rank) {
             const uint64_t board = (prefix36 << kSuffixBits) | dense_lut.unrank_array[unrank_offset + rank];
@@ -2299,7 +2315,7 @@ uint32_t compact_count_bitmap_live(
 template <typename T>
 uint32_t compact_count_success_kept(
     const std::vector<T> &success_values,
-    uint32_t begin,
+    uint64_t begin,
     uint32_t count,
     T threshold
 ) {
@@ -2321,10 +2337,10 @@ uint32_t compact_count_kept_by_bitmap(
     uint32_t kept = 0U;
     uint32_t ordinal = 0U;
     auto count_rank = [&]() {
-        if (static_cast<uint64_t>(plan.old_success_offset) + ordinal >= input.success_values.size()) {
+        if (EXSuccessLayout::decode(plan.old_success_offset, input.success_stride) + ordinal >= input.success_values.size()) {
             throw std::runtime_error("EX prefix36 compact success offset out of bounds");
         }
-        kept += input.success_values[static_cast<size_t>(plan.old_success_offset + ordinal)] > threshold ? 1U : 0U;
+        kept += input.success_values[static_cast<size_t>(EXSuccessLayout::decode(plan.old_success_offset, input.success_stride) + ordinal)] > threshold ? 1U : 0U;
         ++ordinal;
     };
     if (plan.is_small) {
@@ -2363,7 +2379,8 @@ Prefix36LayerT<T> compact_layer(
     const Prefix36LayerT<T> &input,
     const DenseLow24RankLut &dense_lut,
     T threshold,
-    int num_threads
+    int num_threads,
+    uint64_t minimum_stride = 1
 ) {
     Prefix36LayerT<T> out;
     out.layer_sum = input.layer_sum;
@@ -2392,14 +2409,14 @@ Prefix36LayerT<T> compact_layer(
         plan.old_success_offset = input.success_offsets[i];
         const uint32_t bitmap_live = compact_count_bitmap_live(input, plan);
         const uint64_t next_success_offset = (i + 1U < bucket_count)
-            ? static_cast<uint64_t>(input.success_offsets[i + 1U])
+            ? decoded_success_base(input, i + 1U)
             : static_cast<uint64_t>(input.success_values.size());
         uint32_t live_count = bitmap_live;
         uint32_t kept = 0U;
-        if (next_success_offset >= plan.old_success_offset &&
+        if (next_success_offset >= decoded_success_base(input, i) &&
             next_success_offset <= input.success_values.size() &&
-            next_success_offset - plan.old_success_offset == bitmap_live) {
-            kept = compact_count_success_kept(input.success_values, plan.old_success_offset, bitmap_live, threshold);
+            next_success_offset - decoded_success_base(input, i) >= bitmap_live) {
+            kept = compact_count_success_kept(input.success_values, decoded_success_base(input, i), bitmap_live, threshold);
         } else {
             kept = compact_count_kept_by_bitmap(input, plan, threshold, live_count);
         }
@@ -2408,6 +2425,9 @@ Prefix36LayerT<T> compact_layer(
         plans[i] = plan;
     }
 
+    for (const auto &plan : plans) out.live_board_count += plan.kept_count;
+    out.success_stride = EXSuccessLayout::choose_stride(plans.size(),
+        [&](size_t i) { return plans[i].kept_count; }, out.live_board_count, minimum_stride);
     uint64_t output_bucket_count = 0;
     uint64_t small_bitmap_bytes = 0;
     uint64_t large_bitmap_words = 0;
@@ -2421,12 +2441,12 @@ Prefix36LayerT<T> compact_layer(
         if (output_bucket_count > std::numeric_limits<uint32_t>::max()) {
             throw std::runtime_error("EX prefix36 compact bucket count exceeds uint32_t");
         }
-        if (success_value_count > std::numeric_limits<uint32_t>::max()) {
+        if (success_value_count / out.success_stride > std::numeric_limits<uint32_t>::max()) {
             throw std::runtime_error("EX prefix36 compact success offset exceeds uint32_t");
         }
         plan.out_bucket_index = static_cast<uint32_t>(output_bucket_count++);
-        plan.out_success_offset = static_cast<uint32_t>(success_value_count);
-        success_value_count += plan.kept_count;
+        plan.out_success_offset = static_cast<uint32_t>(success_value_count / out.success_stride);
+        success_value_count += EXSuccessLayout::aligned(plan.kept_count, out.success_stride);
         if (plan.is_small) {
             if (small_bitmap_bytes > std::numeric_limits<uint32_t>::max()) {
                 throw std::runtime_error("EX prefix36 compact small bitmap offset exceeds uint32_t");
@@ -2455,7 +2475,7 @@ Prefix36LayerT<T> compact_layer(
     out.small_bitmap_bytes.assign(static_cast<size_t>(small_bitmap_bytes), 0U);
     out.large_bitmap_words.assign(static_cast<size_t>(large_bitmap_words), 0ULL);
     out.large_rank_bases.assign(static_cast<size_t>(large_rank_base_count), 0U);
-    out.success_values.resize(static_cast<size_t>(success_value_count));
+    out.success_values.assign(static_cast<size_t>(success_value_count), std::numeric_limits<T>::lowest());
 
 #pragma omp parallel for schedule(dynamic, 256) num_threads(thread_count)
     for (int64_t i_signed = 0; i_signed < static_cast<int64_t>(bucket_count); ++i_signed) {
@@ -2473,9 +2493,9 @@ Prefix36LayerT<T> compact_layer(
 
         if (plan.kept_count == plan.live_count) {
             std::copy_n(
-                input.success_values.data() + plan.old_success_offset,
+                input.success_values.data() + EXSuccessLayout::decode(plan.old_success_offset, input.success_stride),
                 plan.live_count,
-                out.success_values.data() + plan.out_success_offset
+                out.success_values.data() + EXSuccessLayout::decode(plan.out_success_offset, out.success_stride)
             );
             if (plan.is_small) {
                 std::copy_n(
@@ -2512,10 +2532,10 @@ Prefix36LayerT<T> compact_layer(
                         break;
                     }
                     const T success =
-                        input.success_values[static_cast<size_t>(plan.old_success_offset + ordinal)];
+                        input.success_values[static_cast<size_t>(EXSuccessLayout::decode(plan.old_success_offset, input.success_stride) + ordinal)];
                     if (success > threshold) {
                         out_value = static_cast<uint8_t>(out_value | static_cast<uint8_t>(1U << bit));
-                        out.success_values[static_cast<size_t>(plan.out_success_offset + kept)] = success;
+                        out.success_values[static_cast<size_t>(EXSuccessLayout::decode(plan.out_success_offset, out.success_stride) + kept)] = success;
                         ++kept;
                     }
                     ++ordinal;
@@ -2534,10 +2554,10 @@ Prefix36LayerT<T> compact_layer(
                         break;
                     }
                     const T success =
-                        input.success_values[static_cast<size_t>(plan.old_success_offset + ordinal)];
+                        input.success_values[static_cast<size_t>(EXSuccessLayout::decode(plan.old_success_offset, input.success_stride) + ordinal)];
                     if (success > threshold) {
                         out_value |= (1ULL << bit);
-                        out.success_values[static_cast<size_t>(plan.out_success_offset + kept)] = success;
+                        out.success_values[static_cast<size_t>(EXSuccessLayout::decode(plan.out_success_offset, out.success_stride) + kept)] = success;
                         ++kept;
                     }
                     ++ordinal;
@@ -2556,7 +2576,7 @@ Prefix36LayerT<T> compact_layer(
             throw std::runtime_error("EX prefix36 compact kept count mismatch");
         }
     }
-    out.live_board_count = success_value_count;
+    out.success_storage_count = success_value_count;
     return out;
 }
 
@@ -2568,7 +2588,7 @@ bool keep_bit_is_set(const std::vector<uint64_t> &keep_bits, uint64_t index) {
     return (keep_bits[static_cast<size_t>(word)] & (1ULL << (index & 63U))) != 0ULL;
 }
 
-uint32_t count_keep_range(const std::vector<uint64_t> &keep_bits, uint32_t begin, uint32_t count) {
+uint32_t count_keep_range(const std::vector<uint64_t> &keep_bits, uint64_t begin, uint32_t count) {
     if (count == 0U) {
         return 0U;
     }
@@ -2623,10 +2643,13 @@ Prefix36LayerT<T> compact_layer_by_keep_bits(
         plan.old_bitmap_offset = input.bitmap_offsets[i];
         plan.old_success_offset = input.success_offsets[i];
         plan.live_count = compact_count_bitmap_live(input, plan);
-        plan.kept_count = count_keep_range(keep_bits, plan.old_success_offset, plan.live_count);
+        plan.kept_count = count_keep_range(keep_bits, decoded_success_base(input, i), plan.live_count);
         plans[i] = plan;
     }
 
+    for (const auto &plan : plans) out.live_board_count += plan.kept_count;
+    out.success_stride = EXSuccessLayout::choose_stride(plans.size(),
+        [&](size_t i) { return plans[i].kept_count; }, out.live_board_count);
     uint64_t output_bucket_count = 0;
     uint64_t small_bitmap_bytes = 0;
     uint64_t large_bitmap_words = 0;
@@ -2640,12 +2663,12 @@ Prefix36LayerT<T> compact_layer_by_keep_bits(
         if (output_bucket_count > std::numeric_limits<uint32_t>::max()) {
             throw std::runtime_error("EX prefix36 keep compact bucket count exceeds uint32_t");
         }
-        if (success_value_count > std::numeric_limits<uint32_t>::max()) {
+        if (success_value_count / out.success_stride > std::numeric_limits<uint32_t>::max()) {
             throw std::runtime_error("EX prefix36 keep compact success offset exceeds uint32_t");
         }
         plan.out_bucket_index = static_cast<uint32_t>(output_bucket_count++);
-        plan.out_success_offset = static_cast<uint32_t>(success_value_count);
-        success_value_count += plan.kept_count;
+        plan.out_success_offset = static_cast<uint32_t>(success_value_count / out.success_stride);
+        success_value_count += EXSuccessLayout::aligned(plan.kept_count, out.success_stride);
         if (plan.is_small) {
             if (small_bitmap_bytes > std::numeric_limits<uint32_t>::max()) {
                 throw std::runtime_error("EX prefix36 keep compact small bitmap offset exceeds uint32_t");
@@ -2674,7 +2697,7 @@ Prefix36LayerT<T> compact_layer_by_keep_bits(
     out.small_bitmap_bytes.assign(static_cast<size_t>(small_bitmap_bytes), 0U);
     out.large_bitmap_words.assign(static_cast<size_t>(large_bitmap_words), 0ULL);
     out.large_rank_bases.assign(static_cast<size_t>(large_rank_base_count), 0U);
-    out.success_values.resize(static_cast<size_t>(success_value_count));
+    out.success_values.assign(static_cast<size_t>(success_value_count), std::numeric_limits<T>::lowest());
 
 #pragma omp parallel for schedule(dynamic, 256) num_threads(thread_count)
     for (int64_t i_signed = 0; i_signed < static_cast<int64_t>(bucket_count); ++i_signed) {
@@ -2692,9 +2715,9 @@ Prefix36LayerT<T> compact_layer_by_keep_bits(
 
         if (plan.kept_count == plan.live_count) {
             std::copy_n(
-                input.success_values.data() + plan.old_success_offset,
+                input.success_values.data() + EXSuccessLayout::decode(plan.old_success_offset, input.success_stride),
                 plan.live_count,
-                out.success_values.data() + plan.out_success_offset
+                out.success_values.data() + EXSuccessLayout::decode(plan.out_success_offset, out.success_stride)
             );
             if (plan.is_small) {
                 std::copy_n(
@@ -2730,10 +2753,10 @@ Prefix36LayerT<T> compact_layer_by_keep_bits(
                     if (rank >= plan.valid_count) {
                         break;
                     }
-                    const uint32_t success_index = plan.old_success_offset + ordinal;
+                    const uint64_t success_index = EXSuccessLayout::decode(plan.old_success_offset, input.success_stride) + ordinal;
                     if (keep_bit_is_set(keep_bits, success_index)) {
                         out_value = static_cast<uint8_t>(out_value | static_cast<uint8_t>(1U << bit));
-                        out.success_values[static_cast<size_t>(plan.out_success_offset + kept)] =
+                        out.success_values[static_cast<size_t>(EXSuccessLayout::decode(plan.out_success_offset, out.success_stride) + kept)] =
                             input.success_values[static_cast<size_t>(success_index)];
                         ++kept;
                     }
@@ -2752,10 +2775,10 @@ Prefix36LayerT<T> compact_layer_by_keep_bits(
                     if (rank >= plan.valid_count) {
                         break;
                     }
-                    const uint32_t success_index = plan.old_success_offset + ordinal;
+                    const uint64_t success_index = EXSuccessLayout::decode(plan.old_success_offset, input.success_stride) + ordinal;
                     if (keep_bit_is_set(keep_bits, success_index)) {
                         out_value |= (1ULL << bit);
-                        out.success_values[static_cast<size_t>(plan.out_success_offset + kept)] =
+                        out.success_values[static_cast<size_t>(EXSuccessLayout::decode(plan.out_success_offset, out.success_stride) + kept)] =
                             input.success_values[static_cast<size_t>(success_index)];
                         ++kept;
                     }
@@ -2775,7 +2798,7 @@ Prefix36LayerT<T> compact_layer_by_keep_bits(
             throw std::runtime_error("EX prefix36 keep compact kept count mismatch");
         }
     }
-    out.live_board_count = success_value_count;
+    out.success_storage_count = success_value_count;
     return out;
 }
 
@@ -2792,7 +2815,7 @@ struct OptimalMarkWorkspace {
     static constexpr size_t kMaxCells = static_cast<size_t>(kBatchSize) * 16U;
     static constexpr size_t kMaxCandidates = kMaxCells * 4U;
     std::array<T, kMaxCells> best_success{};
-    std::array<uint32_t, kMaxCells> best_index{};
+    std::array<uint64_t, kMaxCells> best_index{};
     std::array<uint64_t, kMaxCandidates> canonical_candidates{};
     std::array<uint16_t, kMaxCandidates> candidate_refs{};
     std::vector<PreparedQuery> queries;
@@ -2802,8 +2825,8 @@ struct OptimalMarkWorkspace {
     }
 };
 
-void mark_keep_index(std::vector<std::atomic<uint64_t>> &keep_words, uint32_t success_index) {
-    const uint32_t word = success_index >> 6U;
+void mark_keep_index(std::vector<std::atomic<uint64_t>> &keep_words, uint64_t success_index) {
+    const uint64_t word = success_index >> 6U;
     if (word >= keep_words.size()) {
         return;
     }
@@ -2872,7 +2895,7 @@ OptimalBranchStats mark_optimal_batch(
             empty_mask &= empty_mask - 1U;
             const uint16_t ref = static_cast<uint16_t>(cell_count++);
             workspace.best_success[ref] = zero_value;
-            workspace.best_index[ref] = std::numeric_limits<uint32_t>::max();
+            workspace.best_index[ref] = std::numeric_limits<uint64_t>::max();
             const uint64_t spawned = board | (static_cast<uint64_t>(spawn_exp) << (4U * cell));
             const auto moves = Mover::move_all_dir(spawned);
             const uint64_t moved_boards[4] = {
@@ -2888,7 +2911,7 @@ OptimalBranchStats mark_optimal_batch(
     }
     flush_canonical();
 
-    uint32_t success_indices[kBatchSize];
+    uint64_t success_indices[kBatchSize];
     uint8_t found_flags[kBatchSize];
     for (uint32_t base = 0; base < static_cast<uint32_t>(workspace.queries.size()); base += kBatchSize) {
         const uint32_t count = std::min<uint32_t>(kBatchSize, static_cast<uint32_t>(workspace.queries.size()) - base);
@@ -2909,7 +2932,7 @@ OptimalBranchStats mark_optimal_batch(
                 continue;
             }
             ++stats.found;
-            const uint32_t success_index = success_indices[i];
+            const uint64_t success_index = success_indices[i];
             const T success = target.success_values[static_cast<size_t>(success_index)];
             const uint16_t ref = workspace.queries[base + i].ref;
             if (success > workspace.best_success[ref]) {
@@ -2920,9 +2943,9 @@ OptimalBranchStats mark_optimal_batch(
     }
 
     for (uint32_t ref = 0; ref < cell_count; ++ref) {
-        const uint32_t success_index = workspace.best_index[ref];
+        const uint64_t success_index = workspace.best_index[ref];
         if (workspace.best_success[ref] != zero_value &&
-            success_index != std::numeric_limits<uint32_t>::max()) {
+            success_index != std::numeric_limits<uint64_t>::max()) {
             mark_keep_index(keep_words, success_index);
             ++stats.marked;
         }
@@ -3210,7 +3233,7 @@ RecalcStats recalculate_current_layer(
     const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
     const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     if constexpr (Spawn != 1) {
-        current.success_values.assign(static_cast<size_t>(current.live_board_count), zero_value);
+        current.success_values.assign(static_cast<size_t>(current.success_storage_count), zero_value);
     }
     const double t0 = now_seconds();
     std::vector<RecalcStats> per_thread(static_cast<size_t>(num_threads));
@@ -3251,12 +3274,12 @@ RecalcStats recalculate_current_layer(
             const uint32_t group = sum_index(key_remaining_sum(key));
             const uint32_t valid_count = dense_lut.size_table[group];
             const uint32_t unrank_offset = dense_lut.offset_table[group];
-            const uint32_t success_base = current.success_offsets[bucket_idx];
+            const uint64_t success_base = decoded_success_base(current, bucket_idx);
             uint32_t ordinal = 0U;
             auto push_or_mark_success = [&](uint32_t rank) {
                 const uint64_t board =
                     (prefix36 << kSuffixBits) | static_cast<uint64_t>(dense_lut.unrank_array[unrank_offset + rank]);
-                const uint32_t output_pos = success_base + ordinal;
+                const uint64_t output_pos = success_base + ordinal;
                 ++ordinal;
                 if (do_check && goal_success(board, options.target, options.sum_target, spec.success_shifts)) {
                     current.success_values[static_cast<size_t>(output_pos)] = max_scale;
@@ -3900,7 +3923,7 @@ SolveStepSummary solve_loaded_step_impl(
         current.success_values.clear();
         recalc.boards = current.live_board_count;
     } else if (futures_empty) {
-        current.success_values.assign(static_cast<size_t>(current.live_board_count), zero_value);
+        current.success_values.assign(static_cast<size_t>(current.success_storage_count), zero_value);
         if (do_check) {
             build_terminal_success(current, dense_lut, spec, options, num_threads);
         }
@@ -4695,7 +4718,8 @@ uint32_t find_bucket_by_success_index(
     const std::string &path,
     const LayerFileLayout &layout,
     uint64_t bucket_count,
-    uint64_t success_index
+    uint64_t success_index,
+    uint64_t success_stride
 ) {
     uint64_t low = 0U;
     uint64_t high = bucket_count;
@@ -4706,7 +4730,7 @@ uint32_t find_bucket_by_success_index(
             layout.success_offsets_offset + mid * sizeof(uint32_t),
             path
         );
-        if (static_cast<uint64_t>(success_offset) <= success_index) {
+        if (EXSuccessLayout::decode(success_offset, success_stride) <= success_index) {
             low = mid + 1U;
         } else {
             high = mid;
@@ -4833,7 +4857,7 @@ EXCompressedResult::ColdLookupResult lookup_zbook_cold(
         if (!small_bitmap_has_bit(bitmap.data(), query.rank)) {
             return result;
         }
-        success_index = static_cast<uint64_t>(success_offset) +
+        success_index = EXSuccessLayout::decode(success_offset, layer_success_stride(header)) +
             dense_ordinal_small_raw(bitmap.data(), query.rank);
     } else {
         const uint32_t word_idx = query.rank >> 6U;
@@ -4871,7 +4895,7 @@ EXCompressedResult::ColdLookupResult lookup_zbook_cold(
         if (bit_idx != 0U) {
             ordinal += popcount_u64(target_word & ((1ULL << bit_idx) - 1ULL));
         }
-        success_index = static_cast<uint64_t>(success_offset) + ordinal;
+        success_index = EXSuccessLayout::decode(success_offset, layer_success_stride(header)) + ordinal;
     }
     if (success_index >= header.success_value_count) {
         throw std::runtime_error("EX prefix36 cold lookup produced out-of-range success index: " + zbook_path);
@@ -4940,7 +4964,8 @@ bool sample_zbook_state(
             zbook_path,
             layout,
             header.bucket_count,
-            target_success_index
+            target_success_index,
+            layer_success_stride(header)
         );
         if (bucket_idx == std::numeric_limits<uint32_t>::max()) {
             continue;
@@ -4970,7 +4995,7 @@ bool sample_zbook_state(
             layout.success_offsets_offset + static_cast<uint64_t>(bucket_idx) * sizeof(uint32_t),
             zbook_path
         );
-        if (target_success_index < static_cast<uint64_t>(success_base)) {
+        if (target_success_index < EXSuccessLayout::decode(success_base, layer_success_stride(header))) {
             continue;
         }
         const uint32_t bitmap_offset = read_one_at<uint32_t>(
@@ -4978,7 +5003,7 @@ bool sample_zbook_state(
             layout.bitmap_offsets_offset + static_cast<uint64_t>(bucket_idx) * sizeof(uint32_t),
             zbook_path
         );
-        uint64_t ordinal = target_success_index - static_cast<uint64_t>(success_base);
+        uint64_t ordinal = target_success_index - EXSuccessLayout::decode(success_base, layer_success_stride(header));
         uint32_t rank = std::numeric_limits<uint32_t>::max();
         if (valid_count <= header.threshold_bits) {
             const uint32_t bytes = static_cast<uint32_t>(bytes_for_bits(valid_count));

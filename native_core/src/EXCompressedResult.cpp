@@ -1,5 +1,6 @@
 #include "EXCompressedResult.h"
 #include "EXSectionWriter.h"
+#include "EXSuccessLayout.h"
 
 #include "EXFrozenLayer.h"
 #include "EXPrefix36Runtime.h"
@@ -428,9 +429,11 @@ void validate_prefix36_layer_header(const Prefix36LayerHeader &header) {
     if (std::memcmp(header.magic, kPrefix36LayerMagic, sizeof(kPrefix36LayerMagic)) != 0) {
         throw std::runtime_error("invalid prefix36 zbook magic");
     }
-    if (header.version != kPrefix36LayerVersion) {
+    if (header.version != kPrefix36LayerVersion && header.version != EXSuccessLayout::kStridedVersion) {
         throw std::runtime_error("unsupported prefix36 zbook version");
     }
+    EXSuccessLayout::storage_count(header.version, header.reserved16, header.reserved1,
+        header.live_board_count, header.success_value_count);
     const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(header.dtype_mode);
     if (header.success_kind != static_cast<uint32_t>(storage_kind_for_prefix36_mode(mode)) ||
         header.value_size != prefix36_value_size(mode)) {
@@ -474,6 +477,9 @@ uint64_t prefix36_layer_view_logical_bytes(const Prefix36LayerView &layer) {
 }
 
 void validate_prefix36_layer_view(const Prefix36LayerView &layer) {
+    EXSuccessLayout::storage_count(EXSuccessLayout::version(layer.success_stride),
+        EXSuccessLayout::shift(layer.success_stride), layer.success_value_count,
+        layer.live_board_count, layer.success_value_count);
     const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(layer.dtype_mode);
     if (layer.success_kind != storage_kind_for_prefix36_mode(mode) ||
         layer.value_size != prefix36_value_size(mode)) {
@@ -763,9 +769,11 @@ Prefix36CompressedFileIndex read_prefix36_compressed_index(const std::string &pa
     in.read(reinterpret_cast<char *>(&index.header), sizeof(index.header));
     if (!in ||
         std::memcmp(index.header.magic, kPrefix36CompressedMagic, sizeof(kPrefix36CompressedMagic)) != 0 ||
-        index.header.version != kPrefix36LayerVersion) {
+        (index.header.version != kPrefix36LayerVersion && index.header.version != EXSuccessLayout::kStridedVersion)) {
         throw std::runtime_error("invalid EX prefix36 compressed result");
     }
+    EXSuccessLayout::storage_count(index.header.version, index.header.reserved16, index.header.reserved0,
+        index.header.live_board_count, index.header.success_value_count);
     const Prefix36DTypeMode mode = prefix36_dtype_mode_from_u32(index.header.dtype_mode);
     if (index.header.success_kind != static_cast<uint32_t>(storage_kind_for_prefix36_mode(mode)) ||
         index.header.value_size != prefix36_value_size(mode) ||
@@ -1153,6 +1161,9 @@ CompressStats compress_prefix36_layer_file(
 
     Prefix36CompressedHeader header{};
     std::memcpy(header.magic, kPrefix36CompressedMagic, sizeof(kPrefix36CompressedMagic));
+    header.version = source.version;
+    header.reserved16 = source.reserved16;
+    header.reserved0 = source.reserved1;
     header.success_kind = source.success_kind;
     header.dtype_mode = source.dtype_mode;
     header.value_size = static_cast<uint32_t>(source.value_size);
@@ -1400,6 +1411,9 @@ CompressStats compress_prefix36_layer_view_impl(
 
     Prefix36CompressedHeader header{};
     std::memcpy(header.magic, kPrefix36CompressedMagic, sizeof(kPrefix36CompressedMagic));
+    header.version = EXSuccessLayout::version(layer.success_stride);
+    header.reserved16 = EXSuccessLayout::shift(layer.success_stride);
+    header.reserved0 = layer.success_stride == 1 ? 0 : layer.success_value_count;
     header.success_kind = static_cast<uint32_t>(layer.success_kind);
     header.dtype_mode = layer.dtype_mode;
     header.value_size = layer.value_size;
@@ -1597,7 +1611,9 @@ void decompress_prefix36_result_to_zbook_impl(
     }
     Prefix36LayerHeader header{};
     std::memcpy(header.magic, kPrefix36LayerMagic, sizeof(kPrefix36LayerMagic));
-    header.version = kPrefix36LayerVersion;
+    header.version = index.header.version;
+    header.reserved16 = index.header.reserved16;
+    header.reserved1 = index.header.reserved0;
     header.success_kind = index.header.success_kind;
     header.layer_sum = index.header.layer_sum;
     header.threshold_bits = index.header.threshold_bits;
@@ -1822,7 +1838,8 @@ ColdLookupResult lookup_prefix36_compressed_cold(
         if (!test_small_raw(bitmap, query.rank)) {
             return miss;
         }
-        success_index = static_cast<uint64_t>(success_offset) + dense_ordinal_small_raw(bitmap, query.rank);
+        success_index = EXSuccessLayout::decode(success_offset,
+                    EXSuccessLayout::stride(index.header.version, index.header.reserved16)) + dense_ordinal_small_raw(bitmap, query.rank);
     } else {
         const uint64_t words = ZMaskFrozen::words_for_bits(query.valid_count);
         if (static_cast<uint64_t>(bitmap_offset) + words > raw_header.large_bitmap_words) {
@@ -1832,7 +1849,8 @@ ColdLookupResult lookup_prefix36_compressed_cold(
         if (!test_large_raw(bitmap, query.rank)) {
             return miss;
         }
-        success_index = static_cast<uint64_t>(success_offset) + dense_ordinal_large_raw(bitmap, query.rank);
+        success_index = EXSuccessLayout::decode(success_offset,
+                    EXSuccessLayout::stride(index.header.version, index.header.reserved16)) + dense_ordinal_large_raw(bitmap, query.rank);
     }
     if (success_index >= index.header.success_value_count) {
         throw std::runtime_error("EX prefix36 compressed lookup produced out-of-range success index");
@@ -2059,7 +2077,8 @@ bool sample_prefix36_compressed_cold(
                     !lut.unrank_suffix(group, rank, suffix28)) {
                     continue;
                 }
-                const uint64_t success_index = static_cast<uint64_t>(success_offset) + success_ordinal;
+                const uint64_t success_index = EXSuccessLayout::decode(success_offset,
+                    EXSuccessLayout::stride(index.header.version, index.header.reserved16)) + success_ordinal;
                 if (success_index >= index.header.success_value_count) {
                     continue;
                 }
@@ -2131,7 +2150,8 @@ bool sample_prefix36_compressed_cold(
                     !lut.unrank_suffix(group, rank, suffix28)) {
                     continue;
                 }
-                const uint64_t success_index = static_cast<uint64_t>(success_offset) + success_ordinal;
+                const uint64_t success_index = EXSuccessLayout::decode(success_offset,
+                    EXSuccessLayout::stride(index.header.version, index.header.reserved16)) + success_ordinal;
                 if (success_index >= index.header.success_value_count) {
                     continue;
                 }

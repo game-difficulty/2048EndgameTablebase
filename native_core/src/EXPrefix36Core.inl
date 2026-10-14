@@ -2,6 +2,7 @@
 #include "Calculator.h"
 #include "CanonicalBatch.h"
 #include "EXFrozenLayer.h"
+#include "EXSuccessLayout.h"
 #include "EXPrefix40Layer.h"
 #include "NativeSortPolicy.h"
 
@@ -683,6 +684,7 @@ uint16_t dense_low24_rank_for_table(const DenseLow24RankLut &lut, uint8_t table_
 struct BucketEntry {
     static constexpr uint32_t kRankOffsetMask = 0x0FFFFFFFU;
     static constexpr uint32_t kSmallRankOffset = kRankOffsetMask;
+    static constexpr uint32_t kBitmapRankOffset = kRankOffsetMask - 1U;
     uint32_t prefix_low32 = 0;
     uint32_t bitmap_offset = 0;
     uint32_t success_offset = 0;
@@ -690,13 +692,17 @@ struct BucketEntry {
 };
 static_assert(sizeof(BucketEntry) == 16, "BucketEntry must stay compact");
 
-uint32_t pack_rank_offset_prefix_high(uint64_t prefix36, uint32_t rank_offset) {
+uint32_t pack_rank_offset_prefix_high(uint64_t prefix36, uint32_t rank_offset, uint32_t bitmap_offset, bool small) {
     if ((prefix36 >> 36U) != 0ULL) {
         throw std::runtime_error("prefix36 entry prefix overflow");
     }
     const uint32_t prefix_high = static_cast<uint32_t>(prefix36 >> 32U);
-    if ((rank_offset & ~BucketEntry::kRankOffsetMask) != 0U) {
-        throw std::runtime_error("prefix36 entry rank offset exceeds packed 28-bit storage");
+    if (!small && rank_offset >= BucketEntry::kBitmapRankOffset) {
+        // Dense rank metadata has one entry per bitmap word. Reuse the full
+        // bitmap address once it no longer fits beside the four prefix bits.
+        if (rank_offset != bitmap_offset)
+            throw std::runtime_error("EX large rank offset does not match bitmap layout");
+        rank_offset = BucketEntry::kBitmapRankOffset;
     }
     return (prefix_high << 28U) | rank_offset;
 }
@@ -711,7 +717,8 @@ bool bucket_is_small(const BucketEntry &bucket) {
 }
 
 uint32_t bucket_rank_offset(const BucketEntry &bucket) {
-    return bucket.rank_offset_prefix_high & BucketEntry::kRankOffsetMask;
+    const uint32_t offset = bucket.rank_offset_prefix_high & BucketEntry::kRankOffsetMask;
+    return offset == BucketEntry::kBitmapRankOffset ? bucket.bitmap_offset : offset;
 }
 
 struct DirectIndex {
@@ -730,6 +737,8 @@ struct Prefix36LayerBase {
     uint32_t layer_sum = 0;
     uint32_t threshold_bits = ZMaskFrozen::kEstimatedLargeSuccessStride * 8U;
     uint64_t live_board_count = 0;
+    uint64_t success_stride = 1;
+    uint64_t success_storage_count = 0;
     std::vector<uint64_t> bucket_keys;
     std::vector<uint32_t> bitmap_offsets;
     std::vector<uint32_t> success_offsets;
@@ -748,6 +757,58 @@ struct Prefix36LayerT : Prefix36LayerBase {
 };
 
 using Prefix36Layer = Prefix36LayerT<uint32_t>;
+
+uint64_t decoded_success_base(const Prefix36LayerBase &layer, size_t bucket) {
+    return EXSuccessLayout::decode(layer.success_offsets[bucket], layer.success_stride);
+}
+
+uint32_t bucket_live_count(const Prefix36LayerBase &layer, size_t bucket, uint32_t valid) {
+    const uint32_t offset = layer.bitmap_offsets[bucket];
+    uint32_t count = 0;
+    if (valid <= layer.threshold_bits) {
+        for (uint32_t i = 0; i < bytes_for_bits(valid); ++i) {
+            uint32_t bits = layer.small_bitmap_bytes[offset + i];
+            if (i + 1 == bytes_for_bits(valid) && valid % 8) bits &= (1U << (valid % 8)) - 1;
+            count += popcount_u32(bits);
+        }
+    } else {
+        for (uint32_t i = 0; i < words_for_bits(valid); ++i) {
+            uint64_t bits = layer.large_bitmap_words[offset + i];
+            if (i + 1 == words_for_bits(valid) && valid % 64) bits &= (1ULL << (valid % 64)) - 1;
+            count += popcount_u64(bits);
+        }
+    }
+    return count;
+}
+
+void assign_success_offsets(Prefix36LayerBase &layer, const std::vector<uint32_t> &counts, int threads) {
+    layer.live_board_count = 0;
+    for (uint32_t count : counts) layer.live_board_count += count;
+    layer.success_stride = EXSuccessLayout::choose_stride(counts.size(),
+        [&](size_t i) { return counts[i]; }, layer.live_board_count);
+    threads = std::max(1, threads);
+    std::vector<uint64_t> blocks(static_cast<size_t>(threads) + 1, 0);
+#pragma omp parallel for schedule(static) num_threads(threads)
+    for (int t = 0; t < threads; ++t) {
+        const size_t begin = counts.size() * size_t(t) / threads;
+        const size_t end = counts.size() * size_t(t + 1) / threads;
+        for (size_t i = begin; i < end; ++i)
+            blocks[t + 1] += EXSuccessLayout::units(counts[i], layer.success_stride);
+    }
+    for (int t = 0; t < threads; ++t) blocks[t + 1] += blocks[t];
+    layer.success_storage_count = blocks.back() * layer.success_stride;
+    layer.success_offsets.resize(counts.size());
+#pragma omp parallel for schedule(static) num_threads(threads)
+    for (int t = 0; t < threads; ++t) {
+        uint64_t cursor = blocks[t];
+        const size_t begin = counts.size() * size_t(t) / threads;
+        const size_t end = counts.size() * size_t(t + 1) / threads;
+        for (size_t i = begin; i < end; ++i) {
+            layer.success_offsets[i] = static_cast<uint32_t>(cursor);
+            cursor += EXSuccessLayout::units(counts[i], layer.success_stride);
+        }
+    }
+}
 
 uint64_t direct_slot(const DirectIndex &index, uint64_t key) {
     const uint64_t mixed = key * 11400714819323198485ULL;
@@ -804,7 +865,7 @@ void build_direct_index(Prefix36LayerBase &layer, const std::vector<uint32_t> &s
             static_cast<uint32_t>(prefix36),
             layer.bitmap_offsets[i],
             layer.success_offsets[i],
-            pack_rank_offset_prefix_high(prefix36, rank_offset)
+            pack_rank_offset_prefix_high(prefix36, rank_offset, layer.bitmap_offsets[i], valid_count <= layer.threshold_bits)
         };
     }
     layer.direct_index.table_size = choose_direct_table_size(layer.bucket_keys.size());
@@ -1145,7 +1206,7 @@ bool success_index_from_bucket(
     const PreparedQuery &query,
     const BucketEntry &bucket,
     uint32_t bucket_index,
-    uint32_t &success_index
+    uint64_t &success_index
 ) {
     if (!bucket_is_small(bucket)) {
         const uint32_t word_idx = query.rank >> 6U;
@@ -1159,7 +1220,7 @@ bool success_index_from_bucket(
         if (bit_idx != 0U) {
             ordinal += popcount_u64(word & ((1ULL << bit_idx) - 1ULL));
         }
-        success_index = bucket.success_offset + ordinal;
+        success_index = EXSuccessLayout::decode(bucket.success_offset, layer.success_stride) + ordinal;
         return true;
     }
     const uint32_t byte_idx = query.rank >> 3U;
@@ -1170,14 +1231,14 @@ bool success_index_from_bucket(
     }
     const uint32_t ordinal =
         dense_ordinal_small(layer.small_bitmap_bytes, bucket.bitmap_offset, query.rank);
-    success_index = bucket.success_offset + ordinal;
+    success_index = EXSuccessLayout::decode(bucket.success_offset, layer.success_stride) + ordinal;
     return true;
 }
 
 void lookup_prepared_batch(
     const Prefix36LayerBase &layer,
     const PreparedQuery *queries,
-    uint32_t *success_indices,
+    uint64_t *success_indices,
     uint8_t *found_flags,
     uint32_t count
 ) {
@@ -1297,7 +1358,7 @@ void lookup_prepared_batch(
 void lookup_prepared_batch_direct_entry(
     const Prefix36LayerBase &layer,
     const PreparedQuery *queries,
-    uint32_t *success_indices,
+    uint64_t *success_indices,
     uint8_t *found_flags,
     uint32_t count
 ) {
@@ -1660,6 +1721,11 @@ Prefix36Layer build_prefix36_metadata_from_prefix40_single_bucket_parallel(
             plans[static_cast<size_t>(i)]
         );
     }
+    std::vector<uint32_t> counts(ranges.size());
+#pragma omp parallel for schedule(static) num_threads(num_threads)
+    for (int64_t i = 0; i < static_cast<int64_t>(counts.size()); ++i)
+        counts[i] = bucket_live_count(out, i, plans[i].valid_count);
+    assign_success_offsets(out, counts, num_threads);
     return out;
 }
 
@@ -2443,49 +2509,7 @@ Prefix36Layer finalize_prefix36_dynamic_state(
             live_counts[i] = fill_large_rank_bases(out, dst, out.large_rank_offsets[i], words);
         }
     }
-    if (item_count >= 10000U && num_threads > 1) {
-        std::vector<uint64_t> block_success(static_cast<size_t>(num_threads + 1), 0U);
-#pragma omp parallel num_threads(num_threads)
-        {
-            const int tid = omp_get_thread_num();
-            const size_t begin =
-                (item_count * static_cast<size_t>(tid)) / static_cast<size_t>(num_threads);
-            const size_t end =
-                (item_count * static_cast<size_t>(tid + 1)) / static_cast<size_t>(num_threads);
-            uint64_t local = 0U;
-            for (size_t i = begin; i < end; ++i) {
-                local += live_counts[i];
-            }
-            block_success[static_cast<size_t>(tid + 1)] = local;
-        }
-        for (int i = 0; i < num_threads; ++i) {
-            block_success[static_cast<size_t>(i + 1)] += block_success[static_cast<size_t>(i)];
-        }
-        if (block_success[static_cast<size_t>(num_threads)] > std::numeric_limits<uint32_t>::max()) {
-            throw std::runtime_error("prefix36 dynamic finalize success offsets exceed uint32");
-        }
-#pragma omp parallel num_threads(num_threads)
-        {
-            const int tid = omp_get_thread_num();
-            const size_t begin =
-                (item_count * static_cast<size_t>(tid)) / static_cast<size_t>(num_threads);
-            const size_t end =
-                (item_count * static_cast<size_t>(tid + 1)) / static_cast<size_t>(num_threads);
-            uint64_t success_cursor = block_success[static_cast<size_t>(tid)];
-            for (size_t i = begin; i < end; ++i) {
-                out.success_offsets[i] = static_cast<uint32_t>(success_cursor);
-                success_cursor += live_counts[i];
-            }
-        }
-        out.live_board_count = block_success[static_cast<size_t>(num_threads)];
-    } else {
-        uint64_t success_cursor = 0U;
-        for (size_t i = 0; i < live_counts.size(); ++i) {
-            out.success_offsets[i] = static_cast<uint32_t>(success_cursor);
-            success_cursor += live_counts[i];
-        }
-        out.live_board_count = success_cursor;
-    }
+    assign_success_offsets(out, live_counts, num_threads);
     const double copy_t1 = wall_time_seconds();
     if (timing != nullptr) {
         timing->count_seconds = count_t1 - count_t0;
@@ -2504,8 +2528,8 @@ struct RecalcWorkspace {
     std::vector<PreparedQuery> queries2;
     std::vector<LateQuery> late_queries1;
     std::vector<LateQuery> late_queries2;
-    std::vector<uint32_t> success_indices1;
-    std::vector<uint32_t> success_indices2;
+    std::vector<uint64_t> success_indices1;
+    std::vector<uint64_t> success_indices2;
     std::vector<uint8_t> found_flags1;
     std::vector<uint8_t> found_flags2;
     std::array<uint16_t, kBatchSize> empty_masks{};
@@ -2548,7 +2572,7 @@ template <typename T>
 void lookup_query_vector_dense(
     const Prefix36LayerT<T> &future,
     std::vector<PreparedQuery> &queries,
-    std::vector<uint32_t> &success_indices,
+    std::vector<uint64_t> &success_indices,
     std::vector<uint8_t> &found_flags
 ) {
     success_indices.resize(queries.size());
@@ -2572,7 +2596,7 @@ uint64_t lookup_reduce_query_vector_dense(
     std::array<T, kBatchSize * 16U> &best
 ) {
     uint64_t found = 0U;
-    uint32_t success_indices[kBatchSize];
+    uint64_t success_indices[kBatchSize];
     uint8_t found_flags[kBatchSize];
     for (uint32_t base = 0; base < static_cast<uint32_t>(queries.size()); base += kBatchSize) {
         const uint32_t count = std::min<uint32_t>(kBatchSize, static_cast<uint32_t>(queries.size()) - base);
@@ -2607,7 +2631,7 @@ uint64_t lookup_reduce_query_vector_dense_direct_entry(
     std::array<T, kBatchSize * 16U> &best
 ) {
     uint64_t found = 0U;
-    uint32_t success_indices[kBatchSize];
+    uint64_t success_indices[kBatchSize];
     uint8_t found_flags[kBatchSize];
     for (uint32_t base = 0; base < static_cast<uint32_t>(queries.size()); base += kBatchSize) {
         const uint32_t count = std::min<uint32_t>(kBatchSize, static_cast<uint32_t>(queries.size()) - base);
@@ -2636,7 +2660,7 @@ uint64_t lookup_reduce_query_vector_dense_direct_entry(
 }
 
 struct SuccessRef {
-    uint32_t success_index = 0;
+    uint64_t success_index = 0;
     uint16_t ref = 0;
 };
 
@@ -2647,7 +2671,7 @@ uint64_t lookup_reduce_query_vector_dense_direct_entry_sorted_success(
     std::array<T, kBatchSize * 16U> &best
 ) {
     uint64_t found = 0U;
-    uint32_t success_indices[kBatchSize];
+    uint64_t success_indices[kBatchSize];
     uint8_t found_flags[kBatchSize];
     SuccessRef refs[kBatchSize];
     for (uint32_t base = 0; base < static_cast<uint32_t>(queries.size()); base += kBatchSize) {
@@ -2694,8 +2718,8 @@ void lookup_reduce_query_vectors_dense_interleaved(
 ) {
     found1 = 0U;
     found2 = 0U;
-    uint32_t success_indices1[kBatchSize];
-    uint32_t success_indices2[kBatchSize];
+    uint64_t success_indices1[kBatchSize];
+    uint64_t success_indices2[kBatchSize];
     uint8_t found_flags1[kBatchSize];
     uint8_t found_flags2[kBatchSize];
     const uint32_t size1 = static_cast<uint32_t>(queries1.size());
@@ -2769,7 +2793,7 @@ uint64_t lookup_reduce_late_query_vector_dense(
     BucketEntry buckets[kBatchSize];
     uint8_t hit[kBatchSize];
     uint32_t ranks[kBatchSize];
-    uint32_t success_indices[kBatchSize];
+    uint64_t success_indices[kBatchSize];
     uint8_t found_flags[kBatchSize];
     uint16_t retry_storage_a[kBatchSize];
     uint16_t retry_storage_b[kBatchSize];
@@ -3484,7 +3508,7 @@ RecalcStats run_recalculate_prefix36_current(
             const uint32_t group = sum_index(total_sum);
             const uint32_t valid_count = dense_lut.size_table[group];
             const uint32_t unrank_offset = dense_lut.offset_table[group];
-            const uint64_t success_base = current.success_offsets[bucket_idx];
+            const uint64_t success_base = decoded_success_base(current, bucket_idx);
             uint32_t ordinal = 0U;
             if (valid_count <= current.threshold_bits) {
                 const uint32_t offset = current.bitmap_offsets[bucket_idx];
@@ -3611,7 +3635,7 @@ RecalcStats run_recalculate_prefix36_current_interleaved(
             const uint32_t group = sum_index(total_sum);
             const uint32_t valid_count = dense_lut.size_table[group];
             const uint32_t unrank_offset = dense_lut.offset_table[group];
-            const uint64_t success_base = current.success_offsets[bucket_idx];
+            const uint64_t success_base = decoded_success_base(current, bucket_idx);
             uint32_t ordinal = 0U;
             if (valid_count <= current.threshold_bits) {
                 const uint32_t offset = current.bitmap_offsets[bucket_idx];
@@ -3737,7 +3761,7 @@ RecalcStats run_recalculate_prefix36_current_late(
             const uint32_t group = sum_index(total_sum);
             const uint32_t valid_count = dense_lut.size_table[group];
             const uint32_t unrank_offset = dense_lut.offset_table[group];
-            const uint64_t success_base = current.success_offsets[bucket_idx];
+            const uint64_t success_base = decoded_success_base(current, bucket_idx);
             uint32_t ordinal = 0U;
             if (valid_count <= current.threshold_bits) {
                 const uint32_t offset = current.bitmap_offsets[bucket_idx];
