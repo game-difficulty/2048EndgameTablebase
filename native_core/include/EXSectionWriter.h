@@ -19,8 +19,7 @@ public:
         if (!bytes) return;
         auto &out = streams_.at(section);
         if (!out.is_open()) out.open(NativePath::from_utf8(section_path(section)), std::ios::binary | std::ios::trunc);
-        out.write(static_cast<const char *>(data), static_cast<std::streamsize>(bytes));
-        if (!out) throw std::runtime_error("failed to spool EX section: " + path_);
+        FileIOUtils::write_exact(out, data, bytes, section_path(section));
         sizes_[section] += bytes;
     }
     uint64_t size(size_t section) const { return sizes_.at(section); }

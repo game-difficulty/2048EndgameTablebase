@@ -4527,17 +4527,28 @@ void run_pattern_solve_typed(
             const uint64_t reserve = std::max<uint64_t>(256ULL * 1024 * 1024,
                 uint64_t(num_threads) * 4ULL * 1024 * 1024);
             const uint64_t budget = forced_budget ? forced_budget :
-                (pool > reserve ? (pool - reserve) * 3 / 4 : 0);
-            const uint64_t full_need = std::max(2 * current_bytes + bytes1 + bytes2,
-                current_bytes + bytes1 + 2 * bytes2);
+                (pool > reserve ? (pool - reserve) * 19 / 20 : 0);
+            const uint64_t full_need = current_bytes + bytes1 + bytes2;
             const uint64_t max_future = std::max(bytes1, bytes2);
+            const uint64_t resident_split_need = max_future + current_bytes;
             const uint64_t forced_chunk = ex_solve_env_bytes("EX_TEST_CURRENT_CHUNK_BYTES");
             const bool split = options.chunked_solve || forced_chunk || full_need > budget;
-            const bool resident_current = !forced_chunk && max_future + 2 * current_bytes <= budget;
+            const bool resident_current = !forced_chunk && resident_split_need <= budget;
             if (split && max_future >= budget && !forced_chunk)
                 throw std::runtime_error("EX split solve cannot fit one successor layer in the available memory budget");
             const uint64_t chunk_budget = forced_chunk ? forced_chunk : std::max<uint64_t>(1,
                 std::min<uint64_t>(64ULL * 1024 * 1024, (budget > max_future ? budget - max_future : 0) / 4));
+            {
+                const std::string path = options.pathname + "zmask_solve_routes.csv";
+                const bool header = !NativePath::exists(path) || NativePath::file_size(path) == 0;
+                std::ofstream log(NativePath::from_utf8(path), std::ios::app);
+                if (header) log << "timestamp,step,route,available_bytes,cached_bytes,budget_bytes,current_bytes,future1_bytes,future2_bytes,full_need_bytes,resident_split_need_bytes,chunk_budget_bytes,requested_split,forced_budget_bytes,forced_chunk_bytes\n";
+                log << current_timestamp() << ',' << step << ','
+                    << (!split ? "solve" : resident_current ? "split_solve" : "chunked_solve") << ','
+                    << available << ',' << cached_bytes << ',' << budget << ',' << current_bytes << ','
+                    << bytes1 << ',' << bytes2 << ',' << full_need << ',' << resident_split_need << ','
+                    << chunk_budget << ',' << options.chunked_solve << ',' << forced_budget << ',' << forced_chunk << '\n';
+            }
             deletion_threshold_state =
                 RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
             SolveStepSummary step_summary;

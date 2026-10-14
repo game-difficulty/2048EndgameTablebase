@@ -372,23 +372,26 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
         summary.output_live += chunk.live_board_count;
         summary.bitmap_bits += layer_bitmap_bits(chunk);
     };
-    EXChunkOutput<T> output(lease.path(), input.header, lut.dense_lut.size_table);
     if (resident_current) {
         calculate2(current);
-        write_chunk(output, current);
+        ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
+        t0 = now_seconds();
+        write_layer_file(lease.path(), current, spec, mode, io);
+        summary.current_write_seconds += now_seconds() - t0;
         current = {};
     } else {
+        EXChunkOutput<T> output(lease.path(), input.header, lut.dense_lut.size_table);
         EXLayerChunks<T> partial(work.partial, lut);
         while (read_chunk(partial, current)) {
             calculate2(current);
             write_chunk(output, current);
         }
+        ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
+        t0 = now_seconds();
+        output.finish(io);
+        summary.current_write_seconds += now_seconds() - t0;
     }
-    ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
-    t0 = now_seconds();
-    output.finish(io);
     lease.release();
-    summary.current_write_seconds += now_seconds() - t0;
     remove_generated_layer_input(options, step);
     if (!work.retired.empty()) {
         FileIOUtils::finalize_temporary_file(work.retired, retired_lease.path());

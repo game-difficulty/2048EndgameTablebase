@@ -359,7 +359,10 @@ bucket must fit; the code reports insufficient memory rather than silently
 switching to a different lookup algorithm.
 
 `EXLayerChunks` handles disk and resident-memory bucket ranges, and
-`EXSectionWriter` assembles the existing six-section file format. Current
+`EXSectionWriter` assembles the existing six-section file format for bounded
+output. Its writes use `FileIOUtils::write_exact` so a large buffer cannot
+enter the MinGW single-write overflow path. A resident current layer uses
+`write_layer_file` directly, avoiding section spooling and rereading. Current
 output is published before a threshold-pruned dependency replaces its exact
 file. Result decompression is block-streamed; generated archives are extracted
 through `SevenZipSequentialReader` before seekable reads. Low-memory result
@@ -367,6 +370,18 @@ compression uses smaller bucket blocks and one worker to bound scratch memory.
 Generation and the optional optimal-branch post-pass retain their existing
 memory behavior. The standalone single-layer diagnostic entrypoint retains
 the original whole-layer route.
+
+Each routing decision is appended to `<prefix>zmask_solve_routes.csv` before
+calculation. The automatic budget uses 95% of available plus cached memory
+after the fixed workspace reserve. Whole-layer demand is current + both
+successors; resident split demand is current + the larger successor. Neither
+estimate reserves a second layer copy for pruning. Temporary allocations can
+still exceed these estimates; this policy favors residency over peak headroom.
+Each record is written before
+calculation, including the internal step, chosen route, available/cached bytes,
+budget, layer estimates, full/split peak estimates and explicit overrides.
+Apply `layer_offset` to obtain the filename layer. The log is separate from
+completed-step timings, so a failed or stalled step still has a route record.
 
 Core optimizations:
 
