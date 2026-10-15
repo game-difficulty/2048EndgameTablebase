@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <random>
@@ -1751,8 +1752,7 @@ double compress_layer_result_from_memory(
     return now_seconds() - t0;
 }
 
-double compress_layer_result_from_file(const RunOptions &options, int step, bool low_memory = false,
-                                      bool source_changed = false) {
+double compress_layer_result_from_file(const RunOptions &options, int step, bool source_changed = false) {
     if (!options.compress) {
         return 0.0;
     }
@@ -1783,11 +1783,10 @@ double compress_layer_result_from_file(const RunOptions &options, int step, bool
         zbook_path,
         lut_file_path(options.pathname),
         temp_path,
-        low_memory ? 64U : 4096U,
+        4096U,
         65536U,
         5,
-        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative},
-        low_memory ? 1U : 0U
+        {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative}
     );
     FileIOUtils::finalize_temporary_file(temp_path, output_path);
     NativePath::remove(zbook_path, ec);
@@ -1795,13 +1794,13 @@ double compress_layer_result_from_file(const RunOptions &options, int step, bool
     return now_seconds() - t0;
 }
 
-double compress_all_layer_results(const RunOptions &options, bool low_memory = false) {
+double compress_all_layer_results(const RunOptions &options) {
     if (!options.compress || options.steps <= 0) {
         return 0.0;
     }
     const double t0 = now_seconds();
     for (int step = 0; step < options.steps; ++step) {
-        (void)compress_layer_result_from_file(options, step, low_memory);
+        (void)compress_layer_result_from_file(options, step);
     }
     return now_seconds() - t0;
 }
@@ -3809,12 +3808,13 @@ T max_success_value(const Prefix36LayerT<T> &layer, T zero_value) {
     return max_value;
 }
 
+#include "EXSplitSolve.inl"
+
 template <typename T>
 SolveStepSummary solve_loaded_step_impl(
     const PatternSpec &spec,
     const RunOptions &options,
-    const DenseLow24RankLut &dense_lut,
-    const ZMaskFrozen::ZMaskLuts &z_luts,
+    const LutBundle &lut,
     int step,
     Prefix36LayerT<T> &current,
     Prefix36LayerT<T> &future1,
@@ -3823,10 +3823,11 @@ SolveStepSummary solve_loaded_step_impl(
     RuntimeControls::DeletionThresholdState deletion_threshold_state,
     bool periodic_checkpoint = false
 ) {
+    const auto &dense_lut = lut.dense_lut;
+    const auto &z_luts = lut.row_luts;
     const int num_threads = thread_count_from_options(options);
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
     const T zero_value = zero_value_for_dtype<T>(options.success_rate_dtype);
-    const T max_scale = max_scale_value_for_dtype<T>(options.success_rate_dtype);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
     const double total_t0 = now_seconds();
     const double index_t0 = now_seconds();
@@ -3881,6 +3882,11 @@ SolveStepSummary solve_loaded_step_impl(
     const double recalc_t1 = now_seconds();
     recalc.seconds = recalc_t1 - recalc_t0;
     recalc.mbps = throughput(recalc.boards, recalc.seconds);
+    EXRetiredLayer retired;
+    stage_retired_layer(retired, future2, spec, options, lut, step + 2,
+        64ULL * 1024 * 1024, deletion_threshold_state, periodic_checkpoint);
+    future2 = {};
+    ex_split_test_stop("RESIDENT_RELEASE", step);
     const double compact_t0 = now_seconds();
     if (all_zero_output) {
         Prefix36LayerT<T> empty;
@@ -3905,67 +3911,14 @@ SolveStepSummary solve_loaded_step_impl(
     if (!periodic_checkpoint) remove_generated_layer_input(options, step);
     const double write_t1 = now_seconds();
 
-    double future_compact_seconds = 0.0;
-    double future_write_seconds = 0.0;
-    const uint64_t future2_pre_threshold_live = future2.live_board_count;
-    uint64_t future2_post_live = future2.live_board_count;
-    double effective_deletion_threshold = 0.0;
-    if (RuntimeControls::deletion_threshold_enabled(deletion_threshold_state)) {
-        bool should_compact_future = deletion_threshold_state.absolute > 0.0;
-        T threshold = RuntimeControls::absolute_deletion_threshold(
-            zero_value,
-            max_scale,
-            deletion_threshold_state
-        );
-        if (deletion_threshold_state.relative > 0.0) {
-            const T future_max = max_success_value(future2, zero_value);
-            if (future_max > zero_value) {
-                const T relative_threshold = RuntimeControls::relative_deletion_threshold(
-                    future_max,
-                    zero_value,
-                    deletion_threshold_state
-                );
-                threshold = RuntimeControls::max_deletion_threshold(threshold, relative_threshold);
-                should_compact_future = true;
-            }
-        }
-        if (should_compact_future) {
-            effective_deletion_threshold = RuntimeControls::normalized_deletion_threshold(
-                threshold,
-                zero_value,
-                max_scale
-            );
-            const double fc_t0 = now_seconds();
-            future2 = compact_layer(future2, dense_lut, threshold, num_threads);
-            const double fc_t1 = now_seconds();
-            const double fw_t0 = now_seconds();
-            if (!periodic_checkpoint) write_routed_layer_file(
-                options,
-                StoragePaths::ArtifactRole::Hot,
-                step + 2,
-                kLayerFileExtension,
-                future2,
-                spec,
-                mode,
-                io_config
-            );
-            if (!periodic_checkpoint) remove_generated_layer_input(options, step + 2);
-            const double fw_t1 = now_seconds();
-            future_compact_seconds = fc_t1 - fc_t0;
-            future_write_seconds = fw_t1 - fw_t0;
-            future2_post_live = future2.live_board_count;
-        }
-    }
-    if (!options.optimal_branch_only && options.compress) {
-        const double retired_seconds =
-            compress_layer_result_from_memory(options, step + 2, future2, spec, mode, true, periodic_checkpoint);
-        if (!periodic_checkpoint) remove_generated_layer_input(options, step + 2);
-        future_write_seconds += retired_seconds;
-    }
-    if (periodic_checkpoint && !options.compress) {
-        write_routed_layer_file(options, StoragePaths::ArtifactRole::Hot, step + 2,
-            kLayerFileExtension, future2, spec, mode, io_config);
-    }
+    const double publish_start = now_seconds();
+    retired.publish(options);
+    if (!periodic_checkpoint) remove_generated_layer_input(options, step + 2);
+    const double future_compact_seconds = retired.compact_seconds;
+    const double future_write_seconds = retired.write_seconds + now_seconds() - publish_start;
+    const uint64_t future2_pre_threshold_live = retired.before;
+    const uint64_t future2_post_live = retired.after;
+    const double effective_deletion_threshold = retired.effective_threshold;
     const double current_retained_ratio =
         RuntimeControls::retention_ratio(current.live_board_count, input_live);
     const double future_threshold_retained_ratio =
@@ -3980,7 +3933,7 @@ SolveStepSummary solve_loaded_step_impl(
         input_live,
         current.live_board_count,
         future1.live_board_count,
-        future2.live_board_count,
+        future2_pre_threshold_live,
         future2_post_live,
         deletion_threshold_state.absolute,
         deletion_threshold_state.relative,
@@ -4246,8 +4199,6 @@ SolveStepSummary keep_only_optimal_branches_prefix36(
         : keep_only_optimal_branches_prefix36_impl<BoardMover, T>(spec, options, lut);
 }
 
-#include "EXSplitSolve.inl"
-
 template <typename T>
 SolveStepSummary solve_single_step_impl(
     const PatternSpec &spec,
@@ -4268,8 +4219,7 @@ SolveStepSummary solve_single_step_impl(
     return solve_loaded_step_impl(
         spec,
         options,
-        lut.dense_lut,
-        lut.row_luts,
+        lut,
         step,
         current,
         future1,
@@ -4389,12 +4339,12 @@ void run_pattern_solve_typed(
     const DTypeMode mode = dtype_mode_from_name(options.success_rate_dtype);
     RuntimeControls::DeletionThresholdState deletion_threshold_state =
         RuntimeControls::current_deletion_thresholds(options);
-    bool used_split_solve = false;
     const auto clean_positions = [&](int step) { remove_generated_layer_input(options, step); };
     const RunOptions snapshot_options = checkpoint.snapshot_options();
     if (options.steps >= 3) {
         Prefix36LayerT<T> future1;
         Prefix36LayerT<T> future2;
+        EXSplitPipeline split_pipeline;
         int cached_future1_step = std::numeric_limits<int>::min();
         int cached_future2_step = std::numeric_limits<int>::min();
         int first_step = options.steps - 3;
@@ -4435,7 +4385,8 @@ void run_pattern_solve_typed(
                 solve_progress_base - static_cast<uint32_t>(step) - 2U,
                 progress_total
             );
-            if (!checkpoint.has_frontier() && solved_layer_exists(options, step)) {
+            const bool prepared_split = split_pipeline.ready(step);
+            if (!prepared_split && !checkpoint.has_frontier() && solved_layer_exists(options, step)) {
                 continue;
             }
             if (checkpoint.enabled && !checkpoint.has_frontier()) {
@@ -4451,7 +4402,7 @@ void run_pattern_solve_typed(
             if (cached_future1_step != step + 1 && !readable_layer_input_exists(options, step + 1)) {
                 ensure_ex_generated_through(arr_init, spec, options, lut, step + 1);
             }
-            if (cached_future2_step != step + 2 && !readable_layer_input_exists(options, step + 2)) {
+            if (!prepared_split && cached_future2_step != step + 2 && !readable_layer_input_exists(options, step + 2)) {
                 ensure_ex_generated_through(arr_init, spec, options, lut, step + 2);
             }
             if (!readable_layer_input_exists(options, step)) {
@@ -4459,7 +4410,7 @@ void run_pattern_solve_typed(
             }
             if (!readable_layer_input_exists(options, step) ||
                 (cached_future1_step != step + 1 && !readable_layer_input_exists(options, step + 1)) ||
-                (cached_future2_step != step + 2 && !readable_layer_input_exists(options, step + 2))) {
+                (!prepared_split && cached_future2_step != step + 2 && !readable_layer_input_exists(options, step + 2))) {
                 throw std::runtime_error(
                     "missing EX prefix36 layer for local solve resume at step " +
                     std::to_string(step)
@@ -4470,7 +4421,7 @@ void run_pattern_solve_typed(
             const auto header1 = cached_future1_step == step + 1
                 ? make_layer_header(future1, spec, mode)
                 : ex_input_header(ex_seekable_input(options, step + 1), lut);
-            const auto header2 = cached_future2_step == step + 2
+            const auto header2 = prepared_split ? split_pipeline.future4_header : cached_future2_step == step + 2
                 ? make_layer_header(future2, spec, mode)
                 : ex_input_header(ex_seekable_input(options, step + 2), lut);
             const uint64_t current_bytes = ex_layer_resident_estimate(current_header);
@@ -4487,10 +4438,12 @@ void run_pattern_solve_typed(
             const uint64_t budget = forced_budget ? forced_budget :
                 (pool > reserve ? (pool - reserve) * 19 / 20 : 0);
             const uint64_t full_need = current_bytes + bytes1 + bytes2;
-            const uint64_t max_future = std::max(bytes1, bytes2);
+            const uint64_t max_future = prepared_split ? bytes1 : std::max(bytes1, bytes2);
             const uint64_t resident_split_need = max_future + current_bytes;
             const uint64_t forced_chunk = ex_solve_env_bytes("EX_TEST_CURRENT_CHUNK_BYTES");
-            const bool split = options.chunked_solve || forced_chunk || full_need > budget;
+            // A prepared +4 pass has already retired its successor. Continue
+            // the pipeline instead of reading that now-pruned layer again.
+            const bool split = prepared_split || options.chunked_solve || forced_chunk || full_need > budget;
             const bool resident_current = !forced_chunk && resident_split_need <= budget;
             if (split && max_future >= budget && !forced_chunk)
                 throw std::runtime_error("EX split solve cannot fit one successor layer in the available memory budget");
@@ -4511,17 +4464,37 @@ void run_pattern_solve_typed(
                 RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
             SolveStepSummary step_summary;
             if (split) {
-                used_split_solve = true;
-                // A resident-to-split transition must spill the exact +2 future
-                // before releasing it. Split work files are not checkpoints.
-                if (checkpoint.enabled && cached_future1_step == step + 1)
-                    write_routed_layer_file(options, StoragePaths::ArtifactRole::Hot, step + 1,
-                        kLayerFileExtension, future1, spec, mode, io_config);
-                future1 = {};
+                if (prepared_split) {
+                    future2 = std::move(future1);
+                    cached_future2_step = cached_future1_step;
+                    future1 = {};
+                } else {
+                    // Bootstrap needs +4 first; spill the cached +2 successor
+                    // only when it has no exact on-disk working copy.
+                    if (checkpoint.enabled && cached_future1_step == step + 1)
+                        write_routed_layer_file(options, StoragePaths::ArtifactRole::Hot, step + 1,
+                            kLayerFileExtension, future1, spec, mode, io_config);
+                    future1 = {};
+                }
                 cached_future1_step = kNoSolveResumeStep;
+                std::string next_path;
+                if (step > 0 && (checkpoint.has_frontier() || !solved_layer_exists(options, step - 1))) {
+                    if (!readable_layer_input_exists(options, step - 1))
+                        ensure_ex_generated_through(arr_init, spec, options, lut, step - 1);
+                    next_path = ex_seekable_input(options, step - 1, true);
+                }
+                std::function<void(const Prefix36LayerT<T> &)> save_future;
+                if (checkpoint.due(step)) save_future = [&](const Prefix36LayerT<T> &layer) {
+                    // Never overwrite a file belonging to the committed pair.
+                    split_pipeline.checkpoint_future = checkpoint.frontier() == step + 1
+                        ? checkpoint.file(0)
+                        : write_routed_layer_file(snapshot_options, StoragePaths::ArtifactRole::Hot,
+                            step + 1, kLayerFileExtension, layer, spec, mode, io_config);
+                };
                 step_summary = solve_split_step<T>(spec, options, lut, step, current_path, chunk_budget,
                     resident_current, future2, cached_future2_step, load_cached_future, deletion_threshold_state,
-                    checkpoint.enabled, checkpoint.enabled && resident_current ? &future1 : nullptr);
+                    checkpoint.enabled, checkpoint.enabled && resident_current ? &future1 : nullptr,
+                    &split_pipeline, next_path, save_future);
                 if (checkpoint.enabled && resident_current) cached_future1_step = step;
             } else {
                 double read_seconds = load_cached_future(step + 1, future1, cached_future1_step);
@@ -4531,7 +4504,7 @@ void run_pattern_solve_typed(
                     current_path, nullptr, io_config, &lut.dense_lut.size_table, num_threads);
                 read_seconds += now_seconds() - read_t0;
                 step_summary = solve_loaded_step_impl(
-                    spec, options, lut.dense_lut, lut.row_luts, step, current, future1, future2,
+                    spec, options, lut, step, current, future1, future2,
                     read_seconds, deletion_threshold_state, checkpoint.enabled);
                 future2 = std::move(future1);
                 future1 = std::move(current);
@@ -4548,6 +4521,8 @@ void run_pattern_solve_typed(
                     if (cached_future2_step == layer)
                         return write_routed_layer_file(snapshot_options, StoragePaths::ArtifactRole::Hot,
                             layer, kLayerFileExtension, future2, spec, mode, io_config);
+                    if (index == 1 && !split_pipeline.checkpoint_future.empty())
+                        return split_pipeline.checkpoint_future;
                     return SolveCheckpoint::copy_layer(existing_raw_layer_file_path(options, layer),
                         snapshot_options, layer, kLayerFileExtension);
                 }, clean_positions);
@@ -4591,7 +4566,7 @@ void run_pattern_solve_typed(
         total.total_seconds += optimal_summary.total_seconds;
         total.compute_seconds += optimal_summary.compute_seconds;
     } else {
-        const double compress_seconds = compress_all_layer_results(options, used_split_solve);
+        const double compress_seconds = compress_all_layer_results(options);
         total.total_seconds += compress_seconds;
         total.current_write_seconds += compress_seconds;
     }

@@ -123,7 +123,7 @@ public:
                 (next_large_begin == UINT64_MAX ? 0 : (next_large_end - next_large_begin) * 10ULL) +
                 (EXSuccessLayout::decode(values_[i + 1], layer.success_stride) - value_begin) * sizeof(T);
             if (!layer.bucket_keys.empty() && estimate > budget) break;
-            if (layer.bucket_keys.empty() && estimate > budget &&
+            if (!memory_ && layer.bucket_keys.empty() && estimate > budget &&
                 !ex_solve_env_bytes("EX_TEST_CURRENT_CHUNK_BYTES"))
                 throw std::runtime_error("EX split solve cannot fit a single bucket in the current chunk budget");
             small_begin = next_small_begin; small_end = next_small_end;
@@ -248,15 +248,14 @@ private:
     const std::vector<uint32_t> &sizes_;
 };
 
+#include "EXRetiredLayer.inl"
+
 struct EXSplitWork {
-    std::string partial, retired;
+    std::string partial;
     ~EXSplitWork() {
-        for (const auto &path : {partial, retired}) {
-            if (path.empty()) continue;
-            std::error_code ec;
-            NativePath::remove(path, ec);
-            NativePath::remove(FileIOUtils::temp_write_path(path), ec);
-        }
+        if (partial.empty()) return;
+        std::error_code ec;
+        NativePath::remove(partial, ec);
     }
 };
 
@@ -277,198 +276,210 @@ void ex_split_pass(Prefix36LayerT<T> &current, const Prefix36LayerT<T> &future,
             spec, options, step > options.docheck_step, thread_count_from_options(options));
 }
 
+struct EXSplitPipeline {
+    int step = kNoSolveResumeStep;
+    std::string partial;
+    LayerFileHeader future4_header{};
+    std::unique_ptr<EXRetiredLayer> retired;
+    std::string checkpoint_future;
+    ~EXSplitPipeline() {
+        if (!partial.empty()) {
+            std::error_code ec;
+            NativePath::remove(partial, ec);
+        }
+    }
+    bool ready(int current_step) const { return step == current_step && !partial.empty(); }
+};
+
 template <typename T, typename LoadFuture>
 SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &options, const LutBundle &lut,
     int step, const std::string &current_path, uint64_t chunk_budget, bool resident_current,
     Prefix36LayerT<T> &future, int &cached_step, LoadFuture &&load_future,
     RuntimeControls::DeletionThresholdState thresholds, bool retain_positions = false,
-    Prefix36LayerT<T> *retained_current = nullptr) {
+    Prefix36LayerT<T> *retained_current = nullptr, EXSplitPipeline *pipeline_state = nullptr,
+    const std::string &next_path = {},
+    const std::function<void(const Prefix36LayerT<T> &)> &save_future = {}) {
     const double started = now_seconds();
     const auto mode = dtype_mode_from_name(options.success_rate_dtype);
     const auto io = FileIOUtils::direct_io_config_from_options(options);
     const int threads = thread_count_from_options(options);
     const T zero = zero_value_for_dtype<T>(options.success_rate_dtype);
     SolveStepSummary summary;
-    EXLayerChunks<T> input(current_path, lut);
-    if (dtype_mode_from_header(input.header) != mode)
+    EXSplitPipeline local_pipeline;
+    auto &pipeline = pipeline_state ? *pipeline_state : local_pipeline;
+    const bool prepared = pipeline.ready(step);
+    const auto header = ex_input_header(current_path, lut);
+    if (dtype_mode_from_header(header) != mode)
         throw std::runtime_error("EX split solve dtype does not match input; resume with the original dtype");
-    summary.input_live = input.header.live_board_count;
+    summary.input_live = header.live_board_count;
     auto lease = StoragePaths::ReservedWritePath{};
     if (!resident_current || !retained_current)
         lease = StoragePaths::reserve_write_path(options, StoragePaths::ArtifactRole::Hot, step,
-            kLayerFileExtension, 3 * (layer_file_bytes(input.header) + layer_success_storage_count(input.header) * sizeof(T)));
-    EXSplitWork work{resident_current ? std::string{} : lease.path() + ".spawn4.tmp", {}};
+            kLayerFileExtension, 3 * (layer_file_bytes(header) + layer_success_storage_count(header) * sizeof(T)));
+    EXSplitWork work{prepared ? std::move(pipeline.partial) :
+        resident_current ? std::string{} : lease.path() + ".spawn4.tmp"};
+    pipeline.partial.clear();
+    pipeline.checkpoint_future.clear();
+    auto retired = std::move(pipeline.retired);
     Prefix36LayerT<T> current;
-    if (cached_step != step + 2) future = {};
-    summary.read_seconds += load_future(step + 2, future, cached_step);
-    double t0 = now_seconds();
-    ensure_direct_index_built(future, lut.dense_lut.size_table);
-    summary.future_index_seconds += now_seconds() - t0;
-    const uint64_t future4_live = future.live_board_count;
-    const auto calculate4 = [&](Prefix36LayerT<T> &chunk) {
-        const double t = now_seconds();
-        ex_split_pass<2>(chunk, future, spec, options, lut, step);
-        summary.recalc_seconds += now_seconds() - t;
-    };
+    double t0;
     const auto read_chunk = [&](auto &reader, auto &chunk) {
         const double t = now_seconds();
         const bool found = reader.next(chunk, chunk_budget);
         summary.read_seconds += now_seconds() - t;
         return found;
     };
-    const auto write_chunk = [&](auto &writer, const auto &chunk) {
+    const auto index_future = [&] {
         const double t = now_seconds();
-        writer.append(chunk);
-        summary.current_write_seconds += now_seconds() - t;
+        ensure_direct_index_built(future, lut.dense_lut.size_table);
+        summary.future_index_seconds += now_seconds() - t;
+    };
+    const auto calculate4 = [&](auto &chunk, int target_step) {
+        const double t = now_seconds();
+        ex_split_pass<2>(chunk, future, spec, options, lut, target_step);
+        summary.recalc_seconds += now_seconds() - t;
+    };
+    const auto spool4 = [&](const std::string &source, const std::string &output, int target_step) {
+        EXLayerChunks<T> positions(source, lut);
+        std::ofstream values(NativePath::from_utf8(output), std::ios::binary | std::ios::trunc);
+        Prefix36LayerT<T> chunk;
+        while (read_chunk(positions, chunk)) {
+            calculate4(chunk, target_step);
+            const double t = now_seconds();
+            FileIOUtils::write_exact(values, chunk.success_values.data(), chunk.success_values.size() * sizeof(T), output);
+            summary.current_write_seconds += now_seconds() - t;
+        }
+        values.close();
+        if (!values) throw std::runtime_error("failed to close EX partial values: " + output);
     };
     if (resident_current) {
         t0 = now_seconds();
         current = read_layer_file<T>(current_path, nullptr, io, &lut.dense_lut.size_table, threads);
         summary.read_seconds += now_seconds() - t0;
-        calculate4(current);
-    } else {
-        // The +4 pass does not change positions or bucket layout. Only its
-        // success values need spooling; the second pass reuses the input keys.
-        std::ofstream partial(NativePath::from_utf8(work.partial), std::ios::binary | std::ios::trunc);
-        while (read_chunk(input, current)) {
-            calculate4(current);
-            t0 = now_seconds();
-            FileIOUtils::write_exact(partial, current.success_values.data(),
-                current.success_values.size() * sizeof(T), work.partial);
-            summary.current_write_seconds += now_seconds() - t0;
-        }
-        t0 = now_seconds();
-        partial.close();
-        if (!partial) throw std::runtime_error("failed to close EX partial values: " + work.partial);
-        summary.current_write_seconds += now_seconds() - t0;
-        current = {};
     }
-    input.close();
-
-    // Retire +4 using bounded copies of its resident buckets. Keep exact disk
-    // dependencies unchanged until the current layer has committed.
-    T threshold = RuntimeControls::absolute_deletion_threshold(zero,
-        max_scale_value_for_dtype<T>(options.success_rate_dtype), thresholds);
-    if (thresholds.relative > 0)
-        threshold = RuntimeControls::max_deletion_threshold(threshold,
-            RuntimeControls::relative_deletion_threshold(max_success_value(future, zero), zero, thresholds));
-    uint64_t retired_live = future.live_board_count;
-    auto retired_lease = StoragePaths::ReservedWritePath{};
-    const bool compress_retired = options.compress && !options.optimal_branch_only;
-    if (retain_positions || RuntimeControls::deletion_threshold_enabled(thresholds) || compress_retired) {
-        retired_lease = StoragePaths::reserve_write_path(options,
-            compress_retired ? StoragePaths::ArtifactRole::Cold : StoragePaths::ArtifactRole::Hot, step + 2,
-            compress_retired ? EXCompressedResult::kCompressedLayerFileExtension : kLayerFileExtension,
-            2 * layer_file_bytes(future, mode));
-        work.retired = retired_lease.path() + ".retire_tmp";
-        EXLayerChunks<T> chunks(future, spec, mode, lut);
-        EXChunkOutput<T> out(work.retired, chunks.header, lut.dense_lut.size_table);
-        Prefix36LayerT<T> chunk;
-        while (chunks.next(chunk, chunk_budget)) {
-            t0 = now_seconds();
-            if (RuntimeControls::deletion_threshold_enabled(thresholds))
-                chunk = compact_layer(chunk, lut.dense_lut, threshold, threads, chunk.success_stride);
-            summary.future_compact_seconds += now_seconds() - t0;
-            t0 = now_seconds();
-            out.append(chunk);
-            summary.future_write_seconds += now_seconds() - t0;
-        }
-        t0 = now_seconds();
-        if (compress_retired) {
-            out.seal_sections();
-            const std::string header_path = work.retired;
-            work.retired = retired_lease.path() + ".tmp";
-            try {
-                EXCompressedResult::compress_zbook_sections_to_ex_result(header_path,
-                    lut_file_path(options.pathname), work.retired,
-                    {options.result_value_policy.get(), step + 2, thresholds.absolute, thresholds.relative});
-            } catch (...) {
-                std::error_code ec;
-                NativePath::remove(header_path, ec);
-                throw;
-            }
-            std::error_code ec;
-            NativePath::remove(header_path, ec);
-        } else {
-            out.finish(io);
-        }
-        retired_live = out.header().live_board_count;
-        summary.future_write_seconds += now_seconds() - t0;
+    if (!prepared) {
+        if (cached_step != step + 2) future = {};
+        summary.read_seconds += load_future(step + 2, future, cached_step);
+        index_future();
+        if (resident_current) calculate4(current, step);
+        else spool4(current_path, work.partial, step);
+        retired = std::make_unique<EXRetiredLayer>();
+        stage_retired_layer(*retired, future, spec, options, lut, step + 2, chunk_budget, thresholds, retain_positions, true);
+        summary.future_compact_seconds += retired->compact_seconds;
+        summary.future_write_seconds += retired->write_seconds;
+        future = {};
+        cached_step = kNoSolveResumeStep;
     }
-    future = {};
-    cached_step = kNoSolveResumeStep;
     ex_split_test_stop("SPLIT_FIRST_PASS", step);
     summary.read_seconds += load_future(step + 1, future, cached_step);
-    t0 = now_seconds();
-    ensure_direct_index_built(future, lut.dense_lut.size_table);
-    summary.future_index_seconds += now_seconds() - t0;
-    const auto calculate2 = [&](Prefix36LayerT<T> &chunk) {
+    index_future();
+    const uint64_t future1_live = future.live_board_count;
+
+    // Complete both consumers of this successor before retiring it. The next
+    // +4 contribution is disposable; exact checkpoints never depend on it.
+    if (!next_path.empty()) {
+        const auto next_header = ex_input_header(next_path, lut);
+        auto partial_lease = StoragePaths::reserve_write_path(options, StoragePaths::ArtifactRole::Hot,
+            step - 1, ".spawn4.tmp", layer_success_storage_count(next_header) * sizeof(T));
+        pipeline.partial = partial_lease.path();
+        spool4(next_path, pipeline.partial, step - 1);
+        partial_lease.release();
+        pipeline.step = step - 1;
+        pipeline.future4_header = make_layer_header(future, spec, mode);
+        ex_split_test_stop("PIPELINE_PREFETCH", step);
+    } else {
+        pipeline.step = kNoSolveResumeStep;
+    }
+    const auto calculate2 = [&](auto &chunk) {
         const double t = now_seconds();
         ex_split_pass<1>(chunk, future, spec, options, lut, step);
         summary.recalc_seconds += now_seconds() - t;
-        const double c = now_seconds();
+    };
+    const auto compact = [&](auto &chunk) {
+        const double t = now_seconds();
         chunk = compact_layer(chunk, lut.dense_lut, zero, threads, chunk.success_stride);
-        summary.compact_seconds += now_seconds() - c;
+        summary.compact_seconds += now_seconds() - t;
         summary.output_live += chunk.live_board_count;
         summary.bitmap_bits += layer_bitmap_bits(chunk);
     };
+    std::unique_ptr<EXChunkOutput<T>> output;
     if (resident_current) {
+        if (prepared) {
+            t0 = now_seconds();
+            std::ifstream values(NativePath::from_utf8(work.partial), std::ios::binary);
+            current.success_values.resize(current.success_storage_count);
+            read_stream_exact(values, current.success_values.data(), current.success_values.size() * sizeof(T), work.partial);
+            if (values.peek() != std::char_traits<char>::eof())
+                throw std::runtime_error("EX partial values do not match positions: " + work.partial);
+            summary.read_seconds += now_seconds() - t0;
+        }
         calculate2(current);
-        ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
-        t0 = now_seconds();
-        if (retained_current) *retained_current = std::move(current);
-        else write_layer_file(lease.path(), current, spec, mode, io);
-        summary.current_write_seconds += now_seconds() - t0;
-        current = {};
     } else {
-        EXChunkOutput<T> output(lease.path(), input.header, lut.dense_lut.size_table);
+        output = std::make_unique<EXChunkOutput<T>>(lease.path(), header, lut.dense_lut.size_table);
         EXLayerChunks<T> positions(current_path, lut);
-        std::ifstream partial(NativePath::from_utf8(work.partial), std::ios::binary);
-        if (!partial) throw std::runtime_error("failed to open EX partial values: " + work.partial);
+        std::ifstream values(NativePath::from_utf8(work.partial), std::ios::binary);
+        if (!values) throw std::runtime_error("failed to open EX partial values: " + work.partial);
         while (read_chunk(positions, current)) {
             t0 = now_seconds();
             current.success_values.resize(current.success_storage_count);
-            read_stream_exact(partial, current.success_values.data(),
-                current.success_values.size() * sizeof(T), work.partial);
+            read_stream_exact(values, current.success_values.data(), current.success_values.size() * sizeof(T), work.partial);
             summary.read_seconds += now_seconds() - t0;
             calculate2(current);
-            write_chunk(output, current);
+            compact(current);
+            t0 = now_seconds();
+            output->append(current);
+            summary.current_write_seconds += now_seconds() - t0;
         }
-        if (partial.peek() != std::char_traits<char>::eof())
+        if (values.peek() != std::char_traits<char>::eof())
             throw std::runtime_error("EX partial values do not match positions: " + work.partial);
-        ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
+    }
+    if (save_future) {
         t0 = now_seconds();
-        output.finish(io);
+        save_future(future);
         summary.current_write_seconds += now_seconds() - t0;
     }
-    lease.release();
-    if (!retain_positions) remove_generated_layer_input(options, step);
-    if (!work.retired.empty()) {
-        FileIOUtils::finalize_temporary_file(work.retired, retired_lease.path());
-        work.retired.clear();
-        retired_lease.release();
-        if (compress_retired) {
-            std::error_code ec;
-            NativePath::remove(existing_raw_layer_file_path(options, step + 2), ec);
-        }
-    }
-    ex_split_test_stop("SPLIT_PUBLISH", step);
-    if (!options.optimal_branch_only && !compress_retired) {
+    if (!next_path.empty()) {
+        pipeline.retired = std::make_unique<EXRetiredLayer>();
+        stage_retired_layer(*pipeline.retired, future, spec, options, lut,
+            step + 1, chunk_budget, thresholds, retain_positions, true);
+        summary.future_compact_seconds += pipeline.retired->compact_seconds;
+        summary.future_write_seconds += pipeline.retired->write_seconds;
+    } else if (retain_positions) {
+        // The last two layers retain the existing unpruned tail semantics.
         t0 = now_seconds();
-        compress_layer_result_from_file(options, step + 2, true,
-            retain_positions || RuntimeControls::deletion_threshold_enabled(thresholds));
-        summary.future_write_seconds += now_seconds() - t0;
+        write_routed_layer_file(options, StoragePaths::ArtifactRole::Hot, step + 1,
+            kLayerFileExtension, future, spec, mode, io);
+        summary.current_write_seconds += now_seconds() - t0;
     }
+    future = {};
+    cached_step = kNoSolveResumeStep;
+    ex_split_test_stop("PIPELINE_RELEASE", step);
+    if (resident_current) compact(current);
+    ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
+    t0 = now_seconds();
+    if (resident_current) {
+        if (retained_current) *retained_current = std::move(current);
+        else write_layer_file(lease.path(), current, spec, mode, io);
+        current = {};
+    } else {
+        output->finish(io);
+    }
+    lease.release();
+    summary.current_write_seconds += now_seconds() - t0;
+    if (!retain_positions) remove_generated_layer_input(options, step);
+    t0 = now_seconds();
+    retired->publish(options);
+    summary.future_write_seconds += now_seconds() - t0;
+    ex_split_test_stop("SPLIT_PUBLISH", step);
     summary.bitmap_live = summary.output_live;
     summary.total_seconds = now_seconds() - started;
     summary.compute_seconds = summary.recalc_seconds + summary.compact_seconds +
         summary.future_index_seconds + summary.future_compact_seconds;
     append_solve_stats(options, resident_current ? "split_solve" : "chunked_solve", step,
-        summary.input_live, summary.output_live, future.live_board_count, future4_live, retired_live,
-        thresholds.absolute, thresholds.relative,
-        RuntimeControls::normalized_deletion_threshold(threshold, zero, max_scale_value_for_dtype<T>(options.success_rate_dtype)),
+        summary.input_live, summary.output_live, future1_live, retired->before, retired->after,
+        thresholds.absolute, thresholds.relative, retired->effective_threshold,
         RuntimeControls::retention_ratio(summary.output_live, summary.input_live),
-        RuntimeControls::retention_ratio(retired_live, future4_live), summary.recalc_seconds,
+        RuntimeControls::retention_ratio(retired->after, retired->before), summary.recalc_seconds,
         summary.compact_seconds, summary.future_index_seconds, summary.future_compact_seconds,
         summary.current_write_seconds, summary.future_write_seconds, summary.read_seconds, summary.total_seconds,
         summary.compute_seconds, nullptr, summary.output_live, summary.bitmap_bits);

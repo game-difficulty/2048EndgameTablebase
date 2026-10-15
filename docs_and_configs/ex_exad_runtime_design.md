@@ -331,13 +331,14 @@ for step = steps - 3 down to 0:
     promote generated futures to .zbook if needed
     load current/future1/future2
     recalculate current from future1/future2
+    stage retired future2 in bounded chunks, then release future2
     compact current
-    write .zbook
-    optionally compress no-longer-needed future
+    retain current or write .zbook
+    publish retired future2
 ```
 
 EX normally keeps two full future layers plus the current layer. Before each
-step it estimates the resident layers, query indexes and compaction headroom,
+step it estimates the resident layers and query indexes,
 then selects one of three routes:
 
 - `solve`: the existing three-layer calculation.
@@ -346,10 +347,16 @@ then selects one of three routes:
 - `chunked_solve`: the same two passes, but read current in bounded bucket
   ranges and spool partial results to disk. No whole current-layer allocation.
 
-Both split routes retain `L[s+1]` and its index for the next step's spawn-4
-pass. The intermediate mean for spawn-4 is stored as `T`, as in AD; only the
-second pass applies the spawn probabilities and zero compaction. Whole-layer
-and split calculations can therefore differ slightly through rounding.
+After bootstrap, both split routes pipeline successive steps. While `L[s+1]`
+and its index are resident, compute spawn-4 for `L[s-1]` into a success-only
+spool, then finish spawn-2 for `L[s]`. Stage `L[s+1]` for retirement and release
+it before whole-current zero compaction. On the next step, consume the spool
+instead of rereading `L[s+1]`. The intermediate mean remains stored as `T`, as
+in AD; only the second pass applies spawn probabilities and zero compaction.
+Whole-layer and split calculations can therefore differ slightly through rounding.
+Once pipelining starts it remains split until completion, although current-layer
+residency can change. Returning to the full route would require a successor
+whose exact values have already been consumed and released.
 
 `RunOptions.chunked_solve` forces a split route, with the current-layer choice
 still based on memory. Otherwise selection is automatic. `EX_SOLVE_MEMORY_BYTES`
@@ -366,41 +373,56 @@ enter the MinGW single-write overflow path. A resident current layer uses
 spooling and rereading. The current layer finishes before a threshold-pruned
 dependency replaces its exact file; periodic checkpoints remain the recovery
 authority for cached results. Result decompression is block-streamed; generated archives are extracted
-through `SevenZipSequentialReader` before seekable reads. Low-memory result
-compression uses smaller bucket blocks and one worker to bound scratch memory.
+through `SevenZipSequentialReader` before seekable reads. Result compression uses
+4096-bucket blocks and the existing automatic worker count for all solve routes.
 Generation and the optional optimal-branch post-pass retain their existing
 memory behavior. The standalone single-layer diagnostic entrypoint retains
 the original whole-layer route.
 
-In the chunked route, the +4 intermediate contains only success values in
+In the split pipeline, the +4 intermediate contains only success values in
 bucket order. The +2 pass rereads the unchanged generated positions and reads
 these values sequentially, avoiding a second copy of all metadata/bitmaps and
 the intermediate section assembly. This spool is disposable, not a resume
 format; original positions remain available through both passes.
 
-Retired layers are compacted in bounded chunks. With result compression enabled,
-their sealed sections feed the existing block compressor directly; no assembled
-raw layer is written and reread. The compressed temporary result is published
-only after the current layer succeeds. Uncompressed output still assembles its
-sections into the existing layer format. Empty layers and scaled success offsets
-use the same serializers and compression policy as ordinary layer files.
+Retired layers are compacted in bounded chunks using the existing parallel
+compactor. The full resident route copies pruned chunks back into the retired
+layer's existing buffers, preserving its stride so writes cannot overtake unread
+data. It then uses the existing memory-view compressor (4096 buckets per block,
+automatic worker count), or the normal raw writer. It does not spool sections.
+Only the low-memory split routes spool sealed sections; they feed the same
+parallel block compressor. Their uncompressed output assembles the sections into
+the existing layer format. In both cases the temporary result
+is published only after the current layer succeeds. Empty layers and scaled
+success offsets use the existing serializers and compression policy.
+The resident route releases `L[s+2]` before copying the current layer for zero
+compaction: approximately four layer-sized allocations become three. Resident
+split releases its sole successor first: approximately three become two.
+Truly chunked execution keeps one successor plus bounded current chunks.
+These are layer counts, not fixed RAM limits: sizes differ, indexes and scratch
+buffers remain, and a retirement chunk must hold at least one complete bucket.
 
 With periodic checkpoints, a resident split result stays in the current-layer
-cache instead of being written unconditionally. Checkpoints serialize the cached
-pair directly. A later split step must still spill a cached +1 dependency before
-releasing it to fit the +4 phase; continuously split execution therefore still
-needs exact working files. Truly chunked output also needs an exact disk layer
-for subsequent queries. These are not eliminated by the checkpoint interval.
+cache instead of being written unconditionally. A transition from full to split
+may spill the +1 successor once to bootstrap the +4 pass. Steady resident split
+execution no longer writes full per-layer working files; its disposable spool
+contains values only. Truly chunked output still needs an exact disk layer for
+subsequent queries. At a checkpoint, save the exact +1 snapshot before releasing
+that successor, then save current and publish the pair. A staged retirement is
+published only after its last consumer finishes, not at lookahead time; legacy
+per-layer resume therefore also retains its exact dependency on failure.
+The last two layers keep their existing unpruned output semantics.
 
 Each routing decision is appended to `<prefix>zmask_solve_routes.csv` before
 calculation. The automatic budget uses 95% of available plus cached memory
 after the fixed workspace reserve. Whole-layer demand is current + both
-successors; resident split demand is current + the larger successor. Neither
+successors; bootstrap split demand is current + the larger successor, and a
+prepared pipeline needs only current + its spawn-2 successor. Neither
 estimate reserves a second layer copy for pruning. Temporary allocations can
 still exceed these estimates; this policy favors residency over peak headroom.
 Each record is written before
 calculation, including the internal step, chosen route, available/cached bytes,
-budget, layer estimates, full/split peak estimates and explicit overrides.
+budget, layer estimates, full/split working-set estimates and explicit overrides.
 Apply `layer_offset` to obtain the filename layer. The log is separate from
 completed-step timings, so a failed or stalled step still has a route record.
 

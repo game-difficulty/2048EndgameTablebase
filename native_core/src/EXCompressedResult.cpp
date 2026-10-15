@@ -2084,7 +2084,7 @@ CompressStats compress_zbook_sections_to_ex_result(
     const std::string &output_path,
     const ResultCompression::Context &context
 ) {
-    return compress_prefix36_layer_file(header_path, zlut_path, output_path, 64U, 65536U, 5, context, 1U, true);
+    return compress_prefix36_layer_file(header_path, zlut_path, output_path, 4096U, 65536U, 5, context, 0U, true);
 }
 
 CompressStats compress_prefix36_layer_view_to_ex_result(
