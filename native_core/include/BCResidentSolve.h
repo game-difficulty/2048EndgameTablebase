@@ -288,16 +288,6 @@ struct BCResidentSolvedLayer {
         );
     }
 
-    void refresh_lookup_view() {
-        lookup.rebind_flat_values(
-            position,
-            success_values.empty() ? nullptr : success_values.data(),
-            success_values.size(),
-            keep_rows.empty() ? nullptr : keep_rows.data(),
-            keep_rows.size()
-        );
-    }
-
 private:
     void refresh_lookup_view_after_move() {
         if (position.cell_count() == 0U) {
@@ -342,61 +332,6 @@ void bc_solve_validate_success_matches_position(
         bc_success_expected_payload_bytes_for(position, success.row_width(), success.dtype_mode());
     if (s.payload_bytes != expected_payload_bytes) {
         throw std::invalid_argument("BC solve future success payload does not match future position rows");
-    }
-}
-
-template <typename StorageT>
-void bc_resident_solve_validate_options(
-    const BCPositionLayerReader &current_position,
-    const BCPositionLayerReader &future2_position,
-    const BCSuccessLayerReader &future2_success,
-    const BCPositionLayerReader &future4_position,
-    const BCSuccessLayerReader &future4_success,
-    const BCResidentSolveOptions<StorageT> &options
-) {
-    static_assert(
-        std::is_same_v<StorageT, uint32_t> || std::is_same_v<StorageT, uint64_t> ||
-        std::is_same_v<StorageT, float> || std::is_same_v<StorageT, double>,
-        "unsupported BC resident solve value type"
-    );
-    if (options.row_width == 0U) {
-        throw std::invalid_argument("BC resident solve row_width must be non-zero");
-    }
-    if (!bc_success_dtype_matches_type<StorageT>(options.dtype)) {
-        throw std::invalid_argument("BC resident solve dtype does not match storage type");
-    }
-    if (future2_success.row_width() != options.row_width ||
-        future4_success.row_width() != options.row_width) {
-        throw std::invalid_argument("BC resident solve future success row_width mismatch");
-    }
-    if (!bc_success_dtype_matches_type<StorageT>(future2_success.dtype_mode()) ||
-        !bc_success_dtype_matches_type<StorageT>(future4_success.dtype_mode())) {
-        throw std::invalid_argument("BC resident solve future success dtype mismatch");
-    }
-    bc_solve_validate_success_matches_position(future2_position, future2_success);
-    bc_solve_validate_success_matches_position(future4_position, future4_success);
-    if (future2_position.cell_count() == 0U || future4_position.cell_count() == 0U ||
-        current_position.cell_count() == 0U) {
-        throw std::invalid_argument("BC resident solve positions must be open and non-empty");
-    }
-    const BCLut &lut = current_position.lut();
-    if (!lut.is_legal_tile(options.edge_options.spawn2_tile_rank) ||
-        !lut.is_legal_tile(options.edge_options.spawn4_tile_rank)) {
-        throw std::invalid_argument("BC resident solve spawn tile is outside the LUT alphabet");
-    }
-    const uint64_t expected2 =
-        static_cast<uint64_t>(current_position.axis().layer_sum()) +
-        lut.tile_sum_value(options.edge_options.spawn2_tile_rank);
-    const uint64_t expected4 =
-        static_cast<uint64_t>(current_position.axis().layer_sum()) +
-        lut.tile_sum_value(options.edge_options.spawn4_tile_rank);
-    if (future2_position.axis().layer_sum() != expected2 ||
-        future4_position.axis().layer_sum() != expected4) {
-        throw std::invalid_argument("BC resident solve future layer_sum does not match spawn delta");
-    }
-    if (future2_position.axis().family_unit() != current_position.axis().family_unit() ||
-        future4_position.axis().family_unit() != current_position.axis().family_unit()) {
-        throw std::invalid_argument("BC resident solve family_unit mismatch");
     }
 }
 
@@ -1080,11 +1015,6 @@ inline void bc_resident_store_u32_le(uint8_t *out, uint32_t value) {
     out[3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
 }
 
-inline void bc_resident_store_u16_le(uint8_t *out, uint16_t value) {
-    out[0] = static_cast<uint8_t>(value & 0xFFU);
-    out[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
-}
-
 inline void bc_resident_store_u64_le(uint8_t *out, uint64_t value) {
     for (uint32_t i = 0U; i < 8U; ++i) {
         out[i] = static_cast<uint8_t>((value >> (i * 8U)) & 0xFFU);
@@ -1342,121 +1272,6 @@ inline void bc_resident_append_bitmap_le(
 #else
     return static_cast<uint32_t>(__builtin_ctzll(value));
 #endif
-}
-
-template <typename StorageT>
-inline void bc_resident_compact_cell(
-    const BCPositionLayerReader &position,
-    CellId cid,
-    const std::vector<StorageT> &raw_values,
-    uint64_t cell_value_offset,
-    uint32_t row_width,
-    StorageT zero_value,
-    FinalizedCellPayload &payload,
-    std::vector<StorageT> &cell_success_values,
-    BCResidentCompactStats &stats
-) {
-    const BCPositionCellDescriptor &desc = position.descriptor(cid);
-    if (desc.empty() || desc.success_rows == 0U) {
-        ++stats.empty_cells;
-        return;
-    }
-    stats.input_rows += desc.success_rows;
-    const BCLut &lut = position.lut();
-    const BCBucketEntryView buckets = position.bucket_entries_for_cell(cid);
-    const BCRankPayloadView rank_payload = position.rank_payload_for_cell(cid);
-    uint64_t success_cursor = 0U;
-    for (uint32_t bucket_i = 0U; bucket_i < buckets.size; ++bucket_i) {
-        const BCBucketEntry &bucket = buckets.data[bucket_i];
-        const uint32_t bitmap_len = bitmap_len_from_trusted_key(lut, bucket.key);
-        const uint32_t word_count = words_for_bits(bitmap_len);
-        const uint32_t bitmap_offset = bc_rank_payload_bitmap_offset(
-            bucket.rank_payload_offset,
-            bitmap_len
-        );
-        const uint64_t bitmap_end =
-            static_cast<uint64_t>(bitmap_offset) +
-            static_cast<uint64_t>(word_count) * sizeof(uint64_t);
-        assert(bitmap_end <= rank_payload.size);
-        std::vector<uint64_t> keep_bitmap(word_count, 0U);
-        uint32_t bucket_seen = 0U;
-        uint32_t bucket_kept = 0U;
-        const uint8_t *bitmap_words = rank_payload.data + bitmap_offset;
-        for (uint32_t word_i = 0U; word_i < word_count; ++word_i) {
-            uint64_t word = load_u64_le(bitmap_words + static_cast<size_t>(word_i) * sizeof(uint64_t));
-            if (word_i + 1U == word_count && (bitmap_len & 63U) != 0U) {
-                word &= (1ULL << (bitmap_len & 63U)) - 1ULL;
-            }
-            while (word != 0U) {
-                const uint32_t bit = bc_resident_countr_zero64(word);
-#ifndef NDEBUG
-                const uint32_t rank = word_i * kBCBitmapWordBits + bit;
-#endif
-                const uint64_t local_row =
-                    static_cast<uint64_t>(bucket.success_row_offset) + bucket_seen;
-                assert(rank < bitmap_len);
-                assert(local_row < desc.success_rows);
-                const uint64_t row_base =
-                    (cell_value_offset + local_row) * static_cast<uint64_t>(row_width);
-                assert(row_base + row_width <= raw_values.size());
-                bool keep_row = false;
-                for (uint32_t lane = 0U; lane < row_width; ++lane) {
-                    if (raw_values[static_cast<size_t>(row_base + lane)] != zero_value) {
-                        keep_row = true;
-                        break;
-                    }
-                }
-                if (keep_row) {
-                    keep_bitmap[word_i] |= (1ULL << bit);
-                    for (uint32_t lane = 0U; lane < row_width; ++lane) {
-                        cell_success_values.push_back(
-                            raw_values[static_cast<size_t>(row_base + lane)]
-                        );
-                    }
-                    ++bucket_kept;
-                    ++stats.live_rows;
-                } else {
-                    ++stats.zero_pruned_rows;
-                }
-                ++bucket_seen;
-                word &= word - 1ULL;
-            }
-        }
-        if (bucket_kept == 0U) {
-            continue;
-        }
-        const uint32_t payload_offset = static_cast<uint32_t>(payload.rank_payload.size());
-        const uint32_t aligned_payload_offset = align_up_u32(payload_offset, 8U);
-        bc_resident_append_padding(payload.rank_payload, aligned_payload_offset - payload_offset);
-        const uint32_t rank_payload_offset = static_cast<uint32_t>(payload.rank_payload.size());
-        bc_resident_append_prefix256_le(payload.rank_payload, keep_bitmap.data(), word_count, bitmap_len);
-        const uint32_t out_bitmap_offset = bc_rank_payload_bitmap_offset(rank_payload_offset, bitmap_len);
-        bc_resident_append_padding(
-            payload.rank_payload,
-            out_bitmap_offset - static_cast<uint32_t>(payload.rank_payload.size())
-        );
-        bc_resident_append_bitmap_le(payload.rank_payload, keep_bitmap.data(), word_count);
-        if (success_cursor > std::numeric_limits<uint32_t>::max()) {
-            throw std::overflow_error("BC resident compact success row offset exceeds uint32");
-        }
-        payload.buckets.push_back(BCBucketEntry{
-            bucket.key,
-            rank_payload_offset,
-            static_cast<uint32_t>(success_cursor)
-        });
-        success_cursor += bucket_kept;
-    }
-    if (success_cursor > std::numeric_limits<uint32_t>::max()) {
-        throw std::overflow_error("BC resident compact success rows exceed uint32");
-    }
-    payload.success_rows = static_cast<uint32_t>(success_cursor);
-    if (payload.success_rows == 0U) {
-        payload.buckets.clear();
-        payload.rank_payload.clear();
-        ++stats.empty_cells;
-    } else {
-        ++stats.live_cells;
-    }
 }
 
 template <typename StorageT, typename RawValuesT, typename KeepRowFn>
@@ -1721,85 +1536,6 @@ inline void bc_resident_compact_zero_cell_in_place(
             return false;
         }
     );
-}
-
-template <typename StorageT>
-inline BCResidentSolvedLayer<StorageT> bc_resident_compact_layer(
-    const BCPositionLayerReader &position,
-    const std::vector<StorageT> &raw_values,
-    const std::vector<uint64_t> &cell_value_offsets,
-    const BCLut &lut,
-    uint32_t row_width = 1U,
-    BCSuccessDTypeMode dtype = bc_success_default_dtype_for_type<StorageT>(),
-    StorageT zero_value = StorageT{},
-    int num_threads = 0
-) {
-    const double compact_t0 = bc_resident_solve_now_seconds();
-    if (row_width == 0U) {
-        throw std::invalid_argument("BC resident compact row_width must be non-zero");
-    }
-    if (!bc_success_dtype_matches_type<StorageT>(dtype)) {
-        throw std::invalid_argument("BC resident compact dtype does not match storage type");
-    }
-    const uint32_t cell_count = position.cell_count();
-    if (cell_value_offsets.size() != static_cast<size_t>(cell_count) + 1U ||
-        cell_value_offsets.back() > std::numeric_limits<uint64_t>::max() / row_width ||
-        cell_value_offsets.back() * row_width != raw_values.size()) {
-        throw std::invalid_argument("BC resident compact cell offsets do not match raw values");
-    }
-    std::vector<FinalizedCellPayload> payloads(cell_count);
-    std::vector<std::vector<StorageT>> cell_success_values(cell_count);
-    const int threads = bc_resident_solve_effective_threads(num_threads);
-    std::vector<BCResidentCompactStats> per_thread(static_cast<size_t>(threads));
-#pragma omp parallel for schedule(dynamic, kBCResidentCellDynamicChunk) num_threads(threads)
-    for (int64_t cid_signed = 0; cid_signed < static_cast<int64_t>(cell_count); ++cid_signed) {
-#if defined(_OPENMP)
-        const int tid = omp_get_thread_num();
-#else
-        const int tid = 0;
-#endif
-        const CellId cid = static_cast<CellId>(cid_signed);
-        bc_resident_compact_cell<StorageT>(
-            position,
-            cid,
-            raw_values,
-            cell_value_offsets[static_cast<size_t>(cid)],
-            row_width,
-            zero_value,
-            payloads[static_cast<size_t>(cid)],
-            cell_success_values[static_cast<size_t>(cid)],
-            per_thread[static_cast<size_t>(tid)]
-        );
-    }
-
-    BCResidentSolvedLayer<StorageT> out;
-    for (const BCResidentCompactStats &stats : per_thread) {
-        out.compact_stats.input_rows += stats.input_rows;
-        out.compact_stats.live_rows += stats.live_rows;
-        out.compact_stats.zero_pruned_rows += stats.zero_pruned_rows;
-        out.compact_stats.live_cells += stats.live_cells;
-        out.compact_stats.empty_cells += stats.empty_cells;
-    }
-    if (out.compact_stats.live_rows > std::numeric_limits<uint64_t>::max() / row_width ||
-        out.compact_stats.live_rows * row_width > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-        throw std::overflow_error("BC resident compact value count exceeds size_t");
-    }
-    std::vector<StorageT> compact_values;
-    compact_values.reserve(static_cast<size_t>(out.compact_stats.live_rows * row_width));
-    for (std::vector<StorageT> &values : cell_success_values) {
-        compact_values.insert(compact_values.end(), values.begin(), values.end());
-        std::vector<StorageT>().swap(values);
-    }
-
-    std::vector<uint8_t> position_bytes =
-        bc_resident_build_position_bytes_from_payloads(position.axis(), payloads);
-    out.compact_stats.position_bytes = position_bytes.size();
-    out.compact_stats.success_bytes =
-        kBCSuccessHeaderBytes +
-        static_cast<uint64_t>(compact_values.size()) * bc_success_dtype_value_size(dtype);
-    out.open(std::move(position_bytes), std::move(compact_values), lut, row_width, dtype);
-    out.compact_stats.compact_seconds = bc_resident_solve_now_seconds() - compact_t0;
-    return out;
 }
 
 template <typename StorageT>

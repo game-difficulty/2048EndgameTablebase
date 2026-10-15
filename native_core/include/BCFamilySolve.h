@@ -286,47 +286,6 @@ inline constexpr uint64_t kBCFamilySolveTempMagic = 0x31504d5446534342ULL; // "B
     return static_cast<uint16_t>(value);
 }
 
-[[nodiscard]] inline uint64_t bc_family_loaded_cell_resident_bytes(const BCLoadedCell &cell) {
-    return static_cast<uint64_t>(cell.buckets.capacity()) * sizeof(BCBucketEntry) +
-        static_cast<uint64_t>(cell.rank_payload.capacity());
-}
-
-[[nodiscard]] inline uint64_t bc_family_loaded_cells_resident_bytes(
-    const std::vector<BCLoadedCell> &cells
-) {
-    uint64_t bytes = static_cast<uint64_t>(cells.capacity()) * sizeof(BCLoadedCell);
-    for (const BCLoadedCell &cell : cells) {
-        bytes += bc_family_loaded_cell_resident_bytes(cell);
-    }
-    return bytes;
-}
-
-template <typename StorageT>
-[[nodiscard]] uint64_t bc_family_value_vector_resident_bytes(
-    const BCFamilyValueVector<StorageT> &values
-) {
-    return static_cast<uint64_t>(values.capacity()) * sizeof(StorageT);
-}
-
-template <typename StorageT>
-[[nodiscard]] uint64_t bc_family_value_buffer_resident_bytes(
-    const BCSingleChunkValueBuffer<StorageT> &values
-) {
-    return static_cast<uint64_t>(values.capacity()) * sizeof(StorageT);
-}
-
-template <typename StorageT>
-[[nodiscard]] uint64_t bc_family_value_vectors_resident_bytes(
-    const std::vector<BCFamilyValueVector<StorageT>> &values
-) {
-    uint64_t bytes =
-        static_cast<uint64_t>(values.capacity()) * sizeof(BCFamilyValueVector<StorageT>);
-    for (const BCFamilyValueVector<StorageT> &cell_values : values) {
-        bytes += bc_family_value_vector_resident_bytes(cell_values);
-    }
-    return bytes;
-}
-
 template <typename StorageT>
 void bc_family_release_value_vectors(
     std::vector<BCFamilyValueVector<StorageT>> &values,
@@ -995,16 +954,6 @@ public:
         return read_record(cid, expected_count, partial4_, partial4_records_, stats);
     }
 
-    [[nodiscard]] BCFamilyValueVector<StorageT> read_partial4_any(CellId cid, BCFamilySolveStats &stats) {
-        wait_partial4_write(stats);
-        ++stats.partial4_cells_read;
-        BCFamilyValueVector<StorageT> cached;
-        if (take_hot_any(cid, partial4_hot_, partial4_hot_present_, cached, stats)) {
-            return cached;
-        }
-        return read_record_any(cid, partial4_, partial4_records_, stats);
-    }
-
     [[nodiscard]] BCFamilyValueVector<StorageT> read_partial2(CellId cid, uint64_t expected_count, BCFamilySolveStats &stats) {
         wait_partial2_write(stats);
         ++stats.partial2_cells_read;
@@ -1013,16 +962,6 @@ public:
             return cached;
         }
         return read_record(cid, expected_count, partial2_, partial2_records_, stats);
-    }
-
-    [[nodiscard]] BCFamilyValueVector<StorageT> read_partial2_any(CellId cid, BCFamilySolveStats &stats) {
-        wait_partial2_write(stats);
-        ++stats.partial2_cells_read;
-        BCFamilyValueVector<StorageT> cached;
-        if (take_hot_any(cid, partial2_hot_, partial2_hot_present_, cached, stats)) {
-            return cached;
-        }
-        return read_record_any(cid, partial2_, partial2_records_, stats);
     }
 
     [[nodiscard]] BCFamilyValueVector<StorageT> read_scratch4(CellId cid, uint64_t expected_count, BCFamilySolveStats &stats) {
@@ -1245,38 +1184,6 @@ private:
         record.value_count = values.size();
     }
 
-    static void write_records_batch(
-        const std::vector<CellId> &cids,
-        std::vector<BCFamilyValueVector<StorageT>> &values,
-        TempFile &file,
-        std::vector<BCFamilySolveTempRecord> &records,
-        BCFamilySolveStats &stats
-    ) {
-        if (cids.size() != values.size()) {
-            throw std::invalid_argument("BC family solve temp batch write cids/value size mismatch");
-        }
-        if (cids.empty()) {
-            return;
-        }
-        std::vector<const BCFamilyValueVector<StorageT> *> value_views;
-        value_views.reserve(values.size());
-        for (size_t i = 0U; i < cids.size(); ++i) {
-            const CellId cid = cids[i];
-            require_cid(cid, records);
-            if (records[static_cast<size_t>(cid)].written()) {
-                throw std::runtime_error("BC family solve duplicate temp batch record");
-            }
-            value_views.push_back(&values[i]);
-        }
-        std::vector<BCFamilySolveTempRecord> appended = file.append_many(value_views, &stats);
-        if (appended.size() != cids.size()) {
-            throw std::runtime_error("BC family solve temp append_many returned unexpected count");
-        }
-        for (size_t i = 0U; i < cids.size(); ++i) {
-            records[static_cast<size_t>(cids[i])] = appended[i];
-        }
-    }
-
     static BCFamilyValueVector<StorageT> read_record(
         CellId cid,
         uint64_t expected_count,
@@ -1291,20 +1198,6 @@ private:
         }
         if (record.value_count != expected_count) {
             throw std::runtime_error("BC family solve temp value count mismatch");
-        }
-        return file.read(record.value_offset, record.value_count, &stats);
-    }
-
-    static BCFamilyValueVector<StorageT> read_record_any(
-        CellId cid,
-        TempFile &file,
-        const std::vector<BCFamilySolveTempRecord> &records,
-        BCFamilySolveStats &stats
-    ) {
-        require_cid(cid, records);
-        const BCFamilySolveTempRecord &record = records[static_cast<size_t>(cid)];
-        if (!record.written()) {
-            throw std::runtime_error("BC family solve missing temp record");
         }
         return file.read(record.value_offset, record.value_count, &stats);
     }
@@ -1534,38 +1427,6 @@ public:
         bc_family_accumulate_final_stage_write_stats(stats, local);
     }
 
-    void write_batch(
-        const std::vector<CellId> &cids,
-        const std::vector<const BCFamilyValueVector<StorageT> *> &values,
-        BCFamilySolveStats &stats
-    ) {
-        if (cids.size() != values.size()) {
-            throw std::invalid_argument("BC family final stage batch size mismatch");
-        }
-        if (cids.empty()) {
-            return;
-        }
-        for (size_t i = 0U; i < cids.size(); ++i) {
-            require_cid(cids[i]);
-            if (values[i] == nullptr) {
-                throw std::invalid_argument("BC family final stage batch values are null");
-            }
-            if (records_[static_cast<size_t>(cids[i])].written()) {
-                throw std::runtime_error("BC family final stage duplicate batch record");
-            }
-        }
-        BCFamilySolveStats local;
-        std::vector<BCFamilySolveTempRecord> appended = values_.append_many(values, &local);
-        if (appended.size() != cids.size()) {
-            throw std::runtime_error("BC family final stage append_many returned unexpected count");
-        }
-        for (size_t i = 0U; i < cids.size(); ++i) {
-            records_[static_cast<size_t>(cids[i])] = appended[i];
-        }
-        stats.final_stage_cells_written += cids.size();
-        bc_family_accumulate_final_stage_write_stats(stats, local);
-    }
-
     [[nodiscard]] bool written(CellId cid) const {
         require_cid(cid);
         return records_[static_cast<size_t>(cid)].written();
@@ -1588,23 +1449,6 @@ public:
         ++stats.final_stage_cells_read;
         bc_family_accumulate_final_stage_read_stats(stats, local);
         return out;
-    }
-
-    void read_batch(
-        const std::vector<CellId> &cids,
-        std::vector<BCFamilyValueVector<StorageT>> &out,
-        BCFamilySolveStats &stats
-    ) {
-        for (CellId cid : cids) {
-            require_cid(cid);
-            if (!records_[static_cast<size_t>(cid)].written()) {
-                throw std::runtime_error("BC family final stage missing batch record");
-            }
-        }
-        BCFamilySolveStats local;
-        values_.read_many_records(records_, cids, out, &local);
-        stats.final_stage_cells_read += cids.size();
-        bc_family_accumulate_final_stage_read_stats(stats, local);
     }
 
     void close() {
@@ -1645,24 +1489,6 @@ struct BCFamilyCompactedOutputCell {
     BCFamilyValueVector<StorageT> values;
     BCResidentCompactStats compact_stats;
 };
-
-template <typename StorageT>
-void bc_family_release_compacted_output_values(
-    std::vector<BCFamilyCompactedOutputCell<StorageT>> &compacted,
-    int threads
-) {
-    const size_t count = compacted.size();
-    if (count >= 8U && threads > 1) {
-#pragma omp parallel for schedule(static) num_threads(threads)
-        for (int64_t i = 0; i < static_cast<int64_t>(count); ++i) {
-            BCFamilyValueVector<StorageT>().swap(compacted[static_cast<size_t>(i)].values);
-        }
-    } else {
-        for (BCFamilyCompactedOutputCell<StorageT> &cell : compacted) {
-            BCFamilyValueVector<StorageT>().swap(cell.values);
-        }
-    }
-}
 
 template <typename StorageT>
 void bc_family_update_pending_stats(
@@ -1734,43 +1560,6 @@ void bc_family_flush_ready_outputs(
     pending_value_bytes = 0U;
     next_output_cid = checked_u32_size(pending.size(), "BC family pending cell count exceeds uint32");
     bc_family_update_pending_stats(pending, stats);
-}
-
-template <typename StorageT>
-void bc_family_mark_compacted_outputs_ready(
-    std::vector<BCFamilyCompactedOutputCell<StorageT>> &compacted,
-    std::vector<BCFamilyPendingOutputCell<StorageT>> &pending,
-    uint64_t &pending_value_bytes,
-    uint64_t pending_value_memory_cap_bytes,
-    CellId next_output_cid,
-    BCFinalLayerFileStreamer<StorageT> &streamer,
-    BCFamilySolveStats &stats
-) {
-    const double t0 = bc_single_chunk_now_seconds();
-    const double position_write_before = stats.single.position_write_seconds;
-    const double success_write_before = stats.single.success_write_seconds;
-    const double assembly_before = stats.single.result_assembly_seconds;
-    (void)pending;
-    (void)pending_value_bytes;
-    (void)pending_value_memory_cap_bytes;
-    (void)next_output_cid;
-
-    for (BCFamilyCompactedOutputCell<StorageT> &cell : compacted) {
-        if (!cell.ready) {
-            continue;
-        }
-        streamer.write_cell_metadata(cell.cid, cell.payload);
-        if (cell.payload.success_rows != 0U || !cell.payload.buckets.empty()) {
-            streamer.write_success_cell_values(cell.cid, cell.values);
-        }
-        ++stats.finalized_cells;
-    }
-    const double known_delta =
-        (stats.single.position_write_seconds - position_write_before) +
-        (stats.single.success_write_seconds - success_write_before) +
-        (stats.single.result_assembly_seconds - assembly_before);
-    stats.pending_mark_seconds +=
-        bc_family_positive_remainder(bc_single_chunk_now_seconds() - t0, known_delta);
 }
 
 template <typename StorageT>
@@ -1866,33 +1655,6 @@ void bc_family_compact_and_mark_ready(
     ++stats.finalized_cells;
     bc_family_update_pending_stats(pending, stats);
     stats.pending_mark_seconds += bc_single_chunk_now_seconds() - t0;
-}
-
-template <typename StorageT>
-void bc_family_merge_best_for_summary(
-    const BCSolveBoardQuerySummary &summary,
-    uint32_t row_width,
-    const BCFamilyValueVector<StorageT> &best,
-    BCFamilyValueVector<StorageT> &merged
-) {
-    if (best.size() != merged.size() ||
-        best.size() != static_cast<size_t>(kBCBoardCellCount) * row_width) {
-        throw std::invalid_argument("BC family solve best buffer size mismatch");
-    }
-    if (summary.terminal_success || summary.empty_count == 0U) {
-        return;
-    }
-    uint32_t mask = summary.empty_mask;
-    while (mask != 0U) {
-        const uint32_t cell = bc_solve_pop_lowest_set_bit_index(mask);
-        for (uint32_t lane = 0U; lane < row_width; ++lane) {
-            StorageT &dst = merged[static_cast<size_t>(cell) * row_width + lane];
-            const StorageT src = best[static_cast<size_t>(cell) * row_width + lane];
-            if (src > dst) {
-                dst = src;
-            }
-        }
-    }
 }
 
 template <typename StorageT>
@@ -5016,141 +4778,6 @@ void bc_family_scan_cell_phase_partial_sum_batches(
         stats,
         flush
     );
-}
-
-template <typename StorageT, class Emit>
-void bc_family_scan_cell_entries(
-    const BCLut &lut,
-    const BCLoadedCell &cell,
-    const BCFamilySolveOptions<StorageT> &options,
-    BCFamilySolveWorkspace<StorageT> &workspace,
-    BCFamilySolveStats &stats,
-    Emit &&emit
-) {
-    std::vector<BCFamilySolveCellRangeWork> &work_items = workspace.cell_range_work_items;
-    bc_family_build_cell_range_work(
-        lut,
-        cell.view(),
-        options.source_bitmap_words_per_work_item,
-        work_items
-    );
-    stats.single.current_work_items = bc_checked_add_u64(
-        stats.single.current_work_items,
-        work_items.size(),
-        "BC family solve current work item stats overflow"
-    );
-    const int threads = bc_resident_solve_effective_threads(options.solve.num_threads);
-    const bool use_parallel =
-        threads > 1 &&
-        work_items.size() >= static_cast<size_t>(std::max<uint32_t>(
-            2U,
-            options.cell_parallel_min_work_items
-        ));
-    const double t0 = bc_single_chunk_now_seconds();
-
-    if (!use_parallel) {
-        if (workspace.cell_workspaces.empty()) {
-            workspace.cell_workspaces.resize(1U);
-        }
-        BCFamilySolveCellWorkspace<StorageT> &local = workspace.cell_workspaces.front();
-        bc_family_prepare_cell_workspace(local, options.solve.row_width, options.solve.zero_value);
-        BCLoadedCellScanner scanner(lut, cell.view());
-        for (const BCFamilySolveCellRangeWork &work : work_items) {
-            for (uint32_t bucket_i = work.bucket_begin; bucket_i < work.bucket_end; ++bucket_i) {
-                const bool ranged_bucket =
-                    work.bucket_end == work.bucket_begin + 1U && work.word_end != 0U;
-#if defined(__GNUC__) || defined(__clang__)
-                if (bucket_i + 1U < work.bucket_end) {
-                    __builtin_prefetch(&cell.buckets[static_cast<size_t>(bucket_i + 1U)], 0, 1);
-                }
-#endif
-                scanner.for_each_bucket_word_range_board(
-                    bucket_i,
-                    ranged_bucket ? work.word_begin : 0U,
-                    ranged_bucket ? work.word_end : 0U,
-                    [&](const BCScannedBoardEntry &entry) {
-                        emit(entry, local);
-                    }
-                );
-            }
-        }
-        if (false) {
-            bc_resident_solve_accumulate_edge_stats(stats.single.edge, local.stats.edge);
-        }
-        stats.single.recalc_seconds += bc_single_chunk_now_seconds() - t0;
-        return;
-    }
-
-    if (workspace.cell_workspaces.size() < static_cast<size_t>(threads)) {
-        workspace.cell_workspaces.resize(static_cast<size_t>(threads));
-    }
-    for (int i = 0; i < threads; ++i) {
-        bc_family_prepare_cell_workspace(
-            workspace.cell_workspaces[static_cast<size_t>(i)],
-            options.solve.row_width,
-            options.solve.zero_value
-        );
-    }
-
-    std::exception_ptr first_exception;
-    const int schedule_chunk = static_cast<int>(std::max<uint32_t>(
-        1U,
-        options.source_work_schedule_chunk
-    ));
-#pragma omp parallel num_threads(threads)
-    {
-#if defined(_OPENMP)
-        const int tid = omp_get_thread_num();
-#else
-        const int tid = 0;
-#endif
-        BCFamilySolveCellWorkspace<StorageT> &local =
-            workspace.cell_workspaces[static_cast<size_t>(tid)];
-        BCLoadedCellScanner scanner(lut, cell.view());
-        try {
-#pragma omp for schedule(dynamic, schedule_chunk)
-            for (int64_t work_i = 0; work_i < static_cast<int64_t>(work_items.size()); ++work_i) {
-                const BCFamilySolveCellRangeWork &work =
-                    work_items[static_cast<size_t>(work_i)];
-                for (uint32_t bucket_i = work.bucket_begin; bucket_i < work.bucket_end; ++bucket_i) {
-                    const bool ranged_bucket =
-                        work.bucket_end == work.bucket_begin + 1U && work.word_end != 0U;
-#if defined(__GNUC__) || defined(__clang__)
-                    if (bucket_i + 1U < work.bucket_end) {
-                        __builtin_prefetch(&cell.buckets[static_cast<size_t>(bucket_i + 1U)], 0, 1);
-                    }
-#endif
-                    scanner.for_each_bucket_word_range_board(
-                        bucket_i,
-                        ranged_bucket ? work.word_begin : 0U,
-                        ranged_bucket ? work.word_end : 0U,
-                        [&](const BCScannedBoardEntry &entry) {
-                            emit(entry, local);
-                        }
-                    );
-                }
-            }
-        } catch (...) {
-#pragma omp critical(BCFamilySolveCellException)
-            {
-                if (!first_exception) {
-                    first_exception = std::current_exception();
-                }
-            }
-        }
-    }
-    if (first_exception) {
-        std::rethrow_exception(first_exception);
-    }
-    for (int i = 0; i < threads; ++i) {
-        if (false) {
-            bc_resident_solve_accumulate_edge_stats(
-                stats.single.edge,
-                workspace.cell_workspaces[static_cast<size_t>(i)].stats.edge
-            );
-        }
-    }
-    stats.single.recalc_seconds += bc_single_chunk_now_seconds() - t0;
 }
 
 } // namespace detail

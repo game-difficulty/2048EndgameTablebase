@@ -67,40 +67,6 @@ struct BCBoardEncodedPosition {
     return set_board_tile_unchecked(board, cell_index, tile_rank);
 }
 
-[[nodiscard]] inline bool bc_quadrant_sum_value(
-    const BCLut &lut,
-    uint16_t word,
-    uint32_t &sum_out
-) {
-    const BCWordDesc &desc = lut.word_desc(word);
-    if (!desc.valid) {
-        return false;
-    }
-    sum_out = desc.sum;
-    return true;
-}
-
-[[nodiscard]] inline bool bc_min_side_coord(
-    uint32_t first_sum,
-    uint32_t second_sum,
-    uint16_t family_unit,
-    FamilyCoord &coord_out
-) {
-    if (family_unit == 0U) {
-        throw std::logic_error("BC family unit must not be zero");
-    }
-    const uint32_t min_sum = std::min(first_sum, second_sum);
-    if ((min_sum % family_unit) != 0U) {
-        return false;
-    }
-    const uint32_t coord = min_sum / family_unit;
-    if (coord > std::numeric_limits<FamilyCoord>::max()) {
-        return false;
-    }
-    coord_out = static_cast<FamilyCoord>(coord);
-    return true;
-}
-
 [[nodiscard]] inline bool bc_min_side_coord_u64(
     uint64_t first_sum,
     uint64_t second_sum,

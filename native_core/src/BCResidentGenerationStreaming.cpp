@@ -184,22 +184,6 @@ void copy_cell_load_stats_to_result(
     return false;
 }
 
-[[nodiscard]] uint32_t countr_zero32(uint32_t value) {
-    if (value == 0U) {
-        throw std::invalid_argument("BC countr_zero32 requires non-zero value");
-    }
-#if defined(__GNUC__) || defined(__clang__)
-    return static_cast<uint32_t>(__builtin_ctz(value));
-#else
-    uint32_t count = 0U;
-    while ((value & 1U) == 0U) {
-        value >>= 1U;
-        ++count;
-    }
-    return count;
-#endif
-}
-
 [[nodiscard]] uint32_t bc_dynamic_home_slot(CellId cid, uint64_t key, uint32_t capacity) {
     const uint64_t value = key ^ (static_cast<uint64_t>(cid) * 0x9e3779b97f4a7c15ULL);
     const uint64_t mixed = value * 11400714819323198485ULL;

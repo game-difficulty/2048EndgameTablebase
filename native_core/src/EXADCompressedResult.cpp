@@ -199,23 +199,6 @@ void read_exact(std::ifstream& in, void* dst, size_t bytes, const char* what) {
     }
 }
 
-std::vector<uint8_t> read_range(const std::string& path, uint64_t offset, uint64_t size) {
-    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-        throw std::runtime_error("range too large to read");
-    }
-    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("failed to open file for reading: " + path);
-    }
-    in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    if (!in) {
-        throw std::runtime_error("failed to seek file: " + path);
-    }
-    std::vector<uint8_t> out(static_cast<size_t>(size));
-    read_exact(in, out.data(), out.size(), "range");
-    return out;
-}
-
 void write_exact(std::fstream& out, const void* data, size_t bytes, const char* what) {
     if (bytes == 0) {
         return;
@@ -310,23 +293,6 @@ SuccessRateKind success_kind_for_mode(EXAD::DTypeMode mode) {
     return SuccessRateKind::UInt32;
 }
 
-template <typename T>
-uint64_t raw_bits_for_value(T value) {
-    if constexpr (std::is_same_v<T, uint32_t>) {
-        return value;
-    } else if constexpr (std::is_same_v<T, uint64_t>) {
-        return value;
-    } else if constexpr (std::is_same_v<T, float>) {
-        uint32_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(bits));
-        return bits;
-    } else {
-        uint64_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(bits));
-        return bits;
-    }
-}
-
 double numeric_from_raw_bits(uint64_t raw, EXAD::DTypeMode mode) {
     switch (mode) {
     case EXAD::DTypeMode::UInt32:
@@ -385,23 +351,6 @@ EXAD::DTypeMode read_exadbook_dtype_mode(const std::string& path) {
         throw std::runtime_error("invalid EXAD solved layer header: " + path);
     }
     return static_cast<EXAD::DTypeMode>(header.dtype_mode);
-}
-
-template <typename Fn>
-auto dispatch_dtype(EXAD::DTypeMode mode, Fn&& fn) {
-    switch (mode) {
-    case EXAD::DTypeMode::UInt32:
-        return fn.template operator()<uint32_t>();
-    case EXAD::DTypeMode::UInt64:
-        return fn.template operator()<uint64_t>();
-    case EXAD::DTypeMode::Float32:
-    case EXAD::DTypeMode::OneMinusFloat32:
-        return fn.template operator()<float>();
-    case EXAD::DTypeMode::Float64:
-    case EXAD::DTypeMode::OneMinusFloat64:
-        return fn.template operator()<double>();
-    }
-    throw std::runtime_error("unsupported EXAD dtype mode");
 }
 
 template <typename T>
@@ -1474,12 +1423,6 @@ uint32_t popcount_u64(uint64_t value) {
 #endif
 }
 
-ColdLookupResult cold_miss(EXAD::DTypeMode mode) {
-    ColdLookupResult result;
-    result.success_kind = success_kind_for_mode(mode);
-    return result;
-}
-
 uint32_t trailing_zero_u32(uint32_t value) {
     uint32_t count = 0;
     while ((value & 1U) == 0U) {
@@ -1689,16 +1632,6 @@ bool sample_from_solved_bucket(
 }
 
 } // namespace
-
-bool is_exad_compressed_file(const std::string& path) {
-    std::ifstream in(NativePath::from_utf8(path), std::ios::binary);
-    if (!in) {
-        return false;
-    }
-    char magic[8]{};
-    in.read(magic, sizeof(magic));
-    return in && std::memcmp(magic, kMagic, sizeof(kMagic)) == 0;
-}
 
 CompressStats compress_exad_solved_layer_to_result(
     const std::string& exadbook_path,

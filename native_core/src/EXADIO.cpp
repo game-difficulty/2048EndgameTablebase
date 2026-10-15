@@ -209,12 +209,6 @@ bool layer_file_exists(const std::string &path) {
     return NativePath::exists(path) || is_readable_7z_or_xz_archive(archive_path_for_layer(path));
 }
 
-void remove_layer_file(const std::string &path) {
-    std::error_code ec;
-    NativePath::remove(path, ec);
-    NativePath::remove(archive_path_for_layer(path), ec);
-}
-
 class LayerSlotReader::Impl {
 public:
     Impl(const std::string &path, FileIOUtils::DirectIoConfig config)

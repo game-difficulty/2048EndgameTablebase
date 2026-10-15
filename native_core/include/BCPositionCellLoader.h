@@ -155,10 +155,6 @@ public:
         validate_loaded_cells_ = enabled;
     }
 
-    [[nodiscard]] bool validate_loaded_cells() const {
-        return validate_loaded_cells_;
-    }
-
     [[nodiscard]] const BCPositionHeader &header() const {
         return header_;
     }

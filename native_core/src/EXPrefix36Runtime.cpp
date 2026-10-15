@@ -1,7 +1,7 @@
 #include "EXPrefix36Runtime.h"
 
 #include "EXFrozenLayer.h"
-#include "EXIoConfig.h"
+#include "FileIOUtils.h"
 #include "EXSectionWriter.h"
 #include "SolveCheckpoint.h"
 #include "EXPrefix40Layer.h"
@@ -1231,10 +1231,6 @@ LutBundle load_or_build_prefix36_lut(
     return bundle;
 }
 
-LutBundle load_lut_for_reader(const std::string &path) {
-    return read_lut_file(path);
-}
-
 struct ColdFileQuery {
     uint64_t target_key = 0;
     uint32_t rank = 0;
@@ -1362,18 +1358,6 @@ Prefix40Baseline::Luts build_prefix_luts(
     return Prefix40Baseline::build_luts(config, std::min(8, thread_count_from_options(options)));
 }
 
-bool all_layers_exist(const RunOptions &options) {
-    if (options.steps <= 0) {
-        return false;
-    }
-    for (int step = 0; step < options.steps; ++step) {
-        if (!NativePath::exists(layer_file_path(options.pathname, logical_layer(options, step)))) {
-            return false;
-        }
-    }
-    return true;
-}
-
 std::string optimal_layer_marker_path(const std::string &pathname) {
     return pathname + "ex_optlayer";
 }
@@ -1412,14 +1396,6 @@ void write_optimal_complete_marker(const RunOptions &options) {
     out << "complete\n";
 }
 
-std::string generated_layer_file_path(const std::string &pathname, int step) {
-    return pathname + std::to_string(step) + kGeneratedLayerFileExtension;
-}
-
-std::string generated_layer_archive_path(const std::string &pathname, int step) {
-    return generated_layer_file_path(pathname, step) + ".7z";
-}
-
 std::string existing_raw_layer_file_path(const RunOptions &options, int step) {
     const std::string path = StoragePaths::existing_path_for(options, step, kLayerFileExtension, false);
     return path.empty() ? layer_file_path(options.pathname, logical_layer(options, step)) : path;
@@ -1455,47 +1431,17 @@ std::string existing_compressed_layer_file_path(const RunOptions &options, int s
     return compressed_layer_file_path(options, step);
 }
 
-bool layer_input_exists(const std::string &pathname, int step) {
-    return NativePath::exists(layer_file_path(pathname, step)) ||
-           NativePath::exists(compressed_layer_file_path(pathname, step)) ||
-           NativePath::exists(generated_layer_file_path(pathname, step)) ||
-           is_readable_7z_or_xz_archive(generated_layer_archive_path(pathname, step));
-}
-
-bool generated_layer_input_exists(const std::string &pathname, int step) {
-    return NativePath::exists(generated_layer_file_path(pathname, step)) ||
-           is_readable_7z_or_xz_archive(generated_layer_archive_path(pathname, step));
-}
-
-bool raw_solved_layer_exists(const std::string &pathname, int step) {
-    return NativePath::exists(layer_file_path(pathname, step));
-}
-
 bool raw_solved_layer_exists(const RunOptions &options, int step) {
     return StoragePaths::filename_exists_any(options, step, kLayerFileExtension, false);
-}
-
-bool compressed_solved_layer_exists(const std::string &pathname, int step) {
-    return NativePath::exists(compressed_layer_file_path(pathname, step));
 }
 
 bool compressed_solved_layer_exists(const RunOptions &options, int step) {
     return NativePath::exists(existing_compressed_layer_file_path(options, step));
 }
 
-bool solved_layer_exists(const std::string &pathname, int step) {
-    return raw_solved_layer_exists(pathname, step) ||
-           compressed_solved_layer_exists(pathname, step);
-}
-
 bool solved_layer_exists(const RunOptions &options, int step) {
     return raw_solved_layer_exists(options, step) ||
            compressed_solved_layer_exists(options, step);
-}
-
-bool readable_layer_input_exists(const std::string &pathname, int step) {
-    return solved_layer_exists(pathname, step) ||
-           generated_layer_input_exists(pathname, step);
 }
 
 bool readable_layer_input_exists(const RunOptions &options, int step) {
@@ -1518,26 +1464,6 @@ int find_generation_resume_step(const RunOptions &options, int target_step) {
         }
     }
     return kNoSolveResumeStep;
-}
-
-std::string existing_layer_input_path(const std::string &pathname, int step) {
-    const std::string final_path = layer_file_path(pathname, step);
-    if (NativePath::exists(final_path)) {
-        return final_path;
-    }
-    const std::string compressed_path = compressed_layer_file_path(pathname, step);
-    if (NativePath::exists(compressed_path)) {
-        return compressed_path;
-    }
-    const std::string generated_path = generated_layer_file_path(pathname, step);
-    if (NativePath::exists(generated_path)) {
-        return generated_path;
-    }
-    const std::string generated_archive = generated_layer_archive_path(pathname, step);
-    if (NativePath::exists(generated_archive)) {
-        return generated_archive;
-    }
-    return final_path;
 }
 
 std::string existing_layer_input_path(const RunOptions &options, int step) {
@@ -1601,12 +1527,6 @@ Prefix36LayerT<T> read_layer_input(
         );
     }
     return layer;
-}
-
-void remove_generated_layer_input(const std::string &pathname, int step) {
-    std::error_code ec;
-    NativePath::remove(generated_layer_file_path(pathname, step), ec);
-    NativePath::remove(generated_layer_archive_path(pathname, step), ec);
 }
 
 void remove_generated_layer_input(const RunOptions &options, int step) {

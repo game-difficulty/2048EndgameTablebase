@@ -85,7 +85,6 @@ MaskerContext init_masker(const AdvancedPatternSpec &spec);
 
 uint64_t mask_board(uint64_t board, int threshold = 6);
 
-TileCountResult tile_sum_and_32k_count(uint64_t masked_board, const AdvancedMaskParam &param);
 TileCountPositionsResult tile_sum_and_32k_count_positions(uint64_t masked_board, const AdvancedMaskParam &param);
 TileCountResult tile_sum_and_32k_count2(uint64_t masked_board, const AdvancedMaskParam &param);
 TileCount3Result tile_sum_and_32k_count3(uint64_t masked_board, const AdvancedMaskParam &param);

@@ -22,7 +22,6 @@ namespace EXAD {
 
 constexpr const char *kSolvedFileExtension = ".exadbook";
 constexpr uint32_t kSolvedFileVersion = 2U;
-constexpr uint32_t kInvalidDirectBucket = 0xFFFFFFFFU;
 constexpr uint32_t kLookupBatchSize = 256U;
 
 template <typename T>
@@ -255,51 +254,6 @@ inline uint32_t popcount64_local(uint64_t value) {
 #endif
 }
 
-inline bool dense_ordinal_for_rank(
-    const BoardSet &set,
-    const BucketEntry &bucket,
-    uint32_t valid_count,
-    uint32_t rank,
-    uint32_t &ordinal
-) {
-    if (rank >= valid_count) {
-        return false;
-    }
-    if (valid_count <= set.threshold_bits) {
-        const uint32_t byte_idx = rank >> 3U;
-        const uint32_t bit = rank & 7U;
-        const uint32_t offset = bucket.bitmap_offset;
-        const uint8_t current = set.small_bitmap_bytes[offset + byte_idx];
-        if (((current >> bit) & 1U) == 0U) {
-            return false;
-        }
-        uint32_t count = 0;
-        for (uint32_t i = 0; i < byte_idx; ++i) {
-            count += popcount8(set.small_bitmap_bytes[offset + i]);
-        }
-        const uint8_t lower_mask = bit == 0U ? 0U : static_cast<uint8_t>((1U << bit) - 1U);
-        count += popcount8(static_cast<uint8_t>(current & lower_mask));
-        ordinal = count;
-        return true;
-    }
-
-    const uint32_t word_idx = rank >> 6U;
-    const uint32_t bit = rank & 63U;
-    const uint32_t offset = bucket.bitmap_offset;
-    const uint64_t current = set.large_bitmap_words[offset + word_idx];
-    if (((current >> bit) & 1ULL) == 0ULL) {
-        return false;
-    }
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < word_idx; ++i) {
-        count += popcount64_local(set.large_bitmap_words[offset + i]);
-    }
-    const uint64_t lower_mask = bit == 0U ? 0ULL : ((1ULL << bit) - 1ULL);
-    count += popcount64_local(current & lower_mask);
-    ordinal = count;
-    return true;
-}
-
 inline bool dense_ordinal_for_rank_fast(
     const BoardSet &set,
     const DirectEntry &entry,
@@ -344,24 +298,6 @@ inline bool dense_ordinal_for_rank_fast(
     count += popcount64_local(current & lower_mask);
     ordinal = count;
     return true;
-}
-
-inline void build_direct_index_for_set(const BoardSet &set, DirectIndex &index) {
-    index = DirectIndex{};
-    if (set.buckets.empty()) {
-        return;
-    }
-    const uint32_t capacity = next_power_of_two_u32(static_cast<uint64_t>(set.buckets.size()) * 2ULL);
-    index.slots.assign(capacity, kInvalidDirectBucket);
-    index.mask = capacity - 1U;
-    for (uint32_t bucket_idx = 0; bucket_idx < static_cast<uint32_t>(set.buckets.size()); ++bucket_idx) {
-        const uint64_t key = set.buckets[bucket_idx].key;
-        uint32_t slot = static_cast<uint32_t>(mix_key64(key)) & index.mask;
-        while (index.slots[slot] != kInvalidDirectBucket) {
-            slot = (slot + 1U) & index.mask;
-        }
-        index.slots[slot] = bucket_idx;
-    }
 }
 
 inline uint32_t choose_direct_entry_capacity(uint64_t bucket_count) {

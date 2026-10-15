@@ -78,51 +78,11 @@ struct BCFutureLookupResult {
     T value{};
 };
 
-struct BCFutureLookupQuery {
-    CellId cid = 0U;
-    uint64_t key = 0U;
-    BucketRank rank = 0U;
-    uint32_t lane = 0U;
-    uint32_t ref = 0U;
-    bool valid = true;
-};
-
-template <typename T>
-struct BCFutureBatchLookupResult {
-    uint32_t ref = 0U;
-    BCFutureLookupResult<T> result;
-};
-
 struct BCFutureFamilyWindowOptions {
     bool measure_scalar_lookup_seconds = false;
     uint64_t max_recycled_index_bytes = 0U;
     uint32_t release_threads = 1U;
 };
-
-[[nodiscard]] inline std::vector<CellId> bc_future_family_view_cells(
-    const BCFamilyTable &axis,
-    FamilyId family_id
-) {
-    const BCCellMatrix matrix(axis);
-    const uint32_t family_count = matrix.family_count();
-    if (family_id >= family_count) {
-        throw std::out_of_range("BC future family window family id out of range");
-    }
-
-    std::vector<CellId> cells;
-    cells.reserve(static_cast<size_t>(family_count) * 2U - 1U);
-    for (uint32_t x = 0U; x < family_count; ++x) {
-        cells.push_back(matrix.cid(family_id, static_cast<FamilyId>(x)));
-    }
-    for (uint32_t x = 0U; x < family_count; ++x) {
-        if (x == family_id) {
-            continue;
-        }
-        cells.push_back(matrix.cid(static_cast<FamilyId>(x), family_id));
-    }
-    std::sort(cells.begin(), cells.end());
-    return cells;
-}
 
 template <typename SuccessT>
 class BCFutureFamilyWindow {
@@ -138,16 +98,8 @@ public:
         validate_readers();
     }
 
-    void reset_stats() {
-        stats_ = {};
-    }
-
     [[nodiscard]] const BCFutureFamilyWindowStats &stats() const {
         return stats_;
-    }
-
-    [[nodiscard]] const std::vector<CellId> &active_cell_ids() const {
-        return active_cell_ids_;
     }
 
     [[nodiscard]] bool contains(CellId cid) const {
@@ -275,10 +227,6 @@ public:
         stats_.release_except_ids_seconds += seconds_since(ids_begin);
     }
 
-    void load_family(FamilyId family_id) {
-        load_cells(bc_future_family_view_cells(position_reader_->axis(), family_id));
-    }
-
     void load_cells(std::vector<CellId> next_cells) {
         require_open();
         const auto normalize_begin = std::chrono::steady_clock::now();
@@ -354,25 +302,6 @@ public:
             return result;
         }
         return lookup_impl(cid, key, rank, lane);
-    }
-
-    [[nodiscard]] std::vector<BCFutureBatchLookupResult<SuccessT>> lookup_batch(
-        const std::vector<BCFutureLookupQuery> &queries
-    ) {
-        const auto begin = std::chrono::steady_clock::now();
-        ++stats_.batch_lookup_count;
-        std::vector<BCFutureBatchLookupResult<SuccessT>> out;
-        out.reserve(queries.size());
-        for (const BCFutureLookupQuery &query : queries) {
-            BCFutureBatchLookupResult<SuccessT> item;
-            item.ref = query.ref;
-            if (query.valid) {
-                item.result = lookup_impl(query.cid, query.key, query.rank, query.lane);
-            }
-            out.push_back(item);
-        }
-        stats_.lookup_seconds += seconds_since(begin);
-        return out;
     }
 
     [[nodiscard]] uint64_t active_position_resident_bytes() const {

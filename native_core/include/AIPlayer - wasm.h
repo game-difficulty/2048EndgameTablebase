@@ -22,7 +22,6 @@ extern ScorePair _diffs_merged[65536];
 // 基础位运算工具函数
 // ------------------------------------------------------------------
 inline uint64_t mask(uint64_t board, int threshold);
-inline uint64_t extract_0xf_nibbles(uint64_t v);
 uint64_t resolve_32768_doubles(uint64_t board);
 
 // ------------------------------------------------------------------

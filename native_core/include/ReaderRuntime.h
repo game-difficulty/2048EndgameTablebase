@@ -154,11 +154,9 @@ public:
 
 namespace BCRuntime {
 
-std::vector<uint8_t> legal_tiles(uint32_t target_rank);
 
 std::string dtype_name(uint32_t dtype);
 
-double normalize_lookup_value(const BCCompressedResult::ColdLookupResult &lookup);
 
 BCCompressedResult::ColdLookupResult lookup_compressed_result_cached(
     const std::filesystem::path &compressed_path,
@@ -203,10 +201,4 @@ double find_classic_value_native(
     uint64_t search_key,
     const std::string &success_rate_dtype,
     bool &found
-);
-
-std::optional<double> trie_decompress_search_cached_native(
-    const std::string &path_prefix,
-    uint64_t board,
-    const std::string &success_rate_dtype
 );

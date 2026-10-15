@@ -1066,47 +1066,6 @@ EXAD::SolvedLayer<T> make_solved_layer_from_slot(
     return layer;
 }
 
-void discard_reader_bytes(
-    FileIOUtils::DirectSequentialReader &reader,
-    uint64_t bytes,
-    const std::string &path
-) {
-    std::vector<uint8_t> buffer(8ULL * 1024ULL * 1024ULL);
-    while (bytes != 0U) {
-        const size_t chunk = static_cast<size_t>(std::min<uint64_t>(bytes, buffer.size()));
-        read_chunk_exact(reader, buffer.data(), chunk, path);
-        bytes -= static_cast<uint64_t>(chunk);
-    }
-}
-
-void copy_reader_bytes(
-    FileIOUtils::DirectSequentialReader &reader,
-    FileIOUtils::DirectAppendWriter &writer,
-    uint64_t bytes,
-    const std::string &path
-) {
-    std::vector<uint8_t> buffer(8ULL * 1024ULL * 1024ULL);
-    while (bytes != 0U) {
-        const size_t chunk = static_cast<size_t>(std::min<uint64_t>(bytes, buffer.size()));
-        read_chunk_exact(reader, buffer.data(), chunk, path);
-        writer.append(buffer.data(), chunk);
-        bytes -= static_cast<uint64_t>(chunk);
-    }
-}
-
-template <typename T>
-EXADSlotChunkHeader read_slot_chunk_header_direct(
-    FileIOUtils::DirectSequentialReader &reader,
-    const std::string &path,
-    EXAD::DTypeMode expected_mode,
-    size_t expected_slot
-) {
-    EXADSlotChunkHeader header{};
-    read_chunk_exact(reader, &header, sizeof(header), path);
-    (void)manifest_from_chunk_header<T>(header, path, expected_mode, expected_slot);
-    return header;
-}
-
 template <typename T>
 void append_slot_chunk_metadata(
     FileIOUtils::DirectAppendWriter &out,
@@ -1546,23 +1505,6 @@ EXAD::Luts exad_load_or_build_luts(
 }
 
 template <typename T>
-T update_osr_exad_arr(
-    const EXAD::SolvedLayer<T> &layer,
-    const EXAD::Luts &luts,
-    int ad_key,
-    uint64_t board,
-    uint32_t column,
-    T osr
-) {
-    const T *row = EXAD::lookup_row_ptr(layer, luts, ad_key, board);
-    if (row == nullptr || column >= layer.row_width[bucket_to_index(ad_key)]) {
-        return osr;
-    }
-    prefetch_success_row(row);
-    return std::max(osr, row[column]);
-}
-
-template <typename T>
 void update_osr_exad_ranked(
     const EXAD::SolvedLayer<T> &layer,
     const EXAD::Luts &luts,
@@ -1726,29 +1668,6 @@ void update_mnt_osr_exad_arr1(
 }
 
 template <typename T>
-T update_mnt_osr_364_exad(
-    const EXAD::SolvedLayer<T> &layer,
-    const EXAD::Luts &luts,
-    uint64_t board,
-    uint64_t unmasked_board,
-    T osr,
-    const AdvancedMaskParam &param
-) {
-    auto [pos_rank64, pos_rank128, pos_rank, pos_64] = find_3x64_pos(unmasked_board, param);
-    board |= (0xFULL << pos_64);
-    const T *row = EXAD::lookup_row_ptr(layer, luts, pos_rank, board);
-    if (row == nullptr) {
-        return osr;
-    }
-    prefetch_success_row(row);
-    uint32_t mapping = permutations_mapping_364(pos_rank64, pos_rank128, pos_rank);
-    if (mapping >= layer.row_width[bucket_to_index(pos_rank)]) {
-        return osr;
-    }
-    return std::max(osr, row[mapping]);
-}
-
-template <typename T>
 void update_mnt_osr_364_arr_exad(
     const EXAD::SolvedLayer<T> &layer,
     const EXAD::Luts &luts,
@@ -1787,62 +1706,6 @@ void update_mnt_osr_364_arr_exad(
             osr[i] = value;
         }
     }
-}
-
-template <typename T>
-T update_mnt_osr_exad(
-    const EXAD::SolvedLayer<T> &layer,
-    const EXAD::Luts &luts,
-    uint64_t board,
-    uint64_t unmasked_board,
-    T osr,
-    uint32_t board_sum_after_spawn,
-    const FormationAD::TilesCombinationTable &tiles_table,
-    const AdvancedMaskParam &param,
-    T max_scale
-) {
-    auto stats = FormationAD::tile_sum_and_32k_count4(unmasked_board, param);
-    if (stats.is_success) {
-        return max_scale;
-    }
-    uint32_t large_tiles_sum = board_sum_after_spawn
-        - stats.total_sum
-        - (static_cast<uint32_t>(param.num_free_32k + param.num_fixed_32k) << 15U);
-    auto tiles = FormationAD::tiles_combination_view(
-        tiles_table,
-        static_cast<uint8_t>(large_tiles_sum >> 6U),
-        static_cast<uint8_t>(stats.count_32k - static_cast<int8_t>(param.num_free_32k))
-    );
-    if (tiles.empty() || stats.merged_tile_found == 2U) {
-        return osr;
-    }
-    int bucket_key = stats.count_32k;
-    if (tiles.size > 1 && tiles[0] == tiles[1]) {
-        if (tiles.size > 2 && tiles[0] == tiles[2]) {
-            bucket_key = static_cast<int8_t>(stats.count_32k + 16 - 3);
-            board = unmasked_board;
-        } else {
-            bucket_key = static_cast<int8_t>(-stats.count_32k);
-            uint64_t tile = static_cast<uint64_t>(tiles[0]);
-            uint64_t tiles_all_positions = tile * 0x1111111111111111ULL;
-            board = (board & (~stats.pos_bitmap)) | (tiles_all_positions & stats.pos_bitmap);
-        }
-    }
-    const T *row = EXAD::lookup_row_ptr(layer, luts, bucket_key, board);
-    if (row == nullptr) {
-        return osr;
-    }
-    prefetch_success_row(row);
-    if (bucket_key > 15) {
-        return std::max(osr, row[0]);
-    }
-    if (bucket_key > 0) {
-        if (stats.pos_rank >= layer.row_width[bucket_to_index(bucket_key)]) {
-            return osr;
-        }
-        return std::max(osr, row[stats.pos_rank]);
-    }
-    return std::max(osr, row[0]);
 }
 
 template <typename T>
@@ -1980,60 +1843,6 @@ void solve_optimal_success_rate_arr_into_exad(
         ArrayView<const uint32_t> ranked_array = load_or_compute_ranked(true);
         update_osr_exad_ranked(future, luts, count_32k, canonical_board, ranked_array, optimal_success_rate);
     }
-}
-
-template <typename T>
-T solve_optimal_success_rate_exad(
-    uint64_t board,
-    uint64_t new_value,
-    int spawn_pos,
-    uint32_t board_sum_after_spawn,
-    const AdvancedPatternSpec &spec,
-    int8_t count_32k,
-    const EXAD::SolvedLayer<T> &future,
-    const EXAD::Luts &luts,
-    const FormationAD::TilesCombinationTable &tiles_table,
-    const AdvancedMaskParam &param,
-    T zero_val,
-    T max_scale
-) {
-    uint64_t board_with_spawn = board | (new_value << static_cast<uint64_t>(4 * spawn_pos));
-    uint64_t board_rev = FormationAD::reverse(board_with_spawn);
-    T optimal_success_rate = zero_val;
-    auto moves = FormationAD::m_move_all_dir2(board_with_spawn, board_rev);
-
-    for (int direction = 0; direction < 4; ++direction) {
-        uint64_t moved_board = moves[static_cast<size_t>(direction)].board;
-        bool mask_new_tile = moves[static_cast<size_t>(direction)].mask_new_tile;
-        if (moved_board == board_with_spawn || !is_pattern(moved_board, spec.pattern_masks)) {
-            continue;
-        }
-        auto [canonical_board, symm_index] = canonical_pair_by_mode(moved_board, spec.symm_mode);
-        if (mask_new_tile) {
-            uint64_t unmasked_newt = BoardMover::move_board(board_with_spawn, direction + 1);
-            unmasked_newt = apply_sym_like(unmasked_newt, symm_index);
-            if (count_32k < 16) {
-                optimal_success_rate = update_mnt_osr_exad(
-                    future,
-                    luts,
-                    canonical_board,
-                    unmasked_newt,
-                    optimal_success_rate,
-                    board_sum_after_spawn,
-                    tiles_table,
-                    param,
-                    max_scale
-                );
-            } else {
-                optimal_success_rate = update_mnt_osr_364_exad(
-                    future, luts, canonical_board, unmasked_newt, optimal_success_rate, param
-                );
-            }
-        } else {
-            optimal_success_rate = update_osr_exad_arr(future, luts, count_32k, canonical_board, 0U, optimal_success_rate);
-        }
-    }
-    return optimal_success_rate;
 }
 
 template <typename T>

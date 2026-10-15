@@ -160,9 +160,7 @@ template <typename T> struct AdSolveWorkspace {
 };
 
 constexpr size_t kNotFoundIndex = std::numeric_limits<size_t>::max();
-constexpr uint64_t kEmptyMatchIndex = 0xFFFFFFFFFFFFFFFFULL;
 constexpr size_t kADMaxMatchCacheCells = 64ULL * 1024ULL * 1024ULL;
-constexpr std::array<uint8_t, 16> kPosRev = {0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15};
 constexpr std::array<uint32_t, 19> kFactorials = {
     1U, 1U, 2U, 6U, 24U, 120U, 720U, 5040U, 40320U, 362880U,
     3628800U, 39916800U, 1U, 1U, 1U, 1U, 1U, 1U, 1U
@@ -210,25 +208,6 @@ void debug_log(const std::string &message) {
         nb::module_::import_("Config").attr("logger").attr("debug")(nb::str(message.c_str()));
     } catch (...) {
     }
-}
-
-void log_recalculate_performance(int step_index, double t0, double t1, double t2, double t3, size_t length) {
-    if (t3 <= t0) {
-        return;
-    }
-    double total = t3 - t0;
-    std::ostringstream speed_stream;
-    speed_stream << "step " << step_index << " recalculated: "
-                 << round_to_2(static_cast<double>(length) / total / 1e6)
-                 << " mbps";
-    debug_log(speed_stream.str());
-
-    std::ostringstream phase_stream;
-    phase_stream << "index/solve/remove: "
-                 << round_to_2((t1 - t0) / total) << "/"
-                 << round_to_2((t2 - t1) / total) << "/"
-                 << round_to_2((t3 - t2) / total);
-    debug_log(phase_stream.str());
 }
 
 double throughput_mbps_for(uint64_t count, double seconds) {
@@ -425,13 +404,6 @@ std::vector<T> read_binary_vector(const std::string &path, FileIOUtils::DirectIo
     return FileIOUtils::read_binary_vector_direct<T>(path, config);
 }
 
-std::vector<uint64_t> read_temp_raw_layer(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
-    if (NativePath::exists(path)) {
-        return FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
-    }
-    return read_temp_uint64_archive(path + ".7z");
-}
-
 std::vector<uint64_t> read_temp_raw_layer(
     const RunOptions &options,
     int step,
@@ -591,16 +563,6 @@ void clear_index_store(IndexStore &index_store) {
     for (int key = bucket_key_min(); key <= bucket_key_max(); ++key) {
         index_store.at(key).clear();
     }
-}
-
-void remove_file_if_exists(const std::string &path) {
-    std::error_code ec;
-    NativePath::remove(path, ec);
-}
-
-void remove_temp_raw_layer_files(const std::string &path) {
-    remove_file_if_exists(path);
-    remove_file_if_exists(path + ".7z");
 }
 
 void release_index_store(IndexStore &index_store) {
@@ -952,14 +914,6 @@ uint64_t ind_match(uint64_t encoded_board, uint64_t replacement_value) {
         }
     }
     return index;
-}
-
-std::vector<uint64_t> reverse_arr(const std::vector<uint64_t> &boards) {
-    std::vector<uint64_t> result(boards.size());
-    for (size_t i = 0; i < boards.size(); ++i) {
-        result[i] = FormationAD::reverse(boards[i]);
-    }
-    return result;
 }
 
 void move_arr_into(const std::vector<uint64_t> &boards, int direction, std::vector<uint64_t> &result) {

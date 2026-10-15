@@ -192,18 +192,6 @@ namespace detail {
 #endif
 }
 
-[[nodiscard]] inline std::string bc_family_success_dtype_name(BCSuccessDTypeMode dtype) {
-    switch (dtype) {
-        case BCSuccessDTypeMode::UInt32: return "uint32";
-        case BCSuccessDTypeMode::UInt64: return "uint64";
-        case BCSuccessDTypeMode::Float32: return "float32";
-        case BCSuccessDTypeMode::Float64: return "float64";
-        case BCSuccessDTypeMode::OneMinusFloat32: return "1-float32";
-        case BCSuccessDTypeMode::OneMinusFloat64: return "1-float64";
-    }
-    return "unknown";
-}
-
 [[nodiscard]] inline uint64_t bc_family_runner_success_value_rows(
     const BCSuccessStreamingReader &success
 ) {
@@ -766,23 +754,6 @@ template <class PositionReader>
         : BCSuccessStreamingReader::open_buffered(path, position, 1U);
 }
 
-inline void bc_family_runner_remove_exact_layer_files(
-    const BCFamilySolveRunOptions &options,
-    uint32_t ordinal
-) {
-    std::error_code ec;
-    for (const std::filesystem::path &dir : bc_family_runner_solved_dirs(options)) {
-        std::filesystem::remove(
-            bc_family_runner_position_path(dir, options.prefix, ordinal),
-            ec);
-        ec.clear();
-        std::filesystem::remove(
-            bc_family_runner_success_path(dir, options.prefix, ordinal),
-            ec);
-        ec.clear();
-    }
-}
-
 inline void bc_family_runner_remove_file_quiet(const std::filesystem::path &path) {
     if (path.empty()) {
         return;
@@ -1207,21 +1178,6 @@ inline void bc_family_runner_add_final_compress_stats(
     compress_options.value_policy = options.archive_value_policy;
     compress_options.ordinal = static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix);
     return compress_options;
-}
-
-[[nodiscard]] inline std::filesystem::path bc_family_runner_compressed_output_path(
-    const BCFamilySolveRunOptions &options,
-    uint32_t ordinal,
-    const std::filesystem::path &position_path
-) {
-    const std::filesystem::path output_dir =
-        options.archive_output_dir.empty() ? position_path.parent_path() : options.archive_output_dir;
-    if (!output_dir.empty()) {
-        std::filesystem::create_directories(output_dir);
-    }
-    return output_dir / (
-        options.prefix + std::to_string(static_cast<int64_t>(ordinal) + free_layer_offset(options.prefix)) +
-        BCCompressedResult::kCompressedLayerFileExtension);
 }
 
 [[nodiscard]] inline std::vector<std::filesystem::path> bc_family_runner_compressed_output_candidates(
@@ -2445,27 +2401,6 @@ template <typename StorageT>
         }
     }
     return max_value;
-}
-
-template <typename StorageT>
-inline void bc_family_runner_append_row_values(
-    std::vector<StorageT> &out,
-    const BCLoadedSuccessCell &success_cell,
-    const StorageT *values,
-    uint32_t local_row,
-    uint32_t row_width
-) {
-    const uint64_t base = static_cast<uint64_t>(local_row) * row_width;
-    if (values != nullptr) {
-        out.insert(
-            out.end(),
-            values + static_cast<size_t>(base),
-            values + static_cast<size_t>(base + row_width));
-        return;
-    }
-    for (uint32_t lane = 0U; lane < row_width; ++lane) {
-        out.push_back(success_cell.read_value_typed<StorageT>(local_row, lane));
-    }
 }
 
 template <typename StorageT>

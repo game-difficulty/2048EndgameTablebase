@@ -285,42 +285,6 @@ void add_load_stats(BCFamilyGenerationStats &stats, const BCCellLoadStats &load)
     return total;
 }
 
-[[nodiscard]] uint64_t finalized_payloads_allocated_bytes(
-    const std::vector<FinalizedCellPayload> &payloads
-) {
-    uint64_t total = static_cast<uint64_t>(payloads.capacity()) * sizeof(FinalizedCellPayload);
-    for (const FinalizedCellPayload &payload : payloads) {
-        total = bc_checked_add_u64(
-            total,
-            static_cast<uint64_t>(payload.buckets.capacity()) * sizeof(BCBucketEntry),
-            "BC Family finalized bucket capacity byte count overflow"
-        );
-        total = bc_checked_add_u64(
-            total,
-            payload.rank_payload.capacity(),
-            "BC Family finalized rank payload capacity byte count overflow"
-        );
-    }
-    return total;
-}
-
-[[nodiscard]] uint64_t finalized_payload_allocated_bytes(
-    const FinalizedCellPayload &payload
-) {
-    uint64_t total = sizeof(FinalizedCellPayload);
-    total = bc_checked_add_u64(
-        total,
-        static_cast<uint64_t>(payload.buckets.capacity()) * sizeof(BCBucketEntry),
-        "BC Family finalized single bucket capacity byte count overflow"
-    );
-    total = bc_checked_add_u64(
-        total,
-        payload.rank_payload.capacity(),
-        "BC Family finalized single rank payload capacity byte count overflow"
-    );
-    return total;
-}
-
 void validate_family_source(
     const BCFamilyTable &target_axis,
     const BCFamilyStreamingGenerationSource &source
@@ -945,7 +909,6 @@ struct FamilyActiveCellBuffer {
 }
 
 struct FamilyThreadWorkspace {
-    static constexpr CellId kInvalidCachedCell = std::numeric_limits<CellId>::max();
 
     std::vector<uint64_t> canonical_buffer;
     std::vector<BCCellTrustedKeyRankInsert> active_encoded_storage;
@@ -1017,17 +980,6 @@ struct FamilyThreadWorkspace {
         }
     }
 
-    [[nodiscard]] uint32_t active_index_from_row_col(FamilyId row, FamilyId col) const {
-        return family_active_index_from_row_col_fast(
-            row,
-            col,
-            active_family0,
-            active_family1,
-            active_family2,
-            active_family_count,
-            active_axis_family_count
-        );
-    }
 };
 
 [[nodiscard]] uint64_t family_thread_workspace_bytes(
@@ -2476,169 +2428,6 @@ BCFamilyGenerationStats generate_family_position_layer_v1(
         stats.generation_seconds = family_now_seconds() - generation_begin;
     }
     return stats;
-}
-
-BCFamilyLoadedPassBenchmarkResult benchmark_loaded_family_plus_spawn_pass(
-    const BCLut &lut,
-    const BCFamilyTable &target_axis,
-    const BCFamilyTable &source_axis,
-    FamilyId source_family_id,
-    SpawnDeltaCoord delta_coord,
-    uint8_t spawn_tile_rank,
-    const std::vector<BCLoadedCell> &loaded_cells,
-    BCFamilyMutableStore &target_store,
-    const BCFamilyGenerationOptions &options
-) {
-    if (source_family_id >= source_axis.family_count()) {
-        throw std::out_of_range("BC Family loaded pass benchmark source family id out of range");
-    }
-    if (spawn_tile_rank == 0U || spawn_tile_rank > 15U) {
-        throw std::invalid_argument("BC Family loaded pass benchmark spawn tile rank is invalid");
-    }
-    if (source_axis.family_unit() != target_axis.family_unit()) {
-        throw std::invalid_argument("BC Family loaded pass benchmark source/target family unit mismatch");
-    }
-    const uint32_t expected_total =
-        static_cast<uint32_t>(source_axis.total_coord()) + static_cast<uint32_t>(delta_coord);
-    if (target_axis.total_coord() != expected_total) {
-        throw std::invalid_argument("BC Family loaded pass benchmark source/target total coord mismatch");
-    }
-    if (options.canonical_batch_size == 0U ||
-        options.pending_insert_buffer_size == 0U ||
-        options.source_bitmap_words_per_work_item == 0U) {
-        throw std::invalid_argument("BC Family loaded pass benchmark options contain zero batch size");
-    }
-
-    const double begin = family_now_seconds();
-
-    BCFamilyGenerationScheduler scheduler(source_axis, target_axis);
-    const BCFamilyPartitionLayerMap source_partition =
-        make_family_partition_layer_for_generation(source_axis, options);
-    const BCFamilyPartitionLayerMap target_partition =
-        make_family_partition_layer_for_generation(target_axis, options);
-    BCFamilyGenerationPass pass =
-        scheduler.make_pass_existing_targets(source_family_id, delta_coord, spawn_tile_rank);
-    pass.target_families = checked_partition_fanout3(
-        map_partition_source_family_to_target_families(
-            source_partition,
-            target_axis,
-            target_partition,
-            source_family_id,
-            delta_coord
-        )
-    );
-    if (options.enforce_family_window && pass.target_families.size() > 3U) {
-        throw std::logic_error("BC Family loaded pass benchmark target fanout exceeds three families");
-    }
-    const std::vector<BCSourceCellWork> source_work = scheduler.source_cells(pass);
-    if (loaded_cells.size() != source_work.size()) {
-        throw std::invalid_argument("BC Family loaded pass benchmark loaded cell count mismatch");
-    }
-    if (options.enforce_family_window &&
-        source_work.size() > static_cast<size_t>(2U) * source_axis.family_count() - 1U) {
-        throw std::logic_error("BC Family loaded pass benchmark source family view exceeds 2F-1 cells");
-    }
-
-    target_store.set_default_builder_reserve(
-        options.new_cell_reserve_buckets,
-        options.new_cell_reserve_bitmap_words
-    );
-    const double prepare_begin = family_now_seconds();
-    target_store.prepare_target_window_for_families(pass.target_families);
-    const double prepare_seconds = family_now_seconds() - prepare_begin;
-    const std::vector<CellId> active_cells = target_store.active_cells();
-    const double build_work_begin = family_now_seconds();
-    const std::vector<FamilySourceRangeWork> range_work =
-        build_family_source_range_work(
-            lut,
-            loaded_cells,
-            source_work,
-            options.source_bitmap_words_per_work_item
-        );
-    const double build_work_seconds = family_now_seconds() - build_work_begin;
-
-    const int thread_count = family_effective_threads(options.num_threads);
-    std::vector<FamilyThreadWorkspace> workspaces(static_cast<size_t>(thread_count));
-    for (FamilyThreadWorkspace &workspace : workspaces) {
-        workspace.canonical_buffer.reserve(options.canonical_batch_size);
-    }
-
-    std::exception_ptr first_exception;
-    const int schedule_chunk = static_cast<int>(std::max<uint32_t>(
-        1U,
-        options.source_work_schedule_chunk
-    ));
-    const double parallel_begin = family_now_seconds();
-#pragma omp parallel num_threads(thread_count)
-    {
-        const int tid = family_thread_num();
-        FamilyThreadWorkspace &workspace = workspaces[static_cast<size_t>(tid)];
-        try {
-            workspace.prepare_active_window(
-                active_cells,
-                pass.target_families,
-                target_axis.family_count(),
-                target_store.cell_count(),
-                options.pending_insert_buffer_size
-            );
-#pragma omp for schedule(dynamic, schedule_chunk) nowait
-            for (int64_t i = 0; i < static_cast<int64_t>(range_work.size()); ++i) {
-                const FamilySourceRangeWork &work = range_work[static_cast<size_t>(i)];
-                process_family_source_range(
-                    workspace,
-                    lut,
-                    target_axis,
-                    &target_partition,
-                    spawn_tile_rank,
-                    loaded_cells[work.loaded_index],
-                    work,
-                    target_store,
-                    options,
-                    false
-                );
-            }
-            flush_family_canonical_buffer(
-                workspace,
-                lut,
-                target_axis,
-                &target_partition,
-                target_store,
-                options
-            );
-            flush_family_pending_encoded(
-                workspace,
-                target_store,
-                options
-            );
-        } catch (...) {
-#pragma omp critical
-            {
-                if (!first_exception) {
-                    first_exception = std::current_exception();
-                }
-            }
-        }
-    }
-    const double parallel_seconds = family_now_seconds() - parallel_begin;
-    if (first_exception) {
-        std::rethrow_exception(first_exception);
-    }
-    if (target_store.builder_overflowed()) {
-        throw BCCellMutableBuilderOverflow("BC Family loaded pass benchmark cell builder capacity overflow");
-    }
-
-    BCFamilyLoadedPassBenchmarkResult result;
-    result.timed_seconds = family_now_seconds() - begin;
-    result.stats.reload_seconds = prepare_seconds;
-    result.stats.build_work_seconds = build_work_seconds;
-    result.stats.parallel_seconds = parallel_seconds;
-    result.stats.source_cells_loaded = loaded_cells.size();
-    result.stats.source_loaded_cell_peak = loaded_cells.size();
-    result.stats.target_active_cell_peak = target_store.active_cell_count();
-    result.stats.active_family_window_peak = 1U + static_cast<uint64_t>(pass.target_families.size());
-    result.stats.active_builder_bytes_peak = target_store.active_builder_bytes();
-    result.stats.generation_seconds = result.timed_seconds;
-    return result;
 }
 
 

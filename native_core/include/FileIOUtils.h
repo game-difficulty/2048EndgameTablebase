@@ -251,23 +251,6 @@ void write_binary_vector(const PathLike &path_like, const std::vector<T> &data) 
     write_binary_span(path_like, data.data(), data.size());
 }
 
-template <typename PathLike>
-void write_binary_bytes_direct(
-    const PathLike &path_like,
-    const std::vector<uint8_t> &data,
-    DirectIoConfig config = {}
-) {
-    if (!normalize_direct_io_config(config).enabled) {
-        write_binary_bytes(path_like, data);
-        return;
-    }
-    DirectAppendWriter out(path_string(path_like), static_cast<uint64_t>(data.size()), config);
-    if (!data.empty()) {
-        out.append(data.data(), data.size());
-    }
-    out.close();
-}
-
 template <typename T, typename PathLike>
 void write_binary_span_direct(
     const PathLike &path_like,

@@ -129,11 +129,6 @@ struct BCFamilyGenerationStats {
     double generation_seconds = 0.0;
 };
 
-struct BCFamilyLoadedPassBenchmarkResult {
-    BCFamilyGenerationStats stats;
-    double timed_seconds = 0.0;
-};
-
 // Generates one target layer with FamilyChain semantics:
 //   +4 source -> target mutable, no finalize
 //   +2 source -> same target mutable, boundary finalize/write
@@ -148,22 +143,6 @@ BCFamilyGenerationStats generate_family_position_layer_v1(
     const BCFamilyStreamingGenerationSource &source2,
     BCFamilyMutableStore &target_store,
     BCFamilyPositionWriter &position_writer,
-    const BCFamilyGenerationOptions &options = {}
-);
-
-// Diagnostic helper for one already-loaded source family pass. It does not
-// perform source IO, dump/reload, boundary finalize, or position writes. The
-// timer covers target-window prepare, source work construction, scan/unrank,
-// spawn/move, canonicalize, encode, and cell-local insert for this pass only.
-BCFamilyLoadedPassBenchmarkResult benchmark_loaded_family_plus_spawn_pass(
-    const BCLut &lut,
-    const BCFamilyTable &target_axis,
-    const BCFamilyTable &source_axis,
-    FamilyId source_family_id,
-    SpawnDeltaCoord delta_coord,
-    uint8_t spawn_tile_rank,
-    const std::vector<BCLoadedCell> &loaded_cells,
-    BCFamilyMutableStore &target_store,
     const BCFamilyGenerationOptions &options = {}
 );
 

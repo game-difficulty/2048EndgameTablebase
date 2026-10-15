@@ -30,11 +30,6 @@ inline uint32_t popcount64(uint64_t value) {
 #endif
 }
 
-bool tile_limit_allows(const ZMaskFrozen::TileLimitConfig &config, uint32_t tile, uint8_t new_count) {
-    const int8_t limit = config.max_counts[tile & 0xFU];
-    return limit < 0 || new_count <= static_cast<uint8_t>(limit);
-}
-
 bool suffix28_structural_constraints_allow(const ZMaskFrozen::TileLimitConfig &config, uint32_t suffix) {
     if ((suffix & config.required_suffix24) != config.required_suffix24) {
         return false;
@@ -334,10 +329,6 @@ Luts build_luts(const ZMaskFrozen::TileLimitConfig &config, int /*num_threads*/)
     return luts;
 }
 
-uint32_t semantic_suffix_sum(uint32_t suffix28, const Luts &luts) {
-    return low24_sum_from_row_lut(luts, suffix28 & 0xFFFFFFU) + tile_value(suffix28 >> 24U);
-}
-
 uint64_t pack_bucket_key(uint64_t prefix36, uint32_t semantic_suffix_sum) {
     if ((prefix36 >> 36U) != 0ULL) {
         throw std::runtime_error("EXAD prefix36 overflow");
@@ -358,11 +349,6 @@ uint32_t bucket_key_semantic_sum(uint64_t key) {
 
 uint32_t lut_group_index(uint32_t semantic_suffix_sum) {
     return sum_index(semantic_suffix_sum);
-}
-
-bool suffix28_rank_group(const Luts &luts, uint32_t suffix28, uint32_t &group, uint32_t &rank) {
-    uint32_t semantic_sum = 0U;
-    return suffix28_rank_group_sum(luts, suffix28, group, rank, semantic_sum);
 }
 
 bool suffix28_rank_group_sum(
@@ -389,107 +375,6 @@ bool suffix28_rank_group_sum(
     semantic_sum = group << 1U;
     rank = luts.high_base[static_cast<size_t>(high) * kSemanticGroupCount + group] + low_rank;
     return rank < luts.size_table[group];
-}
-
-int8_t ad_bucket_key_for_board(
-    uint64_t board,
-    uint32_t original_board_sum,
-    const FormationAD::TilesCombinationTable &tiles_table,
-    const AdvancedMaskParam &param
-) {
-    const uint64_t masked_board = board & ~param.pos_fixed_32k_mask;
-    const auto &table = FormationAD::info_table1();
-    const uint64_t block0 = masked_board & 0xFFFFULL;
-    const uint64_t block1 = (masked_board >> 16U) & 0xFFFFULL;
-    const uint64_t block2 = (masked_board >> 32U) & 0xFFFFULL;
-    const uint64_t block3 = (masked_board >> 48U) & 0xFFFFULL;
-    const FormationAD::InfoEntry &r0 = table[block0];
-    const FormationAD::InfoEntry &r1 = table[block1];
-    const FormationAD::InfoEntry &r2 = table[block2];
-    const FormationAD::InfoEntry &r3 = table[block3];
-    const int8_t count_32k = static_cast<int8_t>(r0.count_32k + r1.count_32k + r2.count_32k + r3.count_32k);
-    if (count_32k == static_cast<int8_t>(param.num_free_32k)) {
-        return count_32k;
-    }
-    const int remaining_count = static_cast<int>(count_32k) - static_cast<int>(param.num_free_32k);
-    if (remaining_count < 0 || remaining_count > 9) {
-        return -1;
-    }
-    const uint32_t total_sum = static_cast<uint32_t>(r0.total_sum + r1.total_sum + r2.total_sum + r3.total_sum);
-    const int64_t large_tiles_sum64 =
-        static_cast<int64_t>(original_board_sum) -
-        static_cast<int64_t>(total_sum) -
-        (static_cast<int64_t>(param.num_free_32k + param.num_fixed_32k) << 15);
-    if (large_tiles_sum64 < 0 || (large_tiles_sum64 & 63LL) != 0LL) {
-        return -1;
-    }
-    const uint64_t large_tiles_sum = static_cast<uint64_t>(large_tiles_sum64);
-    if ((large_tiles_sum >> 6U) > 255U) {
-        return -1;
-    }
-    auto tiles = FormationAD::tiles_combination_view(
-        tiles_table,
-        static_cast<uint8_t>(large_tiles_sum >> 6U),
-        static_cast<uint8_t>(remaining_count)
-    );
-    if (tiles.empty()) {
-        return -1;
-    }
-    if (remaining_count == 1) {
-        return count_32k;
-    }
-    if (tiles.size > 1 && tiles[0] == tiles[1]) {
-        if (tiles.size > 2 && tiles[0] == tiles[2]) {
-            return static_cast<int8_t>(count_32k - 3 + 16);
-        }
-        return static_cast<int8_t>(-count_32k);
-    }
-    return count_32k;
-}
-
-uint64_t live_count_by_bitmap(
-    const BoardSet &set,
-    uint32_t bucket_index,
-    const Luts &luts
-) {
-    if (bucket_index >= set.buckets.size()) {
-        return 0U;
-    }
-    const uint64_t key = set.buckets[bucket_index].key;
-    const uint32_t valid_count = luts.size_table[lut_group_index(bucket_key_semantic_sum(key))];
-    const uint32_t offset = set.buckets[bucket_index].bitmap_offset;
-    uint64_t live = 0U;
-    if (valid_count <= set.threshold_bits) {
-        const uint32_t bytes = static_cast<uint32_t>(ZMaskFrozen::bytes_for_bits(valid_count));
-        for (uint32_t i = 0; i < bytes; ++i) {
-            live += popcount64(set.small_bitmap_bytes[offset + i]);
-        }
-    } else {
-        const uint32_t words = static_cast<uint32_t>(ZMaskFrozen::words_for_bits(valid_count));
-        for (uint32_t i = 0; i < words; ++i) {
-            live += popcount64(set.large_bitmap_words[offset + i]);
-        }
-    }
-    return live;
-}
-
-std::vector<uint64_t> extract_boards_sorted(const Layer &layer, const Luts &luts, int num_threads) {
-    std::vector<uint64_t> boards;
-    boards.reserve(static_cast<size_t>(layer.live_board_count));
-    for_each_live_board(layer, luts, [&boards](int8_t, uint64_t board) {
-        boards.push_back(board);
-    });
-    if (num_threads > 1 && boards.size() > 100000U) {
-#pragma omp parallel
-        {
-#pragma omp single nowait
-            std::sort(boards.begin(), boards.end());
-        }
-    } else {
-        std::sort(boards.begin(), boards.end());
-    }
-    boards.erase(std::unique(boards.begin(), boards.end()), boards.end());
-    return boards;
 }
 
 } // namespace EXAD

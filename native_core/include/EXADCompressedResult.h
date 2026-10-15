@@ -47,7 +47,6 @@ struct ColdSampleResult {
     uint32_t original_board_sum = 0;
 };
 
-bool is_exad_compressed_file(const std::string& path);
 
 CompressStats compress_exad_solved_layer_to_result(
     const std::string& exadbook_path,

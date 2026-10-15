@@ -299,15 +299,6 @@ void rotate_derive_hashmaps(DeriveHashState &state) {
     std::swap(state.next1, state.next2);
 }
 
-inline bool derive_input_seen_or_record(uint64_t *hashmap, uint64_t hashmask, uint64_t board) {
-    const size_t hash_index = static_cast<size_t>(BookGeneratorUtils::hash_board(board) & hashmask);
-    if (hashmap[hash_index] == board) {
-        return true;
-    }
-    hashmap[hash_index] = board;
-    return false;
-}
-
 inline bool derive_input_seen_or_record_at(uint64_t *hashmap, size_t hash_index, uint64_t board) {
     if (hashmap[hash_index] == board) {
         return true;
@@ -378,28 +369,6 @@ const std::array<uint32_t, 16> &reverse_spawn_shifts() {
         return out;
     }();
     return table;
-}
-
-uint64_t apply_canonical(uint64_t board, int symm_mode) {
-    switch (static_cast<SymmMode>(symm_mode)) {
-        case SymmMode::Full:
-            return Calculator::canonical_full(board);
-        case SymmMode::Diagonal:
-            return Calculator::canonical_diagonal(board);
-        case SymmMode::Horizontal:
-            return Calculator::canonical_horizontal(board);
-        case SymmMode::Min33:
-            return Calculator::canonical_min33(board);
-        case SymmMode::Min24:
-            return Calculator::canonical_min24(board);
-        case SymmMode::Min34:
-            return Calculator::canonical_min34(board);
-        case SymmMode::Min34Top:
-            return Calculator::canonical_min34_top(board);
-        case SymmMode::Identity:
-        default:
-            return Calculator::canonical_identity(board);
-    }
 }
 
 uint8_t derive_3x64(uint64_t masked, const std::array<uint64_t, 16> &pos_32k, int8_t count_32k, std::array<uint64_t, 120> &out) {
@@ -609,17 +578,6 @@ EstimateSet estimate_from_layer(const Layer &layer, ReserveFactors factors, int 
         );
         estimates.slots[slot].small_bytes += static_cast<uint64_t>(thread_count + 2) * kDynamicSmallChunkBytes;
         estimates.slots[slot].large_words += static_cast<uint64_t>(thread_count + 2) * kDynamicLargeChunkWords;
-    }
-    return estimates;
-}
-
-EstimateSet estimate_from_board_count(uint64_t boards, ReserveFactors factors, int thread_count) {
-    EstimateSet estimates{};
-    const uint64_t per_slot = boards / bucket_slot_count() + 1U;
-    for (Estimate &estimate : estimates.slots) {
-        estimate.buckets = std::max<uint64_t>(static_cast<uint64_t>(thread_count * 128), static_cast<uint64_t>(std::ceil(static_cast<double>(per_slot) * factors.bucket)));
-        estimate.small_bytes = std::max<uint64_t>(kDynamicSmallChunkBytes, static_cast<uint64_t>(std::ceil(static_cast<double>(per_slot) * factors.small)));
-        estimate.large_words = std::max<uint64_t>(kDynamicLargeChunkWords, static_cast<uint64_t>(std::ceil(static_cast<double>(per_slot / 8U + 1U) * factors.large)));
     }
     return estimates;
 }
@@ -995,24 +953,6 @@ bool make_pending_insert_for_slot(
         hash_slot_for_key(key, state.hash_capacity)
     };
     return true;
-}
-
-void insert_board_immediate(
-    CarryLayer &target,
-    uint64_t board,
-    uint32_t original_board_sum,
-    const FormationAD::TilesCombinationTable &tiles_table,
-    const AdvancedMaskParam &param,
-    const Luts &luts,
-    std::array<ThreadChunkState, bucket_slot_count()> &chunks,
-    std::array<uint32_t, bucket_slot_count()> &local_new_counts
-) {
-    const AdBucketLookup ad_lookup = make_ad_bucket_lookup(original_board_sum, tiles_table, param);
-    PendingInsert insert{};
-    if (!make_pending_insert(board, param, ad_lookup, luts, target, insert)) {
-        return;
-    }
-    flush_pending(&insert, 1U, target, chunks, local_new_counts);
 }
 
 void finalize_counts(CarryLayer &layer, const std::vector<std::array<uint32_t, bucket_slot_count()>> &thread_new_counts) {
@@ -1720,41 +1660,6 @@ bool any_overflow(const CarryLayer &layer) {
     return false;
 }
 
-const char *overflow_reason_name(uint32_t reason) {
-    switch (reason) {
-        case kOverflowSmallArena:
-            return "small_arena";
-        case kOverflowLargeArena:
-            return "large_arena";
-        case kOverflowHashFull:
-            return "hash_full";
-        default:
-            return "unknown";
-    }
-}
-
-std::string overflow_summary(const CarryLayer &layer, const char *label) {
-    std::ostringstream oss;
-    oss << label << " overflow";
-    for (size_t slot = 0; slot < layer.states.size(); ++slot) {
-        const CarryState &state = layer.states[slot];
-        if (!state.overflowed.load(std::memory_order_acquire)) {
-            continue;
-        }
-        const uint32_t reason = state.overflow_reason.load(std::memory_order_acquire);
-        oss << " slot=" << static_cast<int>(bucket_key_min() + static_cast<int>(slot))
-            << " reason=" << overflow_reason_name(reason)
-            << " buckets=" << state.bucket_count.load(std::memory_order_relaxed)
-            << " hash_capacity=" << state.hash_capacity
-            << " small_used=" << state.small_cursor_bytes.load(std::memory_order_relaxed)
-            << "/" << state.reserved_small_bytes
-            << " large_used=" << state.large_cursor_words.load(std::memory_order_relaxed)
-            << "/" << state.reserved_large_words;
-        break;
-    }
-    return oss.str();
-}
-
 void insert_boards_into_carry(
     CarryLayer &carry,
     const std::vector<uint64_t> &boards,
@@ -2200,19 +2105,6 @@ Layer validate_layer_streaming(
         out.live_board_count += live;
     }
     return out;
-}
-
-CarryLayer validate_carry_streaming(
-    const CarryLayer &carry,
-    uint32_t original_board_sum,
-    const FormationAD::TilesCombinationTable &tiles_table,
-    const AdvancedMaskParam &param,
-    const Luts &luts,
-    int num_threads
-) {
-    Layer layer = finalize_carry_layer(carry, luts, num_threads);
-    layer = validate_layer_streaming(layer, original_board_sum, tiles_table, param, luts, num_threads);
-    return carry_from_layer(layer, luts, num_threads);
 }
 
 uint64_t carry_bucket_count(const CarryLayer &carry) {

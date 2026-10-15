@@ -259,21 +259,6 @@ public:
         return live_rows_;
     }
 
-    [[nodiscard]] size_t live_bitmap_words() const {
-        return live_bitmap_word_count();
-    }
-
-    void reserve_buckets(size_t count) {
-        reserve_buckets_and_bitmap_words(count, count * kDefaultReserveWordsPerBucket);
-    }
-
-    void reserve_buckets_and_bitmap_words(size_t bucket_count, size_t bitmap_words) {
-        ensure_table_capacity(bucket_count);
-        if (bitmap_words > bitmap_arena_.capacity()) {
-            bitmap_arena_.reserve(bitmap_words);
-        }
-    }
-
     [[nodiscard]] BCMergeResult merge_from(const BCCellBuilder &other) {
         BCMergeResult result;
         if (other.bucket_count_ == 0U) {

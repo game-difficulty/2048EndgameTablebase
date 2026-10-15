@@ -116,11 +116,8 @@ uint32_t tile_value(uint32_t tile);
 bool decode_suffix24_if_valid(uint32_t state, uint32_t &sum, const TileLimitConfig &config);
 uint8_t suffix24_zero_mask(uint32_t state);
 uint64_t pack_bucket_key(uint64_t prefix40, uint8_t zero_mask, uint32_t remaining_sum);
-uint64_t pack_direct_lookup_key46(uint64_t prefix40, uint8_t zero_mask);
 uint64_t bucket_key_prefix40(uint64_t key);
-uint8_t bucket_key_zero_mask(uint64_t key);
 uint32_t bucket_key_remaining_sum(uint64_t key);
-uint64_t bucket_key_direct_lookup_key46(uint64_t key);
 uint32_t sum_index(uint32_t sum);
 uint32_t lut_group_index(uint32_t sum, uint8_t zero_mask);
 uint64_t bytes_for_bits(uint32_t bits);
@@ -131,11 +128,8 @@ uint64_t large_success_partition_base(uint64_t large_success_base, uint32_t succ
 uint32_t board_layer_sum(uint64_t board, const ZMaskLuts &luts);
 uint32_t prefix40_sum(uint64_t prefix40, const ZMaskLuts &luts);
 uint32_t prefix40_remaining_sum(uint64_t prefix40, uint32_t layer_sum, const ZMaskLuts &luts);
-ZMaskLuts build_zmask_luts(const TileLimitConfig &config, int num_threads = 8);
 void initialize_runtime_tables(ZMaskLuts &luts);
 ThresholdStats choose_best_threshold(const std::vector<ThresholdStats> &scan);
-bool test_small_bit(const std::vector<uint8_t> &bitmap, uint32_t offset, uint32_t rank);
-bool test_large_bit(const std::vector<uint64_t> &bitmap, uint32_t offset, uint32_t rank);
 void set_small_bit(std::vector<uint8_t> &bitmap, uint32_t offset, uint32_t rank);
 void set_large_bit(std::vector<uint64_t> &bitmap, uint32_t offset, uint32_t rank);
 
@@ -147,56 +141,13 @@ Layer<T> build_layer_from_sorted_boards(
     int num_threads
 );
 
-template <typename T>
-void build_index(Layer<T> &layer, int num_threads);
 
-template <typename T>
-LookupResult<T> lookup_success_and_index(
-    const Layer<T> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    T zero_value
-);
 
-template <typename T>
-T lookup_success(
-    const Layer<T> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    T zero_value
-);
 
-PreparedDirectQuery prepare_direct_suffix_query(const ZMaskLuts &luts, uint64_t board);
 
-template <typename T>
-bool lookup_direct_success_index_prepared(
-    const Layer<T> &layer,
-    const PreparedDirectQuery &query,
-    uint64_t &success_index
-);
 
-template <typename T>
-void lookup_direct_success_indices_prepared_batch(
-    const Layer<T> &layer,
-    const PreparedDirectQuery *queries,
-    uint64_t *success_indices,
-    uint8_t *found_flags,
-    uint32_t count
-);
 
-template <typename T>
-T lookup_direct_prepared(
-    const Layer<T> &layer,
-    const PreparedDirectQuery &query,
-    T zero_value
-);
 
-template <typename T>
-uint64_t live_count_by_bitmap(
-    const Layer<T> &layer,
-    uint32_t bucket_index,
-    const ZMaskLuts &luts
-);
 
 extern template Layer<uint32_t> build_layer_from_sorted_boards(
     const std::vector<uint64_t> &boards,
@@ -223,151 +174,11 @@ extern template Layer<double> build_layer_from_sorted_boards(
     int num_threads
 );
 
-extern template void build_index(Layer<uint32_t> &layer, int num_threads);
-extern template void build_index(Layer<uint64_t> &layer, int num_threads);
-extern template void build_index(Layer<float> &layer, int num_threads);
-extern template void build_index(Layer<double> &layer, int num_threads);
 
-extern template LookupResult<uint32_t> lookup_success_and_index(
-    const Layer<uint32_t> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    uint32_t zero_value
-);
-extern template LookupResult<uint64_t> lookup_success_and_index(
-    const Layer<uint64_t> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    uint64_t zero_value
-);
-extern template LookupResult<float> lookup_success_and_index(
-    const Layer<float> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    float zero_value
-);
-extern template LookupResult<double> lookup_success_and_index(
-    const Layer<double> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    double zero_value
-);
 
-extern template uint32_t lookup_success(
-    const Layer<uint32_t> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    uint32_t zero_value
-);
-extern template uint64_t lookup_success(
-    const Layer<uint64_t> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    uint64_t zero_value
-);
-extern template float lookup_success(
-    const Layer<float> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    float zero_value
-);
-extern template double lookup_success(
-    const Layer<double> &layer,
-    const ZMaskLuts &luts,
-    uint64_t board,
-    double zero_value
-);
 
-extern template bool lookup_direct_success_index_prepared(
-    const Layer<uint32_t> &layer,
-    const PreparedDirectQuery &query,
-    uint64_t &success_index
-);
-extern template bool lookup_direct_success_index_prepared(
-    const Layer<uint64_t> &layer,
-    const PreparedDirectQuery &query,
-    uint64_t &success_index
-);
-extern template bool lookup_direct_success_index_prepared(
-    const Layer<float> &layer,
-    const PreparedDirectQuery &query,
-    uint64_t &success_index
-);
-extern template bool lookup_direct_success_index_prepared(
-    const Layer<double> &layer,
-    const PreparedDirectQuery &query,
-    uint64_t &success_index
-);
 
-extern template void lookup_direct_success_indices_prepared_batch(
-    const Layer<uint32_t> &layer,
-    const PreparedDirectQuery *queries,
-    uint64_t *success_indices,
-    uint8_t *found_flags,
-    uint32_t count
-);
-extern template void lookup_direct_success_indices_prepared_batch(
-    const Layer<uint64_t> &layer,
-    const PreparedDirectQuery *queries,
-    uint64_t *success_indices,
-    uint8_t *found_flags,
-    uint32_t count
-);
-extern template void lookup_direct_success_indices_prepared_batch(
-    const Layer<float> &layer,
-    const PreparedDirectQuery *queries,
-    uint64_t *success_indices,
-    uint8_t *found_flags,
-    uint32_t count
-);
-extern template void lookup_direct_success_indices_prepared_batch(
-    const Layer<double> &layer,
-    const PreparedDirectQuery *queries,
-    uint64_t *success_indices,
-    uint8_t *found_flags,
-    uint32_t count
-);
 
-extern template uint32_t lookup_direct_prepared(
-    const Layer<uint32_t> &layer,
-    const PreparedDirectQuery &query,
-    uint32_t zero_value
-);
-extern template uint64_t lookup_direct_prepared(
-    const Layer<uint64_t> &layer,
-    const PreparedDirectQuery &query,
-    uint64_t zero_value
-);
-extern template float lookup_direct_prepared(
-    const Layer<float> &layer,
-    const PreparedDirectQuery &query,
-    float zero_value
-);
-extern template double lookup_direct_prepared(
-    const Layer<double> &layer,
-    const PreparedDirectQuery &query,
-    double zero_value
-);
 
-extern template uint64_t live_count_by_bitmap(
-    const Layer<uint32_t> &layer,
-    uint32_t bucket_index,
-    const ZMaskLuts &luts
-);
-extern template uint64_t live_count_by_bitmap(
-    const Layer<uint64_t> &layer,
-    uint32_t bucket_index,
-    const ZMaskLuts &luts
-);
-extern template uint64_t live_count_by_bitmap(
-    const Layer<float> &layer,
-    uint32_t bucket_index,
-    const ZMaskLuts &luts
-);
-extern template uint64_t live_count_by_bitmap(
-    const Layer<double> &layer,
-    uint32_t bucket_index,
-    const ZMaskLuts &luts
-);
 
 } // namespace ZMaskFrozen

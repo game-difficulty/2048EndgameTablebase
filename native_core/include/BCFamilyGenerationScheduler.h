@@ -52,10 +52,6 @@ public:
         return *source_axis_;
     }
 
-    [[nodiscard]] const BCFamilyTable &target_axis() const {
-        return *target_axis_;
-    }
-
     [[nodiscard]] const BCCellMatrix &source_matrix() const {
         return source_matrix_;
     }

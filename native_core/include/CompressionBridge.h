@@ -16,10 +16,4 @@ std::vector<uint64_t> maybe_decompress_uint64_array(const std::string &compresse
 bool write_temp_uint64_archive(const std::string &archive_path, const std::vector<uint64_t> &data, int lvl = 1);
 std::vector<uint64_t> read_temp_uint64_archive(const std::string &archive_path);
 bool write_temp_byte_archive(const std::string &archive_path, const std::vector<uint8_t> &data, int lvl = 1);
-bool write_temp_byte_spans_archive(
-    const std::string &archive_path,
-    const std::vector<ArchiveByteSpan> &spans,
-    int lvl = 1
-);
 std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path);
-bool is_readable_temp_archive(const std::string &archive_path);

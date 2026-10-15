@@ -2077,20 +2077,6 @@ static void bc_append_u16_le(std::vector<uint8_t> &buffer, uint16_t value) {
     p[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
 }
 
-static void bc_append_u64_le(std::vector<uint8_t> &buffer, uint64_t value) {
-    const size_t offset = buffer.size();
-    buffer.resize(offset + 8U);
-    uint8_t *p = buffer.data() + offset;
-    p[0] = static_cast<uint8_t>(value & 0xFFU);
-    p[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
-    p[2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
-    p[3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
-    p[4] = static_cast<uint8_t>((value >> 32U) & 0xFFU);
-    p[5] = static_cast<uint8_t>((value >> 40U) & 0xFFU);
-    p[6] = static_cast<uint8_t>((value >> 48U) & 0xFFU);
-    p[7] = static_cast<uint8_t>((value >> 56U) & 0xFFU);
-}
-
 static void bc_append_prefix256_le(
     std::vector<uint8_t> &buffer,
     const uint64_t *bitmap,
@@ -2747,69 +2733,6 @@ struct BCDynamicCellMeasure {
     out.success_rows = static_cast<uint32_t>(success_cursor);
     out.rank_payload_bytes = rank_cursor;
     return out;
-}
-
-[[nodiscard]] static FinalizedCellPayload finalize_dynamic_cell_payload(
-    const BCLut &lut,
-    const BCDynamicState &state,
-    const std::vector<BCDynamicSlotRef> &refs,
-    uint32_t begin,
-    uint32_t end
-) {
-    FinalizedCellPayload payload;
-    if (begin == end) {
-        return payload;
-    }
-    payload.buckets.reserve(end - begin);
-    uint64_t success_cursor = 0U;
-    std::vector<uint64_t> bitmap;
-    for (uint32_t i = begin; i < end; ++i) {
-        const uint32_t slot = refs[i].slot;
-        const uint32_t bitmap_len = bitmap_len_from_trusted_key(lut, refs[i].key);
-        const uint32_t word_count = words_for_bits(bitmap_len);
-        const uint32_t bitmap_offset = state.bitmap_offset_array[slot];
-
-        bitmap.resize(word_count);
-        if (static_cast<uint64_t>(bitmap_offset) + word_count > state.reserved_bitmap_words) {
-            throw std::out_of_range("BC dynamic streaming finalize bitmap offset exceeds arena");
-        }
-        for (uint32_t word = 0U; word < word_count; ++word) {
-            bitmap[word] = state.bitmap_arena[bitmap_offset + word].load(std::memory_order_relaxed);
-        }
-        const uint32_t live = bc_dynamic_count_live(bitmap.data(), word_count, bitmap_len);
-        if (live == 0U) {
-            continue;
-        }
-
-        const uint32_t payload_offset =
-            checked_u32_size(payload.rank_payload.size(), "BC dynamic streaming rank payload offset exceeds uint32");
-        const uint32_t aligned_payload_offset = align_up_u32(payload_offset, 8U);
-        bc_append_padding(payload.rank_payload, aligned_payload_offset - payload_offset);
-        const uint32_t rank_payload_offset =
-            checked_u32_size(payload.rank_payload.size(), "BC dynamic streaming aligned rank payload offset exceeds uint32");
-
-        bc_append_prefix256_le(payload.rank_payload, bitmap.data(), word_count, bitmap_len);
-        const uint32_t out_bitmap_offset = bc_rank_payload_bitmap_offset(rank_payload_offset, bitmap_len);
-        bc_append_padding(
-            payload.rank_payload,
-            out_bitmap_offset - checked_u32_size(
-                payload.rank_payload.size(),
-                "BC dynamic streaming prefix payload end exceeds uint32"
-            )
-        );
-        bc_append_bitmap_le(payload.rank_payload, bitmap.data(), word_count);
-        payload.buckets.push_back(BCBucketEntry{
-            refs[i].key,
-            rank_payload_offset,
-            checked_u32_size(success_cursor, "BC dynamic streaming success row offset exceeds uint32")
-        });
-        success_cursor += live;
-        if (success_cursor > std::numeric_limits<uint32_t>::max()) {
-            throw std::overflow_error("BC dynamic streaming finalized cell success_rows exceeds uint32");
-        }
-    }
-    payload.success_rows = static_cast<uint32_t>(success_cursor);
-    return payload;
 }
 
 static void append_dynamic_cell_bucket_entries_le(
@@ -3497,10 +3420,6 @@ struct BCResidentGenerationMutableLayer::Impl {
 };
 
 struct BCResidentGenerationMutableLayerAccess {
-    [[nodiscard]] static bool has_impl(const BCResidentGenerationMutableLayer &layer) noexcept {
-        return static_cast<bool>(layer.impl_);
-    }
-
     [[nodiscard]] static const BCFamilyTable &axis(const BCResidentGenerationMutableLayer &layer) {
         if (!layer.impl_) {
             throw std::logic_error("BC mutable generation layer is empty");
@@ -4127,70 +4046,6 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair(
     );
 }
 
-BCResidentGenerationPairResult generate_resident_position_layer_pair_to_file(
-    const BCLut &lut,
-    const BCFamilyTable &primary_axis,
-    const BCPositionLayerReader &current,
-    const BCPositionLayerReader *carry_to_primary,
-    const BCFamilyTable *secondary_axis,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *secondary_output_file,
-    const BCResidentGenerationOptions &options
-) {
-    if (secondary_axis != nullptr && secondary_output_file == nullptr) {
-        throw std::invalid_argument("BC resident pair file output requires secondary_output_file");
-    }
-    if (secondary_axis == nullptr && secondary_output_file != nullptr) {
-        throw std::invalid_argument("BC resident pair file output got secondary file without secondary axis");
-    }
-    const BCPositionCellLayout primary_layout =
-        BCPositionCellLayout::from_serialized_axis(primary_axis);
-    const std::optional<BCPositionCellLayout> secondary_layout =
-        secondary_axis != nullptr
-            ? std::optional<BCPositionCellLayout>(
-                  BCPositionCellLayout::from_serialized_axis(*secondary_axis)
-              )
-            : std::nullopt;
-    return generate_resident_position_layer_pair_impl(
-        lut,
-        primary_layout,
-        current,
-        carry_to_primary,
-        secondary_layout ? &*secondary_layout : nullptr,
-        &primary_output_file,
-        secondary_output_file,
-        options
-    );
-}
-
-BCResidentGenerationPairResult generate_resident_position_layer_pair_to_file(
-    const BCLut &lut,
-    const BCPositionCellLayout &primary_layout,
-    const BCPositionLayerReader &current,
-    const BCPositionLayerReader *carry_to_primary,
-    const BCPositionCellLayout *secondary_layout,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *secondary_output_file,
-    const BCResidentGenerationOptions &options
-) {
-    if (secondary_layout != nullptr && secondary_output_file == nullptr) {
-        throw std::invalid_argument("BC resident pair file output requires secondary_output_file");
-    }
-    if (secondary_layout == nullptr && secondary_output_file != nullptr) {
-        throw std::invalid_argument("BC resident pair file output got secondary file without secondary axis");
-    }
-    return generate_resident_position_layer_pair_impl(
-        lut,
-        primary_layout,
-        current,
-        carry_to_primary,
-        secondary_layout,
-        &primary_output_file,
-        secondary_output_file,
-        options
-    );
-}
-
 static BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutable_carry_impl(
     const BCLut &lut,
     const BCPositionCellLayout &primary_layout,
@@ -4491,58 +4346,6 @@ BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutabl
         secondary_layout,
         nullptr,
         nullptr,
-        options
-    );
-}
-
-BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutable_carry_to_file(
-    const BCLut &lut,
-    const BCFamilyTable &primary_axis,
-    const BCPositionLayerReader &current,
-    std::unique_ptr<BCResidentGenerationMutableLayer> carry_to_primary,
-    const BCFamilyTable *secondary_axis,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *terminal_secondary_output_file,
-    const BCResidentGenerationOptions &options
-) {
-    const BCPositionCellLayout primary_layout =
-        BCPositionCellLayout::from_serialized_axis(primary_axis);
-    const std::optional<BCPositionCellLayout> secondary_layout =
-        secondary_axis != nullptr
-            ? std::optional<BCPositionCellLayout>(
-                  BCPositionCellLayout::from_serialized_axis(*secondary_axis)
-              )
-            : std::nullopt;
-    return generate_resident_position_layer_pair_with_mutable_carry_impl(
-        lut,
-        primary_layout,
-        current,
-        std::move(carry_to_primary),
-        secondary_layout ? &*secondary_layout : nullptr,
-        &primary_output_file,
-        terminal_secondary_output_file,
-        options
-    );
-}
-
-BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutable_carry_to_file(
-    const BCLut &lut,
-    const BCPositionCellLayout &primary_layout,
-    const BCPositionLayerReader &current,
-    std::unique_ptr<BCResidentGenerationMutableLayer> carry_to_primary,
-    const BCPositionCellLayout *secondary_layout,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *terminal_secondary_output_file,
-    const BCResidentGenerationOptions &options
-) {
-    return generate_resident_position_layer_pair_with_mutable_carry_impl(
-        lut,
-        primary_layout,
-        current,
-        std::move(carry_to_primary),
-        secondary_layout,
-        &primary_output_file,
-        terminal_secondary_output_file,
         options
     );
 }

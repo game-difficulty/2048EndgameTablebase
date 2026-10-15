@@ -260,18 +260,6 @@ void push_reserve_history(std::deque<ReserveFootprint> &history, const EXAD::Lay
     }
 }
 
-void reset_reserve_history(
-    std::deque<ReserveFootprint> &history,
-    const EXAD::Layer &current,
-    const EXAD::Layer *next = nullptr
-) {
-    history.clear();
-    push_reserve_history(history, current);
-    if (next != nullptr) {
-        push_reserve_history(history, *next);
-    }
-}
-
 void apply_reserve_history_floors(EXAD::ReserveFactors &factors, const std::deque<ReserveFootprint> &history) {
     if (history.empty()) {
         return;

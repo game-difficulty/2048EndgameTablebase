@@ -100,15 +100,6 @@ struct BCCellResolvedInsert {
 
 static_assert(sizeof(BCCellResolvedInsert) <= 16U, "BC resolved insert must stay cache-compact");
 
-struct BCCellEncodedInsert {
-    static constexpr uint32_t kInvalidHomeSlot = std::numeric_limits<uint32_t>::max();
-
-    uint64_t key = 0U;
-    BucketRank rank = 0U;
-    BucketBitmapLen bitmap_len = 0U;
-    uint32_t home_slot = kInvalidHomeSlot;
-};
-
 struct BCCellTrustedKeyRankInsert {
     uint64_t key = 0U;
     BucketRank rank = 0U;
@@ -285,10 +276,6 @@ public:
         return dirty_.load(std::memory_order_acquire);
     }
 
-    void mark_clean() {
-        dirty_.store(false, std::memory_order_release);
-    }
-
     void reserve(uint32_t buckets, uint32_t bitmap_words) {
         if (buckets != 0U) {
             grow_hash_table(capacity_for_bucket_count(buckets));
@@ -309,19 +296,6 @@ public:
         return slot_for_key_with_shift(key, hash_shift_);
     }
 
-    [[nodiscard]] uint32_t compact_home_slot_or_compute(
-        const BCCellEncodedInsert &encoded,
-        const uint32_t *home_slots,
-        uint32_t index
-    ) const {
-        if (home_slots != nullptr) {
-            return home_slots[index];
-        }
-        return encoded.home_slot != BCCellEncodedInsert::kInvalidHomeSlot
-            ? encoded.home_slot
-            : home_slot_for_key(encoded.key);
-    }
-
     [[nodiscard]] BCInsertResult insert(uint64_t key, BucketRank rank) {
         const BucketBitmapLen bitmap_len = bitmap_len_from_key(*lut_, key);
         return insert_impl(key, rank, bitmap_len);
@@ -332,38 +306,6 @@ public:
             throw std::invalid_argument("BC mutable cell builder cannot insert invalid encoded key/rank");
         }
         return insert_impl(encoded.key, encoded.rank, encoded.bitmap_len);
-    }
-
-    void prefetch_home_slot_index(uint32_t home_slot) const {
-        prefetch_slot_index(home_slot);
-    }
-
-    [[nodiscard]] bool resolve_encoded_with_home_slot(
-        const BCEncodedKeyRank &encoded,
-        uint32_t home_slot,
-        BCCellResolvedInsert &resolved,
-        BCCellBitmapThreadChunk *bitmap_chunk = nullptr
-    ) {
-        if (!encoded.valid) {
-            throw std::invalid_argument("BC mutable cell builder cannot resolve invalid encoded key/rank");
-        }
-        if (bucket_count_.load(std::memory_order_acquire) > max_buckets_for_capacity(capacity_)) {
-            mark_capacity_overflow();
-            return false;
-        }
-        bool inserted = false;
-        ReadGuard guard(*this);
-        if (!resolve_one_guarded_at_slot(
-                encoded.key,
-                encoded.rank,
-                encoded.bitmap_len,
-                home_slot,
-                inserted,
-                resolved,
-                bitmap_chunk)) {
-            return false;
-        }
-        return true;
     }
 
     [[nodiscard]] BCInsertResult apply_resolved_insert(
@@ -384,177 +326,6 @@ public:
             mark_dirty_once();
         }
         return BCInsertResult{resolved.new_bucket, new_rank};
-    }
-
-    void resolve_batch(
-        const std::vector<BCEncodedKeyRank> &encoded,
-        std::vector<BCCellResolvedInsert> &resolved
-    ) {
-        resolved.clear();
-        resolved.reserve(encoded.size());
-        if (encoded.empty()) {
-            return;
-        }
-
-        for (;;) {
-            ensure_batch_capacity(static_cast<uint32_t>(encoded.size()));
-            bool need_grow = false;
-            uint32_t grow_bitmap_words = 0U;
-            {
-                ReadGuard guard(*this);
-                resolved.clear();
-                resolved.resize(encoded.size());
-                constexpr uint32_t kPrefetchDistance = kBCMutableBatchPrefetchDistance;
-                const uint32_t count = static_cast<uint32_t>(encoded.size());
-                const uint32_t prefetch_count = std::min<uint32_t>(count, kPrefetchDistance);
-                for (uint32_t i = 0U; i < prefetch_count; ++i) {
-                    prefetch_home_slot(encoded[i].key);
-                }
-                for (uint32_t i = 0U; i < count; ++i) {
-                    if (i + kPrefetchDistance < count) {
-                        prefetch_home_slot(encoded[i + kPrefetchDistance].key);
-                    }
-                    const BCEncodedKeyRank &item = encoded[i];
-                    if (!item.valid) {
-                        throw std::invalid_argument("BC mutable cell builder cannot resolve invalid encoded key/rank");
-                    }
-                    bool inserted = false;
-                    if (!resolve_one_guarded(item.key, item.rank, item.bitmap_len, inserted, resolved[i])) {
-                        grow_bitmap_words = std::max<uint32_t>(grow_bitmap_words, words_for_bits(item.bitmap_len));
-                        need_grow = true;
-                        break;
-                    }
-#if defined(__GNUC__) || defined(__clang__)
-                    if (uint64_t *base = bitmap_base()) {
-                        __builtin_prefetch(base + resolved[i].word_offset, 1, 1);
-                    }
-#endif
-                }
-                if (!need_grow) {
-                    return;
-                }
-            }
-            grow_hash_table(capacity_for_bucket_count(
-                bucket_count_.load(std::memory_order_acquire) + static_cast<uint32_t>(encoded.size())
-            ));
-            if (grow_bitmap_words != 0U) {
-                const uint32_t used = bitmap_used_words_.load(std::memory_order_acquire);
-                const uint32_t current_capacity = bitmap_capacity_words_.load(std::memory_order_acquire);
-                const uint32_t doubled = current_capacity > std::numeric_limits<uint32_t>::max() / 2U
-                    ? std::numeric_limits<uint32_t>::max()
-                    : current_capacity * 2U;
-                reserve_bitmap_words_stop_world(std::max<uint32_t>(used + grow_bitmap_words, doubled));
-            }
-        }
-    }
-
-    [[nodiscard]] BCCellInsertBatchResult resolve_and_apply_compact_batch(
-        const BCCellEncodedInsert *encoded,
-        uint32_t *home_slots,
-        uint32_t count,
-        std::vector<BCCellResolvedInsert> &resolved,
-        BCCellBitmapThreadChunk *bitmap_chunk = nullptr,
-        bool count_new_buckets = true,
-        uint64_t *probe_steps_out = nullptr
-    ) {
-        if (count != 0U && encoded == nullptr) {
-            throw std::invalid_argument("BC mutable cell compact resolve/apply batch pointer is null");
-        }
-        resolved.clear();
-        resolved.reserve(count);
-        if (probe_steps_out != nullptr) {
-            *probe_steps_out = 0U;
-        }
-        if (count == 0U) {
-            return {};
-        }
-        for (;;) {
-            ensure_batch_capacity(count);
-            bool need_grow = false;
-            uint64_t probe_steps = 0U;
-            uint32_t grow_bitmap_words = 0U;
-            {
-                resolved.clear();
-                resolved.resize(count);
-                ReadGuard guard(*this);
-                uint64_t *bitmap_base_ptr = bitmap_base();
-                if (home_slots != nullptr) {
-                    for (uint32_t i = 0U; i < count; ++i) {
-                        home_slots[i] =
-                            encoded[i].home_slot != BCCellEncodedInsert::kInvalidHomeSlot
-                                ? encoded[i].home_slot
-                                : home_slot_for_key(encoded[i].key);
-                    }
-                }
-                constexpr uint32_t kPrefetchDistance = kBCMutableBatchPrefetchDistance;
-                const uint32_t prefetch_count = std::min<uint32_t>(count, kPrefetchDistance);
-                for (uint32_t i = 0U; i < prefetch_count; ++i) {
-                    if (home_slots != nullptr) {
-                        prefetch_slot_index(home_slots[i]);
-                    } else {
-                        prefetch_slot_index(compact_home_slot_or_compute(encoded[i], home_slots, i));
-                    }
-                }
-                for (uint32_t i = 0U; i < count; ++i) {
-                    if (i + kPrefetchDistance < count) {
-                        if (home_slots != nullptr) {
-                            prefetch_slot_index(home_slots[i + kPrefetchDistance]);
-                        } else {
-                            prefetch_slot_index(compact_home_slot_or_compute(
-                                encoded[i + kPrefetchDistance],
-                                home_slots,
-                                i + kPrefetchDistance
-                            ));
-                        }
-                    }
-                    const BCCellEncodedInsert &item = encoded[i];
-                    const uint32_t home_slot =
-                        compact_home_slot_or_compute(item, home_slots, i);
-                    bool inserted = false;
-                    uint32_t item_probe_steps = 0U;
-                    if (!resolve_one_compact_guarded_at_slot(
-                            item.key,
-                            item.rank,
-                            item.bitmap_len,
-                            home_slot,
-                            inserted,
-                            resolved[i],
-                            bitmap_chunk,
-                            probe_steps_out != nullptr ? &item_probe_steps : nullptr)) {
-                        probe_steps += item_probe_steps;
-                        grow_bitmap_words = std::max<uint32_t>(
-                            grow_bitmap_words,
-                            words_for_bits(item.bitmap_len)
-                        );
-                        need_grow = true;
-                        break;
-                    }
-                    probe_steps += item_probe_steps;
-#if defined(__GNUC__) || defined(__clang__)
-                    if (bitmap_base_ptr != nullptr) {
-                        __builtin_prefetch(bitmap_base_ptr + resolved[i].word_offset, 1, 1);
-                    }
-#endif
-                }
-                if (!need_grow) {
-                    if (probe_steps_out != nullptr) {
-                        *probe_steps_out = probe_steps;
-                    }
-                    return apply_resolved_batch_guarded(resolved, count_new_buckets);
-                }
-            }
-            grow_hash_table(capacity_for_bucket_count(
-                bucket_count_.load(std::memory_order_acquire) + count
-            ));
-            if (grow_bitmap_words != 0U) {
-                const uint32_t used = bitmap_used_words_.load(std::memory_order_acquire);
-                const uint32_t current_capacity = bitmap_capacity_words_.load(std::memory_order_acquire);
-                const uint32_t doubled = current_capacity > std::numeric_limits<uint32_t>::max() / 2U
-                    ? std::numeric_limits<uint32_t>::max()
-                    : current_capacity * 2U;
-                reserve_bitmap_words_stop_world(std::max<uint32_t>(used + grow_bitmap_words, doubled));
-            }
-        }
     }
 
     [[nodiscard]] BCCellInsertBatchResult resolve_and_apply_trusted_key_rank_batch(
@@ -645,14 +416,6 @@ public:
         }
     }
 
-    [[nodiscard]] BCCellInsertBatchResult apply_resolved_batch(
-        const std::vector<BCCellResolvedInsert> &resolved,
-        bool count_new_buckets = true
-    ) {
-        ReadGuard guard(*this);
-        return apply_resolved_batch_guarded(resolved, count_new_buckets);
-    }
-
     [[nodiscard]] BCCellInsertBatchResult apply_resolved_batch_guarded(
         const std::vector<BCCellResolvedInsert> &resolved,
         bool count_new_buckets = true
@@ -723,14 +486,6 @@ public:
         return result;
     }
 
-    [[nodiscard]] BCCellInsertBatchResult insert_resolved_batch(
-        const std::vector<BCEncodedKeyRank> &encoded
-    ) {
-        std::vector<BCCellResolvedInsert> resolved;
-        resolve_batch(encoded, resolved);
-        return apply_resolved_batch(resolved);
-    }
-
     [[nodiscard]] bool contains(uint64_t key, BucketRank rank) const {
         const BucketBitmapLen bitmap_len = bitmap_len_from_key(*lut_, key);
         if (rank >= bitmap_len) {
@@ -753,46 +508,12 @@ public:
         return (atomic_load_bitmap_word(bitmap_word) & (1ULL << bit)) != 0U;
     }
 
-    [[nodiscard]] uint64_t live_rows_estimate() const {
-        ReadGuard guard(*this);
-        uint64_t rows = 0U;
-        const uint32_t buckets = bucket_count_.load(std::memory_order_acquire);
-        for (uint32_t index = 0U; index < buckets; ++index) {
-            const uint32_t i = occupied_slots_[index];
-            if (i >= capacity_ || slot_state(i) != kOccupiedState) {
-                continue;
-            }
-            rows += live_count(i);
-        }
-        return rows;
-    }
-
-    [[nodiscard]] uint64_t bucket_count_estimate() const {
-        return bucket_count_.load(std::memory_order_acquire);
-    }
-
     [[nodiscard]] uint64_t allocated_bytes() const {
         const uint64_t table_bytes = static_cast<uint64_t>(capacity_) * slot_metadata_bytes_per_entry();
         const uint64_t occupied_bytes = static_cast<uint64_t>(capacity_) * sizeof(uint32_t);
         const uint64_t bitmap_bytes =
             static_cast<uint64_t>(bitmap_capacity_words_.load(std::memory_order_acquire)) * sizeof(uint64_t);
         return sizeof(BCCellMutableBuilder) + table_bytes + occupied_bytes + bitmap_bytes;
-    }
-
-    [[nodiscard]] uint32_t hash_capacity() const {
-        return capacity_;
-    }
-
-    [[nodiscard]] uint32_t max_bucket_capacity() const {
-        return max_buckets_for_capacity(capacity_);
-    }
-
-    [[nodiscard]] uint32_t bitmap_used_words() const {
-        return bitmap_used_words_.load(std::memory_order_acquire);
-    }
-
-    [[nodiscard]] uint32_t bitmap_capacity_words() const {
-        return bitmap_capacity_words_.load(std::memory_order_acquire);
     }
 
     void validate_internal_for_testing() const {
@@ -865,10 +586,6 @@ public:
 
     [[nodiscard]] uint64_t hash_grow_count() const {
         return hash_grow_count_.load(std::memory_order_acquire);
-    }
-
-    [[nodiscard]] uint64_t bitmap_grow_count() const {
-        return bitmap_grow_count_.load(std::memory_order_acquire);
     }
 
     void mark_growth_baseline() const {
@@ -1832,17 +1549,6 @@ public:
         );
     }
 
-    [[nodiscard]] static FinalizedCellPayload finalize_dump(
-        const BCLut &lut,
-        CellId cid,
-        BCCellBuilderDumpView dump,
-        BCCellFinalizeOptions options = {}
-    ) {
-        FinalizeScratch scratch;
-        finalize_dump_into(lut, cid, dump, scratch, options);
-        return std::move(scratch.payload);
-    }
-
     void finalize_into(FinalizeScratch &scratch, BCCellFinalizeOptions options = {}) const {
         StopWorldGuard stop(*this);
         ++finalize_count_;
@@ -2169,49 +1875,6 @@ private:
         return true;
     }
 
-    [[nodiscard]] bool resolve_one_compact_guarded_at_slot(
-        uint64_t key,
-        BucketRank rank,
-        BucketBitmapLen bitmap_len,
-        uint32_t home_slot,
-        bool &inserted,
-        BCCellResolvedInsert &out,
-        BCCellBitmapThreadChunk *bitmap_chunk = nullptr,
-        uint32_t *probe_steps_out = nullptr
-    ) {
-        if (bitmap_len == 0U || bitmap_len > kBCMaxBucketBitmapLen) {
-            throw std::logic_error("BC mutable compact insert saw invalid bitmap_len");
-        }
-        if (rank >= bitmap_len) {
-            throw std::out_of_range("BC mutable compact insert rank exceeds bitmap_len");
-        }
-        inserted = false;
-        const uint32_t bucket_slot = find_or_create_bucket_compact_at_slot(
-            key,
-            bitmap_len,
-            home_slot,
-            inserted,
-            bitmap_chunk,
-            probe_steps_out
-        );
-        if (bucket_slot == kInvalidSlot) {
-            return false;
-        }
-        const uint32_t rank_word = static_cast<uint32_t>(rank) >> 6U;
-        const uint32_t rank_bit = static_cast<uint32_t>(rank) & (kBCBitmapWordBits - 1U);
-        const uint32_t offset = slots_.bitmap_offsets[bucket_slot];
-        const uint32_t capacity = bitmap_capacity_words_.load(std::memory_order_acquire);
-        if (offset >= capacity || rank_word >= capacity - offset) {
-            throw std::logic_error("BC mutable compact bucket bitmap word exceeds arena");
-        }
-        out = BCCellResolvedInsert{
-            1ULL << rank_bit,
-            offset + rank_word,
-            inserted
-        };
-        return true;
-    }
-
     [[nodiscard]] bool resolve_one_trusted_key_rank_guarded_at_slot(
         uint64_t key,
         BucketRank rank,
@@ -2257,25 +1920,6 @@ private:
         return true;
     }
 
-    [[nodiscard]] uint32_t find_or_create_bucket_guarded(
-        uint64_t key,
-        BucketBitmapLen bitmap_len,
-        uint32_t word_count,
-        bool &inserted,
-        BCCellBitmapThreadChunk *bitmap_chunk = nullptr,
-        uint32_t *probe_steps_out = nullptr
-    ) {
-        return find_or_create_bucket_guarded_at_slot(
-            key,
-            bitmap_len,
-            word_count,
-            home_slot_for_key(key),
-            inserted,
-            bitmap_chunk,
-            probe_steps_out
-        );
-    }
-
     [[nodiscard]] uint32_t find_or_create_bucket_guarded_at_slot(
         uint64_t key,
         BucketBitmapLen bitmap_len,
@@ -2310,65 +1954,6 @@ private:
                         kPendingState,
                         std::memory_order_acq_rel,
                         std::memory_order_acquire)) {
-                    const BitmapAllocation allocation = allocate_bitmap_words(word_count, bitmap_chunk);
-                    if (!allocation.ok) {
-                        slots_.states[slot_index].store(kEmptyState, std::memory_order_release);
-                        return kInvalidSlot;
-                    }
-                    uint32_t occupied_index = 0U;
-                    if (!try_reserve_occupied_index(occupied_index)) {
-                        slots_.states[slot_index].store(kEmptyState, std::memory_order_release);
-                        return kInvalidSlot;
-                    }
-                    slots_.keys[slot_index] = key;
-                    slots_.bitmap_offsets[slot_index] = allocation.offset;
-                    record_occupied_slot(occupied_index, slot_index);
-                    slots_.states[slot_index].store(kOccupiedState, std::memory_order_release);
-                    inserted = true;
-                    return slot_index;
-                }
-                continue;
-            }
-            slot_index = (slot_index + 1U) & mask;
-            prefetch_slot_index(slot_index);
-        }
-        return kInvalidSlot;
-    }
-
-    [[nodiscard]] uint32_t find_or_create_bucket_compact_at_slot(
-        uint64_t key,
-        BucketBitmapLen bitmap_len,
-        uint32_t home_slot,
-        bool &inserted,
-        BCCellBitmapThreadChunk *bitmap_chunk = nullptr,
-        uint32_t *probe_steps_out = nullptr
-    ) {
-        inserted = false;
-
-        const uint32_t mask = capacity_mask_;
-        uint32_t slot_index = home_slot & mask;
-        for (uint32_t probe = 0U; probe < capacity_; ++probe) {
-            if (probe_steps_out != nullptr) {
-                *probe_steps_out = probe + 1U;
-            }
-            uint8_t state = slots_.states[slot_index].load(std::memory_order_acquire);
-            if (state == kPendingState) {
-                while ((state = slots_.states[slot_index].load(std::memory_order_acquire)) == kPendingState) {
-                    bc_cell_mutable_spin_pause();
-                }
-            }
-            if (state == kOccupiedState) {
-                if (slots_.keys[slot_index] == key) {
-                    return slot_index;
-                }
-            } else if (state == kEmptyState) {
-                uint8_t expected = kEmptyState;
-                if (slots_.states[slot_index].compare_exchange_strong(
-                        expected,
-                        kPendingState,
-                        std::memory_order_acq_rel,
-                        std::memory_order_acquire)) {
-                    const uint32_t word_count = words_for_bits(bitmap_len);
                     const BitmapAllocation allocation = allocate_bitmap_words(word_count, bitmap_chunk);
                     if (!allocation.ok) {
                         slots_.states[slot_index].store(kEmptyState, std::memory_order_release);
@@ -2530,20 +2115,6 @@ private:
         return kInvalidSlot;
     }
 
-    [[nodiscard]] uint32_t restore_bucket_slot(uint64_t key, BucketBitmapLen bitmap_len, uint32_t word_count) {
-        for (;;) {
-            bool inserted = false;
-            const uint32_t slot = find_or_create_bucket_guarded(key, bitmap_len, word_count, inserted);
-            if (slot != kInvalidSlot) {
-                if (!inserted) {
-                    throw std::invalid_argument("BC mutable cell dump contains duplicate key");
-                }
-                return slot;
-            }
-            grow_hash_table(capacity_for_bucket_count(bucket_count_.load(std::memory_order_acquire) + 1U));
-        }
-    }
-
     void grow_hash_table(uint32_t requested_capacity) const {
         if (requested_capacity < kInitialCapacity) {
             requested_capacity = kInitialCapacity;
@@ -2668,11 +2239,6 @@ private:
         }
     }
 
-    [[nodiscard]] bool should_grow_for_one_more() const {
-        const uint32_t buckets = bucket_count_.load(std::memory_order_acquire);
-        return buckets + 1U > max_buckets_for_capacity(capacity_);
-    }
-
     [[nodiscard]] bool try_reserve_occupied_index(uint32_t &index) const {
         const uint32_t max_buckets = std::min(
             max_buckets_for_capacity(capacity_),
@@ -2776,27 +2342,6 @@ private:
             clear_bitmap_words(out.offset, word_count);
         }
         return out;
-    }
-
-    [[nodiscard]] BitmapAllocation acquire_bitmap_words_exact_locked(uint32_t word_count) {
-        std::lock_guard<std::mutex> lock(bitmap_alloc_mutex_);
-        uint32_t used = bitmap_used_words_.load(std::memory_order_acquire);
-        uint32_t capacity = bitmap_capacity_words_.load(std::memory_order_acquire);
-        if (used > capacity || word_count > capacity - used) {
-            return BitmapAllocation{0U, false};
-        }
-        used = bitmap_used_words_.load(std::memory_order_relaxed);
-        while (used <= capacity && word_count <= capacity - used) {
-            if (bitmap_used_words_.compare_exchange_weak(
-                    used,
-                    used + word_count,
-                    std::memory_order_acq_rel,
-                    std::memory_order_relaxed)) {
-                return BitmapAllocation{used, true};
-            }
-        }
-        mark_capacity_overflow();
-        return BitmapAllocation{0U, false};
     }
 
     void reserve_bitmap_words(uint32_t words) {
@@ -2915,13 +2460,6 @@ private:
         return shift >= 64U ? 0U : static_cast<uint32_t>(mixed >> shift);
     }
 
-    [[nodiscard]] static uint16_t checked_u16(uint32_t value, const char *label) {
-        if (value > std::numeric_limits<uint16_t>::max()) {
-            throw std::overflow_error(label);
-        }
-        return static_cast<uint16_t>(value);
-    }
-
     [[nodiscard]] static uint32_t checked_u32(uint64_t value, const char *label) {
         if (value > std::numeric_limits<uint32_t>::max()) {
             throw std::overflow_error(label);
@@ -2942,12 +2480,6 @@ private:
     static void append_u16_le(std::vector<uint8_t> &buffer, uint16_t value) {
         buffer.push_back(static_cast<uint8_t>(value & 0xFFU));
         buffer.push_back(static_cast<uint8_t>((value >> 8U) & 0xFFU));
-    }
-
-    static void append_u32_le(std::vector<uint8_t> &buffer, uint32_t value) {
-        for (uint32_t i = 0U; i < 4U; ++i) {
-            buffer.push_back(static_cast<uint8_t>((value >> (i * 8U)) & 0xFFU));
-        }
     }
 
     static void append_u64_le(std::vector<uint8_t> &buffer, uint64_t value) {
@@ -3018,16 +2550,6 @@ private:
 #endif
     }
 
-    [[nodiscard]] static uint64_t align_up_u64_local(uint64_t value, uint64_t alignment) {
-        if (alignment == 0U || (alignment & (alignment - 1U)) != 0U) {
-            throw std::invalid_argument("BC mutable dump alignment must be power-of-two");
-        }
-        if (value > std::numeric_limits<uint64_t>::max() - (alignment - 1U)) {
-            throw std::overflow_error("BC mutable dump align_up overflow");
-        }
-        return (value + alignment - 1U) & ~(alignment - 1U);
-    }
-
     [[nodiscard]] static uint64_t tail_mask_for_bits(uint32_t bitmap_len, uint32_t word) {
         const uint32_t word_count = words_for_bits(bitmap_len);
         if (word + 1U != word_count) {
@@ -3037,39 +2559,12 @@ private:
         return tail == 0U ? ~0ULL : ((1ULL << tail) - 1ULL);
     }
 
-    [[nodiscard]] uint64_t masked_bitmap_word(uint32_t slot, uint32_t word) const {
-        uint64_t *bitmap_word = slot_bitmap_word(slot, word);
-        if (bitmap_word == nullptr) {
-            throw std::logic_error("BC mutable cell bitmap word is out of range");
-        }
-        return atomic_load_bitmap_word(bitmap_word) &
-            tail_mask_for_bits(slot_bitmap_len(slot), word);
-    }
-
     [[nodiscard]] uint64_t masked_bitmap_word_stopped(uint32_t slot, uint32_t word) const {
         uint64_t *bitmap_word = slot_bitmap_word(slot, word);
         if (bitmap_word == nullptr) {
             throw std::logic_error("BC mutable cell bitmap word is out of range");
         }
         return *bitmap_word & tail_mask_for_bits(slot_bitmap_len(slot), word);
-    }
-
-    [[nodiscard]] uint32_t live_count(uint32_t slot) const {
-        uint32_t live = 0U;
-        const uint32_t word_count = slot_word_count(slot);
-        for (uint32_t word = 0U; word < word_count; ++word) {
-            live += popcount64(masked_bitmap_word(slot, word));
-        }
-        return live;
-    }
-
-    [[nodiscard]] uint32_t live_count_stopped(uint32_t slot) const {
-        uint32_t live = 0U;
-        const uint32_t word_count = slot_word_count(slot);
-        for (uint32_t word = 0U; word < word_count; ++word) {
-            live += popcount64(masked_bitmap_word_stopped(slot, word));
-        }
-        return live;
     }
 
     void append_prefix256_le(std::vector<uint8_t> &buffer, uint32_t slot) const {

@@ -153,10 +153,6 @@ public:
         return tile_sum_values_[tile];
     }
 
-    [[nodiscard]] bool is_legal_word(uint16_t word) const {
-        return word_desc(word).valid;
-    }
-
     [[nodiscard]] uint16_t unrank_word(uint16_t sum_id, uint8_t empty_mask, BucketRank rank) const {
         if (sum_id >= offset4_.size()) {
             throw std::out_of_range("BC unrank sum_id out of range");

@@ -209,10 +209,6 @@ LzmaApi &lzma_api() {
     return api;
 }
 
-bool is_lzma_available() {
-    return lzma_api().loaded;
-}
-
 std::vector<uint8_t> xz_compress_bytes(const uint8_t *data, size_t size, uint32_t preset) {
     const auto &api = lzma_api();
     if (!api.loaded) {
@@ -356,41 +352,6 @@ std::optional<std::string> resolve_7z_executable() {
         begin = end + 1U;
     }
     return std::nullopt;
-}
-
-bool run_command(const std::string &command_line) {
-#ifdef _WIN32
-    STARTUPINFOW startup_info{};
-    PROCESS_INFORMATION process_info{};
-    startup_info.cb = sizeof(startup_info);
-    startup_info.dwFlags |= STARTF_USESHOWWINDOW;
-    startup_info.wShowWindow = SW_HIDE;
-    std::wstring command = utf8_to_wide(command_line);
-    command.push_back(L'\0');
-    const BOOL ok_wide = CreateProcessW(
-        nullptr,
-        command.data(),
-        nullptr,
-        nullptr,
-        FALSE,
-        CREATE_NO_WINDOW,
-        nullptr,
-        nullptr,
-        &startup_info,
-        &process_info);
-    if (!ok_wide) {
-        return false;
-    }
-    WaitForSingleObject(process_info.hProcess, INFINITE);
-    DWORD exit_code = 1;
-    GetExitCodeProcess(process_info.hProcess, &exit_code);
-    CloseHandle(process_info.hThread);
-    CloseHandle(process_info.hProcess);
-    return exit_code == 0;
-#else
-    const int status = std::system(command_line.c_str());
-    return status == 0;
-#endif
 }
 
 std::string quote_arg(const std::string &value) {
@@ -715,42 +676,6 @@ bool decompress_7z_archive_to_bytes_streaming_impl(const std::string &archive_pa
     const bool exit_ok = wait_pid_success(pid);
     return read_ok && exit_ok;
 #endif
-}
-
-bool compress_file_xz(const std::string &input_path, const std::string &output_path, int lvl) {
-    std::vector<uint8_t> bytes = FileIOUtils::read_binary_bytes(input_path);
-    if (bytes.empty() && !NativePath::exists(input_path)) {
-        return false;
-    }
-    std::vector<uint8_t> compressed = xz_compress_bytes(bytes.data(), bytes.size(), static_cast<uint32_t>(lvl));
-    if (compressed.empty() && !bytes.empty()) {
-        return false;
-    }
-    const std::string temp_output_path = FileIOUtils::temp_write_path(output_path);
-    FileIOUtils::write_binary_bytes(temp_output_path, compressed);
-    if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
-        return false;
-    }
-    NativePath::remove(input_path);
-    return true;
-}
-
-bool decompress_file_xz(const std::string &input_path, const std::string &output_path) {
-    std::vector<uint8_t> bytes = FileIOUtils::read_binary_bytes(input_path);
-    if (bytes.empty() && !NativePath::exists(input_path)) {
-        return false;
-    }
-    auto decompressed = try_xz_decompress_bytes(bytes.data(), bytes.size());
-    if (!decompressed) {
-        return false;
-    }
-    const std::string temp_output_path = FileIOUtils::temp_write_path(output_path);
-    FileIOUtils::write_binary_bytes(temp_output_path, *decompressed);
-    if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
-        return false;
-    }
-    NativePath::remove(input_path);
-    return true;
 }
 
 std::vector<U64SegmentEntry> read_u64_segments(const fs::path &segments_path) {
@@ -1246,10 +1171,6 @@ void SevenZipArchiveWriter::close() {
     }
 }
 
-bool SevenZipArchiveWriter::is_open() const {
-    return impl_ != nullptr && impl_->opened;
-}
-
 SevenZipSequentialReader::SevenZipSequentialReader() = default;
 
 SevenZipSequentialReader::SevenZipSequentialReader(const std::string &archive_path) {
@@ -1286,10 +1207,6 @@ void SevenZipSequentialReader::close() {
     }
 }
 
-bool SevenZipSequentialReader::is_open() const {
-    return impl_ != nullptr && impl_->opened;
-}
-
 bool compress_bytes_to_7z_archive_streaming(
     const uint8_t *data,
     size_t size,
@@ -1298,24 +1215,6 @@ bool compress_bytes_to_7z_archive_streaming(
     int lvl
 ) {
     return compress_bytes_to_7z_archive_streaming_impl(data, size, archive_path, entry_name, lvl);
-}
-
-bool compress_spans_to_7z_archive_streaming(
-    const std::vector<ArchiveByteSpan> &spans,
-    const std::string &archive_path,
-    const std::string &entry_name,
-    int lvl
-) {
-    try {
-        SevenZipArchiveWriter writer(archive_path, entry_name, lvl);
-        for (const ArchiveByteSpan &span : spans) {
-            writer.append(span.data, span.size);
-        }
-        writer.close();
-        return true;
-    } catch (...) {
-        return false;
-    }
 }
 
 bool decompress_7z_archive_to_bytes_streaming(const std::string &archive_path, std::vector<uint8_t> &output) {
@@ -1393,51 +1292,6 @@ uint64_t crc64_bytes_native(const uint8_t *data, size_t size) {
         throw std::runtime_error("BC RAW CRC64 is unavailable or input is null");
     }
     return api.crc64(data, size, 0U);
-}
-
-bool compress_with_7z_or_xz(const std::string &input_path, int lvl) {
-    if (!NativePath::exists(input_path)) {
-        return false;
-    }
-    const std::string output_path = input_path + ".7z";
-    if (auto exe = resolve_7z_executable()) {
-        const std::string temp_output_path = temporary_archive_path(output_path);
-        std::error_code ec;
-        NativePath::remove(temp_output_path, ec);
-        const int max_threads = std::max(2, omp_get_max_threads());
-        std::string cmd = quote_arg(*exe) + " a -t7z -m0=lzma2 -mx=" + std::to_string(lvl) +
-                          " -mmt=" + std::to_string(max_threads) + " " +
-                          quote_arg(temp_output_path) + " " + quote_arg(input_path);
-        if (run_command(cmd)) {
-            if (publish_file_or_remove_temp(temp_output_path, output_path)) {
-                NativePath::remove(input_path);
-                return true;
-            }
-        }
-        NativePath::remove(temp_output_path, ec);
-    }
-    return compress_file_xz(input_path, output_path, lvl);
-}
-
-bool decompress_with_7z_or_xz(const std::string &archive_path) {
-    if (!NativePath::exists(archive_path)) {
-        return false;
-    }
-    const std::string output_path = NativePath::replace_extension_utf8(archive_path);
-    if (auto exe = resolve_7z_executable()) {
-        (void)exe;
-        std::vector<uint8_t> decompressed;
-        if (decompress_7z_archive_to_bytes_streaming(archive_path, decompressed)) {
-            const std::string temp_output_path = FileIOUtils::temp_write_path(output_path);
-            FileIOUtils::write_binary_bytes(temp_output_path, decompressed);
-            if (!publish_file_or_remove_temp(temp_output_path, output_path)) {
-                return false;
-            }
-            NativePath::remove(archive_path);
-            return true;
-        }
-    }
-    return decompress_file_xz(archive_path, output_path);
 }
 
 bool compress_uint64_array_native(const std::vector<uint64_t> &data, const std::string &output_base, int lvl) {

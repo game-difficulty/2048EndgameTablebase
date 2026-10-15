@@ -136,14 +136,6 @@ Layer validate_layer_streaming(
     int num_threads
 );
 
-CarryLayer validate_carry_streaming(
-    const CarryLayer &carry,
-    uint32_t original_board_sum,
-    const FormationAD::TilesCombinationTable &tiles_table,
-    const AdvancedMaskParam &param,
-    const Luts &luts,
-    int num_threads
-);
 
 uint64_t carry_bucket_count(const CarryLayer &carry);
 

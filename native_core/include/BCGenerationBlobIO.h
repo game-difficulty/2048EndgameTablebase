@@ -363,18 +363,6 @@ public:
         return append_count_;
     }
 
-    [[nodiscard]] uint64_t read_count() const {
-        return read_count_;
-    }
-
-    [[nodiscard]] uint64_t bytes_written() const {
-        return bytes_written_;
-    }
-
-    [[nodiscard]] uint64_t bytes_read() const {
-        return bytes_read_;
-    }
-
     [[nodiscard]] BCGenerationBlobIOStats stats() const override {
         BCGenerationBlobIOStats out;
         out.append_count = append_count_;
@@ -1598,9 +1586,6 @@ public:
         return stats_;
     }
 
-    [[nodiscard]] uint64_t append_offset() const {
-        return append_offset_;
-    }
 
     void flush_pending_appends() const override {
         const bool has_work = append_stage_size_ != 0U || writer_dirty_;

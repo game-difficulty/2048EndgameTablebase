@@ -148,40 +148,6 @@ bool write_temp_byte_archive(const std::string &archive_path, const std::vector<
     return write_temp_byte_payload_archive(archive_path, data.data(), data.size(), lvl);
 }
 
-bool write_temp_byte_spans_archive(
-    const std::string &archive_path,
-    const std::vector<ArchiveByteSpan> &spans,
-    int lvl
-) {
-    if (compress_spans_to_7z_archive_streaming(
-            spans,
-            archive_path,
-            temp_archive_entry_name(archive_path),
-            lvl)) {
-        return true;
-    }
-
-    size_t total_size = 0U;
-    for (const ArchiveByteSpan &span : spans) {
-        if (span.size > std::numeric_limits<size_t>::max() - total_size) {
-            return false;
-        }
-        total_size += span.size;
-    }
-    std::vector<uint8_t> bytes;
-    bytes.reserve(total_size);
-    for (const ArchiveByteSpan &span : spans) {
-        if (span.size == 0U) {
-            continue;
-        }
-        if (span.data == nullptr) {
-            return false;
-        }
-        bytes.insert(bytes.end(), span.data, span.data + span.size);
-    }
-    return write_temp_byte_payload_archive(archive_path, bytes.data(), bytes.size(), lvl);
-}
-
 std::vector<uint8_t> read_temp_byte_archive(const std::string &archive_path) {
     if (!NativePath::exists(archive_path)) {
         return {};
@@ -217,8 +183,4 @@ std::vector<uint64_t> read_temp_uint64_archive(const std::string &archive_path) 
         std::memcpy(result.data(), decompressed.data(), decompressed.size());
     }
     return result;
-}
-
-bool is_readable_temp_archive(const std::string &archive_path) {
-    return is_readable_7z_or_xz_archive(archive_path);
 }

@@ -169,10 +169,6 @@ inline std::string path_for(
     return pathname_for(options, role) + std::to_string(logical_layer(options, step)) + suffix;
 }
 
-inline std::string hot_path_for(const RunOptions &options, int step, const std::string &suffix) {
-    return path_for(options, ArtifactRole::Hot, step, suffix);
-}
-
 inline std::string cold_path_for(const RunOptions &options, int step, const std::string &suffix) {
     return path_for(options, ArtifactRole::Cold, step, suffix);
 }
@@ -565,15 +561,6 @@ inline DeletionThresholdState current_deletion_thresholds(const RunOptions &opti
         options.deletion_threshold,
         options.relative_deletion_threshold
     });
-}
-
-inline double current_deletion_threshold(const RunOptions &options) {
-    return current_deletion_thresholds(options).absolute;
-}
-
-inline double refresh_deletion_threshold(const RunOptions &options, double current_value) {
-    DeletionThresholdState state{current_value, options.relative_deletion_threshold};
-    return refresh_deletion_thresholds(options, state).absolute;
 }
 
 inline bool deletion_threshold_enabled(DeletionThresholdState state) {

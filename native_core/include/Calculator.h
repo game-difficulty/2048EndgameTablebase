@@ -4,26 +4,7 @@
 #include <tuple>
 
 namespace Calculator {
-    // ------------------------------------------------------------------
-    // 1. 基础位运算与检查
-    // ------------------------------------------------------------------
-
-    /**
-     * 使用 SWAR 技术检查棋盘中是否存在目标值
-     * target_stacked 需预先广播，例如目标是 0x9，则为 0x9999999999999999ULL
-     */
-    static inline bool is_success(uint64_t board_encoded, uint64_t target_stacked, uint64_t mask = 0xffffffffffffffffULL) {
-        board_encoded &= mask;
-        uint64_t diff = board_encoded ^ target_stacked;
-        uint64_t mask_7 = 0x7777777777777777ULL;
-        // SWAR 零检测逻辑：如果某 4-bit 为 0，则结果对应位为 1
-        uint64_t res = ~(((diff & mask_7) + mask_7) | diff | mask_7);
-        return res != 0;
-    }
-
-    // ------------------------------------------------------------------
-    // 2. 4x4 棋盘对称变换 (Reflection & Rotation)
-    // ------------------------------------------------------------------
+    // 4x4 board symmetry transforms.
 
     static inline uint64_t ReverseLR(uint64_t board) {
         board = ((board & 0xff00ff00ff00ff00ULL) >> 8) | ((board & 0x00ff00ff00ff00ffULL) << 8);
@@ -130,10 +111,6 @@ namespace Calculator {
     // ------------------------------------------------------------------
     // 5. 子棋盘特定变换 (3x3, 3x4, 2x4)
     // ------------------------------------------------------------------
-
-    static inline uint64_t exchange_row12(uint64_t board) {
-        return (board & 0xffff00000000ffffULL) | ((board & 0x00000000ffff0000ULL) << 16) | ((board & 0x0000ffff00000000ULL) >> 16);
-    }
 
     static inline uint64_t exchange_row02(uint64_t board) {
         return (board & 0x0000ffff0000ffffULL) | ((board & 0x00000000ffff0000ULL) << 32) | ((board & 0xffff000000000000ULL) >> 32);

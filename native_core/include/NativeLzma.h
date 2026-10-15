@@ -7,22 +7,9 @@
 #include <string>
 #include <vector>
 
-struct ArchiveByteSpan {
-    const uint8_t *data = nullptr;
-    size_t size = 0;
-};
-
-bool compress_with_7z_or_xz(const std::string &input_path, int lvl = 1);
-bool decompress_with_7z_or_xz(const std::string &archive_path);
 bool compress_bytes_to_7z_archive_streaming(
     const uint8_t *data,
     size_t size,
-    const std::string &archive_path,
-    const std::string &entry_name,
-    int lvl = 1
-);
-bool compress_spans_to_7z_archive_streaming(
-    const std::vector<ArchiveByteSpan> &spans,
     const std::string &archive_path,
     const std::string &entry_name,
     int lvl = 1
@@ -44,7 +31,6 @@ public:
     void open(const std::string &archive_path, const std::string &entry_name, int lvl = 1);
     void append(const void *data, size_t size);
     void close();
-    [[nodiscard]] bool is_open() const;
 
 private:
     struct Impl;
@@ -67,7 +53,6 @@ public:
     // Returns zero at pipe EOF. Call close() afterwards to verify 7z/CRC success.
     size_t read_some(void *dst, size_t capacity);
     void close();
-    [[nodiscard]] bool is_open() const;
 
 private:
     struct Impl;

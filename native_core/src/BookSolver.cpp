@@ -139,26 +139,12 @@ double wall_time_seconds() {
     return omp_get_wtime();
 }
 
-double round_to_2(double value) {
-    return std::round(value * 100.0) / 100.0;
-}
-
 void debug_log(const std::string &message) {
     try {
         nb::gil_scoped_acquire acquire;
         nb::module_::import_("Config").attr("logger").attr("debug")(nb::str(message.c_str()));
     } catch (...) {
     }
-}
-
-void remove_file_if_exists(const std::string &path) {
-    std::error_code ec;
-    NativePath::remove(path, ec);
-}
-
-void remove_temp_raw_layer_files(const std::string &path) {
-    remove_file_if_exists(path);
-    remove_file_if_exists(path + ".7z");
 }
 
 bool is_valid_restart_file(const std::string &path, uint64_t alignment) {
@@ -179,25 +165,6 @@ void remove_invalid_restart_file(const std::string &path, uint64_t alignment) {
         throw std::runtime_error("failed to remove invalid restart file: " + path);
     }
     debug_log("removed invalid restart file: " + path);
-}
-
-void log_recalculate_performance(int step_index, double t0, double t1, double t2, double t3, size_t length) {
-    if (t3 <= t0) {
-        return;
-    }
-    double total = t3 - t0;
-    std::ostringstream speed_stream;
-    speed_stream << "step " << step_index << " recalculated: "
-                 << round_to_2(static_cast<double>(length) / total / 1e6)
-                 << " mbps";
-    debug_log(speed_stream.str());
-
-    std::ostringstream phase_stream;
-    phase_stream << "index/solve/remove: "
-                 << round_to_2((t1 - t0) / total) << "/"
-                 << round_to_2((t2 - t1) / total) << "/"
-                 << round_to_2((t3 - t2) / total);
-    debug_log(phase_stream.str());
 }
 
 double throughput_mbps_for(uint64_t count, double seconds) {
@@ -452,16 +419,6 @@ std::string write_routed_layer_file(
 }
 
 template <typename T>
-void write_split_layer_archive_file(const std::string &archive_path, const SplitLayer<T> &data, int lvl = 1) {
-    std::vector<uint8_t> bytes = split_layer_to_entry_bytes(data);
-    if (!write_temp_byte_archive(archive_path, bytes, lvl)) {
-        throw std::runtime_error("failed to write archived split layer: " + archive_path);
-    }
-    std::error_code ec;
-    NativePath::remove(NativePath::replace_extension_utf8(archive_path), ec);
-}
-
-template <typename T>
 std::string write_routed_split_layer_archive_file(
     const RunOptions &options,
     int step,
@@ -488,13 +445,6 @@ std::string write_routed_split_layer_archive_file(
     std::string final_path = lease.path();
     lease.release();
     return final_path;
-}
-
-std::vector<uint64_t> read_raw_file(const std::string &path, FileIOUtils::DirectIoConfig config = {}) {
-    if (NativePath::exists(path)) {
-        return FileIOUtils::read_binary_vector_direct<uint64_t>(path, config);
-    }
-    return read_temp_uint64_archive(path + ".7z");
 }
 
 std::vector<uint64_t> read_raw_file(

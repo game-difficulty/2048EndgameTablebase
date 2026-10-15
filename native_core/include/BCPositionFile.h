@@ -65,13 +65,6 @@ struct BCPositionCellDescriptor {
     }
 };
 
-[[nodiscard]] inline uint32_t bc_checked_u32(uint64_t value, const char *label) {
-    if (value > std::numeric_limits<uint32_t>::max()) {
-        throw std::overflow_error(label);
-    }
-    return static_cast<uint32_t>(value);
-}
-
 [[nodiscard]] inline uint64_t bc_checked_add_u64(uint64_t lhs, uint64_t rhs, const char *label) {
     if (lhs > std::numeric_limits<uint64_t>::max() - rhs) {
         throw std::overflow_error(label);

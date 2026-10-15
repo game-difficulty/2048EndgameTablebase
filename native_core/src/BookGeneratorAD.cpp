@@ -148,25 +148,6 @@ void append_ad_generate_stats_record(
          << now_string() << "\n";
 }
 
-void log_generation_performance(int step_index, double t0, double t1, double t2, double t3, size_t layer_size) {
-    if (t3 <= t0) {
-        return;
-    }
-    double total = t3 - t0;
-    std::ostringstream speed_stream;
-    speed_stream << "step " << step_index << " generated: "
-                 << round_to_2(static_cast<double>(layer_size) / total / 1e6)
-                 << " mbps";
-    debug_log(speed_stream.str());
-
-    std::ostringstream phase_stream;
-    phase_stream << "generate/sort/deduplicate: "
-                 << round_to_2((t1 - t0) / total) << "/"
-                 << round_to_2((t2 - t1) / total) << "/"
-                 << round_to_2((t3 - t2) / total) << "\n";
-    debug_log(phase_stream.str());
-}
-
 void clear_u64_buffer(std::vector<uint64_t> &buffer, int num_threads) {
     if (buffer.empty()) {
         return;
@@ -178,46 +159,6 @@ void clear_u64_buffer(std::vector<uint64_t> &buffer, int num_threads) {
     #pragma omp parallel for num_threads(num_threads)
     for (int64_t i = 0; i < static_cast<int64_t>(buffer.size()); ++i) {
         buffer[static_cast<size_t>(i)] = 0ULL;
-    }
-}
-
-uint64_t apply_canonical(uint64_t board, int symm_mode) {
-    switch (static_cast<SymmMode>(symm_mode)) {
-        case SymmMode::Full:
-            return Calculator::canonical_full(board);
-        case SymmMode::Diagonal:
-            return Calculator::canonical_diagonal(board);
-        case SymmMode::Horizontal:
-            return Calculator::canonical_horizontal(board);
-        case SymmMode::Min33:
-            return Calculator::canonical_min33(board);
-        case SymmMode::Min24:
-            return Calculator::canonical_min24(board);
-        case SymmMode::Min34:
-            return Calculator::canonical_min34(board);
-        case SymmMode::Min34Top:
-            return Calculator::canonical_min34_top(board);
-        case SymmMode::Identity:
-        default:
-            return Calculator::canonical_identity(board);
-    }
-}
-
-std::pair<uint64_t, int> apply_sym_pair(uint64_t board, int symm_mode) {
-    switch (static_cast<SymmMode>(symm_mode)) {
-        case SymmMode::Full:
-            return Calculator::canonical_full_pair(board);
-        case SymmMode::Diagonal:
-            return Calculator::canonical_diagonal_pair(board);
-        case SymmMode::Horizontal:
-            return Calculator::canonical_horizontal_pair(board);
-        case SymmMode::Identity:
-        case SymmMode::Min33:
-        case SymmMode::Min24:
-        case SymmMode::Min34:
-        case SymmMode::Min34Top:
-        default:
-            return Calculator::canonical_identity_pair(board);
     }
 }
 
@@ -979,14 +920,6 @@ struct BufferedAcceptedBoards {
     std::array<uint8_t, kAdGenBatchSize> kinds{};
     size_t count = 0;
 };
-
-template <typename TransformFn>
-void transform_boards_batch(const uint64_t *src, uint64_t *dst, size_t count, TransformFn transform) {
-    #pragma omp simd
-    for (int64_t i = 0; i < static_cast<int64_t>(count); ++i) {
-        dst[static_cast<size_t>(i)] = transform(src[static_cast<size_t>(i)]);
-    }
-}
 
 void apply_canonical_batch(const uint64_t *src, uint64_t *dst, size_t count, int symm_mode) {
     CanonicalBatch::canonicalize_by_mode(src, dst, count, symm_mode);
@@ -1942,27 +1875,6 @@ std::tuple<bool, std::vector<uint64_t>, std::vector<uint64_t>> generate_process_
         : 0.0;
     append_ad_generate_stats_record(options, total_record);
     return {started, std::move(d0), std::move(d1)};
-}
-
-void run_python_ad_solver_bridge(
-    const std::vector<uint64_t> &arr_init,
-    const AdvancedPatternSpec &spec,
-    const RunOptions &options
-) {
-    nb::gil_scoped_acquire acquire;
-    nb::object helper = nb::module_::import_("engine_core.BookBuilder").attr("run_pattern_solve_ad_bridge");
-    helper(
-        spec.name,
-        nb::cast(arr_init),
-        spec.symm_mode,
-        spec.num_free_32k,
-        spec.fixed_32k_shifts,
-        static_cast<int>(spec.target),
-        options.steps,
-        options.pathname,
-        options.is_free,
-        options.spawn_rate4
-    );
 }
 
 } // namespace

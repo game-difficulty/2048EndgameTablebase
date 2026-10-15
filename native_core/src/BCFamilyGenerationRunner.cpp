@@ -79,34 +79,6 @@ using BC::FamilyId;
 std::atomic<uint32_t> g_current_generation_layer_sum{0U};
 
 #if defined(_WIN32)
-LONG WINAPI bc_generation_unhandled_exception_filter(EXCEPTION_POINTERS *exception_info) {
-    const DWORD code = exception_info != nullptr && exception_info->ExceptionRecord != nullptr
-        ? exception_info->ExceptionRecord->ExceptionCode
-        : 0U;
-    const void *address = exception_info != nullptr && exception_info->ExceptionRecord != nullptr
-        ? exception_info->ExceptionRecord->ExceptionAddress
-        : nullptr;
-    const HMODULE module = GetModuleHandleW(nullptr);
-    uintptr_t rip = 0U;
-#if defined(_M_X64) || defined(__x86_64__)
-    if (exception_info != nullptr && exception_info->ContextRecord != nullptr) {
-        rip = static_cast<uintptr_t>(exception_info->ContextRecord->Rip);
-    }
-#endif
-    const uintptr_t base = reinterpret_cast<uintptr_t>(module);
-    std::cerr
-        << "BC_GENERATION_UNHANDLED_EXCEPTION"
-        << " code=0x" << std::hex << code
-        << " address=0x" << reinterpret_cast<uintptr_t>(address)
-        << " rip=0x" << rip
-        << " module_base=0x" << base
-        << " rip_offset=0x" << (rip >= base ? rip - base : 0U)
-        << std::dec
-        << " layer_sum=" << g_current_generation_layer_sum.load(std::memory_order_relaxed)
-        << " canonical_backend=" << CanonicalBatch::backend_name()
-        << '\n';
-    return EXCEPTION_CONTINUE_SEARCH;
-}
 #endif
 
 [[nodiscard]] double now_seconds() {
@@ -798,19 +770,6 @@ void commit_family_route_decision(
     return (layer_sum - seed_sum) / 2U;
 }
 
-[[nodiscard]] uint64_t bc_position_bucket_stream_offset(const BCFamilyTable &axis) {
-    const BCCellMatrix matrix(axis);
-    const uint64_t descriptor_bytes =
-        static_cast<uint64_t>(matrix.cell_count()) * BC::kBCPositionCellDescriptorBytes;
-    return BC::bc_checked_add_u64(
-        BC::bc_checked_add_u64(
-            BC::kBCPositionHeaderBytes,
-            BC::bc_axis_coord_table_bytes(axis.family_count()),
-            "BC position archive axis table offset overflow"),
-        descriptor_bytes,
-        "BC position archive bucket stream offset overflow");
-}
-
 [[nodiscard]] std::filesystem::path layer_path(
     const Args &args,
     uint32_t seed_sum,
@@ -1122,15 +1081,6 @@ void commit_family_route_decision(
         possible_8tile_sums,
         family_modulus
     );
-}
-
-[[nodiscard]] bool axes_equivalent(
-    const BCFamilyTable &lhs,
-    const BCFamilyTable &rhs
-) {
-    return lhs.layer_sum() == rhs.layer_sum() &&
-        lhs.family_unit() == rhs.family_unit() &&
-        lhs.coords() == rhs.coords();
 }
 
 [[nodiscard]] BCFamilyTable make_target_axis_for_route(
@@ -1578,32 +1528,6 @@ void write_position_bytes_to_file(
     return archive_path;
 }
 
-void write_position_bytes_to_file_buffered_padded(
-    const Args &args,
-    const std::filesystem::path &path,
-    const std::vector<uint8_t> &bytes
-) {
-    BC::BCBufferedFileWriter writer(path);
-    writer.prepare_full_overwrite(static_cast<uint64_t>(bytes.size()));
-    if (!bytes.empty()) {
-        const std::vector<BC::BCFileWriteRequest> requests{
-            BC::BCFileWriteRequest{0U, bytes.data(), static_cast<uint64_t>(bytes.size())}
-        };
-        writer.write_many(requests);
-    }
-    writer.flush();
-    const uint64_t physical_size = args.family_position_io == "direct-rank-first"
-        ? align_up_u64(static_cast<uint64_t>(bytes.size()), 4096ULL)
-        : static_cast<uint64_t>(bytes.size());
-    if (physical_size != bytes.size()) {
-        std::error_code ec;
-        std::filesystem::resize_file(path, physical_size, ec);
-        if (ec) {
-            throw std::runtime_error("BC buffered position writer padding resize failed: " + ec.message());
-        }
-    }
-}
-
 class BCAsyncPositionWriteQueue {
 public:
     void enqueue(
@@ -1769,10 +1693,6 @@ public:
         return std::move(mirror_);
     }
 
-    [[nodiscard]] double mirror_seconds() const noexcept {
-        return mirror_seconds_;
-    }
-
 private:
     static size_t checked_size_t(uint64_t value, const char *message) {
         if (value > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
@@ -1830,36 +1750,6 @@ private:
     uint64_t logical_size_ = 0U;
     double mirror_seconds_ = 0.0;
 };
-
-[[nodiscard]] std::vector<uint8_t> read_position_file_to_memory(
-    const Args &args,
-    const std::filesystem::path &path,
-    uint64_t logical_size
-) {
-    if (logical_size > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-        throw std::overflow_error("BC position file exceeds addressable vector size");
-    }
-    std::vector<uint8_t> bytes(static_cast<size_t>(logical_size));
-    if (logical_size == 0U) {
-        return bytes;
-    }
-    if (args.family_position_io == "direct-rank-first") {
-        BC::BCDirectFileIOOptions options;
-        options.queue_depth = args.direct_queue_depth;
-        options.max_transfer_bytes = direct_max_transfer_bytes(args);
-        options.overlapped = args.direct_queue_depth > 1U;
-        options.logical_size = logical_size;
-        BC::BCDirectFileReader reader(path, options);
-        reader.read_at(0U, bytes.data(), logical_size);
-        return bytes;
-    }
-    BC::BCBufferedFileReader reader(path);
-    if (reader.size() != logical_size) {
-        throw std::runtime_error("buffered BC position file size mismatch");
-    }
-    reader.read_at(0U, bytes.data(), logical_size);
-    return bytes;
-}
 
 void fill_writer_stats_from_resident_result(
     BC::BCFamilyPositionWriterStats &writer_stats,
@@ -2616,137 +2506,6 @@ void apply_route_decision_to_result(
     result.stats.family_builder_hash_grows = resident.generation_retries;
     result.stats.active_builder_bytes_peak =
         resident.dynamic_bitmap_words_allocated * static_cast<uint64_t>(sizeof(uint64_t));
-    return result;
-}
-
-[[nodiscard]] FamilyLayerResult generate_resident_mutable_carry_layer_to_file(
-    const Args &args,
-    const BCLut &lut,
-    const BCPositionCellLayout &primary_layout,
-    const BCPositionCellLayout &current_layout,
-    const BCPositionCellLayout *secondary_layout,
-    const LayerFile &current_layer,
-    const BC::BCPositionLayerReader *current_memory_layer,
-    std::unique_ptr<BC::BCResidentGenerationMutableLayer> carry_to_primary,
-    const std::array<uint32_t, 16U> &tile_sums,
-    const std::vector<BC::LayerSum> &possible_8tile_sums,
-    const std::vector<uint8_t> &success_shifts,
-    BC::LayerSum success_check_min_source_layer_sum,
-    double dynamic_reserve_factor,
-    double dynamic_secondary_reserve_factor,
-    bool primary_terminal,
-    bool secondary_terminal,
-    const std::filesystem::path &output_path,
-    std::unique_ptr<BC::BCResidentGenerationMutableLayer> &next_carry,
-    uint32_t &next_carry_layer_sum
-) {
-    FamilyLayerResult result;
-    const double total_begin = now_seconds();
-    double source_load_seconds = 0.0;
-    std::optional<BC::BCPositionFileReader> current_file;
-    const BC::BCPositionLayerReader *current_reader = current_memory_layer;
-    if (current_reader == nullptr) {
-        const double source_load_begin = now_seconds();
-        current_file.emplace(open_position_file_reader(args, current_layer, lut));
-        source_load_seconds += now_seconds() - source_load_begin;
-        current_reader = &current_file->layer();
-    }
-    if (!current_layout.equivalent_to_axis(current_reader->axis())) {
-        throw std::runtime_error("resident route current layer was not materialized to requested cell layout");
-    }
-
-    BC::BCResidentGenerationOptions options = resident_options_from_args(
-        args,
-        tile_sums,
-        success_shifts,
-        success_check_min_source_layer_sum,
-        kResidentRoutePendingBuffer
-    );
-    options.dynamic_reserve_factor = dynamic_reserve_factor;
-    options.dynamic_secondary_reserve_factor = dynamic_secondary_reserve_factor;
-    options.keep_only_success_generated_boards = primary_terminal && !args.sum_target;
-    options.keep_only_success_secondary_generated_boards = secondary_terminal && !args.sum_target;
-    options.collect_mutable_output_stats = false;
-    cleanup_temp_file(output_path);
-    cleanup_temp_file(layer_archive_path(output_path));
-    cleanup_temp_file(layer_cell_compressed_path(output_path));
-    auto file_writer = open_position_layer_artifact_writer(args, output_path);
-    BCMemoryMirrorWritableFile mirror_writer(std::move(file_writer));
-    BC::BCResidentGenerationPairResult pair =
-        BC::generate_resident_position_layer_pair_with_mutable_carry_to_file(
-        lut,
-        primary_layout,
-        *current_reader,
-        std::move(carry_to_primary),
-        secondary_layout,
-        mirror_writer,
-        nullptr,
-        options
-    );
-    mirror_writer.flush();
-    current_reader = nullptr;
-    current_file.reset();
-
-    if (pair.secondary_carry) {
-        next_carry_layer_sum = static_cast<uint32_t>(pair.secondary_carry->layout().layer_sum());
-        next_carry = std::move(pair.secondary_carry);
-    } else {
-        next_carry_layer_sum = 0U;
-        next_carry.reset();
-    }
-
-    result.resident_mirror_seconds = mirror_writer.mirror_seconds();
-    pair.primary.position_bytes = std::move(mirror_writer).take_mirror();
-
-    result.logical_size = pair.primary.target_position_file_logical_bytes;
-    result.output_rows = pair.primary.output_success_rows;
-    result.effective_threads = pair.primary.effective_threads;
-    result.retries = std::max(pair.primary.generation_retries, pair.secondary.generation_retries);
-    result.total_seconds = now_seconds() - total_begin;
-    result.target_modulus = 0U;
-    result.dynamic_bucket_slots_used =
-        std::max(pair.primary.dynamic_bucket_slots_used, pair.secondary.dynamic_bucket_slots_used);
-    result.dynamic_bitmap_words_allocated =
-        std::max(pair.primary.dynamic_bitmap_words_allocated, pair.secondary.dynamic_bitmap_words_allocated);
-    fill_writer_stats_from_resident_result(result.writer_stats, pair.primary);
-    if (!pair.primary.position_bytes.empty()) {
-        const BC::BCPositionHeader header = BC::bc_read_header(pair.primary.position_bytes);
-        result.output_bucket_count = header.bucket_meta_bytes / BC::kBCPositionBucketEntryBytes;
-        result.output_rank_payload_bytes = header.rank_payload_bytes;
-    }
-    result.resident_prepare_seconds = pair.primary.prepare_seconds;
-    result.resident_work_seconds = pair.primary.work_seconds;
-    result.resident_compute_seconds = pair.primary.compute_seconds;
-    result.resident_cleanup_seconds = pair.primary.cleanup_seconds;
-    result.resident_finalize_seconds = pair.primary.finalize_seconds;
-    result.resident_write_seconds = pair.primary.write_seconds;
-    result.resident_total_seconds = pair.primary.total_seconds;
-    const double reader_open_begin = now_seconds();
-    result.resident_memory_layer =
-        std::make_shared<BC::BCPositionLayerReader>(std::move(pair.primary.position_bytes), lut);
-    result.resident_reader_open_seconds = now_seconds() - reader_open_begin;
-
-    const uint64_t current_bytes = current_memory_layer == nullptr
-        ? (current_layer.physical_size != 0U ? current_layer.physical_size : current_layer.logical_size)
-        : 0U;
-    result.stats.source_bytes_read = current_bytes;
-    result.stats.source_backend_read_ops = current_memory_layer == nullptr ? 1U : 0U;
-    result.stats.source_backend_read_bytes = current_bytes;
-    result.stats.source_load_seconds = source_load_seconds + pair.primary.source_position_load_seconds;
-    result.stats.parallel_seconds = pair.shared_generation_seconds;
-    result.stats.finalize_seconds = pair.primary.finalize_seconds;
-    result.stats.write_seconds = pair.primary.write_seconds;
-    result.stats.generation_seconds = result.total_seconds;
-    result.stats.target_cells_created =
-        primary_layout.cell_count() +
-        (secondary_layout == nullptr
-             ? 0U
-             : secondary_layout->cell_count());
-    result.stats.target_cells_finalized = primary_layout.cell_count();
-    result.stats.family_builder_hash_grows = result.retries;
-    result.stats.active_builder_bytes_peak =
-        (pair.primary.dynamic_bitmap_words_allocated + pair.secondary.dynamic_bitmap_words_allocated) *
-        static_cast<uint64_t>(sizeof(uint64_t));
     return result;
 }
 

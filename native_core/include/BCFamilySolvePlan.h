@@ -501,15 +501,6 @@ public:
         update_success_row(layout, bucket, success_row, best_by_cell_lane, true);
     }
 
-    void merge_compact_success_row(
-        const BCFamilyPartialCellLayout &layout,
-        const BCFamilyPartialBucketLayout &bucket,
-        uint32_t success_row,
-        const StorageT *best_by_empty_slot_lane
-    ) {
-        copy_compact_success_row(layout, bucket, success_row, best_by_empty_slot_lane, true);
-    }
-
     void read_success_row(
         const BCFamilyPartialCellLayout &layout,
         uint32_t success_row,
@@ -813,31 +804,6 @@ public:
     }
 
     template <typename SumT>
-    void write_spawn4_sum_contribution(
-        uint32_t success_row,
-        SumT sum,
-        uint32_t empty_count,
-        double spawn_rate4,
-        StorageT zero_value
-    ) {
-        if (row_width_ != 1U) {
-            throw std::logic_error("BC family success scratch sum contribution requires row_width=1");
-        }
-        if (empty_count == 0U) {
-            write_zero_row(success_row, zero_value);
-            return;
-        }
-        const StorageT contribution =
-            bc_solve_scale_success_sum_contribution<StorageT>(
-                static_cast<long double>(sum),
-                empty_count,
-                static_cast<long double>(spawn_rate4),
-                zero_value
-            );
-        values_[value_index(success_row, 0U)] = contribution;
-    }
-
-    template <typename SumT>
     void write_spawn4_sum_contribution_unchecked_row_width1(
         uint32_t success_row,
         SumT sum,
@@ -892,32 +858,6 @@ public:
             zero_value,
             true
         );
-    }
-
-    template <typename SumT>
-    void finalize_spawn2_sum_row(
-        uint32_t success_row,
-        SumT sum,
-        uint32_t empty_count,
-        double spawn_rate4,
-        StorageT zero_value
-    ) {
-        if (row_width_ != 1U) {
-            throw std::logic_error("BC family success scratch sum finalize requires row_width=1");
-        }
-        if (empty_count == 0U) {
-            write_zero_row(success_row, zero_value);
-            return;
-        }
-        const StorageT contribution =
-            bc_solve_scale_success_sum_contribution<StorageT>(
-                static_cast<long double>(sum),
-                empty_count,
-                1.0L - static_cast<long double>(spawn_rate4),
-                zero_value
-            );
-        StorageT &dst = values_[value_index(success_row, 0U)];
-        dst = bc_solve_add_success_contribution<StorageT>(dst, contribution);
     }
 
     template <typename SumT>

@@ -10,7 +10,6 @@ constexpr uint32_t kL1Bits = 1U << 20U;
 constexpr uint32_t kL1Size = kL1Bits + 1U;
 constexpr uint32_t kL1WordCount = kL1Bits / 64U;
 constexpr uint32_t kSubBits = 1U << 12U;
-constexpr uint32_t kSubSize = kSubBits + 1U;
 constexpr uint32_t kSubWordCount = kSubBits / 64U;
 
 struct Config {

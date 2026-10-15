@@ -27,11 +27,6 @@ inline uint64_t mask(uint64_t board, int threshold) {
   return board | e_mask | (o_mask << 4);
 }
 
-inline uint64_t extract_0xf_nibbles(uint64_t v) {
-  uint64_t temp = v & (v >> 1) & (v >> 2) & (v >> 3);
-  return (temp & 0x1111111111111111ULL) * 0xF;
-}
-
 // 全局对齐声明，256KB 大小，Cache Line 对齐
 alignas(64) ScorePair _diffs_merged[65536];
 

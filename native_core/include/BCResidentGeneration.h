@@ -211,42 +211,7 @@ struct BCResidentGenerationResult {
     uint64_t family_source_bitmap_words_scanned = 0U;
     uint64_t family_parallel_region_count = 0U;
 
-    [[nodiscard]] double thread_hot_seconds() const {
-        return thread_spawn_move_seconds + thread_canonical_seconds + thread_encode_insert_seconds;
-    }
-
-    [[nodiscard]] double avg_hot_threads() const {
-        return generation_seconds > 0.0 ? thread_hot_seconds() / generation_seconds : 0.0;
-    }
-
     // Match EX generate stats: primary/output live if present, otherwise input/source live.
-    [[nodiscard]] uint64_t ex_generate_throughput_live() const {
-        return output_success_rows != 0U ? output_success_rows : source_boards_scanned;
-    }
-
-    [[nodiscard]] double throughput_mbps() const {
-        return total_seconds > 0.0
-            ? static_cast<double>(ex_generate_throughput_live()) / total_seconds / 1.0e6
-            : 0.0;
-    }
-
-    [[nodiscard]] double compute_throughput_mbps() const {
-        return compute_seconds > 0.0
-            ? static_cast<double>(ex_generate_throughput_live()) / compute_seconds / 1.0e6
-            : 0.0;
-    }
-
-    [[nodiscard]] double source_board_mbps() const {
-        return compute_seconds > 0.0
-            ? static_cast<double>(source_boards_scanned) / compute_seconds / 1.0e6
-            : 0.0;
-    }
-
-    [[nodiscard]] double output_board_mbps() const {
-        return compute_seconds > 0.0
-            ? static_cast<double>(output_success_rows) / compute_seconds / 1.0e6
-            : 0.0;
-    }
 };
 
 struct BCResidentGenerationPairResult {
@@ -376,27 +341,7 @@ struct BCResidentMutableGenerationResult {
     const BCResidentGenerationOptions &options = {}
 );
 
-[[nodiscard]] BCResidentGenerationPairResult generate_resident_position_layer_pair_to_file(
-    const BCLut &lut,
-    const BCFamilyTable &primary_axis,
-    const BCPositionLayerReader &current,
-    const BCPositionLayerReader *carry_to_primary,
-    const BCFamilyTable *secondary_axis,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *secondary_output_file,
-    const BCResidentGenerationOptions &options = {}
-);
 
-[[nodiscard]] BCResidentGenerationPairResult generate_resident_position_layer_pair_to_file(
-    const BCLut &lut,
-    const BCPositionCellLayout &primary_layout,
-    const BCPositionLayerReader &current,
-    const BCPositionLayerReader *carry_to_primary,
-    const BCPositionCellLayout *secondary_layout,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *secondary_output_file,
-    const BCResidentGenerationOptions &options = {}
-);
 
 [[nodiscard]] BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutable_carry(
     const BCLut &lut,
@@ -416,27 +361,7 @@ struct BCResidentMutableGenerationResult {
     const BCResidentGenerationOptions &options = {}
 );
 
-[[nodiscard]] BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutable_carry_to_file(
-    const BCLut &lut,
-    const BCFamilyTable &primary_axis,
-    const BCPositionLayerReader &current,
-    std::unique_ptr<BCResidentGenerationMutableLayer> carry_to_primary,
-    const BCFamilyTable *secondary_axis,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *terminal_secondary_output_file,
-    const BCResidentGenerationOptions &options = {}
-);
 
-[[nodiscard]] BCResidentGenerationPairResult generate_resident_position_layer_pair_with_mutable_carry_to_file(
-    const BCLut &lut,
-    const BCPositionCellLayout &primary_layout,
-    const BCPositionLayerReader &current,
-    std::unique_ptr<BCResidentGenerationMutableLayer> carry_to_primary,
-    const BCPositionCellLayout *secondary_layout,
-    BCWritableFile &primary_output_file,
-    BCWritableFile *terminal_secondary_output_file,
-    const BCResidentGenerationOptions &options = {}
-);
 
 [[nodiscard]] BCResidentGenerationPairResult generate_resident_position_layer_pair_from_streaming_source_with_mutable_carry_to_file(
     const BCLut &lut,

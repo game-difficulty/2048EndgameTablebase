@@ -113,18 +113,4 @@ public:
     return estimate;
 }
 
-[[nodiscard]] inline const char *bc_dynamic_address_limit_name(BCDynamicAddressLimit limit) {
-    switch (limit) {
-    case BCDynamicAddressLimit::None:
-        return "none";
-    case BCDynamicAddressLimit::HashCapacity:
-        return "hash_capacity";
-    case BCDynamicAddressLimit::BitmapWords:
-        return "bitmap_words";
-    case BCDynamicAddressLimit::HashAndBitmap:
-        return "hash_and_bitmap";
-    }
-    return "unknown";
-}
-
 } // namespace BC

@@ -303,25 +303,6 @@ inline void process_buf_avx512(
     }
 }
 
-void log_performance(int step_index, double t0, double t1, double t2, double t3, size_t layer_size) {
-    if (t3 <= t0) {
-        return;
-    }
-    double total = t3 - t0;
-    std::ostringstream speed_stream;
-    speed_stream << "step " << step_index << " generated: "
-                 << round_to_2(static_cast<double>(layer_size) / total / 1e6)
-                 << " mbps";
-    debug_log(speed_stream.str());
-
-    std::ostringstream phase_stream;
-    phase_stream << "generate/sort/deduplicate: "
-                 << round_to_2((t1 - t0) / total) << "/"
-                 << round_to_2((t2 - t1) / total) << "/"
-                 << round_to_2((t3 - t2) / total) << "\n";
-    debug_log(phase_stream.str());
-}
-
 constexpr size_t kScalarBufferedBatchSize = 128;
 constexpr size_t kSpillChunkLength = 1048576ULL;
 
@@ -683,21 +664,6 @@ void save_length_factors(const std::string &path, const std::vector<std::vector<
         }
         out << "\n";
     }
-}
-
-std::string format_percent_array(const std::vector<size_t> &counts) {
-    double sum = std::accumulate(counts.begin(), counts.end(), 0.0);
-    std::ostringstream oss;
-    oss << "array([";
-    for (size_t i = 0; i < counts.size(); ++i) {
-        double value = sum > 0.0 ? static_cast<double>(counts[i]) / sum : 0.0;
-        oss << std::fixed << std::setprecision(5) << value;
-        if (i + 1 != counts.size()) {
-            oss << ", ";
-        }
-    }
-    oss << "])";
-    return oss.str();
 }
 
 std::tuple<std::vector<double>, std::vector<std::vector<double>>> update_parameters(

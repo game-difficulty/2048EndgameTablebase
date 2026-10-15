@@ -77,10 +77,6 @@ public:
         stats_.static_metadata_bytes = static_metadata_bytes();
     }
 
-    [[nodiscard]] const BCCellMatrix &matrix() const {
-        return matrix_;
-    }
-
     [[nodiscard]] const BCMutableCellHeader &header(CellId cid) const {
         check_cid(cid);
         return headers_[cid];
@@ -379,82 +375,6 @@ public:
         ++stats_.finalized_cells;
     }
 
-    [[nodiscard]] std::vector<FinalizedCellPayload> finalize_cells(
-        const std::vector<CellId> &cells,
-        BCCellFinalizeOptions options = {}
-    ) {
-        std::vector<FinalizedCellPayload> payloads(cells.size());
-        std::vector<std::pair<CellId, BCDumpRef>> dumped_refs;
-        std::vector<size_t> dumped_positions;
-        dumped_refs.reserve(cells.size());
-        dumped_positions.reserve(cells.size());
-
-        for (size_t i = 0U; i < cells.size(); ++i) {
-            const CellId cid = cells[i];
-            check_cid(cid);
-            BCMutableCellHeader &header = headers_[cid];
-            if (header.state == BCMutableCellState::Finalized) {
-                throw std::logic_error("BC family mutable cell finalized twice");
-            }
-            if (header.state == BCMutableCellState::Dumped) {
-                dumped_refs.emplace_back(cid, header.dump_ref);
-                dumped_positions.push_back(i);
-            }
-        }
-
-        std::vector<BCCellBuilderDumpBuffer> dumped_buffers;
-        if (!dumped_refs.empty()) {
-            BCGenerationBlobIOStats read_stats;
-            dumped_buffers = blob_->read_many(dumped_refs, &read_stats);
-            add_blob_read_stats(read_stats);
-            stats_.finalize_dump_bytes_peak = std::max<uint64_t>(
-                stats_.finalize_dump_bytes_peak,
-                dump_buffer_vector_bytes(dumped_buffers)
-            );
-            if (dumped_buffers.size() != dumped_refs.size()) {
-                throw std::logic_error("BC family mutable batch finalize read size mismatch");
-            }
-        }
-
-        size_t dumped_cursor = 0U;
-        for (size_t i = 0U; i < cells.size(); ++i) {
-            const CellId cid = cells[i];
-            BCMutableCellHeader &header = headers_[cid];
-            if (header.state == BCMutableCellState::Dumped) {
-                if (dumped_cursor >= dumped_buffers.size() ||
-                    dumped_positions[dumped_cursor] != i ||
-                    dumped_buffers[dumped_cursor].cid != cid) {
-                    throw std::logic_error("BC family mutable batch finalize dump order mismatch");
-                }
-                payloads[i] = BCCellMutableBuilder::finalize_dump(
-                    *lut_,
-                    cid,
-                    dumped_buffers[dumped_cursor].view(),
-                    options
-                );
-                ++dumped_cursor;
-            } else if (header.state == BCMutableCellState::Resident) {
-                if (!builders_[cid]) {
-                    throw std::logic_error("BC family mutable resident cell has no builder");
-                }
-                payloads[i] = builders_[cid]->finalize(options);
-                accumulate_builder_growth_stats(*builders_[cid]);
-                builder_ptrs_[cid].store(nullptr, std::memory_order_release);
-                builders_[cid].reset();
-                remove_resident_cell(cid);
-            }
-            header.state = BCMutableCellState::Finalized;
-            ++stats_.finalized_cells;
-        }
-        return payloads;
-    }
-
-    void finalize_cell_list_for_testing(const std::vector<CellId> &cells, BCCellFinalizeOptions options = {}) {
-        for (CellId cid : cells) {
-            (void)finalize_cell(cid, options);
-        }
-    }
-
     [[nodiscard]] uint32_t resident_cell_count() const {
         return static_cast<uint32_t>(resident_cells_.size());
     }
@@ -463,17 +383,8 @@ public:
         return active_cell_count_;
     }
 
-    [[nodiscard]] const std::vector<CellId> &active_cells() const {
-        return active_cells_;
-    }
-
     [[nodiscard]] uint32_t cell_count() const {
         return matrix_.cell_count();
-    }
-
-    [[nodiscard]] bool is_active_cell(CellId cid) const {
-        check_cid(cid);
-        return active_marks_[cid] == active_epoch_;
     }
 
     [[nodiscard]] uint64_t active_builder_bytes() const {
@@ -692,10 +603,6 @@ public:
         return blob_->stats();
     }
 
-    [[nodiscard]] const FamilyIdList3 &active_target_families() const {
-        return active_target_families_;
-    }
-
     [[nodiscard]] uint64_t last_release_batch_builder_bytes() const {
         return last_release_batch_builder_bytes_;
     }
@@ -842,34 +749,6 @@ private:
         }
     }
 
-    void release_resident_cell(CellId cid) {
-        BCMutableCellHeader &header = headers_[cid];
-        if (!builders_[cid]) {
-            throw std::logic_error("BC family mutable resident cell has no builder");
-        }
-        if (builders_[cid]->dirty()) {
-            if (next_dump_generation_ == std::numeric_limits<uint32_t>::max()) {
-                throw std::overflow_error("BC family mutable dump generation overflow");
-            }
-            const uint32_t generation = ++next_dump_generation_;
-            header.dump_ref = blob_->append_cell_dump_streamed(*builders_[cid], generation);
-            header.dump_generation = generation;
-            ++stats_.dumped_builders;
-        } else if (!header.dump_ref.valid()) {
-            accumulate_builder_growth_stats(*builders_[cid]);
-            builder_ptrs_[cid].store(nullptr, std::memory_order_release);
-                builders_[cid].reset();
-                header.state = BCMutableCellState::Empty;
-                resident_marks_[cid] = 0U;
-                return;
-        }
-        accumulate_builder_growth_stats(*builders_[cid]);
-        builder_ptrs_[cid].store(nullptr, std::memory_order_release);
-        builders_[cid].reset();
-        header.state = BCMutableCellState::Dumped;
-        resident_marks_[cid] = 0U;
-    }
-
     void add_blob_read_stats(const BCGenerationBlobIOStats &stats) {
         blob_read_stats_.append_count += stats.append_count;
         blob_read_stats_.read_count += stats.read_count;
@@ -882,30 +761,6 @@ private:
         blob_read_stats_.backend_read_bytes += stats.backend_read_bytes;
         blob_read_stats_.backend_read_seconds += stats.backend_read_seconds;
         blob_read_stats_.restore_seconds += stats.restore_seconds;
-    }
-
-    void add_blob_read_stats_delta(
-        const BCGenerationBlobIOStats &before,
-        const BCGenerationBlobIOStats &after
-    ) {
-        BCGenerationBlobIOStats delta;
-        delta.append_count = after.append_count >= before.append_count ? after.append_count - before.append_count : 0U;
-        delta.read_count = after.read_count >= before.read_count ? after.read_count - before.read_count : 0U;
-        delta.bytes_written = after.bytes_written >= before.bytes_written ? after.bytes_written - before.bytes_written : 0U;
-        delta.bytes_read = after.bytes_read >= before.bytes_read ? after.bytes_read - before.bytes_read : 0U;
-        delta.requested_extents = after.requested_extents >= before.requested_extents ? after.requested_extents - before.requested_extents : 0U;
-        delta.coalesced_extents = after.coalesced_extents >= before.coalesced_extents ? after.coalesced_extents - before.coalesced_extents : 0U;
-        delta.requested_bytes = after.requested_bytes >= before.requested_bytes ? after.requested_bytes - before.requested_bytes : 0U;
-        delta.read_bytes = after.read_bytes >= before.read_bytes ? after.read_bytes - before.read_bytes : 0U;
-        delta.backend_read_ops = after.backend_read_ops >= before.backend_read_ops ? after.backend_read_ops - before.backend_read_ops : 0U;
-        delta.backend_read_bytes = after.backend_read_bytes >= before.backend_read_bytes ? after.backend_read_bytes - before.backend_read_bytes : 0U;
-        delta.backend_write_ops = after.backend_write_ops >= before.backend_write_ops ? after.backend_write_ops - before.backend_write_ops : 0U;
-        delta.backend_write_bytes = after.backend_write_bytes >= before.backend_write_bytes ? after.backend_write_bytes - before.backend_write_bytes : 0U;
-        delta.backend_read_seconds = after.backend_read_seconds - before.backend_read_seconds;
-        delta.restore_seconds = after.restore_seconds - before.restore_seconds;
-        delta.backend_write_seconds = after.backend_write_seconds - before.backend_write_seconds;
-        delta.flush_seconds = after.flush_seconds - before.flush_seconds;
-        add_blob_read_stats(delta);
     }
 
     [[nodiscard]] const BCCellBuilderDumpBuffer &read_single_dump_for_finalize(
@@ -988,11 +843,6 @@ private:
             hint.bitmap_words = std::max(hint.bitmap_words, cell_hint.bitmap_words);
         }
         return hint;
-    }
-
-    void unmark_resident(CellId cid) {
-        std::lock_guard<std::mutex> lock(resident_cells_mutex_);
-        resident_marks_[cid] = 0U;
     }
 
     void remove_resident_cell(CellId cid) {

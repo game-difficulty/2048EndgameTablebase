@@ -253,22 +253,6 @@ struct BCBucketBoardDecoder {
         );
     }
 
-    [[nodiscard]] uint64_t board_with_tmp_cache(
-        BucketRank rank,
-        uint32_t &last_tmp,
-        uint64_t &last_base_bits
-    ) const {
-        if (rank >= rank_decoder.bitmap_len) {
-            throw std::out_of_range("BC bucket board decoder rank is outside bucket bitmap");
-        }
-        const RankParts parts = split_rank_unchecked(static_cast<uint32_t>(rank));
-        if (parts.tmp != last_tmp) {
-            last_tmp = parts.tmp;
-            last_base_bits = ne_sw_base_bits(parts.rank_ne, parts.rank_sw);
-        }
-        return board_from_base_and_se(last_base_bits, parts.rank_se);
-    }
-
     [[nodiscard]] uint64_t base_bits_for_tmp(uint32_t tmp) const {
         const uint32_t rank_ne = rank_decoder.div_count_sw.div(tmp);
         const uint32_t rank_sw =

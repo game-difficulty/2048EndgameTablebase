@@ -58,17 +58,6 @@ inline void emit_unique(uint64_t value,
     }
 }
 
-inline void emit_unique_block(const uint64_t *block,
-                              size_t count,
-                              uint64_t *output,
-                              size_t &out,
-                              bool &has_last,
-                              uint64_t &last) {
-    for (size_t lane = 0; lane < count; ++lane) {
-        emit_unique(block[lane], output, out, has_last, last);
-    }
-}
-
 inline size_t merge_two_scalar_dedup(const uint64_t *left,
                                      size_t left_len,
                                      const uint64_t *right,

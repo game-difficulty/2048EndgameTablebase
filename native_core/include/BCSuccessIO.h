@@ -1363,9 +1363,6 @@ struct BCLoadedSuccessCell {
         return typed_values_data<uint32_t>();
     }
 
-    [[nodiscard]] size_t uint32_value_count() const noexcept {
-        return typed_value_count<uint32_t>();
-    }
 };
 
 class BCSuccessAlignedByteBuffer {
@@ -1450,10 +1447,6 @@ public:
 
     [[nodiscard]] size_t size() const noexcept {
         return size_;
-    }
-
-    [[nodiscard]] uint32_t alignment() const noexcept {
-        return alignment_;
     }
 
 private:

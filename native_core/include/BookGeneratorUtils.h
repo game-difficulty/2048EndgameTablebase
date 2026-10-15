@@ -50,7 +50,6 @@ std::vector<uint64_t> merge_deduplicate_all_concat(
     int n_threads
 );
 
-std::vector<uint64_t> merge_and_deduplicate(const std::vector<uint64_t> &arr1, const std::vector<uint64_t> &arr2);
 
 inline uint64_t largest_power_of_2(uint64_t n) {
     n |= n >> 1;

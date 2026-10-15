@@ -511,19 +511,4 @@ namespace BookGeneratorUtils {
         return concatenate(merge_deduplicate_all(arrays, pivots, n_threads));
     }
 
-    std::vector<uint64_t> merge_and_deduplicate(const std::vector<uint64_t>& arr1, const std::vector<uint64_t>& arr2) {
-        std::vector<uint64_t> result;
-        result.reserve(arr1.size() + arr2.size());
-        
-        // C++ 标准库直接支持此操作
-        std::set_union(
-            arr1.begin(), arr1.end(),
-            arr2.begin(), arr2.end(),
-            std::back_inserter(result)
-        );
-        
-        result.shrink_to_fit();
-        return result;
-    }
-
 } // namespace BookGeneratorUtils

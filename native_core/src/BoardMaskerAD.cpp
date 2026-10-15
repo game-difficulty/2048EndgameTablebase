@@ -120,29 +120,6 @@ uint64_t mask_board(uint64_t board, int threshold) {
     return masked_board;
 }
 
-TileCountResult tile_sum_and_32k_count(uint64_t masked_board, const AdvancedMaskParam &param) {
-    masked_board &= ~param.pos_fixed_32k_mask;
-    const auto &table = info_table2();
-    uint64_t block3 = (masked_board >> 48U) & 0xFFFFULL;
-    uint64_t block2 = (masked_board >> 32U) & 0xFFFFULL;
-    uint64_t block1 = (masked_board >> 16U) & 0xFFFFULL;
-    uint64_t block0 = masked_board & 0xFFFFULL;
-
-    const InfoEntry &r0 = table[block0];
-    const InfoEntry &r1 = table[block1];
-    const InfoEntry &r2 = table[block2];
-    const InfoEntry &r3 = table[block3];
-
-    TileCountResult result;
-    result.total_sum = static_cast<uint32_t>(r0.total_sum + r1.total_sum + r2.total_sum + r3.total_sum);
-    result.count_32k = static_cast<int8_t>(r0.count_32k + r1.count_32k + r2.count_32k + r3.count_32k);
-    result.pos_bitmap = static_cast<uint64_t>(r0.pos_bitmap)
-        | (static_cast<uint64_t>(r1.pos_bitmap) << 16U)
-        | (static_cast<uint64_t>(r2.pos_bitmap) << 32U)
-        | (static_cast<uint64_t>(r3.pos_bitmap) << 48U);
-    return result;
-}
-
 TileCountPositionsResult tile_sum_and_32k_count_positions(uint64_t masked_board, const AdvancedMaskParam &param) {
     masked_board &= ~param.pos_fixed_32k_mask;
     const auto &table = info_table2();

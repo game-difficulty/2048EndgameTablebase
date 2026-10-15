@@ -80,32 +80,8 @@ public:
         return serialization_axis_.coords();
     }
 
-    [[nodiscard]] bool side_coords_are_dense_range() const noexcept {
-        return dense_side_coords_;
-    }
-
-    [[nodiscard]] bool contains_side_coord(BCPositionSideCoord coord) const {
-        return serialization_axis_.contains_coord(coord);
-    }
-
-    [[nodiscard]] BCPositionSideIndex try_side_coord_to_index(BCPositionSideCoord coord) const {
-        return serialization_axis_.try_coord_to_id(coord);
-    }
-
-    [[nodiscard]] BCPositionSideIndex side_coord_to_index(BCPositionSideCoord coord) const {
-        return serialization_axis_.coord_to_id(coord);
-    }
-
-    [[nodiscard]] BCPositionSideIndex side_coord_to_index_trusted(BCPositionSideCoord coord) const noexcept {
-        return serialization_axis_.coord_to_id_trusted(coord);
-    }
-
     [[nodiscard]] bool uses_modulo_cells() const noexcept {
         return raw_coord_modulus_ != 0U;
-    }
-
-    [[nodiscard]] uint32_t raw_coord_modulus() const noexcept {
-        return raw_coord_modulus_;
     }
 
     [[nodiscard]] BCPositionSideIndex try_raw_side_coord_to_physical_index(
@@ -117,16 +93,6 @@ public:
         return coord < raw_coord_to_physical_index_lut_.size()
             ? raw_coord_to_physical_index_lut_[coord]
             : kInvalidSideIndex;
-    }
-
-    [[nodiscard]] BCPositionSideIndex raw_side_coord_to_physical_index(
-        BCPositionSideCoord coord
-    ) const {
-        const BCPositionSideIndex id = try_raw_side_coord_to_physical_index(coord);
-        if (id == kInvalidSideIndex) {
-            throw std::out_of_range("BC raw side coord is outside this position cell layout");
-        }
-        return id;
     }
 
     [[nodiscard]] BCPositionSideCoord side_index_to_coord(BCPositionSideIndex id) const {
@@ -146,27 +112,6 @@ public:
         return static_cast<CellId>(
             static_cast<uint32_t>(row_index) * side_count + static_cast<uint32_t>(col_index)
         );
-    }
-
-    [[nodiscard]] BCPositionSideIndex row_index(CellId cid) const {
-        if (cid >= cell_count()) {
-            throw std::out_of_range("BC position cell id out of range");
-        }
-        return static_cast<BCPositionSideIndex>(cid / side_coord_count());
-    }
-
-    [[nodiscard]] BCPositionSideIndex col_index(CellId cid) const {
-        if (cid >= cell_count()) {
-            throw std::out_of_range("BC position cell id out of range");
-        }
-        return static_cast<BCPositionSideIndex>(cid % side_coord_count());
-    }
-
-    [[nodiscard]] bool equivalent_to(const BCPositionCellLayout &other) const {
-        return layer_sum() == other.layer_sum() &&
-            side_unit() == other.side_unit() &&
-            side_coords() == other.side_coords() &&
-            raw_coord_modulus_ == other.raw_coord_modulus_;
     }
 
     [[nodiscard]] bool equivalent_to_axis(const BCFamilyTable &axis) const {

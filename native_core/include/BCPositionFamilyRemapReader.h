@@ -73,10 +73,6 @@ public:
         return stats_;
     }
 
-    void reset_stats() const {
-        stats_ = {};
-    }
-
     [[nodiscard]] bool has_success_rows(const std::vector<CellId> &logical_cids) const {
         if (direct_) {
             for (CellId cid : logical_cids) {

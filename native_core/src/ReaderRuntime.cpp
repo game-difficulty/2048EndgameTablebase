@@ -832,27 +832,6 @@ BC::BCFamilyTable bc_read_exact_position_axis(
         coords);
 }
 
-BC::BCPositionCellDescriptor bc_read_exact_cell_descriptor(
-    const BC::BCBufferedFileReader &file,
-    const BC::BCPositionHeader &header,
-    BC::CellId cid,
-    uint64_t *bytes_read = nullptr
-) {
-    if (cid >= header.descriptor_count) {
-        throw std::out_of_range("BC exact point lookup descriptor cid out of range");
-    }
-    const uint64_t descriptor_offset = BC::bc_checked_add_u64(
-        header.descriptor_table_offset,
-        static_cast<uint64_t>(cid) * BC::kBCPositionCellDescriptorBytes,
-        "BC exact point lookup descriptor offset overflow");
-    std::array<uint8_t, BC::kBCPositionCellDescriptorBytes> bytes{};
-    file.read_at_cached_size(descriptor_offset, bytes.data(), bytes.size());
-    if (bytes_read != nullptr) {
-        *bytes_read += bytes.size();
-    }
-    return BC::bc_read_cell_descriptor(bytes.data(), bytes.size());
-}
-
 std::vector<BC::BCPositionCellDescriptor> bc_read_exact_position_descriptors(
     const BC::BCBufferedFileReader &file,
     const BC::BCPositionHeader &header,
@@ -2100,27 +2079,6 @@ SearchValue find_exad_value(
     }
 }
 
-SearchValue find_exad_value(
-    const AdvancedPatternSpec &spec,
-    const FormationAD::MaskerContext &masker,
-    const std::string &pathname,
-    const std::string &filename,
-    const std::string &pattern_full,
-    uint64_t board,
-    const std::string &success_rate_dtype
-) {
-    const fs::path exadlut_path = NativePath::from_utf8(pathname) / (pattern_full + "_.exadlut");
-    return find_exad_value(
-        spec,
-        masker,
-        pathname,
-        filename,
-        exadlut_path,
-        pattern_full,
-        board,
-        success_rate_dtype);
-}
-
 std::vector<fs::path> ex_compressed_candidates(const fs::path &zbook_path) {
     std::vector<fs::path> candidates;
     fs::path replaced = zbook_path;
@@ -2185,23 +2143,6 @@ SearchValue find_ex_value(
     } catch (...) {
         return string_search_value("?");
     }
-}
-
-SearchValue find_ex_value(
-    const std::string &pathname,
-    const std::string &filename,
-    const std::string &pattern_full,
-    uint64_t board,
-    const std::string &success_rate_dtype
-) {
-    const fs::path zlut_path = NativePath::from_utf8(pathname) / (pattern_full + "_.zlut");
-    return find_ex_value(
-        pathname,
-        filename,
-        zlut_path,
-        pattern_full,
-        board,
-        success_rate_dtype);
 }
 
 bool sample_ex_zbook_state(
@@ -3257,16 +3198,8 @@ uint64_t sample_ex_book_state(
 
 namespace BCRuntime {
 
-std::vector<uint8_t> legal_tiles(uint32_t target_rank) {
-    return bc_legal_tiles_for_rank(target_rank);
-}
-
 std::string dtype_name(uint32_t dtype) {
     return bc_dtype_name(dtype);
-}
-
-double normalize_lookup_value(const BCCompressedResult::ColdLookupResult &lookup) {
-    return normalize_bc_lookup_value(lookup);
 }
 
 BCCompressedResult::ColdLookupResult lookup_compressed_result_cached(
@@ -3501,15 +3434,4 @@ double find_classic_value_native(
             break;
     }
     return result;
-}
-
-std::optional<double> trie_decompress_search_cached_native(
-    const std::string &path_prefix,
-    uint64_t board,
-    const std::string &success_rate_dtype
-) {
-    const DTypeInfo dtype_info = dtype_info_for_name(success_rate_dtype);
-    const std::vector<TrieNode32> ind = read_binary_vector<TrieNode32>(path_prefix + "i");
-    const std::vector<TrieSegmentEntry> segments = read_binary_vector<TrieSegmentEntry>(path_prefix + "s");
-    return trie_search_dispatch(path_prefix, board, dtype_info, ind, segments);
 }

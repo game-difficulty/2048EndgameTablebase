@@ -96,12 +96,10 @@ ZMaskFrozen::TileLimitConfig make_exad_lut_tile_limit_config(
 Luts build_luts(const ZMaskFrozen::TileLimitConfig &config, int num_threads = 8);
 void initialize_runtime_tables(Luts &luts);
 
-uint32_t semantic_suffix_sum(uint32_t suffix28, const Luts &luts);
 uint64_t pack_bucket_key(uint64_t prefix36, uint32_t semantic_suffix_sum);
 uint64_t bucket_key_prefix36(uint64_t key);
 uint32_t bucket_key_semantic_sum(uint64_t key);
 uint32_t lut_group_index(uint32_t semantic_suffix_sum);
-bool suffix28_rank_group(const Luts &luts, uint32_t suffix28, uint32_t &group, uint32_t &rank);
 bool suffix28_rank_group_sum(
     const Luts &luts,
     uint32_t suffix28,
@@ -168,82 +166,7 @@ inline bool suffix28_rank_group_sum_fast(
     return rank < luts.size_table[group];
 }
 
-int8_t ad_bucket_key_for_board(
-    uint64_t board,
-    uint32_t original_board_sum,
-    const FormationAD::TilesCombinationTable &tiles_table,
-    const AdvancedMaskParam &param
-);
 
-uint64_t live_count_by_bitmap(
-    const BoardSet &set,
-    uint32_t bucket_index,
-    const Luts &luts
-);
 
-template <typename Fn>
-void for_each_live_board(const Layer &layer, const Luts &luts, Fn &&fn) {
-    for (size_t slot = 0; slot < layer.sets.size(); ++slot) {
-        const BoardSet &set = layer.sets[slot];
-        const int ad_key = bucket_key_min() + static_cast<int>(slot);
-        for (uint32_t bucket_idx = 0; bucket_idx < static_cast<uint32_t>(set.buckets.size()); ++bucket_idx) {
-            const BucketEntry &bucket = set.buckets[bucket_idx];
-            const uint64_t key = bucket.key;
-            const uint64_t prefix36 = bucket_key_prefix36(key);
-            const uint32_t semantic_sum = bucket_key_semantic_sum(key);
-            const uint32_t group = lut_group_index(semantic_sum);
-            const uint32_t valid_count = luts.size_table[group];
-            const uint32_t unrank_base = luts.offset_table[group];
-            const uint32_t bitmap_offset = bucket.bitmap_offset;
-            if (valid_count <= set.threshold_bits) {
-                const uint32_t bytes = static_cast<uint32_t>(ZMaskFrozen::bytes_for_bits(valid_count));
-                for (uint32_t byte_idx = 0; byte_idx < bytes; ++byte_idx) {
-                    uint8_t value = set.small_bitmap_bytes[bitmap_offset + byte_idx];
-                    while (value != 0U) {
-#if defined(__GNUC__) || defined(__clang__)
-                        const uint32_t bit_idx = static_cast<uint32_t>(__builtin_ctz(value));
-#else
-                        uint32_t bit_idx = 0;
-                        while (((value >> bit_idx) & 1U) == 0U) {
-                            ++bit_idx;
-                        }
-#endif
-                        const uint32_t rank = byte_idx * 8U + bit_idx;
-                        if (rank >= valid_count) {
-                            break;
-                        }
-                        const uint64_t board = (prefix36 << 28U) | luts.unrank_array[unrank_base + rank];
-                        fn(static_cast<int8_t>(ad_key), board);
-                        value = static_cast<uint8_t>(value & static_cast<uint8_t>(value - 1U));
-                    }
-                }
-            } else {
-                const uint32_t words = static_cast<uint32_t>(ZMaskFrozen::words_for_bits(valid_count));
-                for (uint32_t word_idx = 0; word_idx < words; ++word_idx) {
-                    uint64_t value = set.large_bitmap_words[bitmap_offset + word_idx];
-                    while (value != 0ULL) {
-#if defined(__GNUC__) || defined(__clang__)
-                        const uint32_t bit_idx = static_cast<uint32_t>(__builtin_ctzll(value));
-#else
-                        uint32_t bit_idx = 0;
-                        while (((value >> bit_idx) & 1ULL) == 0ULL) {
-                            ++bit_idx;
-                        }
-#endif
-                        const uint32_t rank = word_idx * 64U + bit_idx;
-                        if (rank >= valid_count) {
-                            break;
-                        }
-                        const uint64_t board = (prefix36 << 28U) | luts.unrank_array[unrank_base + rank];
-                        fn(static_cast<int8_t>(ad_key), board);
-                        value &= (value - 1ULL);
-                    }
-                }
-            }
-        }
-    }
-}
-
-std::vector<uint64_t> extract_boards_sorted(const Layer &layer, const Luts &luts, int num_threads);
 
 } // namespace EXAD

@@ -15,7 +15,6 @@ constexpr const char *kLutFileExtension = ".exadlut";
 std::string layer_file_path(const std::string &pathname, int step);
 std::string lut_file_path(const std::string &pathname);
 bool layer_file_exists(const std::string &path);
-void remove_layer_file(const std::string &path);
 
 struct LayerFileInfo {
     uint32_t original_board_sum = 0;

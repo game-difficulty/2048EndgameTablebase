@@ -88,14 +88,6 @@ uint16_t merge_line(uint16_t row, bool reverse_line, bool &mask_new_tile) {
     return encode_row(merged);
 }
 
-uint64_t m_move_left(uint64_t board) {
-    board ^= static_cast<uint64_t>(g_row_table[board & 0xFFFFULL].movel);
-    board ^= static_cast<uint64_t>(g_row_table[(board >> 16U) & 0xFFFFULL].movel) << 16U;
-    board ^= static_cast<uint64_t>(g_row_table[(board >> 32U) & 0xFFFFULL].movel) << 32U;
-    board ^= static_cast<uint64_t>(g_row_table[(board >> 48U) & 0xFFFFULL].movel) << 48U;
-    return board;
-}
-
 std::pair<uint64_t, bool> m_move_left2(uint64_t board) {
     const uint64_t r0 = board & 0xFFFFULL;
     const uint64_t r1 = (board >> 16U) & 0xFFFFULL;
@@ -121,11 +113,6 @@ uint64_t m_move_right(uint64_t board) {
     return board;
 }
 
-uint64_t m_move_up(uint64_t board, uint64_t board_rev) {
-    (void) board;
-    return reverse_board(m_move_left(board_rev));
-}
-
 std::pair<uint64_t, bool> m_move_up2(uint64_t board, uint64_t board_rev) {
     (void) board;
     auto [moved_rev, mnt] = m_move_left2(board_rev);
@@ -135,46 +122,6 @@ std::pair<uint64_t, bool> m_move_up2(uint64_t board, uint64_t board_rev) {
 uint64_t m_move_down(uint64_t board, uint64_t board_rev) {
     (void) board;
     return reverse_board(m_move_right(board_rev));
-}
-
-uint64_t m_move_board(uint64_t board, int direction) {
-    if (direction == 1) {
-        return m_move_left(board);
-    }
-    if (direction == 2) {
-        return m_move_right(board);
-    }
-    if (direction == 3) {
-        uint64_t board_rev = reverse(board);
-        return m_move_up(board, board_rev);
-    }
-    if (direction == 4) {
-        uint64_t board_rev = reverse(board);
-        return m_move_down(board, board_rev);
-    }
-    return board;
-}
-
-uint64_t m_move_board2(uint64_t board, uint64_t board_rev, int direction) {
-    if (direction == 1) {
-        return m_move_left(board);
-    }
-    if (direction == 2) {
-        return m_move_right(board);
-    }
-    if (direction == 3) {
-        return m_move_up(board, board_rev);
-    }
-    return m_move_down(board, board_rev);
-}
-
-std::array<ADMoveResult, 4> m_move_all_dir(uint64_t board) {
-    uint64_t board_rev = reverse(board);
-    uint64_t md = m_move_down(board, board_rev);
-    uint64_t mr = m_move_right(board);
-    auto [ml, mnt_h] = m_move_left2(board);
-    auto [mu, mnt_v] = m_move_up2(board, board_rev);
-    return {ADMoveResult{ml, mnt_h}, ADMoveResult{mr, mnt_h}, ADMoveResult{mu, mnt_v}, ADMoveResult{md, mnt_v}};
 }
 
 std::array<ADMoveResult, 4> m_move_all_dir2(uint64_t board, uint64_t board_rev) {
