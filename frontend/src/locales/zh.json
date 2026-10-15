@@ -299,6 +299,7 @@
     "play": {
       "backToMenu": "返回菜单",
       "keyboardHint": "使用方向键或 WASD 操作",
+      "restartConfirm": "确定开始新游戏吗？当前这局将结束，无法继续。",
       "info": "规则",
       "powerUps": "道具",
       "cancel": "取消"

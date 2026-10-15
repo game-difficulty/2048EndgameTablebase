@@ -299,6 +299,7 @@
     "play": {
       "backToMenu": "Back To Menu",
       "keyboardHint": "Use arrows or WASD to play",
+      "restartConfirm": "Start a new game? Your current run will end and cannot be resumed.",
       "info": "Rules",
       "powerUps": "Power-Ups",
       "cancel": "Cancel"

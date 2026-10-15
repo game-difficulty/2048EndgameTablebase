@@ -276,6 +276,8 @@ export function useMinigameSession(activeRef) {
   };
 
   const newGame = () => {
+    if (String(gameState.value?.gameId || '').startsWith('endless-')
+      && !window.confirm(t('minigames.play.restartConfirm'))) return false;
     closeOverlay();
     sendAction('MINIGAME_NEW_GAME');
   };
