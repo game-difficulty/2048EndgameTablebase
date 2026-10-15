@@ -11,3 +11,11 @@ These rules apply even when deployment is initiated from this local AI repositor
 ## Desktop Git Directives
 
 Use forward slashes in Windows paths in Codex desktop git directive attributes.
+
+## Local And Cloud Fix Parity
+
+- For bug fixes, check the matching implementation in `../src - cloud`; if the
+  same bug exists there, apply and test the corresponding fix in both projects.
+- Respect implementation differences and versioned replay compatibility rather
+  than copying files blindly. Report which projects were fixed or not affected.
+- Edit maintained source only, not historical deployment snapshots or build output.

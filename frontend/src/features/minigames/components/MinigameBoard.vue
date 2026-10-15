@@ -35,6 +35,7 @@
           <span
             v-if="showStaticCellLabel(cell)"
             :class="['minigame-cell-label', getTileLabelClass(cell)]"
+            :style="getTileLabelStyle(cell)"
           >{{ cell.displayText }}</span>
         </template>
       </button>
@@ -435,13 +436,14 @@ const shouldRenderEffectTile = (effect) =>
     'twist_move',
     'column_swap_move',
     'ring_rotate_move',
+    'object_slide',
   ].includes(String(effect?.type || ''));
 
 const EFFECT_CLASS_BY_TYPE = {
   explosion: 'effect-explosion',
   airraid_fire_drop: 'effect-airraid-fire-drop',
   airraid_explosion: 'effect-airraid-explosion',
-  object_slide: 'effect-object-slide',
+  object_slide: 'minigame-tile-inner effect-object-slide',
   giftbox_burst: 'effect-giftbox-burst',
   factorization_burst: 'effect-factorization-burst',
   ice_stage_reveal: 'effect-ice-stage-reveal',
@@ -615,8 +617,8 @@ const createMovingEffectTile = (fromIndex, toIndex, rawValue, overrides = {}) =>
   };
 };
 
-const createMergedAnimationTile = (targetIndex, sourceTile) => {
-  const finalCell = cellMap.value.get(targetIndex);
+const createMergedAnimationTile = (targetIndex, sourceTile, useFinalBoard = true) => {
+  const finalCell = useFinalBoard ? cellMap.value.get(targetIndex) : null;
   if (finalCell && isRenderableTile(finalCell)) {
     return createTileFromCell(finalCell, {
       row: Math.floor(targetIndex / cols.value),
@@ -1318,6 +1320,7 @@ const runMoveAnimation = async (revision) => {
   const popPositions = Array.isArray(metadata.pop_positions) ? metadata.pop_positions : [];
   const appearTile = metadata.appearTile || metadata.appear_tile || null;
   const followUp = metadata.followUp || null;
+  const hasFollowUpMove = followUp?.kind === 'move';
 
   const hasMoveAnimation =
     ['left', 'right', 'up', 'down'].includes(direction) &&
@@ -1403,7 +1406,8 @@ const runMoveAnimation = async (revision) => {
     if (Number(popPositions[targetIndex] || 0) === 1) {
       tile.isDying = true;
       if (!nextTiles.find((candidate) => candidate.index === targetIndex && candidate.isHidden)) {
-        const mergedTile = createMergedAnimationTile(targetIndex, tile);
+        // Gravity may change this cell again after the player's move.
+        const mergedTile = createMergedAnimationTile(targetIndex, tile, !hasFollowUpMove);
         if (mergedTile) {
           nextTiles.push(mergedTile);
         }
@@ -1416,7 +1420,7 @@ const runMoveAnimation = async (revision) => {
 
   if (appearTile && appearTile.index != null) {
     const appearIndex = Number(appearTile.index);
-    const appearCell = cellMap.value.get(appearIndex);
+    const appearCell = hasFollowUpMove ? null : cellMap.value.get(appearIndex);
     if (appearCell && isRenderableTile(appearCell)) {
       nextTiles.push(
         createTileFromCell(appearCell, {

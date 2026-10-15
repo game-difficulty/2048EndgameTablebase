@@ -161,7 +161,8 @@ export function useMinigameSession(activeRef) {
     } else {
       const effectDurations = []
         .concat(Array.isArray(animation.effects) ? animation.effects : [])
-        .concat(Array.isArray(animation.pageEffects) ? animation.pageEffects : []);
+        .concat(Array.isArray(animation.pageEffects) ? animation.pageEffects : [])
+        .filter((effect) => effect?.lockInput !== false);
       if (effectDurations.length) {
         const maxEffectDuration = effectDurations.reduce(
           (duration, effect) =>

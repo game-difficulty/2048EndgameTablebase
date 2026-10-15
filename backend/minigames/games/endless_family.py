@@ -248,14 +248,18 @@ class EndlessFamilyEngine(BaseMinigameEngine):
         if self.variant == "giftbox":
             return "giftbox.png", ""
         if self.variant == "factorization":
-            return "tilebg.png", ""
+            return "tilebg.png", "\u00f7"
         if self.variant == "hybrid":
             if self.bomb_type == 0:
                 return "bomb.png", ""
             if self.bomb_type == 1:
-                return "tilebg.png", ""
+                return "tilebg.png", "\u00f7"
             return "giftbox.png", ""
         return "bomb.png", ""
+
+    def queue_move_effects(self, effects: list[dict[str, Any]] | None) -> None:
+        # The board is already resolved; these effects are interruptible presentation only.
+        super().queue_move_effects([{**effect, "lockInput": False} for effect in effects or []])
 
     @staticmethod
     def _twisted_position(
@@ -510,21 +514,23 @@ class EndlessFamilyEngine(BaseMinigameEngine):
         board_for_spawn = np.array(self.board, copy=True)
         if self.bomb_pos is not None:
             board_for_spawn[self.bomb_pos] = 1
+        if self.variant == "hybrid":
+            spawn_chance = 0.03 - float(np.sum(board_for_spawn == -3)) * 0.02 + int(self.difficulty) * 0.015
+            zero_positions = np.argwhere(board_for_spawn == 0)
+            if zero_positions.size and random.random() < spawn_chance:
+                row, col = random.choice(zero_positions.tolist())
+                board_for_spawn[row, col] = -3
+                if self.bomb_pos is not None:
+                    board_for_spawn[self.bomb_pos] = 0
+                self.board = np.array(board_for_spawn, dtype=np.int32)
+                self.newtile_pos, self.newtile = int(row * self.cols + col), -3
+                return
         board, _, pos, val = self.mover.gen_new_num(
             board_for_spawn,
             SingletonConfig().config.get("4_spawn_rate", 0.1),
         )
         if self.bomb_pos is not None:
             board[self.bomb_pos] = 0
-        if self.variant == "hybrid":
-            spawn_chance = 0.03 - float(np.sum(board == -3)) * 0.02 + int(self.difficulty) * 0.015
-            zero_positions = np.argwhere(board == 0)
-            if zero_positions.size and random.random() < spawn_chance:
-                row, col = random.choice(zero_positions.tolist())
-                board[row, col] = -3
-                self.newtile_pos, self.newtile = int(row * self.cols + col), -3
-                self.board = np.array(board, dtype=np.int32)
-                return
         self.board = np.array(board, dtype=np.int32)
         self.newtile_pos, self.newtile = int(pos), int(val)
 
@@ -583,19 +589,10 @@ class EndlessFamilyEngine(BaseMinigameEngine):
 
         if self.bomb_pos is not None:
             bomb_index = int(self.bomb_pos[0] * self.cols + self.bomb_pos[1])
-            if self.variant == "explosions":
-                cover_sprites[str(bomb_index)] = ["bomb.png"]
-            elif self.variant == "giftbox":
-                cover_sprites[str(bomb_index)] = ["giftbox.png"]
-            elif self.variant == "factorization":
-                cover_sprites[str(bomb_index)] = ["tilebg.png"]
-            elif self.variant == "hybrid":
-                if self.bomb_type == 0:
-                    cover_sprites[str(bomb_index)] = ["bomb.png"]
-                elif self.bomb_type == 1:
-                    cover_sprites[str(bomb_index)] = ["tilebg.png"]
-                else:
-                    cover_sprites[str(bomb_index)] = ["giftbox.png"]
+            sprite, label_text = self._current_object_visual()
+            cover_sprites[str(bomb_index)] = [sprite]
+            if label_text:
+                tile_text_override[str(bomb_index)] = label_text
 
         if self.variant == "hybrid":
             for index, value in enumerate(self.board.flatten().tolist()):
