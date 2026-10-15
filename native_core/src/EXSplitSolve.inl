@@ -30,9 +30,12 @@ uint64_t ex_available_memory() {
 
 // Archives must be seekable for bounded bucket reads. Extract through the
 // existing streaming decoder, never via a full decompressed byte vector.
-std::string ex_seekable_input(const RunOptions &options, int step) {
-    materialize_compressed_layer_input(options, step);
-    std::string path = existing_layer_input_path(options, step);
+std::string ex_seekable_input(const RunOptions &options, int step, bool positions_only = false) {
+    if (!positions_only) materialize_compressed_layer_input(options, step);
+    std::string path = positions_only ? existing_generated_layer_file_path(options, step)
+                                      : existing_layer_input_path(options, step);
+    if (positions_only && path.empty()) path = existing_generated_layer_archive_path(options, step);
+    if (path.empty()) throw std::runtime_error("missing EX generated positions at step " + std::to_string(step));
     if (!has_archive_suffix(path)) return path;
     SevenZipSequentialReader in(path);
     LayerFileHeader header{};
@@ -226,13 +229,20 @@ public:
         header_.success_value_count += layer.success_values.size();
     }
     void finish(FileIOUtils::DirectIoConfig io) {
-        header_.reserved1 = layer_success_stride(header_) == 1 ? 0 : header_.success_value_count;
-        header_.small_bitmap_bytes = writer_.size(3);
-        header_.large_bitmap_words = writer_.size(4) / 8;
+        finish_header();
         writer_.finish(header_, io);
+    }
+    void seal_sections() {
+        finish_header();
+        writer_.seal_sections(header_);
     }
     const LayerFileHeader &header() const { return header_; }
 private:
+    void finish_header() {
+        header_.reserved1 = layer_success_stride(header_) == 1 ? 0 : header_.success_value_count;
+        header_.small_bitmap_bytes = writer_.size(3);
+        header_.large_bitmap_words = writer_.size(4) / 8;
+    }
     EXSectionWriter writer_;
     LayerFileHeader header_;
     const std::vector<uint32_t> &sizes_;
@@ -271,7 +281,8 @@ template <typename T, typename LoadFuture>
 SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &options, const LutBundle &lut,
     int step, const std::string &current_path, uint64_t chunk_budget, bool resident_current,
     Prefix36LayerT<T> &future, int &cached_step, LoadFuture &&load_future,
-    RuntimeControls::DeletionThresholdState thresholds) {
+    RuntimeControls::DeletionThresholdState thresholds, bool retain_positions = false,
+    Prefix36LayerT<T> *retained_current = nullptr) {
     const double started = now_seconds();
     const auto mode = dtype_mode_from_name(options.success_rate_dtype);
     const auto io = FileIOUtils::direct_io_config_from_options(options);
@@ -282,9 +293,11 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
     if (dtype_mode_from_header(input.header) != mode)
         throw std::runtime_error("EX split solve dtype does not match input; resume with the original dtype");
     summary.input_live = input.header.live_board_count;
-    auto lease = StoragePaths::reserve_write_path(options, StoragePaths::ArtifactRole::Hot, step,
-        kLayerFileExtension, 3 * (layer_file_bytes(input.header) + layer_success_storage_count(input.header) * sizeof(T)));
-    EXSplitWork work{lease.path() + ".spawn4.tmp", {}};
+    auto lease = StoragePaths::ReservedWritePath{};
+    if (!resident_current || !retained_current)
+        lease = StoragePaths::reserve_write_path(options, StoragePaths::ArtifactRole::Hot, step,
+            kLayerFileExtension, 3 * (layer_file_bytes(input.header) + layer_success_storage_count(input.header) * sizeof(T)));
+    EXSplitWork work{resident_current ? std::string{} : lease.path() + ".spawn4.tmp", {}};
     Prefix36LayerT<T> current;
     if (cached_step != step + 2) future = {};
     summary.read_seconds += load_future(step + 2, future, cached_step);
@@ -314,13 +327,19 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
         summary.read_seconds += now_seconds() - t0;
         calculate4(current);
     } else {
-        EXChunkOutput<T> partial(work.partial, input.header, lut.dense_lut.size_table);
+        // The +4 pass does not change positions or bucket layout. Only its
+        // success values need spooling; the second pass reuses the input keys.
+        std::ofstream partial(NativePath::from_utf8(work.partial), std::ios::binary | std::ios::trunc);
         while (read_chunk(input, current)) {
             calculate4(current);
-            write_chunk(partial, current);
+            t0 = now_seconds();
+            FileIOUtils::write_exact(partial, current.success_values.data(),
+                current.success_values.size() * sizeof(T), work.partial);
+            summary.current_write_seconds += now_seconds() - t0;
         }
         t0 = now_seconds();
-        partial.finish(io);
+        partial.close();
+        if (!partial) throw std::runtime_error("failed to close EX partial values: " + work.partial);
         summary.current_write_seconds += now_seconds() - t0;
         current = {};
     }
@@ -335,23 +354,44 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
             RuntimeControls::relative_deletion_threshold(max_success_value(future, zero), zero, thresholds));
     uint64_t retired_live = future.live_board_count;
     auto retired_lease = StoragePaths::ReservedWritePath{};
-    if (RuntimeControls::deletion_threshold_enabled(thresholds)) {
-        retired_lease = StoragePaths::reserve_write_path(options, StoragePaths::ArtifactRole::Hot, step + 2,
-            kLayerFileExtension, 2 * layer_file_bytes(future, mode));
+    const bool compress_retired = options.compress && !options.optimal_branch_only;
+    if (retain_positions || RuntimeControls::deletion_threshold_enabled(thresholds) || compress_retired) {
+        retired_lease = StoragePaths::reserve_write_path(options,
+            compress_retired ? StoragePaths::ArtifactRole::Cold : StoragePaths::ArtifactRole::Hot, step + 2,
+            compress_retired ? EXCompressedResult::kCompressedLayerFileExtension : kLayerFileExtension,
+            2 * layer_file_bytes(future, mode));
         work.retired = retired_lease.path() + ".retire_tmp";
         EXLayerChunks<T> chunks(future, spec, mode, lut);
         EXChunkOutput<T> out(work.retired, chunks.header, lut.dense_lut.size_table);
         Prefix36LayerT<T> chunk;
         while (chunks.next(chunk, chunk_budget)) {
             t0 = now_seconds();
-            chunk = compact_layer(chunk, lut.dense_lut, threshold, threads, chunk.success_stride);
+            if (RuntimeControls::deletion_threshold_enabled(thresholds))
+                chunk = compact_layer(chunk, lut.dense_lut, threshold, threads, chunk.success_stride);
             summary.future_compact_seconds += now_seconds() - t0;
             t0 = now_seconds();
             out.append(chunk);
             summary.future_write_seconds += now_seconds() - t0;
         }
         t0 = now_seconds();
-        out.finish(io);
+        if (compress_retired) {
+            out.seal_sections();
+            const std::string header_path = work.retired;
+            work.retired = retired_lease.path() + ".tmp";
+            try {
+                EXCompressedResult::compress_zbook_sections_to_ex_result(header_path,
+                    lut_file_path(options.pathname), work.retired,
+                    {options.result_value_policy.get(), step + 2, thresholds.absolute, thresholds.relative});
+            } catch (...) {
+                std::error_code ec;
+                NativePath::remove(header_path, ec);
+                throw;
+            }
+            std::error_code ec;
+            NativePath::remove(header_path, ec);
+        } else {
+            out.finish(io);
+        }
         retired_live = out.header().live_board_count;
         summary.future_write_seconds += now_seconds() - t0;
     }
@@ -376,33 +416,47 @@ SolveStepSummary solve_split_step(const PatternSpec &spec, const RunOptions &opt
         calculate2(current);
         ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
         t0 = now_seconds();
-        write_layer_file(lease.path(), current, spec, mode, io);
+        if (retained_current) *retained_current = std::move(current);
+        else write_layer_file(lease.path(), current, spec, mode, io);
         summary.current_write_seconds += now_seconds() - t0;
         current = {};
     } else {
         EXChunkOutput<T> output(lease.path(), input.header, lut.dense_lut.size_table);
-        EXLayerChunks<T> partial(work.partial, lut);
-        while (read_chunk(partial, current)) {
+        EXLayerChunks<T> positions(current_path, lut);
+        std::ifstream partial(NativePath::from_utf8(work.partial), std::ios::binary);
+        if (!partial) throw std::runtime_error("failed to open EX partial values: " + work.partial);
+        while (read_chunk(positions, current)) {
+            t0 = now_seconds();
+            current.success_values.resize(current.success_storage_count);
+            read_stream_exact(partial, current.success_values.data(),
+                current.success_values.size() * sizeof(T), work.partial);
+            summary.read_seconds += now_seconds() - t0;
             calculate2(current);
             write_chunk(output, current);
         }
+        if (partial.peek() != std::char_traits<char>::eof())
+            throw std::runtime_error("EX partial values do not match positions: " + work.partial);
         ex_split_test_stop("SPLIT_FINAL_CHUNKS", step);
         t0 = now_seconds();
         output.finish(io);
         summary.current_write_seconds += now_seconds() - t0;
     }
     lease.release();
-    remove_generated_layer_input(options, step);
+    if (!retain_positions) remove_generated_layer_input(options, step);
     if (!work.retired.empty()) {
         FileIOUtils::finalize_temporary_file(work.retired, retired_lease.path());
         work.retired.clear();
         retired_lease.release();
+        if (compress_retired) {
+            std::error_code ec;
+            NativePath::remove(existing_raw_layer_file_path(options, step + 2), ec);
+        }
     }
     ex_split_test_stop("SPLIT_PUBLISH", step);
-    if (!options.optimal_branch_only) {
+    if (!options.optimal_branch_only && !compress_retired) {
         t0 = now_seconds();
         compress_layer_result_from_file(options, step + 2, true,
-            RuntimeControls::deletion_threshold_enabled(thresholds));
+            retain_positions || RuntimeControls::deletion_threshold_enabled(thresholds));
         summary.future_write_seconds += now_seconds() - t0;
     }
     summary.bitmap_live = summary.output_live;

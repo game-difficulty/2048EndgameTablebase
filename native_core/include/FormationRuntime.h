@@ -68,6 +68,7 @@ struct RunOptions {
     bool compress_temp_files = false;
     bool optimal_branch_only = false;
     bool chunked_solve = false;
+    int solve_checkpoint_interval = 20;
     int num_threads = 0;
     bool direct_io = false;
     int direct_io_queue_depth = 16;

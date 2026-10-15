@@ -362,14 +362,35 @@ switching to a different lookup algorithm.
 `EXSectionWriter` assembles the existing six-section file format for bounded
 output. Its writes use `FileIOUtils::write_exact` so a large buffer cannot
 enter the MinGW single-write overflow path. A resident current layer uses
-`write_layer_file` directly, avoiding section spooling and rereading. Current
-output is published before a threshold-pruned dependency replaces its exact
-file. Result decompression is block-streamed; generated archives are extracted
+`write_layer_file` directly when a disk result is needed, avoiding section
+spooling and rereading. The current layer finishes before a threshold-pruned
+dependency replaces its exact file; periodic checkpoints remain the recovery
+authority for cached results. Result decompression is block-streamed; generated archives are extracted
 through `SevenZipSequentialReader` before seekable reads. Low-memory result
 compression uses smaller bucket blocks and one worker to bound scratch memory.
 Generation and the optional optimal-branch post-pass retain their existing
 memory behavior. The standalone single-layer diagnostic entrypoint retains
 the original whole-layer route.
+
+In the chunked route, the +4 intermediate contains only success values in
+bucket order. The +2 pass rereads the unchanged generated positions and reads
+these values sequentially, avoiding a second copy of all metadata/bitmaps and
+the intermediate section assembly. This spool is disposable, not a resume
+format; original positions remain available through both passes.
+
+Retired layers are compacted in bounded chunks. With result compression enabled,
+their sealed sections feed the existing block compressor directly; no assembled
+raw layer is written and reread. The compressed temporary result is published
+only after the current layer succeeds. Uncompressed output still assembles its
+sections into the existing layer format. Empty layers and scaled success offsets
+use the same serializers and compression policy as ordinary layer files.
+
+With periodic checkpoints, a resident split result stays in the current-layer
+cache instead of being written unconditionally. Checkpoints serialize the cached
+pair directly. A later split step must still spill a cached +1 dependency before
+releasing it to fit the +4 phase; continuously split execution therefore still
+needs exact working files. Truly chunked output also needs an exact disk layer
+for subsequent queries. These are not eliminated by the checkpoint interval.
 
 Each routing decision is appended to `<prefix>zmask_solve_routes.csv` before
 calculation. The automatic budget uses 95% of available plus cached memory
@@ -382,6 +403,18 @@ calculation, including the internal step, chosen route, available/cached bytes,
 budget, layer estimates, full/split peak estimates and explicit overrides.
 Apply `layer_offset` to obtain the filename layer. The log is separate from
 completed-step timings, so a failed or stalled step still has a route record.
+
+### EX Periodic Solve Checkpoints
+
+The native EX runtime uses `RunOptions::solve_checkpoint_interval` (default 20).
+With pruning or compression enabled, the shared `SolveCheckpoint` helper keeps
+an exact adjacent pair in `.<prefix>solve-ex/`. Both snapshots are completed
+before the manifest is replaced; generated positions below the committed
+frontier remain available. On restart, EX restores that pair and recomputes
+from the frontier, never from pruned reader-visible results. Changing the
+interval to 1 does not discard an existing periodic recovery manifest.
+Checkpoint snapshots and generated positions must not be manually deleted
+during an unfinished run.
 
 Core optimizations:
 
@@ -396,7 +429,7 @@ Core optimizations:
 
 ### EX solve resume
 
-The solve phase is local-dependency driven:
+Without an active periodic checkpoint, legacy solve resume is local-dependency driven:
 
 - If a step is already solved (`.zbook` or `.exzbook`), it is skipped.
 - If a current/future input is missing, `ensure_ex_generated_through(...)`

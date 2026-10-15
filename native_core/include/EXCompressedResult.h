@@ -90,6 +90,14 @@ CompressStats compress_prefix36_layer_view_to_ex_result(
     const ResultCompression::Context &context = {}
 );
 
+// Consumes a header-only file and its six .sectionN.tmp payloads. Not a table format.
+CompressStats compress_zbook_sections_to_ex_result(
+    const std::string &header_path,
+    const std::string &zlut_path,
+    const std::string &output_path,
+    const ResultCompression::Context &context = {}
+);
+
 void decompress_ex_result_to_zbook(
     const std::string &compressed_path,
     const std::string &zlut_path,

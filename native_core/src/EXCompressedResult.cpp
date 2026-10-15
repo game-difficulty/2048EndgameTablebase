@@ -1136,6 +1136,47 @@ bool is_prefix36_compressed_file(const std::string &path) {
     return in && std::memcmp(magic, kPrefix36CompressedMagic, sizeof(kPrefix36CompressedMagic)) == 0;
 }
 
+// Read either a regular layer or sealed sections using the same logical offsets.
+// Each compression worker owns its streams; no full layer is materialized.
+class Prefix36CompressionInput {
+public:
+    Prefix36CompressionInput(const std::string &path, const Prefix36LayerHeader &header, bool sections)
+        : path_(path), sections_(sections) {
+        const auto layout = prefix36_layer_layout(header);
+        offsets_ = {layout.bucket_keys_offset, layout.bitmap_offsets_offset, layout.success_offsets_offset,
+                    layout.small_bitmap_offset, layout.large_bitmap_offset, layout.success_values_offset,
+                    layout.success_values_offset + header.success_value_count * header.value_size};
+    }
+    void read(uint64_t offset, void *data, size_t bytes) {
+        if (!bytes) return;
+        size_t section = 0;
+        if (offset < offsets_[0] || offset > offsets_[6] || bytes > offsets_[6] - offset)
+            throw std::runtime_error("EX compression input range mismatch: " + path_);
+        if (sections_) {
+            section = static_cast<size_t>(std::upper_bound(offsets_.begin(), offsets_.end(), offset) - offsets_.begin() - 1);
+            if (section >= 6 || bytes > offsets_[section + 1] - offset)
+                throw std::runtime_error("EX compression input crosses sections: " + path_);
+            offset -= offsets_[section];
+        }
+        const std::string path = sections_ ? path_ + ".section" + std::to_string(section) + ".tmp" : path_;
+        auto &in = streams_[section];
+        if (!in.is_open()) in.open(NativePath::from_utf8(path), std::ios::binary);
+        if (!in) throw std::runtime_error("failed to open EX compression input: " + path);
+        in.seekg(static_cast<std::streamoff>(offset));
+        read_stream_exact(in, data, bytes, path);
+    }
+    std::vector<uint8_t> range(uint64_t offset, size_t bytes) {
+        std::vector<uint8_t> result(bytes);
+        read(offset, result.data(), bytes);
+        return result;
+    }
+private:
+    std::string path_;
+    bool sections_;
+    std::array<uint64_t, 7> offsets_{};
+    std::array<std::ifstream, 6> streams_;
+};
+
 CompressStats compress_prefix36_layer_file(
     const std::string &zbook_path,
     const std::string &zlut_path,
@@ -1144,7 +1185,8 @@ CompressStats compress_prefix36_layer_file(
     uint32_t success_block_values,
     int compression_level,
     const ResultCompression::Context &context,
-    uint32_t max_workers
+    uint32_t max_workers,
+    bool sections = false
 ) {
     const double t0 = wall_time_seconds();
     if (bucket_block_buckets == 0U || success_block_values == 0U) {
@@ -1183,7 +1225,7 @@ CompressStats compress_prefix36_layer_file(
     header.bucket_dir_offset = sizeof(Prefix36CompressedHeader);
     header.success_dir_offset = header.bucket_dir_offset + bucket_block_count * sizeof(Prefix36BucketBlockEntry);
     header.data_offset = header.success_dir_offset + success_block_count * sizeof(Prefix36SuccessBlockEntry);
-    header.original_file_size = file_size_u64(zbook_path);
+    header.original_file_size = layout.success_values_offset + source.success_value_count * source.value_size;
 
     std::vector<Prefix36BucketBlockEntry> bucket_dir(static_cast<size_t>(bucket_block_count));
     std::vector<Prefix36SuccessBlockEntry> success_dir(static_cast<size_t>(success_block_count));
@@ -1212,10 +1254,7 @@ CompressStats compress_prefix36_layer_file(
         futures.reserve(static_cast<size_t>(batch_end - batch_begin));
         for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
             futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
-                std::ifstream source_file(NativePath::from_utf8(zbook_path), std::ios::binary);
-                if (!source_file) {
-                    throw std::runtime_error("failed to open prefix36 zbook: " + zbook_path);
-                }
+                Prefix36CompressionInput source_file(zbook_path, source, sections);
                 const uint32_t begin = static_cast<uint32_t>(block_idx * bucket_block_buckets);
                 const uint32_t end = static_cast<uint32_t>(
                     std::min<uint64_t>(source.bucket_count, begin + bucket_block_buckets));
@@ -1224,28 +1263,12 @@ CompressStats compress_prefix36_layer_file(
                 std::vector<uint32_t> bitmap_offsets(count);
                 std::vector<uint32_t> success_offsets(count);
                 if (count != 0U) {
-                    source_file.seekg(static_cast<std::streamoff>(
-                        layout.bucket_keys_offset + static_cast<uint64_t>(begin) * sizeof(uint64_t)));
-                    read_stream_exact(source_file, keys.data(), keys.size() * sizeof(uint64_t), zbook_path);
-                    source_file.seekg(static_cast<std::streamoff>(
-                        layout.bitmap_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
-                    read_stream_exact(
-                        source_file,
-                        bitmap_offsets.data(),
-                        bitmap_offsets.size() * sizeof(uint32_t),
-                        zbook_path
-                    );
-                    source_file.seekg(static_cast<std::streamoff>(
-                        layout.success_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t)));
-                    read_stream_exact(
-                        source_file,
-                        success_offsets.data(),
-                        success_offsets.size() * sizeof(uint32_t),
-                        zbook_path
-                    );
-                    if (!source_file) {
-                        throw std::runtime_error("failed to read prefix36 zbook metadata");
-                    }
+                    source_file.read(layout.bucket_keys_offset + static_cast<uint64_t>(begin) * sizeof(uint64_t),
+                        keys.data(), keys.size() * sizeof(uint64_t));
+                    source_file.read(layout.bitmap_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t),
+                        bitmap_offsets.data(), bitmap_offsets.size() * sizeof(uint32_t));
+                    source_file.read(layout.success_offsets_offset + static_cast<uint64_t>(begin) * sizeof(uint32_t),
+                        success_offsets.data(), success_offsets.size() * sizeof(uint32_t));
                 }
 
                 std::vector<uint32_t> local_bitmap_offsets(static_cast<size_t>(count) + 1U, 0U);
@@ -1258,21 +1281,17 @@ CompressStats compress_prefix36_layer_file(
                     if (valid_count <= source.threshold_bits) {
                         local_bitmap_offsets[local] = static_cast<uint32_t>(small_payload.size());
                         const uint64_t bytes = ZMaskFrozen::bytes_for_bits(valid_count);
-                        std::vector<uint8_t> bitmap = read_range_from(
-                            source_file,
+                        std::vector<uint8_t> bitmap = source_file.range(
                             layout.small_bitmap_offset + bitmap_offsets[local],
-                            bytes,
-                            zbook_path
+                            bytes
                         );
                         small_payload.insert(small_payload.end(), bitmap.begin(), bitmap.end());
                     } else {
                         local_bitmap_offsets[local] = static_cast<uint32_t>(large_payload.size() / sizeof(uint64_t));
                         const uint64_t bytes = ZMaskFrozen::words_for_bits(valid_count) * sizeof(uint64_t);
-                        std::vector<uint8_t> bitmap = read_range_from(
-                            source_file,
+                        std::vector<uint8_t> bitmap = source_file.range(
                             layout.large_bitmap_offset + static_cast<uint64_t>(bitmap_offsets[local]) * sizeof(uint64_t),
-                            bytes,
-                            zbook_path
+                            bytes
                         );
                         large_payload.insert(large_payload.end(), bitmap.begin(), bitmap.end());
                     }
@@ -1321,12 +1340,11 @@ CompressStats compress_prefix36_layer_file(
     }
 
     const bool stored_values = ResultCompression::with_layer_policy(context, source.dtype_mode, compression_level, {}, [&] {
-        std::ifstream sample_file(NativePath::from_utf8(zbook_path), std::ios::binary);
-        if (!sample_file) throw std::runtime_error("failed to open EX sample: " + zbook_path);
+        Prefix36CompressionInput sample_file(zbook_path, source, sections);
         return ResultCompression::use_stored_values(
             source.success_value_count * source.value_size, source.value_size, compression_level, output_path,
             [&](uint64_t offset, size_t take) {
-                return read_range_from(sample_file, layout.success_values_offset + offset, take, zbook_path);
+                return sample_file.range(layout.success_values_offset + offset, take);
             });
     });
     const uint32_t success_workers = max_workers
@@ -1338,19 +1356,14 @@ CompressStats compress_prefix36_layer_file(
         futures.reserve(static_cast<size_t>(batch_end - batch_begin));
         for (uint64_t block_idx = batch_begin; block_idx < batch_end; ++block_idx) {
             futures.emplace_back(std::async(std::launch::async, [&, block_idx]() {
-                std::ifstream source_file(NativePath::from_utf8(zbook_path), std::ios::binary);
-                if (!source_file) {
-                    throw std::runtime_error("failed to open prefix36 zbook: " + zbook_path);
-                }
+                Prefix36CompressionInput source_file(zbook_path, source, sections);
                 const uint64_t first = block_idx * success_block_values;
                 const uint32_t count = static_cast<uint32_t>(
                     std::min<uint64_t>(source.success_value_count - first, success_block_values));
                 const uint64_t raw_size = static_cast<uint64_t>(count) * source.value_size;
-                std::vector<uint8_t> raw = read_range_from(
-                    source_file,
+                std::vector<uint8_t> raw = source_file.range(
                     layout.success_values_offset + first * source.value_size,
-                    raw_size,
-                    zbook_path
+                    raw_size
                 );
                 CompressedPrefix36SuccessBlock result;
                 result.compressed = ResultCompression::encode(raw.data(), raw.size(), compression_level, stored_values);
@@ -2191,6 +2204,15 @@ CompressStats compress_zbook_to_ex_result(
         );
     }
     throw std::runtime_error("EX compression only supports current prefix36 zbook files; rebuild the input layer");
+}
+
+CompressStats compress_zbook_sections_to_ex_result(
+    const std::string &header_path,
+    const std::string &zlut_path,
+    const std::string &output_path,
+    const ResultCompression::Context &context
+) {
+    return compress_prefix36_layer_file(header_path, zlut_path, output_path, 64U, 65536U, 5, context, 1U, true);
 }
 
 CompressStats compress_prefix36_layer_view_to_ex_result(

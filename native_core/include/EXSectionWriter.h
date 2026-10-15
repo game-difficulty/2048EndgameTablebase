@@ -24,13 +24,18 @@ public:
     }
     uint64_t size(size_t section) const { return sizes_.at(section); }
     template <typename Header>
+    void seal_sections(const Header &header) {
+        close_sections();
+        std::ofstream out(NativePath::from_utf8(path_), std::ios::binary | std::ios::trunc);
+        FileIOUtils::write_exact(out, &header, sizeof(header), path_);
+        out.close();
+        if (!out) throw std::runtime_error("failed to write EX section header: " + path_);
+    }
+    template <typename Header>
     void finish(const Header &header, FileIOUtils::DirectIoConfig config = {}) {
         uint64_t bytes = sizeof(header);
+        close_sections();
         for (size_t i = 0; i < streams_.size(); ++i) {
-            if (streams_[i].is_open()) {
-                streams_[i].close();
-                if (streams_[i].fail()) throw std::runtime_error("failed to close EX section: " + path_);
-            }
             bytes += sizes_[i];
         }
         const auto write = [&](FileIOUtils::DirectIoConfig io) {
@@ -58,6 +63,13 @@ public:
         }
     }
 private:
+    void close_sections() {
+        for (auto &stream : streams_) {
+            if (!stream.is_open()) continue;
+            stream.close();
+            if (stream.fail()) throw std::runtime_error("failed to close EX section: " + path_);
+        }
+    }
     std::string section_path(size_t i) const { return path_ + ".section" + std::to_string(i) + ".tmp"; }
     std::string path_;
     std::array<std::ofstream, 6> streams_;
