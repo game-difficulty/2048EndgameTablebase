@@ -83,7 +83,7 @@
             class="flex-1 px-3 py-2 bg-bg-main border border-border-main rounded ui-body font-mono text-text-main outline-none focus:border-accent transition-all placeholder:opacity-50"
             @focus="selectTextInputContentsOnFocus"
           />
-          <button @click="setBoard" class="action-btn ui-control px-4 !bg-btn-bg !text-white border-btn-bg hover:bg-btn-hover font-black uppercase shadow-sm">{{ $t('trainer.board.set') }}</button>
+          <button @click="setBoard" class="action-btn ui-control !bg-btn-bg !text-white border-btn-bg hover:bg-btn-hover font-black uppercase shadow-sm">{{ $t('trainer.board.set') }}</button>
         </div>
 
         <div ref="boardHotkeyTarget" tabindex="-1" class="w-full outline-none focus:outline-none">
@@ -365,6 +365,24 @@ const handleTargetChange = (event) => {
 </script>
 
 <style scoped>
+.trainer-board-input-row {
+  min-width: 0;
+}
+
+.trainer-board-input-row > input {
+  flex: 1 1 0%;
+  width: 0;
+  min-width: 0;
+}
+
+.trainer-board-input-row > button {
+  flex: 0 1 auto;
+  width: 28%;
+  max-width: 7rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
 .trainer-results-body {
   position: relative;
   height: 13rem;
