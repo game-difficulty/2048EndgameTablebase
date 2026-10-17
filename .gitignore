@@ -55,6 +55,7 @@ native_core/src/egtb_data_512.cpp
 !native_core/x86simdsort/x86-simd-sort/lib/
 !native_core/x86simdsort/x86-simd-sort/lib/**
 native_core/*.pyd
+native_core/*.pyd.bak
 native_core/*.so
 native_core/*.dll
 native_core/*.a
@@ -70,6 +71,7 @@ docs/wasm_build/CMakeFiles/
 docs/wasm_build/Makefile
 docs/wasm_build/cmake_install.cmake
 docs/wasm_build/*.dll
+docs/wasm_build/test_omp.cpp
 # Legacy root-level copies from older layouts.
 native_core/AIPlayer.cpp
 native_core/BoardMover.h
@@ -102,6 +104,9 @@ pnpm-debug.log*
 !native_core/egtb_data.7z
 
 # temp files
+/.codex-remote-attachments/
+/output/
+/outputs/
 t/
 t_native_compress_smoke*/
 native_core_/
