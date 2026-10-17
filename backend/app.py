@@ -122,7 +122,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):  # type: ign
 async def serve_index():
     path = os.path.join(frontend_dist_path, "index.html")
     if os.path.exists(path):
-        return FileResponse(path)
+        return FileResponse(path, headers={'Cache-Control': 'no-cache'})
 
     return {
         "ERROR": "FRONTEND_NOT_FOUND",
