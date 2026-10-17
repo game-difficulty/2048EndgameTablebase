@@ -157,7 +157,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onActivated, onDeactivated, onBeforeUnmount, ref, watch } from 'vue';
 
 import { getMinigameAssetUrl } from '../../../services/runtime/backendUrl';
 import {
@@ -167,6 +167,7 @@ import {
   getBoardCellStyle,
 } from '../model/minigameMappers';
 import { clientPointToElementSpace } from '../model/pointerCoordinates';
+import { minigameBoardGeometry, minigameTilePosition, minigameSubgridCenter, minigameLabelSize } from '../model/minigameBoardGeometry.js';
 
 const props = defineProps({
   board: {
@@ -263,9 +264,44 @@ const cursorPreviewStyle = computed(() => ({
 const maxShapeDimension = computed(() => Math.max(rows.value, cols.value, 4));
 const shapeDensityScale = computed(() => Math.min(1, 5.5 / maxShapeDimension.value));
 const shapeTextScale = computed(() => Math.min(1, 6 / maxShapeDimension.value));
+const boardWidth = ref(400);
+const rootFontSize = ref(16);
+const geometry = computed(() => minigameBoardGeometry(boardWidth.value, rows.value, cols.value));
+let boardResizeObserver;
+const measureBoard = () => {
+  if (!boardRef.value) return;
+  // clientWidth excludes the application's visual scaling; height never feeds back into width.
+  const width = boardRef.value?.clientWidth;
+  if (width > 0) boardWidth.value = width;
+  rootFontSize.value = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+};
+const observeBoard = () => {
+  if (!boardRef.value) return;
+  measureBoard();
+  if (!boardResizeObserver && typeof ResizeObserver === 'function') {
+    boardResizeObserver = new ResizeObserver(measureBoard);
+    boardResizeObserver.observe(boardRef.value);
+  }
+  window.addEventListener('resize', measureBoard);
+  window.addEventListener('orientationchange', measureBoard);
+};
+const stopObservingBoard = () => {
+  boardResizeObserver?.disconnect();
+  boardResizeObserver = null;
+  window.removeEventListener('resize', measureBoard);
+  window.removeEventListener('orientationchange', measureBoard);
+};
+onMounted(observeBoard);
+onActivated(observeBoard);
+onDeactivated(stopObservingBoard);
+onBeforeUnmount(stopObservingBoard);
 const boardShellStyle = computed(() => ({
-  containerType: 'size',
-  aspectRatio: `${cols.value} / ${rows.value}`,
+  height: `${geometry.value.height}px`,
+  '--padding': `${geometry.value.gap}px`,
+  '--grid-gap': `${geometry.value.gap}px`,
+  '--twist-hit-size': `${Math.max(30, Math.min(boardWidth.value * 0.1, 44))}px`,
+  '--twist-dot-size': `${Math.max(16, Math.min(boardWidth.value * 0.052, 24))}px`,
+  '--cursor-size': `${Math.max(28, Math.min(boardWidth.value * 0.09, 52))}px`,
   '--shape-density-scale': shapeDensityScale.value.toFixed(4),
   '--shape-text-scale': shapeTextScale.value.toFixed(4),
 }));
@@ -1468,16 +1504,9 @@ onBeforeUnmount(() => {
   clearAnimationTimers();
 });
 
-const getTilePosStyle = (tile) => ({
-  width: `calc((100% - ${(cols.value - 1)} * var(--grid-gap)) / ${cols.value})`,
-  height: `calc((100% - ${(rows.value - 1)} * var(--grid-gap)) / ${rows.value})`,
-  transform: `translate(calc(${tile.col} * (100% + var(--grid-gap))), calc(${tile.row} * (100% + var(--grid-gap))))`,
-});
+const getTilePosStyle = (tile) => minigameTilePosition(geometry.value, tile.row, tile.col);
 
-const getSubgridCenterStyle = (row, col) => ({
-  left: `calc(${col + 1} * ((100% - ${(cols.value - 1)} * var(--grid-gap)) / ${cols.value}) + ${col} * var(--grid-gap) + (var(--grid-gap) / 2))`,
-  top: `calc(${row + 1} * ((100% - ${(rows.value - 1)} * var(--grid-gap)) / ${rows.value}) + ${row} * var(--grid-gap) + (var(--grid-gap) / 2))`,
-});
+const getSubgridCenterStyle = (row, col) => minigameSubgridCenter(geometry.value, row, col);
 
 const getCellSlotStyle = (cell) => getTilePosStyle(cell);
 
@@ -1503,16 +1532,9 @@ const getTileInnerStyle = (tile) => {
 
 const getTileLabelStyle = (tile) => {
   const textLength = String(tile.displayText || '').length || 1;
-  let fontSize = 'clamp(1rem, 8cqw, 2.5rem)';
-  if (textLength >= 5) {
-    fontSize = 'clamp(0.8rem, 5.2cqw, 1.55rem)';
-  } else if (textLength === 4) {
-    fontSize = 'clamp(0.92rem, 5.8cqw, 1.85rem)';
-  } else if (textLength === 3) {
-    fontSize = 'clamp(1rem, 6.8cqw, 2.15rem)';
-  }
+  const fontSize = minigameLabelSize(boardWidth.value, textLength, rootFontSize.value);
   return {
-    fontSize: `calc(${fontSize} * var(--tile-font-scale, 1) * var(--shape-text-scale, 1))`,
+    fontSize: `calc(${fontSize}px * var(--tile-font-scale, 1) * var(--shape-text-scale, 1))`,
     color:
       tile?.variant?.kind === 'mystery-hidden' || tile?.variant?.kind === 'tilebg'
         ? '#fff'
@@ -1534,8 +1556,8 @@ const getEffectWrapperStyle = (effect) => {
     return {
         ...baseVars,
         ...center,
-        width: `calc((((100% - ${(cols.value - 1)} * var(--grid-gap)) / ${cols.value}) * 2) + var(--grid-gap))`,
-        height: `calc((((100% - ${(rows.value - 1)} * var(--grid-gap)) / ${rows.value}) * 2) + var(--grid-gap))`,
+        width: `${geometry.value.cellWidth * 2 + geometry.value.gap}px`,
+        height: `${geometry.value.cellHeight * 2 + geometry.value.gap}px`,
         transform: 'translate(-50%, -50%)',
       };
     }
@@ -1589,10 +1611,19 @@ const getEffectInnerStyle = (effect) => {
 
 <style scoped>
 .board {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+  overflow: hidden;
+  touch-action: none;
+  border-radius: 0.75rem;
+  background: var(--board-bg);
   --shape-density-scale: 1;
   --shape-text-scale: 1;
-  --padding: calc(2.5cqw * var(--shape-density-scale));
-  --grid-gap: calc(2.5cqw * var(--shape-density-scale));
+  --padding: 10px;
+  --grid-gap: 10px;
 }
 
 .has-custom-cursor,
@@ -1659,7 +1690,8 @@ const getEffectInnerStyle = (effect) => {
 }
 
 .minigame-cell {
-  aspect-ratio: 1 / 1;
+  min-width: 0;
+  min-height: 0;
   padding: 0;
 }
 
@@ -1688,8 +1720,8 @@ const getEffectInnerStyle = (effect) => {
 
 .twist-hotspot {
   position: absolute;
-  width: clamp(30px, 10cqw, 44px);
-  height: clamp(30px, 10cqw, 44px);
+  width: var(--twist-hit-size, 40px);
+  height: var(--twist-hit-size, 40px);
   transform: translate(-50%, -50%);
   border-radius: 999px;
   border: none;
@@ -1703,8 +1735,8 @@ const getEffectInnerStyle = (effect) => {
   content: '';
   position: absolute;
   inset: 50%;
-  width: clamp(16px, 5.2cqw, 24px);
-  height: clamp(16px, 5.2cqw, 24px);
+  width: var(--twist-dot-size, 21px);
+  height: var(--twist-dot-size, 21px);
   transform: translate(-50%, -50%);
   border-radius: 999px;
   border: 1px solid rgba(56, 189, 248, 0.76);
@@ -1722,8 +1754,8 @@ const getEffectInnerStyle = (effect) => {
   pointer-events: none;
   position: absolute;
   z-index: 35;
-  width: clamp(28px, 9cqw, 52px);
-  height: clamp(28px, 9cqw, 52px);
+  width: var(--cursor-size, 36px);
+  height: var(--cursor-size, 36px);
   transform: translate(-28%, -22%);
 }
 
@@ -1768,6 +1800,7 @@ const getEffectInnerStyle = (effect) => {
   position: absolute;
   right: 0.4rem;
   bottom: 0.35rem;
+  font-size: calc(0.6rem * var(--shape-text-scale));
   font-size: calc(clamp(0.45rem, 0.75vw, 0.68rem) * var(--shape-text-scale));
   font-weight: 900;
   opacity: 0.9;
@@ -1780,6 +1813,7 @@ const getEffectInnerStyle = (effect) => {
   position: absolute;
   left: 0.4rem;
   top: 0.35rem;
+  font-size: calc(0.6rem * var(--shape-text-scale));
   font-size: calc(clamp(0.45rem, 0.75vw, 0.72rem) * var(--shape-text-scale));
   font-weight: 900;
   opacity: 0.9;
