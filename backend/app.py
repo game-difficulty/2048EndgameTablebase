@@ -9,6 +9,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from backend.static_files import NoNegativeCacheStaticFiles
 
 from backend.actions import Action, Message
 from backend.handlers.analysis import handle_analysis_action
@@ -156,7 +157,7 @@ if os.path.exists(minigame_assets_path):
 
 if os.path.exists(frontend_dist_path):
     app.mount(
-        "/", StaticFiles(directory=frontend_dist_path, html=True), name="frontend"
+        "/", NoNegativeCacheStaticFiles(directory=frontend_dist_path, html=True), name="frontend"
     )
 
 
