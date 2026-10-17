@@ -2,8 +2,8 @@
 # User Manual
 
 **Author**: game_difficulty
-**Version**: 13.1.0
-**Date**: 2026.6.5
+**Version**: 13.7.0
+**Date**: 2026.10.18
 
 ---
 
@@ -15,8 +15,8 @@ This is a comprehensive 2048 training software suite offering table calculation,
 
 - **Lightning-Fast Computation**: Highly optimized algorithms and advanced pruning deliver industry-leading calculation speeds, accelerating large table computations by over 10x.
 - **Storage Efficiency**: Multiple pruning and data compression techniques significantly reduce the disk footprint of table files.
-- **State-of-the-Art AI**: Features the world鈥檚 most powerful 2048 AI, achieving an 8.4% (卤1.6%) success rate for 65536 and 86.1% (卤2.0%) for 32768, far surpassing other AI engines.
-- **Complete Toolkit**: Comprehensive training and analysis tools鈥攊ncluding real-time feedback, an error log (mistake book), and replay analysis鈥攈elp users master advanced strategies.
+- **Strong AI**: The [1,500-game live report](https://live.2048tables.online/rooms/ai-classic/report) records a 65536 achievement rate of **8.93%** and a 32768 achievement rate of **87.67%**. See Section 7.1 for sample composition and confidence intervals.
+- **Complete Toolkit**: Comprehensive training and analysis tools, including real-time feedback, an error log (mistake book), and replay analysis, help users master advanced strategies.
 
 ## 1.2 Main Function Modules
 
@@ -39,7 +39,7 @@ This is a comprehensive 2048 training software suite offering table calculation,
 # 2. Installation and Startup
 
 ## 2.1 System Requirements
-- **Operating System**: Windows 7 or later.
+- **Operating System**: 64-bit Windows with Microsoft Edge WebView2 Runtime, or 64-bit Linux with GTK3, WebKit2GTK and GObject introspection. Linux also uses system `libstdc++`, `libgomp` and `liblzma`.
 - **Memory**:
     - Basic usage: Minimum 8GB.
     - Large tablebase calculation: 32GB+ recommended; configure significant virtual memory (paging file) if necessary.
@@ -47,7 +47,7 @@ This is a comprehensive 2048 training software suite offering table calculation,
     - Basic usage: 10GB+ free space.
     - Large tablebase calculation: Up to 1TB+ depending on the pattern (SSD strongly recommended).
 - **CPU**:
-    - Any 64-bit CPU is compatible.
+    - An x86-64 CPU; the Linux release uses the x86-64-v3 (AVX2-class) baseline.
     - CPUs supporting the AVX-512 instruction set offer superior performance.
     - Full support for multi-core parallel processing.
 - **GPU**: No GPU required; the engine is pure CPU-based.
@@ -56,12 +56,12 @@ This is a comprehensive 2048 training software suite offering table calculation,
 ## 2.2 Installation Steps
 
 - **Extract**: Download and extract the software package.
-- **Run**: Locate and double-click `main.exe` in the extracted folder to launch.
-- **Initial Launch**: The software will perform JIT compilation and initialization, taking approximately 2-10 seconds.
+- **Run**: On Windows, launch `2048EndgameTablebase.exe` and keep `_internal` beside it. On Linux, run `./2048EndgameTablebase` from the extracted directory; preserve its executable permission.
+- **Initial Launch**: Native modules, the embedded browser and local resources need to initialize. If loading fails or takes unusually long, the startup screen offers a reload button.
 
 ## 2.3 Startup Instructions
 
-- **Initialization**: JIT compilation and resource loading occur during the first use of each feature; this is normal.
+- **Initialization**: First use of a feature may take longer while its modules and table data are loaded.
 - **Troubleshooting**: If you encounter errors, please check the `logger.txt` file for detailed diagnostic information.
 
 # 3. Core Concepts
@@ -82,7 +82,7 @@ Endgame classification is determined by the **layout of remaining empty spaces**
 ### Thought Question
 **What is the target tile for a 9-space 65K endgame?**
 
-**Hint**: Think backwards鈥攚hat large numbers should already exist if the final goal is 65K (65536)?
+**Hint**: Think backwards: what large numbers should already exist if the final goal is 65K (65536)?
 
 ## 3.3 Table Concept
 
@@ -170,6 +170,7 @@ The Settings interface is split into two primary sections: **Table Calculation**
 
 - **Compress Temp Files**: Reduces disk footprint during the generation phase but extends total computation time.
 - **Compress** (Recommended): Compresses the final table data, significantly saving long-term disk space.
+- **Checkpoint Interval (Layers)**: Defaults to **20**, for Classic, AD, EX, EXAD and BC. With result compression or pruning enabled, an exact adjacent pair is saved periodically instead of writing every complete resident layer. Larger intervals reduce disk writes but require more recomputation after interruption. Set **1** for per-layer saving on a new run. Chunked routes still write required working files; the optimal-branch post-pass does not use this setting.
 - **Keep Only Optimal Branches**: Strips away sub-optimal move data to minimize file size; requires additional processing time.
 - **Prune Low Success Rate** (Recommended): Post-calculation pruning that removes states with negligible winning chances without compromising overall accuracy.
 
@@ -177,7 +178,7 @@ The Settings interface is split into two primary sections: **Table Calculation**
 
 - **Advanced Algorithm**: Utilizes specialized logic for massive tables, drastically reducing computation time and memory overhead (recommended for large tables only).
 - **BC Algorithm**: Experimental large-table mode that partitions table data by family modulus to lower peak memory pressure. Use the default modulus unless you are comparing performance.
-- **Small Tile Sum Limit (STSL)**: Controls the pruning intensity of the advanced algorithm鈥攁 trade-off between success rate precision and calculation speed.
+- **Small Tile Sum Limit (STSL)**: Controls the pruning intensity of the advanced algorithm, a trade-off between success rate precision and calculation speed.
 - **Chunked Backward Solving**: Lowers the memory ceiling via chunked I/O. Ideal for memory-constrained systems computing massive endgames; best paired with an SSD.
 - **Success Rate Precision**: Allows customization of the storage format and bit-depth for success rate data.
 
@@ -185,8 +186,7 @@ The Settings interface is split into two primary sections: **Table Calculation**
 Click **BUILD** to initiate the process. The interface displays real-time progress and supports resuming from interruptions.
 
 **Notes on Resuming Calculation:**
-While the program supports resuming from breakpoints, interruptions caused by a full disk or unexpected crashes may corrupt the most recently written files. Resuming directly could lead to data inconsistencies. 
-**Recommended Recovery Procedure**: Before resuming, inspect the size of the latest generated files. Manually delete the last 2-3 potentially corrupted files or folders to ensure a clean data chain.
+Keep the original pattern, target, precision, spawn rate and storage paths, then click **BUILD** again. A periodic checkpoint restores its committed exact pair and recomputes the layers after it; the displayed layer number can therefore move backwards. Do not delete or replace checkpoint files, hidden recovery directories or generated positions with empty placeholders. If disk exhaustion or corruption is reported, free space and inspect `logger.txt` before removing any files.
 
 ### 4.1.2 Global Settings Section
 
@@ -209,7 +209,7 @@ Provides a standard 2048 gameplay with professional AI assistance.
 
 ### 4.2.1 Gameplay & Controls
 
-- **Move**: Use Arrow keys or WASD.
+- **Move**: Use Arrow keys, WASD or HJKL (left, down, up, right).
 - **Undo**: Revert the last move (Available only when AI is OFF).
 - **New Game**: Discard the current game and start fresh.
 - **AI**: Click the **"AI: ON/OFF"** button to enable or disable real-time assistance.
@@ -284,7 +284,7 @@ A core tool for study and research, the Practice interface displays table data a
 
 - **Colored Tile Buttons (0-32k)**: Click to enter "Board Editing Mode."
 - **Left-click**: Sets the target tile on the board to the selected value.
-- **Right-click**: Increases the target tile value by one level (e.g., 2 鈫?4 鈫?8...).
+- **Right-click**: Increases the target tile value by one level (e.g., 2 -> 4 -> 8...).
 - **Other keys**: Decreases the target tile value by one level.
 - Click the currently selected tile button again to exit Board Editing Mode.
 
@@ -302,7 +302,7 @@ A core tool for study and research, the Practice interface displays table data a
 
 ### 4.4.3 Keyboard Shortcuts
 
-- **Arrow Keys / WASD**: Move operations.
+- **Arrow Keys / WASD / HJKL**: Move operations.
 - **Enter**: Stops the demo if auto-playing; loads the encoding if the focus is on the input box; otherwise, executes a single optimal move.
 - **Backspace / Delete**: Undo the previous move.
 - **Q**: Toggle Manual Mode.
@@ -327,7 +327,7 @@ The Test interface evaluates a player's endgame skill level, providing real-time
 
 **3. Execute Moves**:
 
-- Use the arrow keys or WASD to perform moves.
+- Use the arrow keys, WASD or HJKL (left, down, up, right) to perform moves.
 - The system automatically spawns a new tile after each move.
 
 **4. View Feedback**:
@@ -362,7 +362,7 @@ The Test interface evaluates a player's endgame skill level, providing real-time
 
 ### 4.5.3 Keyboard Shortcuts
 
-- **Arrow Keys / WASD**: Move operations; triggers real-time table comparison.
+- **Arrow Keys / WASD / HJKL**: Move operations; triggers real-time table comparison.
 - **R**: Quick reset and save the `.rpl` replay to the default directory.
 - **F**: Show/Hide the real-time analysis text on the right.
 
@@ -486,8 +486,9 @@ Where:
 
 Since computing massive tables can take hours or even days, the program includes a robust error-tolerance mechanism:
 
-- **Layer Persistence**: Data is written to disk immediately after each layer completes.
-- **Breakpoint Resume**: On startup, the program automatically detects generated files. If interrupted, it resumes from the last complete layer, avoiding redundant calculations.
+- **Generated Positions**: Positions needed below the committed recovery frontier are retained for recomputation.
+- **Exact Recovery Pair**: Both complete adjacent layers are written before the checkpoint manifest is replaced. Older recovery data is removed only after that publication succeeds.
+- **Resume**: Restore the committed pair and recompute from the preceding layer, never from pruned lookup results. This protects interrupted runs, not arbitrary disk damage or unflushed writes after power loss.
 
 ## 6.3 Advanced Algorithm
 
@@ -504,7 +505,7 @@ The algorithm utilizes "Masking" technology to treat two classes of numbers diff
 During the generation phase, large numbers not currently involved in merges are treated as special placeholders (Masks).
 
 - **Equivalence Classes**: A single masked position can represent thousands of actual positions that differ only in the arrangement of large numbers but share the same local logic.
-- **State Compression**: By generating only masked positions, the BFS (Breadth-First Search) state space is compressed by $10$鈥?100\times$, significantly reducing the pressure on sorting, deduplication, and binary searches.
+- **State Compression**: By generating only masked positions, the BFS (Breadth-First Search) state space is reduced by a factor of 10-100, significantly reducing the pressure on sorting, deduplication, and binary searches.
 
 #### 2. Dynamic Expansion & Unmasking (Derivation)
 When a newly spawned tile might trigger a merge with a large number (e.g., an existing 128 tile colliding with a newly spawned 128), the algorithm performs an "Expose" (or "Derive") operation to restore the mask to a specific value.
@@ -602,6 +603,10 @@ Its main advantages are:
 - **Good compatibility**: EX keeps the same table semantics as the standard algorithm and supports the "Keep Only Optimal Branches" option.
 - **Best use case**: Suitable for all medium and large standard tables; it is usually recommended to enable it.
 
+EX backward solving automatically chooses between three resident layers, a two-pass route with one successor at a time, and chunked processing when memory is insufficient. Chunking trades additional I/O for lower memory use. EXAD also reuses successor layers across chunked passes to avoid redundant reads.
+
+**Adaptive result compression**: Classic checks whether result compression is worthwhile. EX and EXAD sample success-rate compression every 10 layers; when estimated savings are below 5%, success values are stored uncompressed while indexes remain compressed. BC uses a similar adaptive policy. AD continues compressing its indexes; its success values are already stored uncompressed. A layer without compressed success values is therefore not necessarily a failed compression.
+
 ### 6.4.2 EXAD Algorithm
 
 EXAD combines EX with the Advanced Algorithm: it uses the large-number masking idea of the Advanced Algorithm for very large tables, while using EX-style compact storage to reduce file size and lookup pressure.
@@ -618,32 +623,29 @@ The modulus should be a prime number in the supported 13-256 range. The settings
 # 7. About the AI
 
 ## 7.1 AI Performance
-The strongest 2048 AI available.
 
-- Tested over 1200 games without undo: **65536 success rate: 8.4% (卤1.6%), 32768 success rate: 86.1% (卤2.0%)**.
+The [1,500-game live report](https://live.2048tables.online/rooms/ai-classic/report) covers games completed from **2026-09-16 to 2026-10-12 (UTC+8)**. These are the report's **All games** results: 216 earlier single-AI games plus 428 games each for Lume, Clari and Vero. They are not a benchmark of one fixed desktop configuration; results also depend on the available tables and search settings.
 
-| Search Depth      | Games | Avg Score  | Median Score | Moves/s |
-|-------------------|-------|------------|--------------|---------|
-| 1~9 Adaptive      | 1200  | 772,353    | 819,808      | 11      |
+| Metric | Result | 95% Confidence Interval |
+|--------|--------|-------------------------|
+| 32768 or higher | 87.67% (1,315 / 1,500) | 85.91%-89.24% |
+| 65536 or higher | 8.93% (134 / 1,500) | 7.59%-10.48% |
+| Average score | 785,398 | 774,026-797,299 |
+| Median score | 826,798 | 820,032-830,268 |
 
-- Segmented Success Rates:
+The highest score in the sample is **1,712,092**. Tile achievement includes larger tiles. Rate intervals use Wilson's method; the mean uses 20,000 BCa bootstrap resamples, and the median uses an exact binomial order-statistic interval.
 
-| Milestone         | Success Rate | Comparable Score |
-|-------------------|--------------|------------------|
-| 8k                | 100%         | 97,000           |
-| 16k               | 99.9%        | 210,000          |
-| 32k               | 86.1%        | 453,000          |
-| 32k + 16k         | 72.8%        | 663,000          |
-| 32k + 16k + 8k    | 61.8%        | 760,000          |
-| 32k + 16k + 8k + 4k| 53.3%       | 804,000          |
-| Final 2k          | 46.3%        | 824,000          |
-| 65k               | 8.4%         | 971,000          |
+- First 32K progression chain (stops when the game enters the 65K phase):
 
-- Table Usage Distribution:
+| Milestone | Games | Share of All Games |
+|-----------|-------|--------------------|
+| 32K | 1,315 | 87.67% |
+| +16K | 1,144 | 76.27% |
+| +8K | 1,000 | 66.67% |
+| +4K | 864 | 57.60% |
+| +2K | 760 | 50.67% |
 
-| Search | free12-2k | free11-2k | 4442f-2k | free11-512 |
-|--------|-----------|-----------|----------|------------|
-| 26.49% | 13.38%    | 1.41%     | 51.50%   | 7.22%      |
+The report's 32K **stage** success rate is **87.16%** (5,477 passed / 6,284 attempts; 95% CI 86.33%-87.97%). This is not the per-game 32768 achievement rate above. The report also provides group comparisons, survival curves, replays and a downloadable sample CSV.
 
 ## 7.2 AI Testing
 The packaged application can run the same complete AI used by the game page from the command line. It queries configured tablebases first and falls back to search when no table provides a move:
@@ -659,7 +661,7 @@ Each batch creates a separate `run_timestamp` directory. The `replays` subdirect
 From a source checkout, use `python -m backend.ai_batch` with the same arguments. Run `python -m backend.ai_batch --help` for worker, per-game thread, seed, and initial-board options.
 
 ## 7.3 General AI
-The AI is compatible with any calculated table. 
+The AI can use registered tablebases, including `sum-*` targets, through the existing endgame-level and table-freedom priority rules. Unsupported or unavailable results fall back to search.
 However, it currently does not adjust its overall strategy based on available table combinations, making it difficult to utilize `t` or `444` tables effectively on their own. 
 To maximize AI performance, it is recommended to calculate tables in increasing order of size: `L3 \ LL \ 4431 \ 4432f \ free10 \ 4442ff \ free11 \ 4442f \ free12`. The more and larger the tables calculated, the stronger the AI becomes.
 
@@ -703,10 +705,7 @@ Tip: Press Ctrl + F to search the entire manual.
 3. **Enable Chunked Backward Solving**: When using the Advanced Algorithm, check this option during the solving phase to trade disk I/O for reduced memory consumption.
 
 ### Q5: How do I safely resume calculation after an unexpected interruption?
-**A5**: Unexpected interruptions can corrupt files. Recovery steps:
-1. **Safe Rollback**: Check the last 2鈥? modified files in the output folder. If the file size is abnormal (e.g., 0KB or significantly smaller than preceding files), delete them manually.
-2. **Resume**: Restart the program, keep the parameters unchanged, and click **BUILD**. The program will automatically resume from the last complete layer.
-3. **Log Check**: If errors persist, consult `logger.txt` in the root directory to locate the issue.
+**A5**: Keep the same calculation settings and storage paths, then click **BUILD**. With periodic checkpoints, the program restores an exact adjacent pair and recomputes the interrupted interval. Do not delete the recovery manifest, hidden recovery directory or retained generated positions. A layer-number rollback is expected. For persistent errors, inspect `logger.txt` and disk space first; a small or empty file alone does not prove corruption.
 
 ### Q6: Calculation is frozen (low CPU usage, no progress, disk I/O hung)?
 **A6**: This often occurs when using external mobile hard drives if the drive enters sleep mode or suffers from high latency.
@@ -721,7 +720,7 @@ Tip: Press Ctrl + F to search the entire manual.
 ### Q8: UI text is cut off or the board tiles are distorted?
 **A8**: The UI adapts to different resolutions but is affected by system scaling (DPI):
 1. **Manual Adjustment**: Adjust the "Font Size" parameter in settings.
-2. **System Settings**: Right-click `main.exe` > Properties > Compatibility > Change high DPI settings > Override high DPI scaling behavior performed by Application.
+2. **System Settings**: Right-click `2048EndgameTablebase.exe` > Properties > Compatibility > Change high DPI settings > Override high DPI scaling behavior performed by Application.
 
 ---
 
@@ -774,9 +773,9 @@ To speed up generation and solving, do not check the compression option during i
 2. **Storage Management for Large Tables**
 When SSD capacity is insufficient for mega-tables, perform "Hot/Cold Separation":
 
-    - **Hot Data**: Keep the current Layer and 20鈥?0 adjacent files on the SSD to ensure I/O performance.
+    - **Hot Data**: Keep active layers, checkpoint pairs and generated positions needed for recovery on accessible configured paths; use an SSD for frequently accessed data.
     - **Cold Data**: Move completed or currently unnecessary files to an HDD.
-    - **Virtual Pathing**: Since the program only verifies file existence and not content during breakpoints, you can create empty files/folders in the original SSD path to "trick" the resume check.
+    - **Recovery Data**: Keep checkpoint manifests, hidden recovery directories and retained generated positions intact. Do not use empty placeholder files as a substitute for data needed by the solver.
     - **Multi-path Loading**: Tables can be distributed across multiple drives. You don't need to merge them; simply enter all disk paths in the Practice interface to enable cross-drive recognition.
 
 3. **Custom Table Definitions**
