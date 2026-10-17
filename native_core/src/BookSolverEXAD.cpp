@@ -561,23 +561,10 @@ std::string write_exad_solved_layer_file(
         EXAD::solved_serialized_size(layer)
     );
     EXAD::write_solved_layer_file(lease.path(), layer, io_config);
+    SolveCheckpoint::remove_other_copies(options, step, ".exadbook", lease.path());
     std::string final_path = lease.path();
     lease.release();
     return final_path;
-}
-
-struct EXADSolvePlan {
-    int first_step = -1;
-};
-
-EXADSolvePlan make_exad_solve_plan(const RunOptions &options) {
-    EXADSolvePlan plan;
-    const int last_solve_step = options.steps - 3;
-    if (last_solve_step < 0) {
-        return plan;
-    }
-    plan.first_step = last_solve_step;
-    return plan;
 }
 
 void remove_exad_solved_file_after_compression(const std::string &solved_path,
@@ -654,14 +641,15 @@ double compress_exad_solved_layer_from_memory(
     const RunOptions &options,
     int step,
     const EXAD::SolvedLayer<T> &layer,
-    const EXAD::Luts &luts
+    const EXAD::Luts &luts,
+    bool force = false
 ) {
     if (!options.compress) {
         return 0.0;
     }
     const std::string solved_path = exad_solved_file_path(options, step);
     const std::string existing_compressed_path = exad_existing_compressed_file_path(options, step);
-    if (exad_compressed_file_is_fresh(solved_path, existing_compressed_path)) {
+    if (!force && exad_compressed_file_is_fresh(solved_path, existing_compressed_path)) {
         std::error_code ec;
         NativePath::remove(solved_path, ec);
         return 0.0;
@@ -688,6 +676,7 @@ double compress_exad_solved_layer_from_memory(
         {options.result_value_policy.get(), step, thresholds.absolute, thresholds.relative}
     );
     FileIOUtils::finalize_temporary_file(temp_path, compressed_path);
+    SolveCheckpoint::remove_other_copies(options, step, EXADCompressedResult::kCompressedLayerFileExtension, compressed_path);
     NativePath::remove(solved_path, ec);
     if (ec) {
         throw std::runtime_error("failed to remove EXAD solved layer after in-memory compression: " + solved_path);
@@ -3495,11 +3484,41 @@ void load_future_layer(
 }
 
 template <typename T>
+int prepare_exad_checkpoint(SolveCheckpoint::State &checkpoint, const RunOptions &options,
+                            const EXAD::Luts &luts, FileIOUtils::DirectIoConfig io_config) {
+    auto clean = [&](int step) { remove_exad_temp_layer_candidates(options, step); };
+    if (checkpoint.has_frontier()) {
+        for (int index = 0; index < 2; ++index)
+            if (checkpoint.frontier() + index < options.steps - 2)
+                SolveCheckpoint::copy_layer(checkpoint.file(index), options, checkpoint.frontier() + index, ".exadbook");
+        checkpoint.cleanup(clean);
+        return checkpoint.frontier() - 1;
+    }
+    int first = options.steps - 3;
+    while (first >= 0 && exad_solved_output_exists(options, first)) --first;
+    if (checkpoint.enabled && first >= 0) {
+        const auto snapshot = checkpoint.snapshot_options();
+        checkpoint.save(first + 1, [&](int index) {
+            EXAD::SolvedLayer<T> layer;
+            int cached = std::numeric_limits<int>::min();
+            double read = 0, build = 0;
+            load_future_layer(options, first + 1 + index, EXAD::dtype_mode_from_name(options.success_rate_dtype),
+                luts, layer, cached, io_config, read, build);
+            return write_exad_solved_layer_file(snapshot, first + 1 + index, layer, io_config);
+        }, clean);
+    }
+    return first;
+}
+
+template <typename T>
 void recalculate_process_exad_impl(
     const std::vector<uint64_t> &arr_init,
     const AdvancedPatternSpec &spec,
     const RunOptions &options
 ) {
+    SolveCheckpoint::State checkpoint(options, spec, "exad", ".exadbook");
+    auto clean_positions = [&](int step) { remove_exad_temp_layer_candidates(options, step); };
+    if (checkpoint.completed()) { checkpoint.cleanup(clean_positions); return; }
     ensure_exad_solve_stats_header(options);
     EXADSolveStatsRecord total_record;
     total_record.stage = "_total";
@@ -3526,18 +3545,19 @@ void recalculate_process_exad_impl(
     int cached_future2_step = std::numeric_limits<int>::min();
     std::unordered_map<uint32_t, MatchCache> match_dict;
     const uint32_t progress_total = build_progress_total(options);
-    const EXADSolvePlan solve_plan = make_exad_solve_plan(options);
+    const int first_step = prepare_exad_checkpoint<T>(checkpoint, options, luts, io_config);
+    const auto snapshot_options = checkpoint.snapshot_options();
 
-    for (int step = solve_plan.first_step; step >= 0; --step) {
+    for (int step = first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
-        if (exad_raw_solved_file_exists(options, step)) {
+        if (!checkpoint.has_frontier() && exad_raw_solved_file_exists(options, step)) {
             cleanup_exad_chunk_work_files(options, step);
             continue;
         }
-        if (exad_compressed_file_exists(options, step)) {
+        if (!checkpoint.has_frontier() && exad_compressed_file_exists(options, step)) {
             cleanup_exad_chunk_work_files(options, step);
             continue;
         }
@@ -3647,14 +3667,14 @@ void recalculate_process_exad_impl(
                 future_compact_seconds = wall_time_seconds() - future_compact_t0;
                 future_threshold_values_after = static_cast<uint64_t>(compacted_future.success_values.size());
 
-                if (options.compress) {
+                if (options.compress && !checkpoint.enabled) {
                     compress_seconds += compress_exad_solved_layer_from_memory(
                         options,
                         step + 2,
                         compacted_future,
                         luts
                     );
-                } else {
+                } else if (!checkpoint.enabled) {
                     const double future_write_t0 = wall_time_seconds();
                     write_exad_solved_layer_file(options, step + 2, compacted_future, io_config);
                     future_write_seconds = wall_time_seconds() - future_write_t0;
@@ -3663,6 +3683,16 @@ void recalculate_process_exad_impl(
                     future2 = std::move(compacted_future);
                     EXAD::build_direct_indexes(future2, luts);
                 }
+            }
+        }
+
+        if (checkpoint.enabled && step + 2 < options.steps - 2) {
+            if (options.compress)
+                compress_seconds += compress_exad_solved_layer_from_memory(options, step + 2, future2, luts, true);
+            else {
+                const double t = wall_time_seconds();
+                write_exad_solved_layer_file(options, step + 2, future2, io_config);
+                future_write_seconds += wall_time_seconds() - t;
             }
         }
 
@@ -3678,10 +3708,17 @@ void recalculate_process_exad_impl(
         future_index_seconds += wall_time_seconds() - current_index_t0;
 
         const double write_t0 = wall_time_seconds();
-        write_exad_solved_layer_file(options, step, current, io_config);
+        if (!checkpoint.enabled || step < 2) write_exad_solved_layer_file(options, step, current, io_config);
         const double write_t1 = wall_time_seconds();
-        compress_seconds += maybe_compress_exad_solved_file(options, step, true);
-        remove_exad_temp_layer_candidates(options, step);
+        if (!checkpoint.enabled) compress_seconds += maybe_compress_exad_solved_file(options, step, true);
+        SolveCheckpoint::State::test_stop("LAYER", step);
+        if (checkpoint.due(step)) {
+            checkpoint.save(step, [&](int index) {
+                return write_exad_solved_layer_file(snapshot_options, step + index,
+                    index == 0 ? current : future1, io_config);
+            }, clean_positions);
+        }
+        if (!checkpoint.enabled) clean_positions(step);
 
         EXADSolveStatsRecord record;
         record.stage = "solve";
@@ -3758,7 +3795,8 @@ void recalculate_process_exad_impl(
     future2 = empty_future_layer<T>(dtype_mode);
     match_dict.clear();
     total_record.compress_seconds += compress_all_exad_solved_files(options, true);
-    remove_exad_temp_layers(options);
+    if (checkpoint.has_frontier()) checkpoint.finish(clean_positions);
+    else remove_exad_temp_layers(options);
     append_exad_solve_stats_record(options, total_record);
 }
 
@@ -3815,6 +3853,9 @@ void recalculate_process_exad_chunked_impl(
     const AdvancedPatternSpec &spec,
     const RunOptions &options
 ) {
+    SolveCheckpoint::State checkpoint(options, spec, "exad", ".exadbook");
+    auto clean_positions = [&](int step) { remove_exad_temp_layer_candidates(options, step); };
+    if (checkpoint.completed()) { checkpoint.cleanup(clean_positions); return; }
     ensure_exad_solve_stats_header(options);
     EXADSolveStatsRecord total_record;
     total_record.stage = "_total";
@@ -3837,7 +3878,8 @@ void recalculate_process_exad_chunked_impl(
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     const uint32_t progress_total = build_progress_total(options);
-    const EXADSolvePlan solve_plan = make_exad_solve_plan(options);
+    const int first_step = prepare_exad_checkpoint<T>(checkpoint, options, luts, io_config);
+    const auto snapshot_options = checkpoint.snapshot_options();
     const int last_solve_step = options.steps - 3;
     for (int solved_step = 0; solved_step <= last_solve_step; ++solved_step) {
         if (exad_solved_output_exists(options, solved_step)) {
@@ -3859,16 +3901,16 @@ void recalculate_process_exad_chunked_impl(
 
     EXAD::SolvedLayer<T> future = empty_future_layer<T>(dtype_mode);
     int cached_future_step = std::numeric_limits<int>::min();
-    for (int step = solve_plan.first_step; step >= 0; --step) {
+    for (int step = first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
-        if (exad_raw_solved_file_exists(options, step)) {
+        if (!checkpoint.has_frontier() && exad_raw_solved_file_exists(options, step)) {
             cleanup_exad_chunk_work_files(options, step);
             continue;
         }
-        if (exad_compressed_file_exists(options, step)) {
+        if (!checkpoint.has_frontier() && exad_compressed_file_exists(options, step)) {
             cleanup_exad_chunk_work_files(options, step);
             continue;
         }
@@ -4182,6 +4224,7 @@ void recalculate_process_exad_chunked_impl(
             io_config
         );
         solved_lease.release();
+        SolveCheckpoint::remove_other_copies(options, step, ".exadbook", solved_path);
         current_write_seconds += wall_time_seconds() - merge_t0;
         const double publish_t0 = wall_time_seconds();
         retirement.publish();
@@ -4195,7 +4238,14 @@ void recalculate_process_exad_chunked_impl(
         if (cleanup_ec) {
             throw std::runtime_error("failed to remove EXAD chunk directory: " + chunk_dir);
         }
-        remove_exad_temp_layer_candidates(options, step);
+        SolveCheckpoint::State::test_stop("LAYER", step);
+        if (checkpoint.due(step)) {
+            checkpoint.save(step, [&](int index) {
+                if (index == 0) return SolveCheckpoint::copy_layer(solved_path, snapshot_options, step, ".exadbook");
+                return write_exad_solved_layer_file(snapshot_options, step + 1, future, io_config);
+            }, clean_positions);
+        }
+        if (!checkpoint.enabled) clean_positions(step);
 
         const double normalized_max_rate = static_cast<double>(max_rate - zero_val) /
             static_cast<double>(max_scale - zero_val);
@@ -4269,7 +4319,8 @@ void recalculate_process_exad_chunked_impl(
     match_dict.clear();
     future = empty_future_layer<T>(dtype_mode);
     total_record.compress_seconds += compress_all_exad_solved_files(options, true);
-    remove_exad_temp_layers(options);
+    if (checkpoint.has_frontier()) checkpoint.finish(clean_positions);
+    else remove_exad_temp_layers(options);
     append_exad_solve_stats_record(options, total_record);
 }
 

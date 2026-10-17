@@ -219,6 +219,7 @@ BC::BCFamilySolveRunOptions bc_solve_options_from_dict(const nb::dict &options) 
     run.success_dtype = parse_bc_success_dtype_binding(
         dict_get_or<std::string>(options, "success_dtype", "uint32"));
     run.compress = dict_get_or<bool>(options, "compress", true);
+    run.solve_checkpoint_interval = std::max(1, dict_get_or<int>(options, "solve_checkpoint_interval", 20));
     run.compress_temp_files = dict_get_or<bool>(options, "compress_temp_files", false);
     run.temp_io_pipeline = dict_get_or<bool>(options, "temp_io_pipeline", true);
     run.deletion_threshold = dict_get_or<double>(options, "deletion_threshold", 0.0);
@@ -419,6 +420,7 @@ NB_MODULE(formation_core, m) {
         .def_rw("compress_temp_files", &RunOptions::compress_temp_files)
         .def_rw("optimal_branch_only", &RunOptions::optimal_branch_only)
         .def_rw("chunked_solve", &RunOptions::chunked_solve)
+        .def_rw("solve_checkpoint_interval", &RunOptions::solve_checkpoint_interval)
         .def_rw("num_threads", &RunOptions::num_threads)
         .def_rw("direct_io", &RunOptions::direct_io)
         .def_rw("direct_io_queue_depth", &RunOptions::direct_io_queue_depth)

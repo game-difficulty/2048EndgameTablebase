@@ -15,6 +15,7 @@ from Config import (
     deletion_threshold_components,
     logger,
     normalize_bc_family_modulus,
+    normalize_solve_checkpoint_interval,
     pattern_32k_tiles_map,
     pattern_catalog,
     write_runtime_deletion_threshold_signal,
@@ -116,6 +117,9 @@ def _build_native_run_options(
         options.deletion_threshold_signal_path = RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH
     options.compress = bool(config.get("compress", False))
     options.compress_temp_files = bool(config.get("compress_temp_files", False))
+    options.solve_checkpoint_interval = normalize_solve_checkpoint_interval(
+        config.get("solve_checkpoint_interval", 20)
+    )
     options.optimal_branch_only = bool(config.get("optimal_branch_only", False))
     options.chunked_solve = bool(config.get("chunked_solve", False))
     options.direct_io = bool(config.get("direct_io", True))
@@ -473,7 +477,7 @@ def _has_bc_solve_resume_files(
     prefix: str,
 ) -> bool:
     checkpoint = solved_dir / f"{prefix}family_checkpoint.csv"
-    if checkpoint.is_file():
+    if checkpoint.is_file() or (solved_dir / f"{prefix}solve-bc.checkpoint").is_file():
         return True
     return (
         _has_bc_prefixed_exact_pairs(solved_dir, prefix) or
@@ -487,7 +491,8 @@ def _has_bc_solve_resume_files_multi(
     archive_dirs: tuple[Path, ...],
     prefix: str,
 ) -> bool:
-    if any((solved_dir / f"{prefix}family_checkpoint.csv").is_file() for solved_dir in solved_dirs):
+    if any((solved_dir / f"{prefix}{suffix}").is_file()
+           for solved_dir in solved_dirs for suffix in ("family_checkpoint.csv", "solve-bc.checkpoint")):
         return True
     candidate_dirs = tuple(dict.fromkeys((*solved_dirs, *archive_dirs)))
     return (
@@ -598,6 +603,7 @@ def _build_bc_runtime_options(
         "relative_deletion_threshold": float(relative_threshold),
         "deletion_threshold_signal_path": str(RUNTIME_DELETION_THRESHOLD_SIGNAL_PATH),
         "compress": bool(config.get("compress", False)),
+        "solve_checkpoint_interval": normalize_solve_checkpoint_interval(config.get("solve_checkpoint_interval", 20)),
         "compress_temp_files": bool(config.get("compress_temp_files", False)),
         "expected_layers": int(expected_layers),
         "progress_total": int(expected_layers * 2),
@@ -766,6 +772,7 @@ def save_config_to_txt(output_path: str) -> None:
         "compress",
         "optimal_branch_only",
         "compress_temp_files",
+        "solve_checkpoint_interval",
         "algorithm_mode",
         "advanced_algo",
         "zmask_algo",

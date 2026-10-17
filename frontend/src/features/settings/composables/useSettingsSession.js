@@ -47,6 +47,12 @@ export function useSettingsSession(activeRef) {
   const builderZMaskAlgo = ref(true);
   const builderCompress = ref(false);
   const builderCompressTempFiles = ref(false);
+  const builderCheckpointInterval = ref(20);
+  const normalizeCheckpointInterval = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) && value !== ''
+      ? Math.max(1, Math.min(1000000, Math.trunc(number))) : 20;
+  };
   const builderOptimalBranchOnly = ref(false);
   const builderChunkedSolve = ref(false);
   const builderBCFamilyModulus = ref(29);
@@ -277,6 +283,7 @@ export function useSettingsSession(activeRef) {
     builderZMaskAlgo.value = algorithmFlags.ex;
     builderCompress.value = Boolean(config.value.compress);
     builderCompressTempFiles.value = Boolean(config.value.compress_temp_files);
+    builderCheckpointInterval.value = normalizeCheckpointInterval(config.value.solve_checkpoint_interval ?? 20);
     builderOptimalBranchOnly.value = Boolean(config.value.optimal_branch_only);
     builderChunkedSolve.value = Boolean(config.value.chunked_solve);
     builderBCFamilyModulus.value = normalizeBCFamilyModulus(
@@ -301,6 +308,7 @@ export function useSettingsSession(activeRef) {
       config.value.zmask_algo,
       config.value.compress,
       config.value.compress_temp_files,
+      config.value.solve_checkpoint_interval,
       config.value.optimal_branch_only,
       config.value.chunked_solve,
       config.value.bc_family_modulus,
@@ -483,6 +491,11 @@ export function useSettingsSession(activeRef) {
     saveSetting('compress_temp_files', Boolean(builderCompressTempFiles.value));
   };
 
+  const handleCheckpointIntervalChange = () => {
+    builderCheckpointInterval.value = normalizeCheckpointInterval(builderCheckpointInterval.value);
+    saveSetting('solve_checkpoint_interval', builderCheckpointInterval.value);
+  };
+
   const handleOptimalBranchOnlyChange = () => {
     if (builderAdvancedAlgo.value || builderAlgorithm.value === 'bc') {
       builderOptimalBranchOnly.value = false;
@@ -590,6 +603,7 @@ export function useSettingsSession(activeRef) {
       'compress_temp_files',
       Boolean(builderCompressTempFiles.value)
     );
+    handleCheckpointIntervalChange();
     saveSetting(
       'optimal_branch_only',
       advancedEnabled || bcEnabled ? false : Boolean(builderOptimalBranchOnly.value)
@@ -657,6 +671,7 @@ export function useSettingsSession(activeRef) {
     builderZMaskAlgo,
     builderCompress,
     builderCompressTempFiles,
+    builderCheckpointInterval,
     builderOptimalBranchOnly,
     builderChunkedSolve,
     builderBCFamilyModulus,
@@ -673,6 +688,7 @@ export function useSettingsSession(activeRef) {
     handleZMaskAlgoChange,
     handleCompressChange,
     handleCompressTempFilesChange,
+    handleCheckpointIntervalChange,
     handleOptimalBranchOnlyChange,
     handleChunkedSolveChange,
     handleBCFamilyModulusChange,

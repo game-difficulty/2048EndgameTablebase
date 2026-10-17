@@ -18,6 +18,7 @@ from Config import (
     pattern_catalog,
     logger,
     normalize_bc_family_modulus,
+    normalize_solve_checkpoint_interval,
     normalize_deletion_threshold_mode,
     theme_map,
     write_runtime_deletion_threshold_signal,
@@ -165,6 +166,8 @@ async def handle_settings_action(
                 if theme in theme_map:
                     config["colors"] = list(theme_map[theme]) + ["#000000"] * 20
             SingletonConfig.tile_font_colors()
+        elif key == "solve_checkpoint_interval":
+            config[key] = normalize_solve_checkpoint_interval(value)
         elif key == "deletion_threshold":
             value = write_runtime_deletion_threshold_signal(
                 value,

@@ -1,4 +1,5 @@
 #include "BookSolver.h"
+#include "SolveCheckpoint.h"
 
 #include "BoardMaskerAD.h"
 #include "BoardMoverAD.h"
@@ -1886,7 +1887,8 @@ void run_pattern_build_ad_cpp(
 ) {
     FormationProgress::reset_build_progress(build_progress_total(options));
     bool started = false;
-    {
+    SolveCheckpoint::State checkpoint(options, spec, "ad", "b");
+    if (!checkpoint.exists()) {
         FormationAD::MaskerContext masker = FormationAD::init_masker(spec);
         auto [generated_started, d0, d1] = generate_process_ad(arr_init, spec, options, masker);
         started = generated_started;

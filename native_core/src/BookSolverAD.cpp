@@ -10,6 +10,7 @@
 #include "Formation.h"
 #include "HybridSearch.h"
 #include "SymmetryUtils.h"
+#include "SolveCheckpoint.h"
 
 #include <algorithm>
 #include <array>
@@ -586,7 +587,7 @@ std::string ad_book_folder_path(const RunOptions &options, int step) {
 }
 
 template <typename T>
-void dict_tofile(
+std::string dict_tofile(
     const BookStore<T> &book_dict,
     const IndexStore &ind_dict,
     const RunOptions &options,
@@ -648,7 +649,9 @@ void dict_tofile(
         maybe_do_compress_ad(NativePath::to_utf8_string(temp_folder_path));
     }
     publish_ad_chunked_folder(temp_folder_path, folder_path);
+    SolveCheckpoint::remove_other_copies(options, step, "b", NativePath::to_utf8_string(folder_path));
     lease.release();
+    return NativePath::to_utf8_string(folder_path);
 }
 
 template <typename T>
@@ -2257,6 +2260,19 @@ void iter_ind_dict2(
     }
 }
 
+void remove_ad_generated_layer(const RunOptions &options, int step) {
+    StoragePaths::remove_all_candidates(options, step, "", false);
+    StoragePaths::remove_all_candidates(options, step, ".7z", false);
+}
+
+int restore_ad_checkpoint(SolveCheckpoint::State &checkpoint, const RunOptions &options) {
+    if (!checkpoint.has_frontier()) return options.steps - 3;
+    for (int index = 0; index < 2; ++index)
+        SolveCheckpoint::copy_directory(checkpoint.file(index), options, checkpoint.frontier() + index, "b");
+    checkpoint.cleanup([&](int step) { remove_ad_generated_layer(options, step); });
+    return checkpoint.frontier() - 1;
+}
+
 template <typename T>
 void recalculate_process_ad_chunked_impl(
     const std::vector<uint64_t> &arr_init,
@@ -2264,6 +2280,11 @@ void recalculate_process_ad_chunked_impl(
     const RunOptions &options,
     bool started_from_generate
 ) {
+    SolveCheckpoint::State checkpoint(options, spec, "ad", "b");
+    auto clean_positions = [&](int step) { remove_ad_generated_layer(options, step); };
+    if (checkpoint.completed()) { checkpoint.cleanup(clean_positions); return; }
+    const int first_step = restore_ad_checkpoint(checkpoint, options);
+    const RunOptions snapshot_options = checkpoint.snapshot_options();
     ensure_ad_solve_stats_header(options);
     AdSolveStatsRecord total_record;
     total_record.stage = "_total";
@@ -2289,32 +2310,37 @@ void recalculate_process_ad_chunked_impl(
     clear_index_store(ind_dict1);
     clear_index_store(ind_dict2);
 
-    if (started_from_generate) {
+    if (started_from_generate && !checkpoint.has_frontier()) {
         std::error_code create_ec1;
         std::error_code create_ec2;
         NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 1)) + "b", create_ec1);
         NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 2)) + "b", create_ec2);
     }
-    StoragePaths::remove_all_candidates(options, options.steps - 2, "", false);
-    StoragePaths::remove_all_candidates(options, options.steps - 2, ".7z", false);
+    if (!checkpoint.enabled) clean_positions(options.steps - 2);
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
     const uint32_t progress_total = build_progress_total(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
-    for (int step = options.steps - 3; step >= 0; --step) {
+    for (int step = first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
         const std::string solved_folder = ad_book_folder_path(options, step);
-        if (StoragePaths::filename_exists(solved_folder)) {
+        if (!checkpoint.has_frontier() && StoragePaths::filename_exists(solved_folder)) {
             if (options.compress) {
                 maybe_do_compress_ad(ad_book_folder_path(options, step + 2));
             }
             debug_log("skipping step " + std::to_string(step));
             continue;
+        }
+        if (checkpoint.enabled && !checkpoint.has_frontier()) {
+            checkpoint.save(step + 1, [&](int index) {
+                return SolveCheckpoint::copy_directory(ad_book_folder_path(options, step + 1 + index),
+                    snapshot_options, step + 1 + index, "b");
+            }, clean_positions);
         }
         deletion_threshold_state =
             RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
@@ -2472,10 +2498,18 @@ void recalculate_process_ad_chunked_impl(
         );
 
         publish_ad_chunked_folder(temp_folder, final_folder);
+        SolveCheckpoint::remove_other_copies(options, step, "b", NativePath::to_utf8_string(final_folder));
         current_folder_lease.release();
 
-        StoragePaths::remove_all_candidates(options, step, "", false);
-        StoragePaths::remove_all_candidates(options, step, ".7z", false);
+        SolveCheckpoint::State::test_stop("LAYER", step);
+        if (checkpoint.due(step)) {
+            checkpoint.save(step, [&](int index) {
+                if (index == 0) return SolveCheckpoint::copy_directory(
+                    NativePath::to_utf8_string(final_folder), snapshot_options, step, "b");
+                return dict_tofile(book_dict1, ind_dict1, snapshot_options, step + 1, false);
+            }, clean_positions);
+        }
+        if (!checkpoint.enabled) clean_positions(step);
 
         AdSolveStatsRecord record;
         record.stage = "chunked_solve";
@@ -2523,6 +2557,7 @@ void recalculate_process_ad_chunked_impl(
         book_dict2 = std::move(book_dict1);
         ind_dict2 = std::move(ind_dict1);
     }
+    if (checkpoint.has_frontier()) checkpoint.finish(clean_positions);
     total_record.deletion_threshold = deletion_threshold_state.absolute;
     total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     append_ad_solve_stats_record(options, total_record);
@@ -2535,6 +2570,11 @@ void recalculate_process_ad_impl(
     const RunOptions &options,
     bool started_from_generate
 ) {
+    SolveCheckpoint::State checkpoint(options, spec, "ad", "b");
+    auto clean_positions = [&](int step) { remove_ad_generated_layer(options, step); };
+    if (checkpoint.completed()) { checkpoint.cleanup(clean_positions); return; }
+    const int first_step = restore_ad_checkpoint(checkpoint, options);
+    const RunOptions snapshot_options = checkpoint.snapshot_options();
     ensure_ad_solve_stats_header(options);
     AdSolveStatsRecord total_record;
     total_record.stage = "_total";
@@ -2560,32 +2600,37 @@ void recalculate_process_ad_impl(
     clear_index_store(ind_dict1);
     clear_index_store(ind_dict2);
 
-    if (started_from_generate) {
+    if (started_from_generate && !checkpoint.has_frontier()) {
         std::error_code create_ec1;
         std::error_code create_ec2;
         NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 1)) + "b", create_ec1);
         NativePath::create_directories(options.pathname + std::to_string(logical_layer(options, options.steps - 2)) + "b", create_ec2);
     }
-    StoragePaths::remove_all_candidates(options, options.steps - 2, "", false);
-    StoragePaths::remove_all_candidates(options, options.steps - 2, ".7z", false);
+    if (!checkpoint.enabled) clean_positions(options.steps - 2);
 
     std::unordered_map<uint32_t, MatchCache> match_dict;
     bool started = false;
     bool has_prefix1 = false;
     const uint32_t progress_total = build_progress_total(options);
 
-    for (int step = options.steps - 3; step >= 0; --step) {
+    for (int step = first_step; step >= 0; --step) {
         FormationProgress::update_build_progress(
             progress_total - static_cast<uint32_t>(step) - 2U,
             progress_total
         );
         const std::string solved_folder = ad_book_folder_path(options, step);
-        if (StoragePaths::filename_exists(solved_folder)) {
+        if (!checkpoint.has_frontier() && StoragePaths::filename_exists(solved_folder)) {
             if (options.compress) {
                 maybe_do_compress_ad(ad_book_folder_path(options, step + 2));
             }
             debug_log("skipping step " + std::to_string(step));
             continue;
+        }
+        if (checkpoint.enabled && !checkpoint.has_frontier()) {
+            checkpoint.save(step + 1, [&](int index) {
+                return SolveCheckpoint::copy_directory(ad_book_folder_path(options, step + 1 + index),
+                    snapshot_options, step + 1 + index, "b");
+            }, clean_positions);
         }
         deletion_threshold_state =
             RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
@@ -2696,7 +2741,7 @@ void recalculate_process_ad_impl(
         double t3 = wall_time_seconds();
 
         double future_write_seconds = 0.0;
-        if (future_threshold_rows_after != future_threshold_rows_before || options.compress) {
+        if (checkpoint.enabled || future_threshold_rows_after != future_threshold_rows_before || options.compress) {
             const double future_write_t0 = wall_time_seconds();
             dict_tofile(book_dict2, ind_dict2, options, step + 2, true);
             future_write_seconds += wall_time_seconds() - future_write_t0;
@@ -2705,11 +2750,17 @@ void recalculate_process_ad_impl(
         release_index_store(ind_dict2);
         indind_dict2.reset();
         const double current_write_t0 = wall_time_seconds();
-        dict_tofile(book_dict0, ind_dict0, options, step, false);
+        if (!checkpoint.enabled || step < 2) dict_tofile(book_dict0, ind_dict0, options, step, false);
         const double current_write_t1 = wall_time_seconds();
 
-        StoragePaths::remove_all_candidates(options, step, "", false);
-        StoragePaths::remove_all_candidates(options, step, ".7z", false);
+        SolveCheckpoint::State::test_stop("LAYER", step);
+        if (checkpoint.due(step)) {
+            checkpoint.save(step, [&](int index) {
+                if (index == 0) return dict_tofile(book_dict0, ind_dict0, snapshot_options, step, false);
+                return dict_tofile(book_dict1, ind_dict1, snapshot_options, step + 1, false);
+            }, clean_positions);
+        }
+        if (!checkpoint.enabled) clean_positions(step);
 
         AdSolveStatsRecord record;
         record.stage = "solve";
@@ -2761,6 +2812,7 @@ void recalculate_process_ad_impl(
         book_dict1 = std::move(book_dict0);
         ind_dict1 = std::move(ind_dict0);
     }
+    if (checkpoint.has_frontier()) checkpoint.finish(clean_positions);
     total_record.deletion_threshold = deletion_threshold_state.absolute;
     total_record.relative_deletion_threshold = deletion_threshold_state.relative;
     append_ad_solve_stats_record(options, total_record);

@@ -1,4 +1,5 @@
 #include "BookSolver.h"
+#include "SolveCheckpoint.h"
 
 #include "BoardMaskerAD.h"
 #include "EXADBuilder.h"
@@ -909,6 +910,7 @@ void run_pattern_build_exad_cpp(
     const RunOptions &options
 ) {
     FormationProgress::reset_build_progress(build_progress_total(options));
-    ensure_exad_temp_through_cpp(arr_init, spec, options, options.steps - 2);
+    SolveCheckpoint::State checkpoint(options, spec, "exad", ".exadbook");
+    if (!checkpoint.exists()) ensure_exad_temp_through_cpp(arr_init, spec, options, options.steps - 2);
     run_pattern_solve_exad_cpp(arr_init, spec, options);
 }

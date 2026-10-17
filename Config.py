@@ -163,6 +163,13 @@ def _is_prime(value: int) -> bool:
     return True
 
 
+def normalize_solve_checkpoint_interval(value):
+    try:
+        return min(1000000, max(1, int(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 20
+
+
 def normalize_bc_family_modulus(value):
     try:
         parsed = int(float(value))
@@ -593,6 +600,7 @@ class SingletonConfig:
             "compress": False,
             "optimal_branch_only": False,
             "compress_temp_files": False,
+            "solve_checkpoint_interval": 20,
             "algorithm_mode": "ex",
             "SmallTileSumLimit": 96,
             "advanced_algo": False,
@@ -640,6 +648,10 @@ class SingletonConfig:
                         if k not in data:
                             data[k] = v
                             updated = True
+                    checkpoint_interval = normalize_solve_checkpoint_interval(data.get("solve_checkpoint_interval", 20))
+                    if data.get("solve_checkpoint_interval") != checkpoint_interval:
+                        data["solve_checkpoint_interval"] = checkpoint_interval
+                        updated = True
                     bc_family_modulus = normalize_bc_family_modulus(
                         data.get("bc_family_modulus", defaults["bc_family_modulus"])
                     )

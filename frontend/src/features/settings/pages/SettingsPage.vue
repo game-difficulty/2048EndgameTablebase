@@ -231,6 +231,15 @@
                 </span>
               </label>
 
+              <label class="sm:col-span-2 flex flex-col gap-2 ui-control font-bold text-text-main">
+                <span>{{ $t('settings.builder.checkpointInterval') }}</span>
+                <input type="number" min="1" max="1000000" step="1"
+                  v-model="builderCheckpointInterval" @change="handleCheckpointIntervalChange"
+                  :disabled="builderOptimalBranchOnly"
+                  :title="$t('settings.tooltips.checkpointInterval')"
+                  class="w-full rounded-lg border border-border-main bg-bg-main px-3 py-2 font-mono font-normal outline-none focus:border-accent disabled:opacity-40 disabled:cursor-not-allowed" />
+              </label>
+
               <label class="builder-toggle-option cursor-pointer group" v-if="builderSupportsOptimalOnly">
                 <div class="builder-toggle-switch relative">
                   <input type="checkbox" v-model="builderOptimalBranchOnly" class="sr-only peer" @change="handleOptimalBranchOnlyChange" />
@@ -442,6 +451,7 @@ const props = defineProps({
   builderAlgorithm,
   builderCompress,
   builderCompressTempFiles,
+  builderCheckpointInterval,
   builderOptimalBranchOnly,
   builderChunkedSolve,
   builderBCFamilyModulus,
@@ -456,6 +466,7 @@ const props = defineProps({
   handleBuilderAlgorithmChange,
   handleCompressChange,
   handleCompressTempFilesChange,
+  handleCheckpointIntervalChange,
   handleOptimalBranchOnlyChange,
   handleChunkedSolveChange,
   handleBCFamilyModulusChange,

@@ -13,6 +13,7 @@
 #include "FormationRuntime.h"
 #include "PathUtils.h"
 #include "SymmetryUtils.h"
+#include "SolveCheckpoint.h"
 
 #include <algorithm>
 #include <chrono>
@@ -79,6 +80,7 @@ struct BCFamilySolveRunOptions {
     bool direct_io = false;
     bool keep_direct_padding = false;
     bool compress = false;
+    int solve_checkpoint_interval = 20;
     bool compress_temp_files = false;
     bool temp_io_pipeline = true;
     bool optimal_branch_only = false;
@@ -1234,7 +1236,8 @@ inline void bc_family_runner_add_final_compress_stats(
     const BCFamilySolveRunOptions &options,
     uint32_t ordinal,
     const std::filesystem::path &position_path,
-    const std::filesystem::path &success_path
+    const std::filesystem::path &success_path,
+    uint64_t memory_estimate = 0
 ) {
     std::vector<std::string> candidates;
     for (const std::filesystem::path &path :
@@ -1247,14 +1250,15 @@ inline void bc_family_runner_add_final_compress_stats(
     }
     return StoragePaths::reserve_write_path_from_candidates(
         candidates,
-        bc_family_runner_estimate_compressed_output_bytes(position_path, success_path));
+        memory_estimate ? memory_estimate : bc_family_runner_estimate_compressed_output_bytes(position_path, success_path));
 }
 
 [[nodiscard]] inline StoragePaths::ReservedWritePath bc_family_runner_reserve_uncompressed_archive_output(
     const BCFamilySolveRunOptions &options,
     uint32_t ordinal,
     const std::filesystem::path &position_path,
-    const std::filesystem::path &success_path
+    const std::filesystem::path &success_path,
+    uint64_t memory_estimate = 0
 ) {
     auto required_file_size = [](const std::filesystem::path &path) {
         std::error_code ec;
@@ -1266,7 +1270,7 @@ inline void bc_family_runner_add_final_compress_stats(
         }
         return static_cast<uint64_t>(size);
     };
-    const uint64_t required_bytes = StoragePaths::saturating_add(
+    const uint64_t required_bytes = memory_estimate ? memory_estimate : StoragePaths::saturating_add(
         required_file_size(position_path),
         required_file_size(success_path));
     std::vector<std::string> reasons;
@@ -2042,6 +2046,7 @@ template <typename StorageT>
 template <typename StorageT>
 struct BCFamilySolveFrontierLayer {
     int64_t ordinal = -1;
+    bool memory_only = false;
     std::filesystem::path position_path;
     std::filesystem::path success_path;
     BCPositionStreamingReader position;
@@ -2057,6 +2062,77 @@ struct BCFamilySolveFrontierLayer {
         return ordinal >= 0;
     }
 };
+
+// The resident cache owns the payload. Streaming readers borrow it without a
+// second layer-sized allocation; only the success header/offset table is owned.
+class BCResidentViewFile final : public BCReadableFile {
+    std::vector<uint8_t> prefix_;
+    const uint8_t *payload_;
+    uint64_t bytes_;
+public:
+    BCResidentViewFile(std::vector<uint8_t> prefix, const void *payload, uint64_t bytes)
+        : prefix_(std::move(prefix)), payload_(static_cast<const uint8_t *>(payload)), bytes_(bytes) {}
+    uint64_t size() const override { return prefix_.size() + bytes_; }
+    void read_at(uint64_t offset, void *data, uint64_t bytes) const override {
+        if (offset > size() || bytes > size() - offset) throw std::out_of_range("BC resident view read exceeds layer");
+        auto *dst = static_cast<uint8_t *>(data);
+        if (offset < prefix_.size()) {
+            const auto n = std::min<uint64_t>(bytes, prefix_.size() - offset);
+            std::memcpy(dst, prefix_.data() + offset, n);
+            dst += n; offset += n; bytes -= n;
+        }
+        if (bytes) std::memcpy(dst, payload_ + offset - prefix_.size(), bytes);
+    }
+};
+
+template<class T>
+BCFamilySolveFrontierLayer<T> bc_family_runner_memory_frontier(
+    const BCFamilySolveRunOptions &options, uint32_t ordinal,
+    std::unique_ptr<BCResidentSolvedLayer<T>> cache, const BCLut &lut) {
+    BCFamilySolveFrontierLayer<T> result;
+    result.ordinal = ordinal;
+    result.memory_only = true;
+    result.position_path = bc_family_runner_position_path(options.solved_output_dir, options.prefix, ordinal);
+    result.success_path = bc_family_runner_success_path(options.solved_output_dir, options.prefix, ordinal);
+    result.resident_cache = std::move(cache);
+    const auto &layer = *result.resident_cache;
+    const auto &position = layer.position;
+    result.position.open(std::make_unique<BCResidentViewFile>(std::vector<uint8_t>{},
+        position.bytes().data(), position.bytes().size()), lut);
+    BCSuccessHeader header;
+    header.dtype = static_cast<uint32_t>(layer.dtype);
+    header.row_width = 1;
+    header.family_count = position.header().family_count;
+    header.descriptor_count = position.cell_count();
+    header.payload_offset = kBCSuccessHeaderBytes + bc_success_cell_value_offsets_bytes(header.descriptor_count);
+    header.payload_bytes = layer.success_values.size() * sizeof(T);
+    header.position_key_mode = position.header().key_mode;
+    header.family_unit = position.header().family_unit;
+    header.axis_base_coord = position.header().axis_base_coord;
+    header.layer_sum = position.header().layer_sum;
+    header.position_metadata_fingerprint = bc_success_position_fingerprint(position);
+    std::vector<uint8_t> prefix;
+    bc_append_success_header(prefix, header);
+    uint64_t offset = 0;
+    for (CellId cid = 0; cid < position.cell_count(); ++cid) {
+        bc_append_u64_le(prefix, offset);
+        offset += position.descriptor(cid).success_rows;
+    }
+    result.success.open(std::make_unique<BCResidentViewFile>(std::move(prefix),
+        layer.success_values.data(), header.payload_bytes), result.position, 1);
+    return result;
+}
+
+template<class T>
+uint64_t bc_family_runner_memory_archive_estimate(const BCFamilySolveFrontierLayer<T> &layer) {
+    if (!layer.memory_only) return 0;
+    uint64_t bytes = StoragePaths::saturating_add(layer.position.file_size(),
+        StoragePaths::scale_ratio(layer.success.file_size(), 101U));
+    bytes = StoragePaths::saturating_add(bytes, StoragePaths::scale_ratio(
+        layer.position.header().bucket_meta_bytes / kBCPositionBucketEntryBytes, 512U, 1U));
+    bytes = StoragePaths::saturating_add(bytes, StoragePaths::scale_ratio(layer.position.cell_count(), 512U, 1U));
+    return StoragePaths::saturating_add(bytes, 16ULL * 1024U * 1024U);
+}
 
 template <typename StorageT>
 [[nodiscard]] inline BCFamilySolveFrontierLayer<StorageT> bc_family_runner_open_frontier(
@@ -2113,6 +2189,62 @@ inline void bc_family_runner_ensure_frontier_partition(
         possible_8tile_sums,
         options.family_modulus);
     frontier.partition_seconds += bc_family_solve_runner_now_seconds() - t0;
+}
+
+inline void bc_family_runner_remove_other_exact_copies(const BCFamilySolveRunOptions &options, uint32_t ordinal,
+                                               const std::filesystem::path &published_dir) {
+    RunOptions paths;
+    paths.layer_offset = free_layer_offset(options.prefix);
+    paths.pathname = NativePath::to_utf8_string(published_dir / options.prefix);
+    for (const auto &dir : bc_family_runner_solved_dirs(options))
+        paths.cold_pathnames.push_back(NativePath::to_utf8_string(dir / options.prefix));
+    SolveCheckpoint::remove_other_copies(paths, ordinal, ".bcpos",
+        NativePath::to_utf8_string(bc_family_runner_position_path(published_dir, options.prefix, ordinal)));
+    SolveCheckpoint::remove_other_copies(paths, ordinal, ".bcsuc",
+        NativePath::to_utf8_string(bc_family_runner_success_path(published_dir, options.prefix, ordinal)));
+}
+
+template<class T>
+void bc_family_runner_spill_frontier(BCFamilySolveFrontierLayer<T> &layer,
+    const BCFamilySolveRunOptions &options, const BCLut &lut, const std::vector<LayerSum> &sums) {
+    if (!layer.memory_only) return;
+    const auto bytes = layer.position.file_size() + layer.success.file_size();
+    std::vector<std::string> candidates;
+    for (const auto &dir : bc_family_runner_solved_dirs(options))
+        candidates.push_back(NativePath::to_utf8_string(bc_family_runner_position_path(dir, options.prefix, layer.ordinal)));
+    auto lease = StoragePaths::reserve_write_path_from_candidates(candidates, bytes);
+    auto output = options;
+    output.solved_output_dir = NativePath::from_utf8(lease.path()).parent_path();
+    (void)bc_family_runner_write_resident_layer(output, layer.ordinal, *layer.resident_cache, "spill");
+    bc_family_runner_remove_other_exact_copies(options, layer.ordinal, output.solved_output_dir);
+    layer = bc_family_runner_open_frontier<T>(options, layer.ordinal, lut, sums);
+}
+
+template<class T>
+std::string bc_family_runner_snapshot_frontier(const BCFamilySolveFrontierLayer<T> &layer,
+    const BCFamilySolveRunOptions &options, const RunOptions &snapshot) {
+    auto lease = StoragePaths::reserve_write_path(snapshot, StoragePaths::ArtifactRole::Hot,
+        static_cast<int>(layer.ordinal), ".bcfrontier", layer.position.file_size() + layer.success.file_size());
+    const auto directory = NativePath::from_utf8(lease.path());
+    std::filesystem::create_directories(directory);
+    auto output = options;
+    output.solved_output_dir = directory;
+    if (layer.resident_cache) {
+        (void)bc_family_runner_write_resident_layer(output, layer.ordinal, *layer.resident_cache, "checkpoint");
+    } else {
+        RunOptions destination = snapshot;
+        destination.pathname = NativePath::to_utf8_string(directory / options.prefix);
+        destination.cold_pathnames.clear();
+        SolveCheckpoint::copy_layer(NativePath::to_utf8_string(layer.position_path), destination, layer.ordinal, ".bcpos");
+        SolveCheckpoint::copy_layer(NativePath::to_utf8_string(layer.success_path), destination, layer.ordinal, ".bcsuc");
+    }
+    return lease.path();
+}
+
+inline bool bc_family_runner_has_periodic_checkpoint(const BCFamilySolveRunOptions &options) {
+    for (const auto &dir : bc_family_runner_solved_dirs(options))
+        if (std::filesystem::exists(dir / (options.prefix + "solve-bc.checkpoint"))) return true;
+    return false;
 }
 
 template <typename StorageT>
@@ -3001,7 +3133,7 @@ template <typename StorageT>
         std::filesystem::create_directories(archive_dir);
     }
 
-    if (!RuntimeControls::deletion_threshold_enabled(deletion_state)) {
+    if (!retired.memory_only && !RuntimeControls::deletion_threshold_enabled(deletion_state)) {
         std::error_code ec;
         metric.position_bytes = std::filesystem::file_size(exact_position_path, ec);
         if (ec) {
@@ -3073,7 +3205,7 @@ template <typename StorageT>
         terminal_value,
         deletion_state);
     metric.archive_scan_seconds = bc_family_solve_runner_now_seconds() - scan_t0;
-    if (!(threshold > zero_value)) {
+    if (!retired.memory_only && !(threshold > zero_value)) {
         std::error_code ec;
         metric.position_bytes = std::filesystem::file_size(exact_position_path, ec);
         if (ec) {
@@ -3131,7 +3263,7 @@ template <typename StorageT>
             options,
             metric.ordinal,
             exact_position_path,
-            exact_success_path);
+            exact_success_path, bc_family_runner_memory_archive_estimate(retired));
         const std::filesystem::path compressed_output = NativePath::from_utf8(compressed_lease.path());
         auto compression = bc_family_runner_make_compress_options(options, metric.ordinal);
         compression.sampling_threshold = static_cast<double>(threshold);
@@ -3264,7 +3396,7 @@ template <typename StorageT>
         options,
         metric.ordinal,
         exact_position_path,
-        exact_success_path);
+        exact_success_path, retired.memory_only ? retired.position.file_size() + retired.success.file_size() : 0);
     const std::filesystem::path position_target = NativePath::from_utf8(archive_lease.path());
     const std::filesystem::path success_target = bc_family_runner_success_path(
         position_target.parent_path(),
@@ -3548,7 +3680,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
     const std::filesystem::path archive_dir = bc_family_runner_archive_dir(options);
     const bool separate_archive_dir =
         !bc_family_runner_same_path(archive_dir, options.solved_output_dir);
-    if (!options.force_restart && !options.start_ordinal &&
+    if (!bc_family_runner_has_periodic_checkpoint(options) && !options.force_restart && !options.start_ordinal &&
         (separate_archive_dir || layers.empty())) {
         bc_family_runner_compress_existing_archive_exact_layers<StorageT>(
             options,
@@ -3557,7 +3689,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             callback);
     }
     uint32_t archive_max_ordinal = 0U;
-    if (!options.force_restart && !options.start_ordinal &&
+    if (!bc_family_runner_has_periodic_checkpoint(options) && !options.force_restart && !options.start_ordinal &&
         bc_family_runner_archive_layers_are_contiguous_from_zero(
             options,
             &archive_max_ordinal)) {
@@ -3577,6 +3709,47 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
     }
     const uint32_t discovered_min_ordinal = layers.begin()->first;
     const uint32_t max_ordinal = layers.rbegin()->first;
+    RunOptions checkpoint_options;
+    checkpoint_options.pathname = NativePath::to_utf8_string(options.solved_output_dir / options.prefix);
+    for (const auto &dir : bc_family_runner_solved_dirs(options))
+        if (!bc_family_runner_same_path(dir, options.solved_output_dir))
+            checkpoint_options.cold_pathnames.push_back(NativePath::to_utf8_string(dir / options.prefix));
+    checkpoint_options.steps = static_cast<int>(max_ordinal) + 2;
+    checkpoint_options.layer_offset = free_layer_offset(options.prefix);
+    checkpoint_options.target = options.target_rank;
+    checkpoint_options.sum_target = options.sum_target;
+    checkpoint_options.docheck_step = options.success_target_rank;
+    checkpoint_options.spawn_rate4 = options.spawn_rate4;
+    checkpoint_options.success_rate_dtype = std::to_string(static_cast<uint32_t>(options.success_dtype));
+    checkpoint_options.compress = options.compress;
+    checkpoint_options.deletion_threshold = options.deletion_threshold;
+    checkpoint_options.relative_deletion_threshold = options.relative_deletion_threshold;
+    checkpoint_options.solve_checkpoint_interval = options.solve_checkpoint_interval;
+    PatternSpec checkpoint_spec;
+    checkpoint_spec.name = options.prefix + ":m" + std::to_string(options.family_modulus);
+    checkpoint_spec.symm_mode = options.canonical_symm_mode;
+    checkpoint_spec.pattern_masks = options.pattern_masks;
+    checkpoint_spec.success_shifts = options.success_shifts;
+    SolveCheckpoint::State periodic_checkpoint(checkpoint_options, checkpoint_spec, "bc", ".bcfrontier");
+    auto clean_positions = [&](int step) {
+        // Keep the terminal input as the stable generated-range bound.
+        if (step == static_cast<int>(max_ordinal) || step < static_cast<int>(options.min_ordinal.value_or(0))) return;
+        for (const auto &dir : bc_family_runner_generated_dirs(options)) {
+            const auto path = bc_family_runner_position_path(dir, options.prefix, step);
+            bc_family_runner_remove_file_quiet(path);
+            bc_family_runner_remove_file_quiet(path.string() + ".7z");
+            auto cell = path; cell.replace_extension(".bcposc");
+            bc_family_runner_remove_file_quiet(cell);
+        }
+    };
+    if (periodic_checkpoint.completed()) {
+        periodic_checkpoint.cleanup(clean_positions);
+        run_result.completed = true;
+        return run_result;
+    }
+    if (periodic_checkpoint.has_frontier() && (options.force_restart || options.start_ordinal))
+        throw std::invalid_argument("BC periodic checkpoint must be resumed before overriding the start ordinal");
+    const auto snapshot_options = periodic_checkpoint.snapshot_options();
     if (discovered_min_ordinal != 0U || max_ordinal < 2U) {
         throw std::runtime_error(
             "BC family runner expected generated ordinals from 0 with at least 3 layers"
@@ -3700,8 +3873,30 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
     };
 
     bool initialized_from_checkpoint = false;
+    if (periodic_checkpoint.has_frontier()) {
+        for (int index = 0; index < 2; ++index) {
+            const auto ordinal = periodic_checkpoint.frontier() + index;
+            const auto directory = NativePath::from_utf8(periodic_checkpoint.file(index));
+            const auto pos = bc_family_runner_position_path(directory, options.prefix, ordinal);
+            const auto suc = bc_family_runner_success_path(directory, options.prefix, ordinal);
+            auto lease = StoragePaths::reserve_write_path(checkpoint_options, StoragePaths::ArtifactRole::Hot,
+                ordinal, ".bcpos", std::filesystem::file_size(pos) + std::filesystem::file_size(suc));
+            const auto destination_dir = NativePath::from_utf8(lease.path()).parent_path();
+            auto destination = checkpoint_options;
+            destination.pathname = NativePath::to_utf8_string(destination_dir / options.prefix);
+            destination.cold_pathnames.clear();
+            SolveCheckpoint::copy_layer(NativePath::to_utf8_string(pos), destination, ordinal, ".bcpos");
+            SolveCheckpoint::copy_layer(NativePath::to_utf8_string(suc), destination, ordinal, ".bcsuc");
+            bc_family_runner_remove_other_exact_copies(options, ordinal, destination_dir);
+        }
+        periodic_checkpoint.cleanup(clean_positions);
+        first_solve_ordinal = periodic_checkpoint.frontier() - 1;
+        bc_family_runner_require_generated_range(layers, min_ordinal, first_solve_ordinal);
+        open_frontier_pair_for(first_solve_ordinal);
+        initialized_from_checkpoint = true;
+    }
     const std::optional<BCFamilySolveCheckpoint> checkpoint =
-        (!options.force_restart && options.resume_from_checkpoint && !options.start_ordinal)
+        (!initialized_from_checkpoint && !options.force_restart && options.resume_from_checkpoint && !options.start_ordinal)
             ? bc_family_runner_find_resume_checkpoint<StorageT>(
                   options, layers, lut, min_ordinal, max_ordinal)
             : std::nullopt;
@@ -3816,6 +4011,12 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 static_cast<uint32_t>(options.success_dtype),
                 options.family_modulus
             });
+    }
+
+    if (periodic_checkpoint.enabled && !periodic_checkpoint.has_frontier()) {
+        periodic_checkpoint.save(static_cast<int>(first_solve_ordinal + 1), [&](int index) {
+            return bc_family_runner_snapshot_frontier(index == 0 ? future2 : future4, options, snapshot_options);
+        }, clean_positions);
     }
 
     BCFamilySolveWorkspace<StorageT> workspace;
@@ -3949,6 +4150,10 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         std::unique_ptr<BCSingleChunkFrontierLayer<StorageT>> produced_single_future4_cache;
         std::unique_ptr<BCFamilyLastUseArchive<StorageT>> last_use_archive;
 
+        if (route_decision.route != BCSolveRoute::Resident) {
+            bc_family_runner_spill_frontier(future2, options, lut, possible_8tile_sums);
+            bc_family_runner_spill_frontier(future4, options, lut, possible_8tile_sums);
+        }
         try {
         switch (route_decision.route) {
         case BCSolveRoute::Resident: {
@@ -4005,8 +4210,8 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                     solve_options);
             metric.solve_call_seconds = bc_family_solve_runner_now_seconds() - solve_t0;
 
-            BCFamilySolveRunLayerMetric write_metric =
-                bc_family_runner_write_resident_layer<StorageT>(
+            BCFamilySolveRunLayerMetric write_metric;
+            if (!periodic_checkpoint.enabled) write_metric = bc_family_runner_write_resident_layer<StorageT>(
                     layer_options,
                     ordinal,
                     resident_result.layer,
@@ -4288,6 +4493,8 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
             throw;
         }
         current = BCPositionStreamingReader();
+        if (periodic_checkpoint.enabled)
+            bc_family_runner_remove_other_exact_copies(options, ordinal, work_dir);
 
         const double frontier_t0 = bc_family_solve_runner_now_seconds();
         BCFamilySolveFrontierLayer<StorageT> retired_future4 = std::move(future4);
@@ -4304,7 +4511,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 static_cast<uint32_t>(options.success_dtype),
                 options.family_modulus
             });
-        bc_family_runner_remove_generated_layer_file(layer_file->second);
+        if (!periodic_checkpoint.enabled) bc_family_runner_remove_generated_layer_file(layer_file->second);
         metric.total_seconds = bc_family_solve_runner_now_seconds() - layer_t0;
         bc_family_runner_emit_metric<StorageT>(run_result, callback, metric);
         deletion_state = RuntimeControls::refresh_deletion_thresholds(deletion_options, deletion_state);
@@ -4322,13 +4529,18 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
         if (archive_metric.position_bytes != 0U || archive_metric.success_bytes != 0U) {
             bc_family_runner_emit_metric<StorageT>(run_result, callback, archive_metric);
         }
-        future2 = bc_family_runner_open_frontier<StorageT>(
-            options,
-            ordinal_signed,
-            lut,
-            possible_8tile_sums);
-        if (produced_resident_cache) {
-            future2.resident_cache = std::move(produced_resident_cache);
+        if (periodic_checkpoint.enabled && produced_resident_cache) {
+            future2 = bc_family_runner_memory_frontier(layer_options, ordinal, std::move(produced_resident_cache), lut);
+        } else {
+            future2 = bc_family_runner_open_frontier<StorageT>(options, ordinal_signed, lut, possible_8tile_sums);
+            if (produced_resident_cache) future2.resident_cache = std::move(produced_resident_cache);
+        }
+        SolveCheckpoint::State::test_stop("LAYER", static_cast<int>(ordinal));
+        if (periodic_checkpoint.due(static_cast<int>(ordinal)) ||
+            (periodic_checkpoint.enabled && ordinal == min_ordinal && min_ordinal != 0)) {
+            periodic_checkpoint.save(static_cast<int>(ordinal), [&](int index) {
+                return bc_family_runner_snapshot_frontier(index == 0 ? future2 : future4, options, snapshot_options);
+            }, clean_positions);
         }
         (void)frontier_t0;
     }
@@ -4361,6 +4573,7 @@ BCFamilySolveRunResult bc_family_solve_full_run_typed(
                 static_cast<uint32_t>(options.success_dtype),
                 options.family_modulus
             });
+        if (periodic_checkpoint.has_frontier()) periodic_checkpoint.finish(clean_positions);
         run_result.completed = true;
     } else {
         bc_family_runner_write_checkpoint(

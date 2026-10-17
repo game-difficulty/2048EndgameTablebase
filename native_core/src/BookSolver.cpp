@@ -6,6 +6,7 @@
 #include "Calculator.h"
 #include "CompressionBridge.h"
 #include "FileIOUtils.h"
+#include "SolveCheckpoint.h"
 #include "Formation.h"
 #include "HybridSearch.h"
 #include "UniqueUtils.h"
@@ -1303,19 +1304,42 @@ void recalculate_process_impl(
     const uint32_t solve_progress_total = build_progress_total(options);
     const FileIOUtils::DirectIoConfig io_config = FileIOUtils::direct_io_config_from_options(options);
 
-    for (int i = options.steps - 3; i >= 0; --i) {
+    SolveCheckpoint::State checkpoint(options, spec, "classic");
+    const RunOptions snapshot_options = checkpoint.snapshot_options();
+    const auto clean_positions = [&](int step) {
+        StoragePaths::remove_all_candidates(options, step, "", false);
+        StoragePaths::remove_all_candidates(options, step, ".7z", false);
+    };
+    if (checkpoint.completed()) { checkpoint.cleanup(clean_positions); return; }
+    int first_step = options.steps - 3;
+    if (checkpoint.has_frontier()) {
+        first_step = checkpoint.frontier() - 1;
+        d1 = read_split_layer_file<T>(checkpoint.file(0), io_config);
+        d2 = read_split_layer_file<T>(checkpoint.file(1), io_config);
+        started = true;
+        checkpoint.cleanup(clean_positions);
+    }
+    for (int i = first_step; i >= 0; --i) {
         FormationProgress::update_build_progress(
             solve_progress_total - static_cast<uint32_t>(i) - 2U,
             progress_total
         );
-        if (!handle_restart_recalculate(i, d1, d2, started, options)) {
+        if (!checkpoint.has_frontier() && !handle_restart_recalculate(i, d1, d2, started, options)) {
             continue;
+        }
+        if (checkpoint.enabled && !checkpoint.has_frontier()) {
+            checkpoint.save(i + 1, [&](int index) {
+                return write_routed_layer_file(snapshot_options, i + 1 + index, index ? d2 : d1, io_config);
+            }, clean_positions);
         }
         deletion_threshold_state =
             RuntimeControls::refresh_deletion_thresholds(options, deletion_threshold_state);
         const double layer_deletion_threshold = deletion_threshold_state.absolute;
 
         const double read_t0 = wall_time_seconds();
+        if (checkpoint.enabled && !StoragePaths::filename_exists_any(options, i, "", false) &&
+            !StoragePaths::filename_exists_any(options, i, ".7z", false))
+            throw std::runtime_error("missing Classic generated positions at step " + std::to_string(i));
         std::vector<uint64_t> raw_layer = read_raw_file(options, i, io_config);
         const double read_t1 = wall_time_seconds();
         double t0 = wall_time_seconds();
@@ -1356,11 +1380,10 @@ void recalculate_process_impl(
         const double max_scan_t1 = wall_time_seconds();
 
         const double current_write_t0 = wall_time_seconds();
-        write_routed_layer_file(options, i, d0, io_config);
+        if (!checkpoint.enabled || i == 0) write_routed_layer_file(options, i, d0, io_config);
         const double current_write_t1 = wall_time_seconds();
         StoragePaths::remove_all_candidates(options, i, ".book.7z", false);
-        StoragePaths::remove_all_candidates(options, i, "", false);
-        StoragePaths::remove_all_candidates(options, i, ".7z", false);
+        if (!checkpoint.enabled) clean_positions(i);
         const int future_layer = i + 2;
         const bool use_opt_temp_archive =
             options.compress_temp_files &&
@@ -1410,6 +1433,11 @@ void recalculate_process_impl(
                 future_write_seconds += future_write_t1 - future_write_t0;
                 future_threshold_rewritten = true;
             }
+        }
+        if (checkpoint.enabled && !future_threshold_rewritten) {
+            const double t = wall_time_seconds();
+            write_routed_layer_file(options, future_layer, d2, io_config);
+            future_write_seconds += wall_time_seconds() - t;
         }
         if (use_opt_temp_archive) {
             if (!future_threshold_rewritten) {
@@ -1470,6 +1498,20 @@ void recalculate_process_impl(
         total_record.future_write_seconds += record.future_write_seconds;
         total_record.compress_seconds += record.compress_seconds;
 
+        SolveCheckpoint::State::test_stop("LAYER", i);
+        if (checkpoint.due(i)) {
+            checkpoint.save(i, [&](int index) {
+                return write_routed_layer_file(snapshot_options, i + index, index ? d1 : d0, io_config);
+            }, clean_positions);
+        }
+        if (checkpoint.enabled && i == 0) {
+            write_routed_layer_file(options, 1, d1, io_config);
+            if (options.compress) {
+                maybe_do_compress_classic_layer(options, 0);
+                maybe_do_compress_classic_layer(options, 1);
+            }
+            checkpoint.finish(clean_positions);
+        }
         if (i > 0) {
             d2 = std::move(d1);
             d1 = std::move(d0);
@@ -1624,6 +1666,8 @@ template <typename T> std::tuple<bool, PatternLayer, PatternLayer> run_pattern_g
     const PatternSpec &spec,
     const RunOptions &options
 ) {
+    SolveCheckpoint::State checkpoint(options, spec, "classic");
+    if (checkpoint.exists()) return {false, make_pattern_layer(LayerVector<T>{}), make_pattern_layer(LayerVector<T>{})};
     auto [started, d0, d1] = BookGenerator::generate_process(arr_init, spec, options);
     auto [layer0, layer1] = final_steps<T>(started, d0, d1, spec, options);
     return {started, std::move(layer0), std::move(layer1)};

@@ -19,6 +19,7 @@ const DEFAULT_CONFIG = {
   compress: false,
   optimal_branch_only: false,
   compress_temp_files: false,
+  solve_checkpoint_interval: 20,
   algorithm_mode: 'ex',
   advanced_algo: false,
   zmask_algo: true,

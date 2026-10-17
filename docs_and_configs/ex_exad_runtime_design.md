@@ -426,17 +426,50 @@ budget, layer estimates, full/split working-set estimates and explicit overrides
 Apply `layer_offset` to obtain the filename layer. The log is separate from
 completed-step timings, so a failed or stalled step still has a route record.
 
-### EX Periodic Solve Checkpoints
+### Periodic Solve Checkpoints (All Algorithms)
 
-The native EX runtime uses `RunOptions::solve_checkpoint_interval` (default 20).
-With pruning or compression enabled, the shared `SolveCheckpoint` helper keeps
-an exact adjacent pair in `.<prefix>solve-ex/`. Both snapshots are completed
-before the manifest is replaced; generated positions below the committed
-frontier remain available. On restart, EX restores that pair and recomputes
-from the frontier, never from pruned reader-visible results. Changing the
-interval to 1 does not discard an existing periodic recovery manifest.
-Checkpoint snapshots and generated positions must not be manually deleted
-during an unfinished run.
+`solve_checkpoint_interval` is persisted by the builder settings page and passed
+through `RunOptions` (or the BC runtime options dictionary). The default is 20;
+1 retains the legacy per-layer route for a new run. Classic, AD, EX, EXAD and BC
+share the exact-pair publication protocol. The optimal-branch post-pass remains
+excluded. An existing periodic checkpoint takes precedence even after changing
+the interval to 1, so a restart cannot fall back to pruned results.
+
+When compression or threshold pruning is enabled, resident solves can skip
+the reader-visible exact write for each current layer. The retired successor
+is still published normally, after its last use. A separate hidden
+`.<prefix>solve-<algorithm>/` directory holds the exact pair. AD snapshots are
+bucket directories; EXAD snapshots are `.exadbook` files; each BC snapshot is a
+`.bcfrontier` directory containing its matching `.bcpos` and `.bcsuc` files.
+`<prefix>solve-<algorithm>.checkpoint` records the committed frontier and paths.
+The normal table formats are unchanged.
+
+Publication order is: write both exact snapshots, atomically replace the
+checkpoint manifest, then remove superseded snapshots and generated positions.
+Positions below the committed frontier are retained. Recovery bypasses normal
+"result exists" skips and recomputes from frontier - 1, using original generated
+positions rather than already-pruned results. A failed snapshot write never
+advances the manifest. Completion is recorded only after final output writes.
+Overlapping pairs (after changing the interval to 1) reuse the committed
+snapshot instead of rewriting a file still referenced by the old manifest.
+
+AD/EX/EXAD chunked routes and BC single/family routes retain their required
+working files. A transition out of a resident route spills missing exact
+successors before releasing their memory. These transient
+files are distinct from the durable recovery pair. No additional full layers
+are kept resident for checkpointing; snapshots reuse existing serializers or a
+bounded file copy. Cold paths participate in snapshot and manifest routing.
+
+BC's per-layer `family_checkpoint.csv` still authorizes retirement, but it is
+not the recovery authority while a periodic manifest exists. BC retains its
+terminal generated input as a stable ordinal bound. Resident BC readers borrow
+the cached payload through bounded views; only header/offset metadata is copied.
+Archive pruning/compression consumes that cache without an intermediate full
+exact write. Snapshotting never prunes or mutates a live successor.
+
+This is an interruption/restart protocol, not a guarantee against disk damage
+or unflushed writes after sudden power loss. Generated positions and the hidden
+checkpoint directory must not be manually removed during an unfinished run.
 
 Core optimizations:
 
@@ -1069,9 +1102,8 @@ candidate search and inverse physical transform.
   large raw bitmap ordinal calculation can still read part of one bitmap. The
   compressed EX reader uses block directories and can be more IO-shaped for cold
   lookups.
-- EXAD solve currently uses `make_exad_solve_plan(...)` as a simple top-down
-  scan. The local dependency behavior lives in the per-step checks and temp
-  generation helper.
+- EXAD resumes from the committed exact pair when a periodic manifest exists;
+  otherwise it scans solved filenames from the terminal end.
 - Physical metadata mismatch means old EX/EXAD files should be rejected and
   recomputed. Current EX/EXAD formats are not intended to be backward compatible
   with earlier experimental files.
