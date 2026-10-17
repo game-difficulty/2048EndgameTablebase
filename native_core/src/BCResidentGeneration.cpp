@@ -2435,10 +2435,20 @@ static void bc_append_rank_payload_le_from_atomic_arena(
     return out;
 }
 
+// Owned by the invoking finalize operation, one slot per OpenMP worker.
+// MinGW emutls can free thread-local object storage before invoking its C++
+// destructor when a team shrinks (e.g. generation 32 -> compression 8).
+// Explicit ownership keeps reuse across cells without thread-exit destructors.
+struct alignas(64) BCDynamicSortWorkspace {
+    std::vector<uint64_t> keys;
+    std::vector<uint32_t> slots;
+};
+
 static void sort_dynamic_slot_refs_by_key(
     std::vector<BCDynamicSlotRef> &refs,
     uint32_t begin,
-    uint32_t end
+    uint32_t end,
+    BCDynamicSortWorkspace &workspace
 ) {
     if (end - begin < 2U) {
         return;
@@ -2448,8 +2458,8 @@ static void sort_dynamic_slot_refs_by_key(
     const size_t count = static_cast<size_t>(end - begin);
     if (count >= kNativeKeyValueSortMinBuckets) {
         if (auto keyvalue_sort = BC::detail::bc_resolve_keyvalue_sort_uint64_uint32(); keyvalue_sort != nullptr) {
-            thread_local std::vector<uint64_t> sort_keys;
-            thread_local std::vector<uint32_t> sort_slots;
+            auto &sort_keys = workspace.keys;
+            auto &sort_slots = workspace.slots;
             sort_keys.resize(count);
             sort_slots.resize(count);
             for (size_t i = 0U; i < count; ++i) {
@@ -2564,6 +2574,7 @@ void set_dynamic_capacity_stats(
     std::vector<uint32_t> cell_begin = std::move(grouped.cell_begin);
 
     std::vector<FinalizedCellPayload> payloads(state.cell_count);
+    std::vector<BCDynamicSortWorkspace> sort_workspaces(std::max(1, thread_count));
 
     std::exception_ptr first_exception;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)
@@ -2578,7 +2589,7 @@ void set_dynamic_capacity_stats(
             // Finalized cell lookup binary-searches bucket metadata by key, so
             // only the buckets within this cell need sorted order. There is no
             // ordering requirement across different cells.
-            sort_dynamic_slot_refs_by_key(refs, begin, end);
+            sort_dynamic_slot_refs_by_key(refs, begin, end, sort_workspaces[omp_get_thread_num()]);
 
             FinalizedCellPayload payload;
             payload.buckets.reserve(end - begin);
@@ -3208,6 +3219,7 @@ static void append_dynamic_rank_payload_stream_parallel(
     std::vector<BCDynamicSlotRef> refs = std::move(grouped.refs);
     std::vector<uint32_t> cell_begin = std::move(grouped.cell_begin);
 
+    std::vector<BCDynamicSortWorkspace> sort_workspaces(std::max(1, thread_count));
     std::exception_ptr first_exception;
 #pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)
     for (int64_t cid_i = 0; cid_i < static_cast<int64_t>(state.cell_count); ++cid_i) {
@@ -3220,7 +3232,7 @@ static void append_dynamic_rank_payload_stream_parallel(
             }
             // Cell-local key order only; descriptor offsets define inter-cell
             // layout, and keys from different cells are unrelated.
-            sort_dynamic_slot_refs_by_key(refs, begin, end);
+            sort_dynamic_slot_refs_by_key(refs, begin, end, sort_workspaces[omp_get_thread_num()]);
         } catch (...) {
 #pragma omp critical(BCResidentGenerationException)
             {
@@ -3234,6 +3246,7 @@ static void append_dynamic_rank_payload_stream_parallel(
         std::rethrow_exception(first_exception);
     }
 
+    sort_workspaces.clear(); // Team has joined; release arrays on the owner.
     std::vector<BCDynamicCellMeasure> measures(state.cell_count);
 #pragma omp parallel for schedule(dynamic, 1) num_threads(thread_count)
     for (int64_t cid_i = 0; cid_i < static_cast<int64_t>(state.cell_count); ++cid_i) {
